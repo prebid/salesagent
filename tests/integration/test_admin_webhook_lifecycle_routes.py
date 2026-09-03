@@ -1,6 +1,6 @@
 """The admin webhook lifecycle, graded through the real Flask routes.
 
-salesagent-pldmk.16. An operator who registers a push-notification webhook must
+GH #1802. An operator who registers a push-notification webhook must
 be able to DEACTIVATE it, DELETE it, and RE-REGISTER its URL. Today none of
 those three exits works, and each one fails in a way the operator reads as a
 generic error:
@@ -35,7 +35,7 @@ on a fresh session that cannot serve a stale snapshot of the handler's write.
 Spec grounding: none applies — the admin blueprint is an internal operator
 surface, not an AdCP transport, so there is no wire contract or conformance
 storyboard step in play. The obligations here come from the ticket and from the
-solution-review gate (``bd show salesagent-7r4vl.31``), not from the pin.
+solution-review gate (``bd show GH #1802``), not from the pin.
 
 RED vs GUARD at HEAD (see the module's four cases below):
 

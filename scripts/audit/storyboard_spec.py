@@ -662,8 +662,9 @@ def detect_uc(marker_names: frozenset[str]) -> str | None:
 
     The UC number derives from the identity tag itself, so a scenario carrying
     ``T-UC-<n>`` needs no per-UC branch. Only genuinely non-derivable cases are
-    named: ADMIN and COMPAT carry no ``T-UC-<n>`` tag, and UC-GET-PRODUCTS /
-    brand_shorthand-create_media_buy route on tags that are not UC-numbered.
+    named: ADMIN and COMPAT carry no ``T-UC-<n>`` tag, UC-GET-PRODUCTS /
+    brand_shorthand-create_media_buy route on tags that are not UC-numbered,
+    and A2A-TASK-OWNERSHIP uses ``T-A2A-TASK-OWNERSHIP-`` (#1959).
 
     Absorbed from tests/bdd/conftest.py, which is why it lives here: the audit
     join RE-IMPLEMENTED this lookup, and the two copies disagreeing is the
@@ -679,6 +680,9 @@ def detect_uc(marker_names: frozenset[str]) -> str | None:
         return "UC-002"
     if any(t.startswith("T-COMPAT") for t in marker_names):
         return "COMPAT"
+    # Local A2A protocol-method scenarios (tasks/get, tasks/cancel — #1702/#1780/#1959).
+    if any(t.startswith("T-A2A-TASK-OWNERSHIP-") for t in marker_names):
+        return "A2A-TASK-OWNERSHIP"
     for tag in sorted(marker_names):
         match = UC_TAG_RE.match(tag)
         if match:

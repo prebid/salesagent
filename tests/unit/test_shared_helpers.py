@@ -138,7 +138,7 @@ class TestResolveAdapterId:
 # _build_package_responses and _build_create_success
 #
 # build_agent_config (and its _HasAgentFields Protocol) was deleted by
-# salesagent-4n88: both registries that used it now dial through the guarded
+# GH #1802: both registries that used it now dial through the guarded
 # MCP seam (call_mcp_tool, via src.core.utils.operator_mcp.call_operator_mcp_tool)
 # instead of constructing an adcp AgentConfig for ADCPMultiAgentClient. See
 # tests/unit/test_creative_agent_connection_alias.py and

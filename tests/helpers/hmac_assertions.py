@@ -4,7 +4,7 @@ Recomputing over the origin's captured ``.body`` (rather than a fresh
 serialization of the payload dict) is the whole point: a recompute from the
 dict uses whatever serialization formula the caller happens to pick, which
 can silently agree with a sender that signed one serialization and
-transmitted another — the exact defect salesagent-47n9.1 fixed. Several test
+transmitted another — the exact defect GH #1802 fixed. Several test
 files need to grade that same signed-bytes-equal-wire-bytes property, so it
 lives here once instead of six near-identical copies drifting apart.
 """
@@ -55,7 +55,7 @@ def assert_signature_verifies_over_wire_body(
     # Named BEFORE the prefix check. A missing header reads as ``None`` from an
     # ``http.client.HTTPMessage``, so ``.startswith`` would raise AttributeError
     # and report a delivery that went out entirely UNSIGNED as a Python bug
-    # rather than as the security failure it is (salesagent-47n9.24).
+    # rather than as the security failure it is (GH #1802).
     assert sent_signature is not None, (
         f"the delivery carries no {signature_header} at all — it went out UNSIGNED, "
         f"so no receiver can attribute it to us"

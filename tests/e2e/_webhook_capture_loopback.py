@@ -1,6 +1,6 @@
 """In-process loopback webhook receiver for HERMETIC (no-Docker-stack) tests only.
 
-Relocated out of ``tests/e2e/_webhook_capture.py`` by salesagent-amht.3, which
+Relocated out of ``tests/e2e/_webhook_capture.py`` by GH #1802, which
 moved the compose-coupled receiver to a real long-lived service
 (``tests/e2e/webhook_capture_service.py``) fronted by the shared ``tls-proxy``.
 That migration does not apply here: a hermetic test (no Docker stack, no
@@ -9,7 +9,7 @@ whose sender is an in-process ``ProtocolWebhookService`` running on the host)
 cannot resolve ``webhooks.adcp.test`` at all — that name is Docker-embedded-DNS,
 unresolvable outside the compose network. This module is the one place left
 that still terminates TLS in-process, by design, for exactly that class of
-test (owner scope decision, 2026-08-05, recorded in salesagent-amht.3).
+test (owner scope decision, 2026-08-05, recorded in GH #1802).
 
 Everything here is unchanged from before the split — only the file moved.
 """

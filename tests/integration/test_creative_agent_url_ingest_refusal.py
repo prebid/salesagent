@@ -6,7 +6,7 @@ request (``src/core/tools/creatives/_validation.py``) and dialled — through
 ``fetch_format_spec`` → ``CreativeAgentRegistry`` → ``call_mcp_tool`` — to
 check the format exists. That makes it a buyer-supplied URL WE fetch, i.e. an
 SSRF vector in the same class as ``property_list.agent_url`` on
-``get_products`` (salesagent-nbbe, exemplar
+``get_products`` (GH #1802, exemplar
 ``tests/integration/test_property_list_resolver.py``
 ``TestRefusedBuyerUrlOnTheWire``) — and it is reachable by any authenticated
 advertiser, the lowest privilege bar of any egress path in the tree
@@ -63,7 +63,7 @@ v3.1.1:<path>``):
 
 Conformance storyboard: UNGRADED — nothing in ``dist/compliance/3.1.1/``
 grades a seller refusing a counterparty-supplied URL (same finding recorded for
-salesagent-nbbe and for the webhook ingest twin).
+GH #1802 and for the webhook ingest twin).
 """
 
 from __future__ import annotations

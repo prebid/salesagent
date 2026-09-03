@@ -306,12 +306,12 @@ def _media_buy_webhook_task(
     task_type/tenant_id/principal_id/media_buy_id for delivery logging and the
     audit trail, and a dict lets a caller omit one silently — which is how the
     admin sync_creatives sender came to write no delivery-log row at all
-    (salesagent-pldmk.39). Shared by the approve and reject branches
+    (GH #1802). Shared by the approve and reject branches
     (PR #1567 round-2 cleanup).
 
     task_type carries step_data["tool_name"] VERBATIM. notify() coerces its own
     copy for the SDK payload, so the untrusted DB label never reaches the wire and
-    the original still keys the guards (salesagent-yi3s, salesagent-yk7o).
+    the original still keys the guards (GH #1802, GH #1802).
     """
     return WebhookTaskContext(
         task_id=step_data["step_id"],
@@ -457,7 +457,7 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                         )
                         webhook_task = _media_buy_webhook_task(step_data, tenant_id, media_buy_id, media_buy_data)
                         # The dialect fork moved into notify(); this site passes the protocol it
-                        # already read from the workflow step (salesagent-pldmk.39).
+                        # already read from the workflow step (GH #1802).
                         protocol = step_data["request_data"].get("protocol", "mcp")
 
                         try:
@@ -537,7 +537,7 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                     )
                     webhook_task = _media_buy_webhook_task(step_data, tenant_id, media_buy_id, media_buy_data)
                     # The dialect fork moved into notify(); this site passes the protocol it
-                    # already read from the workflow step (salesagent-pldmk.39).
+                    # already read from the workflow step (GH #1802).
                     protocol = step_data["request_data"].get("protocol", "mcp")
 
                     try:

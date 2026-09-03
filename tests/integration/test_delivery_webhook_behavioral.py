@@ -86,7 +86,7 @@ class TestWebhookDeliveryHappyPath:
 
             # Verify HMAC signature headers were added. Spec header names
             # (X-AdCP-Signature/X-AdCP-Timestamp, from adcp.sign_legacy_webhook
-            # via the shared deliver_webhook seam) since salesagent-47n9.1 —
+            # via the shared deliver_webhook seam) since GH #1802 —
             # the non-spec X-Webhook-* pair no longer exists.
             sent_headers = env.last_delivery.headers
             assert "X-AdCP-Signature" in sent_headers
@@ -102,7 +102,7 @@ class TestWebhookDeliveryHappyPath:
 # UC-004-ALT-WEBHOOK-PUSH-REPORTING-07
 #
 # Formerly TestWebhookHmacSha256Signing here, unit-testing the deleted
-# WebhookAuthenticator.sign_payload directly. salesagent-47n9.1 deleted that
+# WebhookAuthenticator.sign_payload directly. GH #1802 deleted that
 # class (dead in production; its only production caller path never set
 # signing_secret) and re-homed this obligation onto a byte-verifying test:
 # tests/integration/test_webhook_sender_signed_body_integrity.py::
@@ -285,7 +285,7 @@ class TestWebhook503RetryBackoff:
             assert env.mock["sleep"].call_count == 1
             assert_backoff_schedule([float(c.args[0]) for c in env.mock["sleep"].call_args_list], jitter=None)
 
-    # Graduated (salesagent-4fya.11): the module is on the jittered egress seam, so
+    # Graduated (GH #1802): the module is on the jittered egress seam, so
     # BR-RULE-029's "+ jitter" is real here now. The xfail this replaces was strict
     # and blamed the old exact 2**attempt schedule.
     def test_backoff_includes_jitter(self, integration_db):
@@ -457,7 +457,7 @@ class TestEXT_G_06_HmacAuthRejection:
 
         Recomputes over the raw received body rather than a re-serialization
         of the payload dict, so a sender that signs one serialization and
-        transmits another cannot pass this test vacuously (salesagent-47n9.1).
+        transmits another cannot pass this test vacuously (GH #1802).
 
         Covers: UC-004-EXT-G-06
         """
@@ -479,7 +479,7 @@ class TestEXT_G_06_HmacAuthRejection:
             )
 
             # Spec header names (X-AdCP-Signature/X-AdCP-Timestamp) since
-            # salesagent-47n9.1 -- the non-spec X-Webhook-* pair no longer exists.
+            # GH #1802 -- the non-spec X-Webhook-* pair no longer exists.
             assert_signature_verifies_over_wire_body(env.last_delivery, secret)
 
     def test_auth_rejection_vs_server_error_retry_behavior(self, integration_db):
@@ -1085,7 +1085,7 @@ class TestWebhookResultShape:
 
     The refused arm is the one that moves: today it returns before a delivery id
     exists, so it carries neither ``delivery_id`` nor ``response_code``. The
-    decision (salesagent-4fya.11 R5) is that all three failure arms return the
+    decision (GH #1802 R5) is that all three failure arms return the
     same five keys, and that ``duration`` stays only where it already is.
 
     Covers: UC-004-EXT-G-08

@@ -7,7 +7,7 @@ mypy, and mypy ACCEPTS it — ``json=`` survives on both ``send`` and ``asend``
 alongside ``content: bytes | None``, so a third signer in this shape is still
 perfectly representable. This guard is live protection, not residue.
 
-salesagent-47n9.1 deleted the two signers (``WebhookAuthenticator.sign_payload``,
+GH #1802 deleted the two signers (``WebhookAuthenticator.sign_payload``,
 ``WebhookDeliveryService._generate_hmac_signature``) that recreated the
 signed-bytes-vs-wire-bytes divergence bug: each computed an HMAC over one
 serialization of a payload dict, then handed the SAME dict to
@@ -60,7 +60,7 @@ _SIGNATURE_HEADER_KEY = re.compile(r"^x-[a-z0-9-]*signature[a-z0-9-]*$", re.IGNO
 
 SEND_NAMES = frozenset({"send", "asend"})
 
-# Pre-existing violations: none. Seeded empty at salesagent-47n9.1 — the two
+# Pre-existing violations: none. Seeded empty at GH #1802 — the two
 # known signers were migrated onto the webhook_egress seam (today:
 # ``deliver_webhook``/``adeliver_webhook``), not allowlisted. Any entry here must
 # name the ticket that removes it.

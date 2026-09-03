@@ -156,7 +156,7 @@ class TestPropertyVerificationService:
             )
 
             assert is_verified is False
-            # salesagent-grgc: a fixed, non-disclosing message -- never the library's
+            # GH #1802: a fixed, non-disclosing message -- never the library's
             # own exception text (which could carry a resolved IP / SSRF detail).
             assert error == "adagents.json not found for this domain"
 
@@ -185,7 +185,7 @@ class TestPropertyVerificationService:
             )
 
             assert is_verified is False
-            # salesagent-grgc: a fixed, non-disclosing message -- see above.
+            # GH #1802: a fixed, non-disclosing message -- see above.
             assert error == "Timed out fetching adagents.json"
 
             # Verify database updated with failure
@@ -213,7 +213,7 @@ class TestPropertyVerificationService:
             )
 
             assert is_verified is False
-            # salesagent-grgc: a fixed, non-disclosing message -- see above. This is
+            # GH #1802: a fixed, non-disclosing message -- see above. This is
             # specifically the branch that could carry a resolved IP / SSRF range
             # classification via AdagentsValidationError, so it must never echo str(e).
             assert error == "adagents.json could not be validated"

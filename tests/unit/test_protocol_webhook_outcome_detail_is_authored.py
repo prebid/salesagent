@@ -1,6 +1,6 @@
 """The protocol sender's unexpected-error arm authors its own outcome detail.
 
-Covers salesagent-pldmk.6, Move 2 -- the SECOND of the two out-of-module
+Covers GH #1802, Move 2 -- the SECOND of the two out-of-module
 ``WebhookDeliveryOutcome`` construction sites.
 
 ``WebhookDeliveryOutcome.detail``'s own docstring says it is "PRE-SANITIZED at

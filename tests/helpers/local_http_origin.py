@@ -89,7 +89,7 @@ def serve_in_thread(
     kernel-assigned value back off ``server.server_address`` rather than
     probing for a free port and rebinding it — the probe-close-rebind form
     races another xdist worker between the close and the rebind. Pass a fixed
-    port for a long-lived service with a well-known address (salesagent-amht.3).
+    port for a long-lived service with a well-known address (GH #1802).
 
     ``server_attrs`` are set on the server instance *before* the serving thread
     starts, so a handler may read per-server state (e.g. the programmable

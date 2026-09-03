@@ -1,6 +1,6 @@
 """Both senders conclude through ONE recorder, and a success is written down too.
 
-Lane salesagent-gra7.1 ("One recorder for both senders, success rows included").
+Lane GH #1802 ("One recorder for both senders, success rows included").
 The absence this module grades is an OPERATOR-OBSERVABILITY absence, which is
 why it is an integration module and not a BDD feature: "did this webhook
 conclude, and how" is a question asked of the ``webhook_delivery_log`` table by

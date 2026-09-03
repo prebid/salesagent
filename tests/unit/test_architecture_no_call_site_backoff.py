@@ -4,7 +4,7 @@
 outbound request: BR-RULE-029's 1s/2s/4s, each plus a ``uniform(0, 1)`` draw.
 A call site that computes its own geometric delay is deciding that policy a
 second time, and the two drift — which is exactly what happened before
-salesagent-4fya.6: one site slept 1/2/4, another skipped the 1s step entirely
+GH #1802: one site slept 1/2/4, another skipped the 1s step entirely
 and slept 2/4, and the seam itself slept 0.1/0.2/0.4 with no jitter at all. The
 BDD step that was supposed to catch it only compared successive delays as a
 ratio, so every one of those schedules passed.
@@ -68,7 +68,7 @@ SLEEP_NAME = "sleep"
 # schedule-derived — same principle as _functions_returning_a_power, but for a
 # call the detector's same-module ast.Name resolution cannot see.
 # ``wait_seconds`` is Attempts.wait_seconds (src/core/security/egress/
-# attempts.py, salesagent-tbrk.2): the seam itself now sleeps
+# attempts.py, GH #1802): the seam itself now sleeps
 # time.sleep(attempts.wait_seconds()), an ast.Attribute-shaped call, and
 # WITHOUT this the seam's own exemption would exempt an already-clean file --
 # see TestNoCallSiteBackoff.test_seam_module_would_otherwise_be_flagged, which
@@ -87,9 +87,9 @@ NON_HTTP_BACKOFF = {
     # seam is not where they belong, and they stay listed with the reason in
     # writing rather than exempted by a path rule the next reader has to
     # reverse-engineer. (Every entry that WAS outbound HTTP has already
-    # migrated onto the seam and been removed: salesagent-4fya.8-.11,
-    # salesagent-cnkq migrated the counterparty-URL call sites;
-    # salesagent-fwid deleted oauth_retry.py; salesagent-zlwz moved
+    # migrated onto the seam and been removed: GH #1802-.11,
+    # GH #1802 migrated the counterparty-URL call sites;
+    # GH #1802 deleted oauth_retry.py; GH #1802 moved
     # mcp_client onto the seam's sleep_backoff.)
     #
     # GAM forecasting readiness (NO_FORECAST_YET): a business-state poll.
@@ -318,7 +318,7 @@ class TestGuardDetector:
         """The chain the seam actually grew: sleep -> wrapper -> geometric helper.
 
         A one-hop detector passes this, which is how it would have gone blind to
-        the seam when salesagent-4fya.9 added Retry-After support.
+        the seam when GH #1802 added Retry-After support.
         """
         source = (
             "import time\n\n\n"

@@ -19,7 +19,7 @@ treats an unresolved format spec as a rejection: "Creative ... has unknown forma
 ... Format must be registered with the creative agent." A media buy carrying a
 creative in the exact format the SELLER advertises therefore fails.
 
-Residual left open by salesagent-7bfi's ingest gate: that gate is INGEST-time only
+Residual left open by GH #1802's ingest gate: that gate is INGEST-time only
 and gates ``sync_creatives``, not this RE-DIAL at ``create_media_buy`` time.
 
 Conformance storyboard: ungraded (no scenario in ``dist/compliance/3.1.1/``
@@ -100,7 +100,7 @@ class TestReDialOfBuyerProvenanceUrlIsNotOperatorMisclassified:
     ``fetch_format_spec`` with no ``field``, so ``get_formats_for_agent`` always
     took the OPERATOR path for a re-dial — CONFIGURATION_ERROR/terminal — even
     for a url the buyer chose at their own prior sync_creatives call, which
-    salesagent-7bfi already classifies INVALID_REQUEST/correctable at ingest for
+    GH #1802 already classifies INVALID_REQUEST/correctable at ingest for
     the identical url. Passing ``field=`` routes a refusal through the seam's
     counterparty-aware path instead, UNLESS the url is also the tenant's actual
     operator agent (verified unaffected: ``_is_operator_agent`` still wins).

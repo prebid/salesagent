@@ -1,4 +1,4 @@
-"""Regression tests for salesagent-fo99.6.
+"""Regression tests for GH #1802.
 
 The BDD step tier translates a Gherkin auth scheme into the
 ``PushNotificationConfig`` auth columns. Two obligations, at two different loci:

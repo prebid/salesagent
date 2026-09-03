@@ -1,4 +1,4 @@
-"""Guard: the two UC-004 circuit-breaker scenarios are graded on the live stack (salesagent-pldmk.41).
+"""Guard: the two UC-004 circuit-breaker scenarios are graded on the live stack (GH #1802).
 
 ``@T-UC-004-webhook-circuit-open`` and ``@T-UC-004-webhook-circuit-recovery``
 claim to grade the webhook circuit breaker over ``e2e_rest``. They grade a
@@ -24,7 +24,7 @@ matters until both are gone. This guard is the standing check that they are:
    scenario itself just created.
 
 WHAT THIS GUARD DOES NOT PROVE. It grades the STRUCTURAL acceptance criteria of
-salesagent-pldmk.41 ("neither scenario seeds ``_circuit_breakers`` in the test
+GH #1802 ("neither scenario seeds ``_circuit_breakers`` in the test
 process on any transport", and "both scenarios run on ``e2e_rest`` without an
 xfail marker"), plus the read-side half of the same Core Invariant. It says
 nothing about the behavioural criteria — that the DEPLOYED
@@ -231,7 +231,7 @@ def test_scenario_is_not_xfail_routed_on_e2e_rest(tag: str) -> None:
         f"@{tag} is still routed through {sorted(set(routed))} in {_CONFTEST.name}, which marks its "
         "e2e_rest leg xfail(strict=False). Under that marker a pass reports XPASS and a failure reports "
         "xfail, so the deployed server's circuit breaker is not graded either way. Remove the tag once "
-        "the scenario is driven through the live stack (salesagent-pldmk.41)."
+        "the scenario is driven through the live stack (GH #1802)."
     )
 
     if _KNOWN_FAILURES.exists():
@@ -249,7 +249,7 @@ def test_scenario_never_seeds_breaker_state_in_the_test_process(tag: str) -> Non
         + "\n".join(f"  {key} — {text!r} calls {sorted(writes)}" for key, (text, writes) in sorted(violations.items()))
         + "\nThe server owns its breaker. A step that seeds one in the test process proves a Python "
         "dictionary works and says nothing about the deployed system. Open the breaker with real rejected "
-        "deliveries against the webhook-capture service instead (salesagent-pldmk.41)."
+        "deliveries against the webhook-capture service instead (GH #1802)."
     )
 
 
@@ -271,5 +271,5 @@ def test_scenario_never_reads_breaker_state_from_the_test_process(tag: str) -> N
         + "\nUnder e2e_rest these accessors build a fresh WebhookDeliveryService in the test process, so "
         "the state they return was never the deployed server's. Grade the observable the scenario names "
         "instead — what the webhook-capture service received, and the webhook_delivery_log rows the server "
-        "wrote (salesagent-pldmk.41)."
+        "wrote (GH #1802)."
     )

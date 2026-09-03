@@ -1,6 +1,6 @@
 """The one place a webhook payload becomes signed bytes and those bytes go out.
 
-Core Invariant (salesagent-47n9.1): a webhook sender must never hold a signer
+Core Invariant (GH #1802): a webhook sender must never hold a signer
 and a body serializer as two independent decisions. One function serializes
 the body once, optionally signs those exact bytes, and transmits those exact
 bytes via ``content=`` through :mod:`src.core.security.outbound_http`. No
@@ -18,7 +18,7 @@ Placed beside :mod:`outbound_http` rather than in ``src/services/``: this is
 egress policy (what bytes represent a payload, and how those bytes are
 authenticated), not business logic.
 
-Signer-side duplicate-object-key MUST (salesagent-47n9.19; pinned AdCP 3.1.1,
+Signer-side duplicate-object-key MUST (GH #1802; pinned AdCP 3.1.1,
 ``docs/building/by-layer/L1/security.mdx`` §Duplicate object keys):
 signers MUST reject duplicate-key input before signing. ``prepare_signed_request``
 takes ``payload: dict[str, Any]`` — a Python ``dict`` cannot represent a

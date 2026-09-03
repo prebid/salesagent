@@ -3,7 +3,7 @@
 The disease, stated once: *a webhook sender resolves push-notification auth
 inline from the config — picking its own FIELD and its own VALUE spelling —
 instead of calling one shared resolver.* A codebase-wide enumeration
-(salesagent-47n9.20) found three independent senders doing it three different
+(GH #1802) found three independent senders doing it three different
 ways:
 
 * ``order_approval_service`` compares lowercase ``"bearer"`` / ``"basic"``, and
@@ -39,7 +39,7 @@ verifier) is not a sender picking a column off a stored config.
 
 Scope note — the guard deliberately does NOT try to detect
 ``src/admin/blueprints/principals.py``'s hand-built ``PushNotificationConfig``
-(disposition row 5, deferred to salesagent-qb9q). That site names ``auth_type=``
+(disposition row 5, deferred to GH #1802). That site names ``auth_type=``
 / ``auth_config=``, kwargs that are not columns on the model at all; it is a
 different defect (it writes nothing that any sender can read) and belongs to its
 own ticket. Widening this detector to catch it would mean matching on invented
@@ -119,7 +119,7 @@ _CREDENTIAL_ATTRS = frozenset({"webhook_secret"})
 # NOTE: `set()`, not `{}` — a brace literal containing only comments is an
 # empty DICT, which the allowlist helper cannot subtract.
 # ``src/services/webhook_delivery_service.py`` was here until
-# salesagent-47n9.24 (GH #1894) converged it on the resolver. Do not re-add
+# GH #1802 (GH #1894) converged it on the resolver. Do not re-add
 # it, or anything else: the only remaining entry below is a justified false
 # positive, so a NEW debt entry would mean a sender started resolving auth
 # inline again -- which is the whole disease.

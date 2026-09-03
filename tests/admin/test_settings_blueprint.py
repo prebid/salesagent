@@ -284,7 +284,7 @@ class TestApproximatedToken:
         # precisely that the key travels as a header. Doubling get_dns_token
         # would patch out the code under test and the assertion would grade
         # nothing. Lives in src.services.approximated_client since
-        # salesagent-47n9.7 moved the client out of this blueprint.
+        # GH #1802 moved the client out of this blueprint.
         mock_result = MagicMock()
         mock_result.json.return_value = {"token": "opaque-widget-token-123"}
 
@@ -328,7 +328,7 @@ class TestApproximatedToken:
         # The seam raises on a non-2xx and discards the response, so the upstream
         # status now arrives on the typed failure rather than on a returned object.
         # get_dns_token (src.services.approximated_client, imported into this
-        # blueprint since salesagent-47n9.7) never catches OutboundError -- every
+        # blueprint since GH #1802) never catches OutboundError -- every
         # status it can receive is a genuine failure -- so the exception reaches
         # this route's own except OutboundError arm unchanged.
         from src.core.security.outbound_http import OutboundDeliveryFailed

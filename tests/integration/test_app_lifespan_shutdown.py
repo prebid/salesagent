@@ -89,7 +89,7 @@ def _prime_real_connection_pool(session: requests.Session) -> object:
 async def test_lifespan_awaits_every_registered_shutdown_callback(isolated_global_app_state):
     """The real lifespan shutdown must AWAIT the callbacks the registry holds.
 
-    Repointed by salesagent-cnkq. This used to prime a real
+    Repointed by GH #1802. This used to prime a real
     ``requests.Session`` pool on ProtocolWebhookService and assert the lifespan
     emptied it. That service now builds and discards a per-destination pinned
     transport, so it owns no pool and registers nothing — with it went the last
@@ -144,7 +144,7 @@ async def test_constructing_the_webhook_service_registers_no_shutdown_callback(i
 
     ``ProtocolWebhookService`` holds a long-lived ``requests.Session`` today and
     self-registers ``close`` to release it. The egress-seam migration
-    (salesagent-cnkq) removes the session, because
+    (GH #1802) removes the session, because
     ``build_ip_pinned_transport`` resolves its destination at construction and
     refuses to connect anywhere else — so there can be no client that outlives a
     single delivery, and therefore nothing left to close at shutdown.
@@ -179,7 +179,7 @@ async def test_constructing_the_webhook_service_registers_no_shutdown_callback(i
 async def test_lifespan_swallows_a_failing_shutdown_callback(isolated_global_app_state):
     """A failing callback must be logged and swallowed, never escape the lifespan.
 
-    Repointed by salesagent-cnkq for the same reason as the drain test above: the
+    Repointed by GH #1802 for the same reason as the drain test above: the
     webhook service no longer has a ``close()`` to make raise. The contract under
     test is the registry's, not that service's — one bad callback must not take
     the process down at shutdown. Fails under mutation (c) (per-callback

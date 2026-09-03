@@ -1,4 +1,4 @@
-"""Operator-registered creative/signals agents dial through the guarded MCP seam (salesagent-4n88).
+"""Operator-registered creative/signals agents dial through the guarded MCP seam (GH #1802).
 
 ``CreativeAgentRegistry`` and ``SignalsAgentRegistry`` used to build an
 ``adcp.ADCPMultiAgentClient`` (``_build_adcp_client``) to query OPERATOR-configured

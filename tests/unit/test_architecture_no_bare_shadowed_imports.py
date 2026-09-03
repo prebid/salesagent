@@ -1,4 +1,4 @@
-"""Structural guard: no bare import shadowing a real src/-namespaced module (salesagent-47n9.11).
+"""Structural guard: no bare import shadowing a real src/-namespaced module (GH #1802).
 
 ``XandrAdapter._create_human_task`` (src/adapters/xandr.py) did
 ``from database_session import get_db_session`` and
@@ -9,9 +9,9 @@ under either name, so both raised ``ModuleNotFoundError`` on first real call.
 CLAUDE.md mandates absolute ``src.*`` imports; this is the shape that
 violation takes when it silently breaks rather than merely looking wrong.
 
-A whole-``src/`` sweep (salesagent-47n9.11's disease-scan atom) found 4 more
+A whole-``src/`` sweep (GH #1802's disease-scan atom) found 4 more
 live instances in ``src/admin/sync_api.py`` (bare ``gam_orders_service``
-imports), tracked and fixed separately as salesagent-vwbj. This guard was
+imports), tracked and fixed separately as GH #1802. This guard was
 originally scoped to ``src/adapters/`` only, with its own docstring
 committing to widen to all of ``src/`` once vwbj's fix landed — done here:
 vwbj's disease-scan and sweep-verify re-scans both found zero violations

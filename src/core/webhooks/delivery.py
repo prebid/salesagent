@@ -6,7 +6,7 @@ one. WHO a delivery was for and WHAT became of it are domain facts that the
 persistence layer and both senders read, and parking them in the security
 package forced ``src/core/database/repositories/delivery.py`` to import out of
 ``src.core.security`` -- persistence depending on the security package
-(salesagent-pldmk.7, review pattern #4 / AR-01).
+(GH #1802, review pattern #4 / AR-01).
 
 ``WebhookTaskContext``'s own docstring named the bind it was written under: "a
 repository importing a dataclass out of a service module would invert the
@@ -70,7 +70,7 @@ class WebhookDeliveryOutcome:
         ``webhook_delivery_service`` and ``order_approval_service`` and as ``error``
         from ``protocol_webhook_service`` and ``webhook_delivery``. An operator
         grepping for a refused destination found half of them, and which half
-        depended on which sender happened to fire (salesagent-pldmk.39).
+        depended on which sender happened to fire (GH #1802).
 
         The level belongs to WHAT HAPPENED, not to who noticed, so it is a property
         of the outcome. ``client_error`` is the one WARNING: the receiver answered

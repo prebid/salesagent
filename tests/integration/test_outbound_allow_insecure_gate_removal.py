@@ -1,4 +1,4 @@
-"""Regression pin for salesagent-e6h0's Core Invariant: once
+"""Regression pin for GH #1802's Core Invariant: once
 ``ADCP_OUTBOUND_ALLOW_INSECURE`` is deleted, NOTHING can make either scheme
 gate accept a plaintext ``http://`` URL -- not the send seam
 (``src.core.security.outbound_http._require_tls``), and not the webhook
@@ -7,10 +7,10 @@ registration gate (``src.core.webhook_validator.WebhookURLValidator._require_htt
 Both gates currently read ``ADCP_OUTBOUND_ALLOW_INSECURE`` and relax when it is
 ``"true"`` (``outbound_http._require_tls``, ``webhook_validator._require_https``
 -- the latter imports the former's env name and helper directly "so the two
-gates cannot drift"). salesagent-e6h0 deletes both read sites: ``_require_tls``
+gates cannot drift"). GH #1802 deletes both read sites: ``_require_tls``
 becomes an unconditional scheme check, and ``_require_https()`` returns ``True``
 unconditionally. This test is the TDD-red pin for that step (step 8 of
-salesagent-e6h0's design) -- it asserts the POST-deletion behavior and is
+GH #1802's design) -- it asserts the POST-deletion behavior and is
 expected to FAIL today, because right now setting the flag "true" really does
 open both gates.
 
@@ -55,7 +55,7 @@ def _open_both_hatches(monkeypatch) -> None:
 
 
 class TestAllowInsecureCanNeverRelaxTheSchemeGate:
-    """Covers: salesagent-e6h0's Core Invariant (no plaintext-http success path
+    """Covers: GH #1802's Core Invariant (no plaintext-http success path
     survives the flag's deletion, at either the send seam or the webhook
     registration gate)."""
 

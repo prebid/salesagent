@@ -5188,7 +5188,7 @@ class TestTypedCreativeAssignments:
 
         Spec: CONFIRMED -- package.json creative_assignments is array of
         creative-assignment objects.
-        Covers: salesagent-e5ao-01
+        Covers: GH #1802-01
         """
         from adcp.types import CreativeAssignment as LibraryCreativeAssignment
 
@@ -5212,7 +5212,7 @@ class TestTypedCreativeAssignments:
 
         Spec: CONFIRMED -- package-update.json creative_assignments uses
         replacement semantics with typed objects.
-        Covers: salesagent-e5ao-02
+        Covers: GH #1802-02
         """
         from adcp.types import CreativeAssignment as LibraryCreativeAssignment
 
@@ -5235,7 +5235,7 @@ class TestTypedCreativeAssignments:
         The legacy class used untyped dict[str, list[str]] for
         creative_assignments which contradicted the AdCP spec.
         It was dead code (never imported or used) and has been deleted.
-        Covers: salesagent-e5ao-03
+        Covers: GH #1802-03
         """
         import src.core.schemas._base as base_module
 
@@ -5249,7 +5249,7 @@ class TestTypedCreativeAssignments:
 
         The module-level dict was consolidated from two dicts (untyped v1 +
         typed v2) into a single typed dict[str, CreativeAssignment].
-        Covers: salesagent-e5ao-04
+        Covers: GH #1802-04
         """
         import typing
 

@@ -1,6 +1,6 @@
 """Vendor and operator egress, driven at a REAL local origin — the retry-drift gate.
 
-salesagent-gstl migrates the ten remaining operator-configured call sites onto
+GH #1802 migrates the ten remaining operator-configured call sites onto
 ``src/core/security/outbound_http.py``. The seam decides address policy, TLS
 policy, redirect refusal, the response-size cap, the attempt count and the
 backoff schedule, and it grades all six exactly once, in
@@ -27,7 +27,7 @@ because a local origin is loopback, which the seam refuses by default and
 rightly so; it is a no-op before the migration (``requests`` has no address
 policy) and load-bearing after it, so the cases read identically on both sides
 of the change. The origin itself is served over real TLS (``local_origin_tls``,
-salesagent-e6h0) since the seam requires https unconditionally now — there is
+GH #1802) since the seam requires https unconditionally now — there is
 no scheme hatch left to open.
 
 Two of the ten sites had no origin-driven case here, and that was a finding
@@ -37,11 +37,11 @@ constant in the services layer, so the gates they blocked are writable:
 
 * ``src/admin/blueprints/settings.py``'s four Approximated calls became one
   ``APPROXIMATED_BASE_URL`` in ``src/services/approximated_client.py``
-  (salesagent-47n9.7). Still no origin-driven case here — the affordance
+  (GH #1802). Still no origin-driven case here — the affordance
   exists, the happy paths remain to be written.
 * ``src/admin/blueprints/auth.py``'s token exchange became
   ``GOOGLE_TOKEN_URL`` in ``src/services/google_oauth_client.py``
-  (salesagent-6gpt.4), which is what lets the Google cases below drive real
+  (GH #1802), which is what lets the Google cases below drive real
   production code — service and ``gam_callback`` alike — at a real origin.
 
 The injectability cases in section 3 pin both constants in place. They were the
@@ -258,7 +258,7 @@ def _point_google_token_url_at(origin: LocalOrigin, monkeypatch) -> None:
     """Re-point the Google token endpoint at *origin*.
 
     Monkeypatching the module constant IS the injection point: the service
-    holds Google's endpoint as a typed ``VendorConstant`` (salesagent-tbrk.6),
+    holds Google's endpoint as a typed ``VendorConstant`` (GH #1802),
     so a test can stand a local origin in for Google without production
     growing a knob to be configured wrong in a deployment. It is also why the
     exchange had to leave the Flask view — a literal inside ``gam_callback``
@@ -694,12 +694,12 @@ def test_triton_status_check_reads_an_active_campaign(local_origin_tls, monkeypa
 def test_triton_delivery_report_csv_decodes_the_vendors_charset(local_origin_tls, monkeypatch):
     """Triton's delivery-report CSV decodes using the origin's OWN Content-Type charset, not a silent guess.
 
-    ``OutboundResult.text`` (salesagent-tbrk.5) replicates
+    ``OutboundResult.text`` (GH #1802) replicates
     ``httpx.Response.text``'s charset-detection stdlib-only: the Content-Type
     header's charset parameter when Python knows the codec, UTF-8 otherwise.
     This is the one migrated ``.text`` read (``triton_digital.py:488``,
     the delivery-report CSV parse) that mutation testing
-    (salesagent-16bhn.35) found had NO behavioral grader at all — the two
+    (GH #1802) found had NO behavioral grader at all — the two
     pre-existing Triton tests in this file exercise ``check_media_buy_status``,
     which reads ``.json()``, not this CSV-report branch.
 
@@ -936,7 +936,7 @@ def test_approximated_base_url_is_injectable():
     anywhere. Hoisting the base to one module-level constant is what makes the
     gate writable, and it deletes three copies of a URL at the same time.
 
-    Lives in ``src/services/approximated_client.py`` since salesagent-47n9.7
+    Lives in ``src/services/approximated_client.py`` since GH #1802
     moved the vendor client out of the admin blueprint into the services layer
     — every other operator-configured vendor already routed through
     ``src/adapters/`` or a service, not a Flask blueprint.
@@ -950,7 +950,7 @@ def test_approximated_base_url_is_injectable():
         "origin. Hoist the host to a module-level APPROXIMATED_BASE_URL."
     )
 
-    # salesagent-tbrk.6: an injectable constant is not enough on its own — the
+    # GH #1802: an injectable constant is not enough on its own — the
     # ticket #1802/F11 shape was exactly this, an os.environ.get(...) default,
     # which is "injectable" (this assertion passed against it too) yet also an
     # import-time credential-redirection knob. The constant must be the typed
@@ -974,7 +974,7 @@ def test_google_token_url_is_injectable():
     in for Google. That is unreachable while the URL is a literal inside the
     view function.
 
-    Lives in ``src/services/google_oauth_client.py`` since salesagent-6gpt.4
+    Lives in ``src/services/google_oauth_client.py`` since GH #1802
     moved the exchange out of the admin blueprint into the services layer —
     the same move ``approximated_client`` made above, for the same reason: an
     operator-configured vendor call belongs in ``src/adapters/`` or a service,
@@ -989,7 +989,7 @@ def test_google_token_url_is_injectable():
         "GOOGLE_TOKEN_URL in src/services/google_oauth_client.py."
     )
 
-    # salesagent-tbrk.6: same requirement as APPROXIMATED_BASE_URL above — a
+    # GH #1802: same requirement as APPROXIMATED_BASE_URL above — a
     # non-None module attribute is not enough; it must be the typed
     # VendorConstant, never a bare string (env-sourced or otherwise), so the
     # env-sourced-destination guard has a type to check the site is built from.

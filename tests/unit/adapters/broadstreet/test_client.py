@@ -13,7 +13,7 @@ def _seam_result(*, content: bytes, body):
 
     The client reads ``result.content`` to decide whether there is a body at
     all, then ``result.json()`` — the same two touchpoints the real result
-    has (salesagent-tbrk.5 closed OutboundResult over content/text/headers
+    has (GH #1802 closed OutboundResult over content/text/headers
     directly -- no more ``.response`` reach-through).
     """
     result = MagicMock()

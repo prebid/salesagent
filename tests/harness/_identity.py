@@ -7,13 +7,13 @@ for constructing ResolvedIdentity in tests.
 from __future__ import annotations
 
 from src.core.resolved_identity import ResolvedIdentity
-from tests.factories.principal import _UNSET, PrincipalFactory
+from tests.factories.principal import PrincipalFactory
 
 
 def make_identity(
-    principal_id: str | None = _UNSET,  # type: ignore[assignment]
-    tenant_id: str | None = _UNSET,  # type: ignore[assignment]
-    tenant: dict | None = _UNSET,  # type: ignore[assignment]
+    principal_id: str | None = PrincipalFactory.UNSET,  # type: ignore[assignment]
+    tenant_id: str | None = PrincipalFactory.UNSET,  # type: ignore[assignment]
+    tenant: dict | None = PrincipalFactory.UNSET,  # type: ignore[assignment]
     protocol: str = "mcp",
     dry_run: bool = False,
     **kwargs: object,
@@ -28,8 +28,8 @@ def make_identity(
     passed (e.g. principal_id=None for auth-error tests).
     """
     return PrincipalFactory.make_identity(
-        principal_id="test_principal" if principal_id is _UNSET else principal_id,
-        tenant_id="test_tenant" if tenant_id is _UNSET else tenant_id,
+        principal_id="test_principal" if principal_id is PrincipalFactory.UNSET else principal_id,
+        tenant_id="test_tenant" if tenant_id is PrincipalFactory.UNSET else tenant_id,
         tenant=tenant,
         protocol=protocol,
         dry_run=dry_run,

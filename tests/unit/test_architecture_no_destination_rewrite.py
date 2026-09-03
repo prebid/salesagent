@@ -20,7 +20,7 @@ Scope, stated precisely: this detector matches the stdlib REASSEMBLY spellings.
 It deliberately does not try to catch every way a destination can change hands
 — ``src/core/creative_agent_registry.py``'s ``_connection_agent_url`` swaps the
 transport URL for the env-configured ``CREATIVE_AGENT_URL`` alias by returning
-a different STRING (sanctioned, salesagent-9qe2), which no spelling scan can
+a different STRING (sanctioned, GH #1802), which no spelling scan can
 distinguish from hostile code statically. That swap's bounds are graded
 behaviourally instead: ``tests/unit/test_creative_agent_connection_alias.py``
 asserts it applies only to the public default agent, only when the env var is
@@ -116,7 +116,7 @@ class TestNoDestinationRewrite:
                 "The URL a caller supplies must reach the egress seam byte-for-byte; nothing may",
                 "rebuild it or swap its netloc/scheme in front of (or inside) the seam. If a test",
                 "stack needs a reachable callback host, register a reachable hostname instead",
-                "(webhooks.adcp.test — see tests/e2e/_webhook_capture.py, salesagent-amht.3).",
+                "(webhooks.adcp.test — see tests/e2e/_webhook_capture.py, GH #1802).",
                 "There is no allowlist.",
             ]
             raise AssertionError("\n".join(lines))
@@ -201,7 +201,7 @@ class TestDestinationRewriteDetector:
 
 
 # ---------------------------------------------------------------------------
-# Env-sourced destination guard (salesagent-tbrk.6) — the class this file's
+# Env-sourced destination guard (GH #1802) — the class this file's
 # own module docstring admits the sibling detector above is blind to: it
 # "matches the stdlib REASSEMBLY spellings" only, so an env read placed in
 # front of a credential-bearing endpoint — ``APPROXIMATED_BASE_URL =
@@ -279,7 +279,7 @@ def find_env_sourced_destination_violations(tree: ast.Module) -> list[int]:
 #   scope on the merits: it is neither credential-bearing (a public allowlist,
 #   not a secret-bearing endpoint) nor reached through the egress seam
 #   (``send``/``asend``) at all -- CORS configuration is a different subsystem
-#   than "where a URL this application DIALS comes from" (salesagent-tbrk.6
+#   than "where a URL this application DIALS comes from" (GH #1802
 #   design correction, found by this atom's own detector run).
 # Only ``app.py`` remains. ``creative_agent_registry.py`` was carried here too
 # until the shared scanner started raising on exemptions that suppress nothing:

@@ -186,6 +186,52 @@ def find_plain_json_column_violations(tree: ast.Module) -> list[int]:
     return lines
 
 
+def find_inline_resolved_identity_calls(tree: ast.Module) -> list[int]:
+    """Return line numbers of inline ``ResolvedIdentity(...)`` constructions.
+
+    Catches both direct (``ResolvedIdentity(...)``) and attribute
+    (``mod.ResolvedIdentity(...)``) call shapes. Aliased imports
+    (``from ... import ResolvedIdentity as RI; RI(...)``) are not caught —
+    that would require type-inference across the import graph, and in
+    practice the test surface constructs directly or via module attribute.
+
+    Shared by the zero-tolerance A2A guard
+    (``test_architecture_a2a_test_uses_factory.py``) and the per-file cap
+    guard for the rest of the test surface
+    (``test_architecture_resolved_identity_inline_cap.py``) so "what inline
+    ResolvedIdentity means" has one definition instead of two byte-identical
+    copies.
+    """
+    lines: list[int] = []
+    for node in iter_call_expressions(tree):
+        func = node.func
+        if isinstance(func, ast.Name) and func.id == "ResolvedIdentity":
+            lines.append(node.lineno)
+        elif isinstance(func, ast.Attribute) and func.attr == "ResolvedIdentity":
+            lines.append(node.lineno)
+    return lines
+
+
+def assert_inline_resolved_identity_matcher_self_test() -> None:
+    """Shared positive/negative self-test body for the inline-ResolvedIdentity matcher.
+
+    Called from both guard test files' self-tests so the detector's own
+    coverage lives in one place instead of two byte-identical copies.
+    """
+    positive_tree = ast.parse(
+        "from src.core.resolved_identity import ResolvedIdentity\n"
+        "import src.core.resolved_identity as mod\n"
+        "ResolvedIdentity(principal_id='a')\n"
+        "mod.ResolvedIdentity(principal_id='b')\n"
+    )
+    assert find_inline_resolved_identity_calls(positive_tree) == [3, 4]
+
+    negative_tree = ast.parse(
+        "from tests.factories.principal import PrincipalFactory\nPrincipalFactory.make_identity(principal_id='a')\n"
+    )
+    assert find_inline_resolved_identity_calls(negative_tree) == []
+
+
 _FS_MUTATING_CALLS: frozenset[str] = frozenset(
     {
         "mkdir",

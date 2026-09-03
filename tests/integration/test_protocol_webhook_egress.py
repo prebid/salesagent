@@ -113,7 +113,7 @@ _UNRESOLVABLE_WEBHOOK_URL = "https://webhook-sink.invalid/webhook"
 
 # The refusal wording an operator reads, in the delivery-log row AND in the audit
 # line. It is the EGRESS SEAM's — src/core/security/webhook_egress.py — not this
-# sender's: before lane salesagent-gra7.1 the sender's refusal arm overrode the
+# sender's: before lane GH #1802 the sender's refusal arm overrode the
 # seam's detail with its own "refused by egress policy" string, which is one more
 # place the vocabulary could drift. Now the outcome carries the wording and the
 # recorder writes it down, so there is exactly one.
@@ -402,7 +402,7 @@ class TestRefusedDestinationRow:
             assert row.status == "refused", (
                 f"a destination refused before any connection was opened was written down as "
                 f"{row.status!r} — the same word the recorder uses for a delivery the buyer's "
-                "endpoint actually rejected. Lane salesagent-gra7.1 gave the refusal its own "
+                "endpoint actually rejected. Lane GH #1802 gave the refusal its own "
                 "status value precisely so an operator can tell a misconfigured URL from a "
                 "flaky endpoint"
             )
@@ -536,7 +536,7 @@ class TestTwoDestinationsOneService:
     second origin therefore binds ``127.0.0.2`` — still loopback, still covered
     by the private-range escape hatch ``LocalOriginMixin`` opens, and now also
     served over real TLS (the generated CA's SAN covers 127.0.0.2 specifically
-    for this test — salesagent-e6h0, since the seam requires https
+    for this test — GH #1802, since the seam requires https
     unconditionally now), and a different pin. (``localhost`` would also work
     now that URLs are delivered verbatim, but ``127.0.0.2`` keeps the two pins
     unambiguously distinct without depending on resolver family ordering.)

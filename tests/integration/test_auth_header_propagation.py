@@ -1,6 +1,6 @@
 """Auth config propagation from CreativeAgent/SignalsAgent into the guarded MCP seam.
 
-Before salesagent-4n88, both registries built an ``adcp.AgentConfig`` (via the
+Before GH #1802, both registries built an ``adcp.AgentConfig`` (via the
 deleted ``build_agent_config``/``_build_adcp_client``) and asserted on its
 ``auth_token``/``auth_header``/``auth_type`` fields. The OPERATOR agent path no
 longer builds that config at all — it goes through

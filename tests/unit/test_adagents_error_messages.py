@@ -1,5 +1,5 @@
 """describe_adagents_error() must return a fixed, non-disclosing message per
-exception class -- never the library's own ``str(exc)`` (salesagent-grgc).
+exception class -- never the library's own ``str(exc)`` (GH #1802).
 
 Unit-level (no DB, no network): the mapping is pure exception-class ->
 string, and every call site that needs an integration-level proof already

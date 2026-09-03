@@ -108,7 +108,7 @@ pytestmark = [pytest.mark.integration]
 # Wire transports that can carry a ``property_list``. All three: ``property_list``
 # is a top-level property of get-products-request.json at the pinned AdCP 3.1.1,
 # so a REST buyer that cannot send one is a protocol gap, not a transport quirk
-# (salesagent-sxl4).
+# (GH #1802).
 _WIRE_TRANSPORTS = [Transport.MCP, Transport.A2A, Transport.REST]
 
 # Buyer-supplied URLs the seam refuses before opening a connection: one for

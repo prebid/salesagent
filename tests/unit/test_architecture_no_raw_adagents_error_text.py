@@ -1,5 +1,5 @@
 """Structural guard: a caught Adagents*Error's text may only reach a
-``logger.*`` call or ``describe_adagents_error`` (salesagent-grgc).
+``logger.*`` call or ``describe_adagents_error`` (GH #1802).
 
 ``adcp``'s ``AdagentsValidationError`` can carry a resolved IP address and an
 SSRF range classification (confirmed by reading ``adcp.signing.jwks`` and
@@ -168,7 +168,7 @@ class TestNoRawAdagentsErrorText:
 
         assert not all_violations, (
             "except-Adagents*Error clause(s) do not route through describe_adagents_error() "
-            f"-- risk of echoing the library's raw exception text (salesagent-grgc): {all_violations}"
+            f"-- risk of echoing the library's raw exception text (GH #1802): {all_violations}"
         )
 
 

@@ -71,7 +71,7 @@ class WorkflowRepository:
         if step is None:
             from src.core.exceptions import AdCPTaskNotFoundError
 
-            raise AdCPTaskNotFoundError(f"Task {step_id} not found")
+            raise AdCPTaskNotFoundError(f"Reference {step_id} not found")
         return step
 
     def list_by_tenant(

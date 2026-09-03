@@ -1,6 +1,6 @@
 """The seam returns ONE outcome record, decided by ONE match on the pinned scheme enum.
 
-Epic D lane C4 (salesagent-fo99.4). The lane deletes the hand-rolled union — its
+Epic D lane C4 (GH #1802). The lane deletes the hand-rolled union — its
 resolver and five variants, both aliases, and all fifteen ``isinstance`` sites —
 and replaces the decision with ONE construction of the pinned library
 ``Authentication`` (imported as ``LibraryAuthentication``, an import alias rather

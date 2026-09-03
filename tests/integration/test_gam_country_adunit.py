@@ -18,7 +18,7 @@ def mock_requests_get(url, **kwargs):
 
     The report download goes through src.core.security.outbound_http.send now, so
     this returns an OutboundResult-shaped double: the body is read off
-    ``result.content`` (salesagent-tbrk.5 closed OutboundResult over
+    ``result.content`` (GH #1802 closed OutboundResult over
     content/text/headers directly -- no more ``.response`` reach-through),
     and the seam raises on a non-2xx rather than handing back something to
     call raise_for_status() on.

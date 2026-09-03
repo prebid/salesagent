@@ -52,7 +52,7 @@ def _drive(send_notification_side):
     session = session_returning([webhook])
 
     # A REAL service with only the wire call stubbed. _send_push_notifications
-    # dispatches through notify() now (salesagent-pldmk.39); a MagicMock service
+    # dispatches through notify() now (GH #1802); a MagicMock service
     # returns a MagicMock from notify(), which asyncio refuses as a coroutine, so
     # no task is ever created and these pinning assertions grade nothing.
     fake_service = ProtocolWebhookService()

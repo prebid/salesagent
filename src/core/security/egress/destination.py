@@ -11,7 +11,7 @@ messaging — but neither replaces the other; this type does not touch
 ``UrlProvenance``, ``send()``/``asend()``'s signature, or any existing
 ``provenance=`` call site.
 
-Threaded through exactly two sites today (salesagent-tbrk.6):
+Threaded through exactly two sites today (GH #1802):
 ``APPROXIMATED_BASE_URL``, ``GOOGLE_TOKEN_URL``.
 
 One member, not a union. Two further members and the union over them were

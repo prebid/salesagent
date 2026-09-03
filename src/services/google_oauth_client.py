@@ -19,7 +19,7 @@ from src.core.security.outbound_http import send
 
 # The Google OAuth token endpoint, hoisted so the exchange can be driven at a
 # local origin. Operator-configured infrastructure, not a counterparty URL.
-# A VendorConstant, matching APPROXIMATED_BASE_URL's typing (salesagent-tbrk.6).
+# A VendorConstant, matching APPROXIMATED_BASE_URL's typing (GH #1802).
 GOOGLE_TOKEN_URL = VendorConstant(url="https://oauth2.googleapis.com/token")
 
 

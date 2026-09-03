@@ -22,7 +22,7 @@ from src.core.security.outbound_http import OutboundError, OutboundResult, send
 # The Approximated vhost API host, in ONE place. It was repeated at all four
 # call sites, which made the ticket's own "drive it at a local origin" gate
 # unreachable. A VendorConstant, never an env read: this is a credential-bearing
-# destination that must not become silently redirectable (salesagent-tbrk.6).
+# destination that must not become silently redirectable (GH #1802).
 APPROXIMATED_BASE_URL = VendorConstant(url="https://cloud.approximated.app")
 
 

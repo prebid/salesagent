@@ -44,7 +44,7 @@ def allow_local_origin(monkeypatch) -> None:
     say that out loud; a test of a refusal must never call this, or it would
     grade nothing. Pair with the ``local_origin_tls`` fixture (not
     ``local_origin``) — the seam requires https unconditionally now
-    (salesagent-e6h0), so a plain-http origin is refused regardless of this hatch.
+    (GH #1802), so a plain-http origin is refused regardless of this hatch.
     """
     set_flags(monkeypatch, private=True)
 

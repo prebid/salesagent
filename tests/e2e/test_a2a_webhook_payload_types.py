@@ -124,7 +124,7 @@ def _classify_entry(payload: dict[str, Any], *, path: str | None = None) -> dict
     hook (below, ``path`` is the receiver's own ``self.path``) and the
     compose-coupled path's client-side :class:`_ClassifiedReceivedView`
     (``path`` is not available once capture is a remote keyed store —
-    salesagent-amht.3 — so it is ``None`` there; nothing asserts on it).
+    GH #1802 — so it is ``None`` there; nothing asserts on it).
     """
     status = None
     if "status" in payload:
@@ -159,7 +159,7 @@ class WebhookPayloadCapture(WebhookCaptureHandler):
     Extends the shared loopback capture handler via the ``record`` hook — only
     the classification logic lives here, never a copied ``do_POST``. Used
     exclusively by ``TestProtocolWebhookWireFormat`` (no Docker stack); the
-    compose-coupled tests below classify client-side instead (salesagent-amht.3
+    compose-coupled tests below classify client-side instead (GH #1802
     — capture moved to a real network service, so a server-side subclass hook
     has nowhere to live for that path).
     """
@@ -658,7 +658,7 @@ class TestProtocolWebhookWireFormat:
     @pytest.fixture(autouse=True)
     def _open_egress_hatches(self):
         """Open the private-range hatch and trust the generated CA: the callback
-        is a real https://127.0.0.1 capture server now (salesagent-e6h0 widened
+        is a real https://127.0.0.1 capture server now (GH #1802 widened
         the webhook capture's TLS coverage to loopback addresses, matching the
         generated CA's IP SAN).
 

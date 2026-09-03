@@ -1,4 +1,4 @@
-"""Regression: T-UC-004-webhook-ssrf-blocked must be collected on e2e_rest too (salesagent-47n9.3).
+"""Regression: T-UC-004-webhook-ssrf-blocked must be collected on e2e_rest too (GH #1802).
 
 ``tests/bdd/conftest.py``'s ``_NO_E2E_REST_TAGS`` silently drops
 ``Transport.E2E_REST`` from this scenario's parametrize list inside

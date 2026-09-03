@@ -362,7 +362,7 @@ class DeliveryWebhookScheduler:
             # buyer that registered over A2A received an MCP-shaped delivery report.
             # It had no way to do better until push_notification_configs recorded the
             # protocol: this job fires long after the request and carries no identity
-            # (salesagent-pldmk.39).
+            # (GH #1802).
             #
             # NULL means a row written before that column existed. Falling back to
             # "mcp" reproduces exactly the previous behaviour for those rows rather

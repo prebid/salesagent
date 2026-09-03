@@ -1,7 +1,7 @@
 """Structural guard: A2A test files must use PrincipalFactory.make_identity, not inline ResolvedIdentity.
 
 Inline ``ResolvedIdentity(...)`` constructions in A2A test files (``tests/unit/test_a2a*.py``,
-``tests/integration/test_a2a*.py``) bypass the single source of truth at
+``tests/integration/test_a2a*.py``, ``tests/e2e/test_a2a*.py``) bypass the single source of truth at
 ``tests.factories.principal.PrincipalFactory.make_identity``. Each inline construction is
 a future drift point — the factory's signature can evolve (e.g., new spec-mandated fields)
 without inline callers tracking the change.
@@ -19,27 +19,24 @@ from pathlib import Path
 
 import pytest
 
-from tests.unit._architecture_helpers import iter_call_expressions
+from tests.unit._architecture_helpers import (
+    assert_inline_resolved_identity_matcher_self_test,
+    find_inline_resolved_identity_calls,
+)
 
 
 def _a2a_test_files() -> list[Path]:
     repo_root = Path(__file__).resolve().parents[2]
     paths: list[Path] = []
-    for pattern in ("tests/unit/test_a2a*.py", "tests/integration/test_a2a*.py"):
-        paths.extend(repo_root.glob(pattern))
+    for suite in ("unit", "integration", "e2e"):
+        # Recursive: depth ≥ 2 ``test_a2a*.py`` must not escape the guard.
+        paths.extend((repo_root / "tests" / suite).rglob("test_a2a*.py"))
     return paths
 
 
 def _find_resolved_identity_calls(path: Path) -> list[int]:
     tree = ast.parse(path.read_text(), filename=str(path))
-    lines: list[int] = []
-    for node in iter_call_expressions(tree):
-        func = node.func
-        if isinstance(func, ast.Name) and func.id == "ResolvedIdentity":
-            lines.append(node.lineno)
-        elif isinstance(func, ast.Attribute) and func.attr == "ResolvedIdentity":
-            lines.append(node.lineno)
-    return lines
+    return find_inline_resolved_identity_calls(tree)
 
 
 @pytest.mark.arch_guard
@@ -60,3 +57,14 @@ def test_a2a_test_files_use_principal_factory_make_identity():
         f"Found {len(violations)} inline ResolvedIdentity(...) construction(s) in "
         f"A2A test files. Replace with PrincipalFactory.make_identity(...):\n  " + "\n  ".join(violations)
     )
+
+
+@pytest.mark.arch_guard
+def test_find_resolved_identity_calls_self_test() -> None:
+    """Matcher self-test for the A2A factory guard.
+
+    Body hoisted to ``tests.unit._architecture_helpers`` — shared with the
+    sister per-file cap guard's self-test so the detector's coverage isn't
+    duplicated byte-for-byte across both guard files.
+    """
+    assert_inline_resolved_identity_matcher_self_test()

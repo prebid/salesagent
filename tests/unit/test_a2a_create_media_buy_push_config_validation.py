@@ -113,7 +113,7 @@ async def test_short_webhook_credentials_do_not_block_create_media_buy():
         "authentication": {"schemes": ["Bearer"], "credentials": "test-webhook-token"},
     }, f"push_notification_config not forwarded to tool: {captured.get('push_notification_config')!r}"
 
-    # ── Epic D lane C3 (salesagent-fo99.3): what changed, and what did not ──
+    # ── Epic D lane C3 (GH #1802): what changed, and what did not ──
     # The assertions above still hold: the HANDLER must not fold
     # push_notification_config into CreateMediaBuyRequest.model_validate and
     # short-circuit the whole request. That was gh-#1299's actual defect and it
@@ -128,7 +128,7 @@ async def test_short_webhook_credentials_do_not_block_create_media_buy():
     # schema-invalid. Before C3 the untyped A2A path forwarded it, stored it, and
     # then the fail-closed sender refused to deliver — accept-then-never-deliver.
     # It is now refused AT INGEST, correctably, naming the exact field. Owner
-    # decision recorded on salesagent-fo99.3 ("tighten to spec"); #1299's real
+    # decision recorded on GH #1802 ("tighten to spec"); #1299's real
     # concern is honoured because the buyer gets a precise field, not an opaque
     # whole-request rejection.
     from src.core.exceptions import AdCPValidationError

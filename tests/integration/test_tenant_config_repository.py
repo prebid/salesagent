@@ -99,7 +99,7 @@ class TestGetAdapterConfig:
 
 
 class TestUpdateTenantProvesEveryKeyNamesAWritableAttribute:
-    """``update_tenant`` refuses a key that is not a writable Tenant attribute (salesagent-6gpt.5).
+    """``update_tenant`` refuses a key that is not a writable Tenant attribute (GH #1802).
 
     ``**columns: Any`` plus ``setattr`` on a SQLAlchemy declarative instance
     accepts a misspelled column as a plain Python attribute: nothing is mapped,

@@ -26,7 +26,7 @@ def webhook_server():
 
     Previously loopback-pinned (``host="127.0.0.1"``) — dead on arrival for a
     containerized adcp-server, which cannot reach the host's loopback
-    (salesagent-amht.3's architect review; masked because this lifecycle test
+    (GH #1802's architect review; masked because this lifecycle test
     never asserts on ``received``, only on ``url`` being accepted by the
     server). ``webhooks.adcp.test`` is reachable both host-run and in-network,
     so this now actually works instead of merely compiling.

@@ -8,13 +8,13 @@ bytes as received — never a re-serialization of a parsed payload. Per AdCP
 captured before any JSON parse or re-serialize." A verifier that
 re-serializes a parsed dict (this module's own prior implementation)
 recreates, on the receive side, the exact signed-bytes-vs-wire-bytes
-divergence salesagent-47n9.1 fixes on the send side — and masks it, because
+divergence GH #1802 fixes on the send side — and masks it, because
 a re-serializing verifier and a re-serializing signer can agree with each
 other while both disagree with the real wire.
 
 This is a reference implementation for AdCP webhook *receivers* — this
 application is a sender, not a receiver, and has no inbound webhook route in
-``src/`` today (salesagent-47n9.19's disease scan confirmed zero production
+``src/`` today (GH #1802's disease scan confirmed zero production
 callers of this module). The duplicate-object-key rejection below is
 conformance work for that reference, graded by the vendored spec vectors, not
 production ingress policy.

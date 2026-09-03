@@ -82,6 +82,7 @@ pytest_plugins = [
     "tests.bdd.steps.domain.uc_brand_shorthand",
     "tests.bdd.steps.domain.compat_normalization",
     "tests.bdd.steps.domain.local_constraint_relaxations",
+    "tests.bdd.steps.domain.a2a_task_ownership",
 ]
 
 # ---------------------------------------------------------------------------
@@ -1369,6 +1370,28 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             "T-UC-006-sandbox-happy": (
                 "SPEC-PRODUCTION GAP: sync_creatives does not set sandbox=true on "
                 "response for sandbox accounts (BR-RULE-209 INV-4)"
+            ),
+            # Async submitted envelope: CreativeSyncEnv.call_a2a uses
+            # sync_creatives_raw (not _run_a2a_handler), so wire_dict() fails
+            # with "wire_response missing" before the submitted envelope can be
+            # graded — that harness gap is the proximate cause on the default
+            # [a2a] node. Underlying SPEC-PRODUCTION GAP: sync_creatives has no
+            # submitted envelope (_sync_creatives_impl only returns the success
+            # variant). Poll step unbound until create→poll seam exists (#1780).
+            "T-UC-006-main-async-submitted": (
+                "HARNESS GAP (proximate, #1922): CreativeSyncEnv.call_a2a does not "
+                "stash wire_response, so wire_dict() fails before grading. "
+                "SPEC-PRODUCTION GAP (underlying): sync_creatives has no submitted "
+                "envelope — _sync_creatives_impl only returns the success variant"
+            ),
+            # Same submitted-envelope gap as main-async-submitted; no poll step,
+            # so this entry retains the production-gap ratchet (flips when the
+            # envelope lands). A2A node also blocked by the wire_response stash.
+            "T-UC-006-sandbox-submitted-no-flag": (
+                "SPEC-PRODUCTION GAP: sync_creatives has no submitted envelope — "
+                "sandbox INV-11 (omit sandbox on submitted) cannot be graded until "
+                "status='submitted' with a pollable task_id is emitted "
+                "(A2A also blocked by CreativeSyncEnv wire_response stash gap)"
             ),
             # Sandbox: invalid format_id does not trigger validation error at _impl level
             "T-UC-006-sandbox-validation": (
@@ -3189,6 +3212,11 @@ _UC002_V31_SUCCESS_WIRED: set[str] = {
 # They must NOT be parametrized across MCP/A2A/REST/IMPL API transports.
 _ADMIN_TAG_PREFIX = "T-ADMIN-"
 
+# Locally-added A2A protocol-method scenarios (tasks/get, tasks/cancel — #1780).
+# Tagged @a2a as well, so they are never parametrized across transports: the
+# methods exist only on the A2A wire.
+_A2A_TASK_OWNERSHIP_TAG_PREFIX = "T-A2A-TASK-OWNERSHIP-"
+
 # UCs whose tool has no REST route — parametrize across A2A + MCP only (a REST
 # variant would 404). get_media_buys (UC-019) is A2A/MCP-only.
 _NO_REST_UC_TAG_PREFIXES = ("T-UC-019-",)
@@ -3630,6 +3658,20 @@ def _seed_uc019(ctx: dict, env: object) -> None:
     ctx["principal"] = principal
 
 
+def _build_a2a_task_ownership_env(e2e_config: object | None) -> AbstractContextManager:
+    """In-memory A2A tasks/get + tasks/cancel ownership gate (#1702 / #1959)."""
+    from tests.harness.a2a_task_ownership import A2ATaskOwnershipEnv
+
+    return A2ATaskOwnershipEnv(e2e_config=e2e_config)
+
+
+def _seed_a2a_task_ownership(ctx: dict, env: object) -> None:
+    """Seed owner + sibling + cross-tenant principals for ownership grading."""
+    tenant, principal = env.setup_principals()
+    ctx["tenant"] = tenant
+    ctx["principal"] = principal
+
+
 # ── Seeds extracted from the former _harness_env elif chain ────
 # Each was an inline body inside a marker-keyed branch. As rows they are visible
 # to storyboard_spec.resolve_env_route, which is what lets scripts/audit resolve
@@ -3808,17 +3850,23 @@ _UC_BUCKET_ROUTES: dict[str, EnvRoute] = {
         env_builder=_build_uc003_storyboard_generic_client_env,
         seed=_seed_uc003_storyboard_generic_client,
     ),
-    # The five rows below are keyed by the coarse `uc` bucket (from
+    # The rows below are keyed by the coarse `uc` bucket (from
     # _detect_uc), not a per-scenario tag: they are what a scenario in these
     # UCs falls back to when no predicate row above claims it. ADMIN, COMPAT,
-    # UC-GET-PRODUCTS and UC-005 have no predicate rows at all — one env + one
-    # seed serves every scenario. UC-019 does have one (@post-create-poll needs
-    # create + list in a single scenario), so its bucket row is the remainder.
+    # UC-GET-PRODUCTS, UC-005 and A2A-TASK-OWNERSHIP have no predicate rows at
+    # all — one env + one seed serves every scenario. UC-019 does have one
+    # (@post-create-poll needs create + list in a single scenario), so its
+    # bucket row is the remainder.
     "ADMIN": EnvRoute(tag="ADMIN", env_builder=_build_admin_env),
     "COMPAT": EnvRoute(tag="COMPAT", env_builder=_build_product_env),
     "UC-GET-PRODUCTS": EnvRoute(tag="UC-GET-PRODUCTS", env_builder=_build_product_env),
     "UC-005": EnvRoute(tag="UC-005", env_builder=_build_creative_formats_env, seed=_seed_uc005),
     "UC-019": EnvRoute(tag="UC-019", env_builder=_build_media_buy_list_env, seed=_seed_uc019),
+    "A2A-TASK-OWNERSHIP": EnvRoute(
+        tag="A2A-TASK-OWNERSHIP",
+        env_builder=_build_a2a_task_ownership_env,
+        seed=_seed_a2a_task_ownership,
+    ),
 }
 
 # Tag sets the routing predicates below key on. They were inline `if` conditions

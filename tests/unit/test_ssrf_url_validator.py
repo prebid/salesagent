@@ -2,7 +2,7 @@
 
 ``TestCheckUrlSsrf`` and ``TestBlockedHostnames`` — the direct tests of
 ``check_url_ssrf``/``BLOCKED_HOSTNAMES`` — are DELETED: that module
-(``src.core.security.url_validator``) no longer exists (salesagent-tbrk.1).
+(``src.core.security.url_validator``) no longer exists (GH #1802).
 Every row's behavioral content migrated into
 ``tests/integration/test_outbound_http.py``'s verdict-parity table (see that
 file's ``EgressPolicy.check_registration`` cases), which grades the SAME
@@ -16,7 +16,7 @@ triaged row-by-row so nothing was silently dropped:
 - CGNAT literal -> the supplement-range parity rows (this is the row that
   used to pass ONLY because ``url_validator.BLOCKED_NETWORKS`` covered it —
   now covered by the shared predicate on both verdicts, closing
-  salesagent-634hc).
+  GH #1802).
 - non-http / file scheme / require_https -> the non-https parity rows.
 - ``valid_public_https_url_accepted`` -> the accepted half of the
   unresolvable-hostname divergence case.

@@ -6,7 +6,7 @@ floor-respecting lengthener only) and the 3-way per-attempt decision
 sleeping, no ``httpx`` import. :class:`Attempts` is the state machine both
 ``send`` and ``asend`` drive identically; before this module existed, the
 value-level decisions were already single-sourced functions but the LOOP
-that called them in sequence was written twice (salesagent-tbrk.2).
+that called them in sequence was written twice (GH #1802).
 """
 
 from __future__ import annotations

@@ -597,7 +597,7 @@ class TestDeliverWithBackoffGenericException:
         mock_config = MagicMock()
         mock_config.url = "https://example.com/hook"
         # No webhook_secret: production stopped reading that column with
-        # salesagent-47n9.24, and a MagicMock answers every attribute, so leaving
+        # GH #1802, and a MagicMock answers every attribute, so leaving
         # it set would keep this mock describing a config shape nothing reads.
         mock_config.authentication_type = None
         mock_config.authentication_token = None
@@ -610,13 +610,13 @@ class TestDeliverWithBackoffGenericException:
             }
         )
 
-        # salesagent-vkxf part 2: the subject is a NON-transport exception escaping
+        # GH #1802 part 2: the subject is a NON-transport exception escaping
         # the delivery call, so there is nothing an origin can serve to produce it.
         # It is injected at the seam instead of at a transport this module no
         # longer touches — and the seam's own exception TYPES are real now, rather
         # than the placeholder classes the old httpx-module stub had to invent.
         #
-        # salesagent-pldmk.6: the STIMULUS changed, and it had to. This test used to
+        # GH #1802: the STIMULUS changed, and it had to. This test used to
         # raise RuntimeError("unexpected") and pin detail == "unexpected", which
         # positively graded the ``detail=str(e)`` behaviour Move 2 removes. It could
         # not simply be re-pinned in place: the replacement detail is a sentence

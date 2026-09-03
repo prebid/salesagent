@@ -5,12 +5,12 @@ vendored from ``adcontextprotocol/adcp`` at the repo's pinned spec tag (v3.1.1
 -- see ``docs/adcp-spec-version.md`` and that fixture dir's ``_refresh.py``).
 This turns "we changed the code" into "the wire is proven against the spec's
 own test data" -- independent of any local test's own (possibly wrong)
-expectations (salesagent-47n9.18).
+expectations (GH #1802).
 
 Scope boundary -- excluded on purpose, not by oversight:
 
 - The ``signer_side.rejection_vectors`` / ``signer_side.positive_vectors``
-  blocks (salesagent-47n9.19) grade the strict-parse PRIMITIVE
+  blocks (GH #1802) grade the strict-parse PRIMITIVE
   (``webhook_strict_json.loads_rejecting_duplicate_keys``), not the signer
   (``prepare_signed_request``) -- the signer never receives text (see the
   scope note below), so it is never on the code path these vectors exercise.
@@ -33,7 +33,7 @@ Scope boundary -- excluded on purpose, not by oversight:
   a task with no design-review atom).
 - The signer (``prepare_signed_request``) only ever emits its own canonical
   compact-separator, ``ensure_ascii=True`` serialization of a payload dict --
-  by the Core Invariant salesagent-47n9.1 established, it never signs
+  by the Core Invariant GH #1802 established, it never signs
   externally-supplied raw bytes. So it can only be graded against the subset
   of ``vectors`` whose ``raw_body`` IS byte-reproducible from a dict via that
   exact serialization (pure-ASCII, compact-form vectors); vectors in other
@@ -108,7 +108,7 @@ class TestVerifierAcceptsSpecVectors:
     the property under test is signature validity over raw bytes, not clock
     freshness (that's graded separately by the rejection vectors below).
 
-    salesagent-47n9.19: ``verify_webhook`` returns the parsed JSON payload
+    GH #1802: ``verify_webhook`` returns the parsed JSON payload
     (duplicate-key-checked) instead of a bare sentinel, to eliminate a
     double-parse -- except for a body that carries no JSON object at all (e.g.
     the ``empty-body``/``null-bytes`` vectors), where duplicate-key detection
@@ -159,7 +159,7 @@ class TestVerifierReturnsNoPayloadForValidNonObjectJson:
 
     Signing goes through the SDK's ``sign_legacy_webhook`` rather than our own
     ``prepare_signed_request`` because the latter is dict-typed by Core
-    Invariant salesagent-47n9.1 and so structurally cannot emit a non-object
+    Invariant GH #1802 and so structurally cannot emit a non-object
     body -- and signing here by hand would put a second copy of the HMAC
     scheme in the tests.
     """

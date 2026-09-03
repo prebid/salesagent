@@ -110,7 +110,7 @@ class CircuitBreakerEnv(CircuitBreakerMixin, BaseTestEnv):
         that really answers.
 
         No ``secret=`` and no ``webhook_secret`` attribute, mirroring the
-        integration twin (salesagent-47n9.24, GH #1894). A MagicMock answers every
+        integration twin (GH #1802, GH #1894). A MagicMock answers every
         attribute, so leaving it set would let this mock keep feeding a column
         production no longer reads -- the failure mode a mock-based harness is
         worst at surfacing.

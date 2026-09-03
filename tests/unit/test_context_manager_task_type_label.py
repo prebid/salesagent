@@ -50,7 +50,7 @@ def _capture_send(tool_name: str):
 
     # A REAL service with only the wire call stubbed. _send_push_notifications now
     # goes through notify(), which is where the dialect is selected and the payload
-    # built (salesagent-pldmk.39) -- mocking the whole service would mock away the
+    # built (GH #1802) -- mocking the whole service would mock away the
     # code these tests exist to grade. With the real object, notify() runs for real
     # and record() still captures exactly what reaches the wire.
     fake_service = ProtocolWebhookService()

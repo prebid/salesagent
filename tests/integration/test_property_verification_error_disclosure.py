@@ -1,4 +1,4 @@
-"""salesagent-grgc: adagents verification echoes the adcp library's raw error
+"""GH #1802: adagents verification echoes the adcp library's raw error
 text back to the admin and into the DB.
 
 ``src/services/property_verification_service.py``'s ``_verify_property_async``

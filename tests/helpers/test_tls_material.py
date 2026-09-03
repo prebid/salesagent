@@ -3,7 +3,7 @@
 Shared by every in-process TLS front — ``tests/e2e/_webhook_capture.py`` and
 ``tests/integration/test_local_http_origin_tls.py`` — so there is exactly one
 place that knows how to reach the generator. A second copy of its SAN list
-here would be exactly the drift the Core Invariant (salesagent-40qh) forbids:
+here would be exactly the drift the Core Invariant (GH #1802) forbids:
 every new TLS front reuses the SAME generated CA/leaf material.
 """
 

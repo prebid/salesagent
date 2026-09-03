@@ -1,8 +1,8 @@
-"""Long-lived webhook-capture compose service (salesagent-amht.3).
+"""Long-lived webhook-capture compose service (GH #1802).
 
 Turns ``tests/e2e/_webhook_capture.py``'s old per-test, ephemeral-port,
 in-process TLS receiver into a real network service: fixed name, fixed port,
-fronted by the shared ``tls-proxy`` (salesagent-amht.2) at
+fronted by the shared ``tls-proxy`` (GH #1802) at
 ``webhooks.adcp.test``. That is what a webhook receiver is in production.
 
 Two traffic patterns, never conflated:
@@ -62,7 +62,7 @@ _CONTROL_PATH_RE = re.compile(r"^/control/(?P<key>[^/]+)/?$")
 class _CaptureStore:
     """Thread-safe, per-key capture storage — a dict-of-lists, never one global list.
 
-    Also holds each key's REJECTION PROGRAMME (salesagent-pldmk.41): how many of
+    Also holds each key's REJECTION PROGRAMME (GH #1802): how many of
     the next deliveries to that key answer a non-200 status. Nothing else in the
     compose stack can make the deployed server's delivery path fail, so without
     this the server's circuit breaker never records a real failure.

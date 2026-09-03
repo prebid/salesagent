@@ -16,9 +16,9 @@ those files at their current count via a per-file cap dict that can only
 shrink. New files with inline sites fail immediately; existing files with
 fewer sites force the cap down to match (no silent regressions).
 
-A2A test files are skipped here because the stricter A2A-only guard already
-enforces zero on them — including A2A files in this dict would double-cap
-them.
+A2A ``test_a2a*.py`` files are skipped here because the stricter A2A-only
+guard already enforces zero on them — including A2A files in this dict would
+double-cap them. ``test_architecture_a2a*`` helpers stay under this cap guard.
 """
 
 from __future__ import annotations
@@ -28,7 +28,10 @@ from pathlib import Path
 
 import pytest
 
-from tests.unit._architecture_helpers import iter_call_expressions
+from tests.unit._architecture_helpers import (
+    assert_inline_resolved_identity_matcher_self_test,
+    find_inline_resolved_identity_calls,
+)
 
 # Per-file caps for inline ``ResolvedIdentity(...)`` constructions in
 # ``tests/`` (excluding ``test_a2a*.py`` files — those are zero-tolerance
@@ -69,7 +72,6 @@ RESOLVED_IDENTITY_PER_FILE_CAP: dict[str, int] = {
     "tests/integration/test_update_media_buy_persistence.py": 1,
     "tests/unit/test_adcp_25_creative_management.py": 1,
     "tests/unit/test_auth_consistency.py": 3,
-    "tests/unit/test_auth_context_middleware_population.py": 0,
     "tests/unit/test_auth_requirements.py": 6,
     "tests/unit/test_authorized_properties_behavioral.py": 2,
     "tests/unit/test_brand_manifest_policy.py": 1,
@@ -101,37 +103,6 @@ RESOLVED_IDENTITY_PER_FILE_CAP: dict[str, int] = {
 }
 
 
-def _is_a2a_test_file(path: Path) -> bool:
-    """A2A test files are governed by the stricter zero-tolerance guard."""
-    name = path.name
-    return name.startswith("test_a2a") or name.startswith("test_architecture_a2a")
-
-
-def _count_inline_resolved_identity(filepath: Path) -> list[int]:
-    """Return line numbers of inline ``ResolvedIdentity(...)`` calls.
-
-    Catches both direct (``ResolvedIdentity(...)``) and attribute
-    (``mod.ResolvedIdentity(...)``) call shapes. Aliased imports
-    (``from ... import ResolvedIdentity as RI; RI(...)``) are not caught —
-    matching the precedent of the existing A2A guard. In practice the test
-    surface uses direct or module-attribute construction.
-    """
-    if _is_a2a_test_file(filepath):
-        return []
-    try:
-        tree = ast.parse(filepath.read_text(), filename=str(filepath))
-    except (OSError, SyntaxError):
-        return []
-    lines: list[int] = []
-    for node in iter_call_expressions(tree):
-        func = node.func
-        if isinstance(func, ast.Name) and func.id == "ResolvedIdentity":
-            lines.append(node.lineno)
-        elif isinstance(func, ast.Attribute) and func.attr == "ResolvedIdentity":
-            lines.append(node.lineno)
-    return lines
-
-
 # Anchor scan paths on REPO_ROOT so the guard works from any cwd
 # (matches pattern from VALUE_ERROR_PER_FILE_CAP / Pattern A guards).
 _REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -141,6 +112,39 @@ _SCAN_DIRS = [_REPO_ROOT / "tests"]
 def _rel(path: Path) -> str:
     """Return the path relative to repo root, with forward slashes."""
     return str(path.relative_to(_REPO_ROOT)).replace("\\", "/")
+
+
+def _is_a2a_test_file(path: Path) -> bool:
+    """A2A test files are governed by the stricter zero-tolerance factory guard.
+
+    Path-aware: unit/integration/e2e ``test_a2a*`` are skipped here so the
+    factory guard owns them at zero tolerance. Architecture helpers named
+    ``test_architecture_a2a*`` stay under THIS cap guard (the factory guard's
+    ``test_a2a*`` glob never matches that prefix).
+    Use repo-relative prefixes — never ``"unit" in path.parts`` on an absolute
+    path (any ancestor named ``unit``/``integration``/``e2e`` would fail open).
+    """
+    name = path.name
+    if not name.startswith("test_a2a"):
+        return False
+    return _rel(path).startswith(("tests/unit/", "tests/integration/", "tests/e2e/"))
+
+
+def _count_inline_resolved_identity(filepath: Path) -> list[int]:
+    """Return line numbers of inline ``ResolvedIdentity(...)`` calls.
+
+    A2A test files are excluded here — the sister zero-tolerance guard
+    (``test_architecture_a2a_test_uses_factory``) owns them. The AST matcher
+    itself is shared via ``find_inline_resolved_identity_calls`` so both
+    guards agree on what counts as an inline construction.
+    """
+    if _is_a2a_test_file(filepath):
+        return []
+    try:
+        tree = ast.parse(filepath.read_text(), filename=str(filepath))
+    except (OSError, SyntaxError):
+        return []
+    return find_inline_resolved_identity_calls(tree)
 
 
 from tests.unit._per_file_cap_guard import (
@@ -185,3 +189,24 @@ def test_resolved_identity_caps_only_shrink() -> None:
         _count_inline_resolved_identity,
         repo_root=_REPO_ROOT,
     )
+
+
+@pytest.mark.arch_guard
+def test_is_a2a_test_file_anchored_rel_not_ancestor_name() -> None:
+    """Fail-open regression: only repo-relative suite prefixes count."""
+    assert _is_a2a_test_file(_REPO_ROOT / "tests" / "unit" / "test_a2a_x.py") is True
+    assert _is_a2a_test_file(_REPO_ROOT / "tests" / "bdd" / "test_a2a_x.py") is False
+    assert _is_a2a_test_file(_REPO_ROOT / "tests" / "unit" / "test_architecture_a2a_x.py") is False
+
+
+@pytest.mark.arch_guard
+def test_count_inline_resolved_identity_self_test() -> None:
+    """Matcher self-test: detects direct + attribute calls; factory yields 0.
+
+    Body hoisted to ``tests.unit._architecture_helpers`` — shared with the
+    sister A2A factory guard's self-test so the detector's coverage isn't
+    duplicated byte-for-byte across both guard files. The a2a-file exclusion
+    wrapped around ``find_inline_resolved_identity_calls`` in this module is
+    covered separately by ``test_is_a2a_test_file_anchored_rel_not_ancestor_name``.
+    """
+    assert_inline_resolved_identity_matcher_self_test()

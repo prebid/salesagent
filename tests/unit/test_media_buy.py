@@ -880,7 +880,7 @@ class TestBuildAdapterAssetFormatFallback:
         provenance on the second dial silently reclassifies a buyer-chosen URL
         as operator configuration, so a subsequent refusal on that URL comes
         back CONFIGURATION_ERROR/terminal instead of VALIDATION_ERROR/correctable
-        (salesagent-6gpt.1 diff-review round 1 BLOCKING finding, proven
+        (GH #1802 diff-review round 1 BLOCKING finding, proven
         load-bearing by round 2's executed trace: the fix routes the same
         provenance through ``format_resolver.get_format`` ->
         ``fetch_format_spec`` -> ``registry.get_format`` ->

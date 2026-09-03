@@ -2023,7 +2023,7 @@ class TestDeliveryWebhookRetry:
         from tests.harness.delivery_webhook_unit import WebhookEnv
 
         for status_code in [401, 403]:
-            # Repointed onto the real local origin (salesagent-4fya.11). This used to
+            # Repointed onto the real local origin (GH #1802). This used to
             # patch requests.post; delivery is on the egress seam now, so that patch
             # would have gone inert and the test would have issued a genuine request
             # to example.com — which is exactly what it did until this was fixed.

@@ -1,6 +1,6 @@
 """The sender receives a GATED value, never a config-shaped object built to fit.
 
-Covers salesagent-fo99.7.
+Covers GH #1802.
 
 ``ProtocolWebhookService.send_notification`` takes ``DeliverableWebhookTarget``, a
 structural Protocol over three fields. Its docstring records why: the annotation

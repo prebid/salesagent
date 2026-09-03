@@ -3,7 +3,7 @@
 ``push_notification_config.url`` and ``reporting_webhook.url`` are URLs the
 protocol surface STORES now and DIALS later — by delivery time there is no
 request left to refuse into, so the buyer-actionable refusal has to happen at
-ingest. The salesagent-w97e disease scan found five hand-rolled copies of "pull
+ingest. The GH #1802 disease scan found five hand-rolled copies of "pull
 ``url`` out of the config and store it", none of which validated; the fix routed
 every protocol ingest of those fields through a validating gate.
 

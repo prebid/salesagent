@@ -45,6 +45,7 @@ EXPECTED_WIRED_ROUTES: frozenset[str] = frozenset(
     {
         # bucket rows, appended from _UC_BUCKET_ROUTES
         "ADMIN",
+        "A2A-TASK-OWNERSHIP",
         "COMPAT",
         "UC-005",
         "UC-019",

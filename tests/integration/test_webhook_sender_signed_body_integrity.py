@@ -1,4 +1,4 @@
-"""Core Invariant (salesagent-47n9.1): a webhook sender signs the bytes it sends.
+"""Core Invariant (GH #1802): a webhook sender signs the bytes it sends.
 
 A webhook sender must never hold a signer and a body serializer as two
 independent decisions. The one correct pattern in this codebase
@@ -26,7 +26,7 @@ that).
 
 Both cases are RED today. They must go GREEN only once each sender routes
 through one shared serialize-once -> sign -> send(content=) function
-(salesagent-47n9.1's implementation), not by patching either recompute here.
+(GH #1802's implementation), not by patching either recompute here.
 """
 
 from __future__ import annotations
@@ -42,7 +42,7 @@ pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 class TestWebhookDeliveryWithRetrySignedBodyIntegrity:
     """``deliver_webhook_with_retry`` (src/core/webhook_delivery.py) must sign what it sends.
 
-    Before salesagent-47n9.1: signs via ``WebhookAuthenticator.sign_payload``
+    Before GH #1802: signs via ``WebhookAuthenticator.sign_payload``
     (line 99) and then calls ``send(..., json=delivery.payload, ...)``
     (line 131) — httpx re-serializes ``delivery.payload`` independently of
     what was signed. After: routes through
@@ -78,7 +78,7 @@ class TestWebhookDeliveryWithRetrySignedBodyIntegrity:
 class TestWebhookDeliveryServiceSignedBodyIntegrity:
     """``WebhookDeliveryService._deliver_with_backoff`` must sign what it sends.
 
-    Before salesagent-47n9.1: signs via ``_generate_hmac_signature`` (line 337)
+    Before GH #1802: signs via ``_generate_hmac_signature`` (line 337)
     and then calls ``send(config.url, json=payload, ...)`` (line 538) — the
     same re-serialization bug as ``deliver_webhook_with_retry``, under the
     spec-correct ``X-ADCP-Signature`` header name (bare hex, no ``sha256=``
@@ -101,7 +101,7 @@ class TestWebhookDeliveryServiceSignedBodyIntegrity:
         Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-07
         """
         # No length requirement: the 32-char minimum this line used to cite was
-        # deleted with the inline resolver (salesagent-47n9.24, GH #1894) -- it
+        # deleted with the inline resolver (GH #1802, GH #1894) -- it
         # tested a column with no writers and had never once fired.
         secret = "buyer-shared-secret-padded-to-32ch"
 

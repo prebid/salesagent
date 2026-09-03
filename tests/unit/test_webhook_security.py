@@ -124,7 +124,7 @@ class TestWebhookURLValidator:
     def test_requires_http_or_https(self):
         """Should reject non-HTTP protocols.
 
-        No hatch to parametrize over anymore (salesagent-e6h0 deleted the
+        No hatch to parametrize over anymore (GH #1802 deleted the
         scheme hatch entirely) — there is only one posture, https-required,
         and ftp:// is refused under it exactly like every other posture that
         used to exist.
@@ -175,12 +175,12 @@ class TestLocalhostAllowanceUnderTestingMode:
     fixture happened to leave behind, which is exactly how a gate control goes
     inert without anyone noticing.
 
-    ``LOOPBACK_URLS`` are https (salesagent-e6h0): the scheme hatch this class
+    ``LOOPBACK_URLS`` are https (GH #1802): the scheme hatch this class
     used to open no longer exists — ``_maybe_allow_localhost`` checks the
     SCHEME first and refuses to rescue a scheme failure, so an e2e capture
     server on loopback must register a REAL https URL now (matching
     ``tests/e2e/_webhook_capture_loopback.py``'s loopback-covered TLS front —
-    the hermetic (no-Docker-stack) capture path, salesagent-amht.3). This
+    the hermetic (no-Docker-stack) capture path, GH #1802). This
     class grades the ADDRESS allowance specifically, decoupled from scheme —
     which colliding with the scheme gate would otherwise obscure.
     """
@@ -232,7 +232,7 @@ class TestWebhookSchemeGateTracksTheEgressSeam:
     """Ingest requires https on exactly the condition the SEND seam does.
 
     ``src/core/security/egress/policy.py`` ``_scheme_error`` refuses anything but
-    ``https://`` — unconditionally now (salesagent-e6h0 deleted the
+    ``https://`` — unconditionally now (GH #1802 deleted the
     ``ADCP_OUTBOUND_ALLOW_INSECURE`` hatch entirely). Ingest used to require
     https only when ``is_production() and not ADCP_TESTING``, so in every
     non-production or ADCP_TESTING process a buyer's ``http://`` webhook URL was
@@ -289,7 +289,7 @@ class TestWebhookSchemeGateTracksTheEgressSeam:
         collapsing the two would put http back in exactly the processes where
         the old bug lived. A capture server on loopback needs a real https URL
         now (see ``tests.e2e._webhook_capture_loopback``'s loopback-covered
-        TLS front, salesagent-amht.3).
+        TLS front, GH #1802).
         """
         monkeypatch.setenv("ADCP_TESTING", "true")
 
@@ -311,7 +311,7 @@ class TestWebhookSchemeGateTracksTheEgressSeam:
     def test_ingest_and_seam_agree_on_the_scheme_verdict(self, monkeypatch):
         """The two GATES reach the same scheme verdict, via two call paths.
 
-        Before salesagent-tbrk.1, ingest (webhook_validator) and the
+        Before GH #1802, ingest (webhook_validator) and the
         dial-time seam (outbound_http) each maintained their own scheme
         check, which could drift. Both now call
         ``EgressPolicy.check_registration`` / ``EgressPolicy.resolve_for_dial``

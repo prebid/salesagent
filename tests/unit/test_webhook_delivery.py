@@ -3,8 +3,8 @@
 Delivery goes to a real local HTTP origin (``WebhookEnv``), not to a patched
 ``requests.post``. Nothing here asserts on the shape of a transport call, so
 these tests keep grading the same behaviour once delivery moves onto the egress
-seam (salesagent-4fya.11) — which is the whole reason they were repointed
-(salesagent-vkxf). What each test observes is what the endpoint actually
+seam (GH #1802) — which is the whole reason they were repointed
+(GH #1802). What each test observes is what the endpoint actually
 received and what production returned.
 """
 
@@ -209,9 +209,9 @@ class TestWebhookDelivery:
         Recomputes over ``env.last_delivery.body`` (the raw wire bytes), not a
         fresh serialization of the payload dict -- a recompute from the dict
         can silently agree with a sender that signed one serialization and
-        transmitted another, which is exactly the defect salesagent-47n9.1
+        transmitted another, which is exactly the defect GH #1802
         fixed. Spec header name (X-AdCP-Signature, from
-        adcp.sign_legacy_webhook) since salesagent-47n9.1 -- the non-spec
+        adcp.sign_legacy_webhook) since GH #1802 -- the non-spec
         X-Webhook-Signature no longer exists.
         """
         from tests.harness.delivery_webhook_unit import WebhookEnv

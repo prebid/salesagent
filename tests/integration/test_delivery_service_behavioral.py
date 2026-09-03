@@ -246,7 +246,7 @@ class TestSendWebhookEnhancedHmacSigning:
     Both cases used to configure ``webhook_secret`` with no
     ``authentication_type`` at all, so they graded signing driven by "is a
     credential present" -- defect 2 of GH #1894, encoded as an expectation. Since
-    salesagent-47n9.24 the scheme gates it, and the secret comes from
+    GH #1802 the scheme gates it, and the secret comes from
     ``authentication_token``: the pair every writer in ``src/`` persists. The
     obligation is unchanged; the row is now one a buyer can create.
 
@@ -299,7 +299,7 @@ class TestSendWebhookEnhancedHmacSigning:
         dict. A recompute from the dict would use whatever serialization
         formula the test happens to pick, which can silently agree with a
         sender that signs one serialization and transmits another (the bug
-        salesagent-47n9.1 fixed); recomputing from the received bytes is the
+        GH #1802 fixed); recomputing from the received bytes is the
         only form that can catch that divergence.
 
         Covers: UC-004-EXT-G-06
@@ -591,8 +591,8 @@ class TestDeliverWithBackoffTransportFailure:
     connection, and a genuine stall the caller's own clock gives up on.
 
     The stall case is real, not simulated. It became affordable when delivery moved
-    onto the seam (salesagent-4fya.10) and its per-attempt timeout became
-    configurable (salesagent-c78m): the test shortens the timeout instead of
+    onto the seam (GH #1802) and its per-attempt timeout became
+    configurable (GH #1802): the test shortens the timeout instead of
     waiting three ten-second attempts, and no transport is patched to fake it.
 
     Covers: UC-004-EXT-G-01
@@ -645,7 +645,7 @@ class TestDeliverWithBackoffTransportFailure:
 
         The origin ACCEPTS each request and then holds it, so the failure is the
         caller's clock rather than a refused or dropped connection — the case
-        salesagent-c78m exists to put back. The endpoint provably received all three
+        GH #1802 exists to put back. The endpoint provably received all three
         attempts, which a mocked clock could not show.
 
         Covers: UC-004-EXT-G-01
@@ -1254,7 +1254,7 @@ class TestShortSecretRefusesRatherThanSigning:
     unsigned at WARNING level — a buyer who configured signing received unsigned
     webhooks and no error (GH #1894, defect 1).
 
-    v2 (salesagent-47n9.24) reversed that to "signed with, not discarded", and
+    v2 (GH #1802) reversed that to "signed with, not discarded", and
     explicitly recorded that refusing had been "considered and rejected" because it
     would take buyers from "delivered" to "not delivered at all", adding: "AdCP
     3.1.1 mandates none." THAT CLAIM WAS FALSE. The pinned schema

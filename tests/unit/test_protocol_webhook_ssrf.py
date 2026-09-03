@@ -87,7 +87,7 @@ def _egress_hatches(*, private: bool) -> Iterator[None]:
     A refusal case that leaves it ambient is graded by whichever gate the
     surrounding shell happened to arm, so a test meaning "production posture"
     would silently grade nothing. Same spelling as ``LocalOriginMixin`` and the
-    seam's own suite. There is no ``insecure`` hatch anymore (salesagent-e6h0):
+    seam's own suite. There is no ``insecure`` hatch anymore (GH #1802):
     the scheme gate is unconditional in production.
     """
     with patch.dict(os.environ, egress_hatch_env(private=private)):
@@ -108,7 +108,7 @@ def _dispatched_hops() -> Iterator[list[str]]:
     transport, so a followed redirect shows up as a second entry naming
     where it went.
 
-    Re-pointed from the pre-salesagent-tbrk.1 ``build_async_ip_pinned_
+    Re-pointed from the pre-GH #1802 ``build_async_ip_pinned_
     transport`` patch target: that SDK builder is no longer called directly
     by ``guarded_async_client``/``asend`` (see ``_async_transport``), so
     patching it would silently record nothing rather than fail loudly.
@@ -168,7 +168,7 @@ async def test_send_notification_rejects_metadata_url_without_post() -> None:
     Graded with the private-range hatch OPEN, which is what makes the case
     about the metadata blocklist and nothing else — a plain ``http://``
     link-local URL is refused by the seam's scheme rule unconditionally now
-    (salesagent-e6h0), so this case would say nothing about the address if the
+    (GH #1802), so this case would say nothing about the address if the
     hatch were closed instead. ``adcp.signing`` refuses ``169.254.169.254``
     unconditionally, hatch or not — the property
     ``tests/integration/test_outbound_http.py::test_cloud_metadata_stays_refused_with_the_private_hatch_open``
@@ -214,7 +214,7 @@ async def test_send_notification_posts_when_url_is_public(monkeypatch) -> None:
     Asserted against the bytes the origin received rather than against the
     arguments a transport mock was handed: the latter reads back the object the
     caller passed and proves nothing crossed a socket. The origin is served
-    over real TLS (salesagent-e6h0's ``local_origin_tls`` equivalent, inline
+    over real TLS (GH #1802's ``local_origin_tls`` equivalent, inline
     here since this file is tests/unit/) standing in for "public": the seam
     requires https unconditionally now, so the only origin a unit test can
     really run has to earn that scheme, not merely be waved through by a hatch.
@@ -254,7 +254,7 @@ async def test_send_notification_does_not_follow_redirect_to_metadata(monkeypatc
 
     The hit count carries the other half: a 302 is terminal to the seam, so the
     buyer's endpoint is asked exactly once. The origin is served over real TLS
-    (salesagent-e6h0) since the seam requires https unconditionally now.
+    (GH #1802) since the seam requires https unconditionally now.
     """
     service = ProtocolWebhookService()
     gen_test_tls = load_gen_test_tls()
@@ -276,7 +276,7 @@ async def test_send_notification_does_not_follow_redirect_to_metadata(monkeypatc
 def test_reject_unsafe_webhook_registration_url_raises_validation_error() -> None:
     """The suggestion is always the strict https wording — no ambient posture left to pick a different one.
 
-    salesagent-e6h0 deleted the scheme hatch entirely, so ``webhook_ssrf_suggestion()``
+    GH #1802 deleted the scheme hatch entirely, so ``webhook_ssrf_suggestion()``
     no longer has a second (dev) wording to select between — ``_require_https()``
     is unconditionally ``True`` now. ``https://`` on the URL itself keeps the
     scheme fine, so this grades the hostname-blocklist refusal, not the scheme rule.
@@ -327,7 +327,7 @@ def test_reject_unsafe_webhook_registration_url_allows_unresolvable_public_hostn
     )
 
 
-# DELETED WITH THE BEHAVIOR IT GRADED (Epic D lane C2, salesagent-fo99.2):
+# DELETED WITH THE BEHAVIOR IT GRADED (Epic D lane C2, GH #1802):
 # test_push_notification_config_repo_upsert_rejects_ssrf_url called
 # repo.upsert(url=..., authentication_type=..., authentication_token=...) and asserted the
 # repository's own "defense-in-depth" ValueError. Both the signature and that second gate

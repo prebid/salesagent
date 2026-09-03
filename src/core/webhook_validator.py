@@ -30,7 +30,7 @@ seam — never a second copy of address policy here.
 
 The one thing this gate MUST NOT decide for itself is the scheme. That decision
 belongs to :class:`~src.core.security.egress.policy.EgressPolicy`, which
-requires https unconditionally on both verdicts (salesagent-e6h0 deleted the
+requires https unconditionally on both verdicts (GH #1802 deleted the
 send-side escape hatch). An ingest gate that admitted a scheme the seam refuses
 would accept a buyer's webhook URL with a success envelope and then never
 deliver to it, which is the one failure mode the buyer cannot see or correct.
@@ -101,7 +101,7 @@ def validate_webhook_task_type(task_type: str, fallback: str = WEBHOOK_TASK_TYPE
 def webhook_ssrf_suggestion() -> str:
     """Buyer-facing suggestion for registration/outbound SSRF rejections.
 
-    Always the strict https wording (salesagent-e6h0): there is no posture
+    Always the strict https wording (GH #1802): there is no posture
     left in which a plain-http webhook URL is ever admissible, so there is no
     second wording to select between. It used to key on
     :meth:`WebhookURLValidator._require_https`, which selected between this and

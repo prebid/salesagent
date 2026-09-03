@@ -15,7 +15,7 @@ The value is ALWAYS written, including the off case: a hatch left unset is a
 hatch decided by whatever exported it into the shell, which is how a refusal
 test gets silently disarmed.
 
-``ADCP_OUTBOUND_ALLOW_INSECURE`` (salesagent-e6h0): production no longer reads
+``ADCP_OUTBOUND_ALLOW_INSECURE`` (GH #1802): production no longer reads
 this at all — ``_require_tls``/``_require_https`` are unconditional. There is
 therefore no ``insecure`` parameter here anymore; a caller cannot relax the
 scheme gate through this helper because there is nothing left to relax.

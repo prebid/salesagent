@@ -273,7 +273,7 @@ def test_signals_agent_add_refusal_reason_reaches_the_logs(
     post_signals_agent(authenticated_admin_client, METADATA_URL)
 
     # The refusal-cause log line moved with EgressPolicy.resolve_for_dial into
-    # src/core/security/egress/policy.py (salesagent-tbrk.1) -- same seam,
+    # src/core/security/egress/policy.py (GH #1802) -- same seam,
     # different logger name.
     seam_records = [r for r in caplog.records if r.name == "src.core.security.egress.policy"]
     assert [r.getMessage() for r in seam_records if "169.254.169.254" in r.getMessage()], (
@@ -474,8 +474,8 @@ def test_register_webhook_refuses_and_stores_nothing(
     assert push_notification_configs_for(seeded_principal) == []
 
 
-# The positive control this site went without until salesagent-h585d (which
-# supersedes salesagent-e4rf). It could not be written before: the handler built
+# The positive control this site went without until GH #1802 (which
+# supersedes GH #1802). It could not be written before: the handler built
 # PushNotificationConfig with config_id/auth_type/auth_config — none of them
 # columns — so it raised TypeError on every real insert regardless of the URL,
 # and the surrounding try/except turned that into a generic error flash. The
@@ -507,7 +507,7 @@ def test_register_webhook_stores_a_row_when_the_url_is_admitted(
 
 
 # ---------------------------------------------------------------------------
-# salesagent-pldmk.8 — the two behaviour deltas this lane introduces at the
+# GH #1802 — the two behaviour deltas this lane introduces at the
 # ADMIN registration surface. Both are RED-or-pinned deliberately; neither is
 # graded anywhere else in the tree.
 # ---------------------------------------------------------------------------
@@ -526,7 +526,7 @@ def test_register_webhook_stores_a_row_when_the_url_is_admitted(
 # "the object's contents are identical"). UNGRADED by the conformance
 # storyboard: nothing in dist/compliance/3.1.1/ sends a short credential, so
 # grading cannot be cited either way and the schema is the only authority in
-# play. Full ruling: .claude/notes/pldmk8-spec-grounding.md.
+# play. Full ruling: GH #1802
 # The boundary value and the contract that grades it both live in
 # ``tests.helpers.webhook_credential_refusal`` — the module that already holds
 # "what a credential refusal looks like" for the protocol surfaces — so this
@@ -538,7 +538,7 @@ def test_register_webhook_refuses_a_secret_shorter_than_the_pinned_minimum(
 ):
     """A 31-character HMAC secret is refused at ingest, naming the credential.
 
-    Before salesagent-pldmk.8 this POST stored the row and flashed success: the
+    Before GH #1802 this POST stored the row and flashed success: the
     coercion funnel's ``string_too_short`` refusal was caught, the document
     re-validated with a padded secret, and the buyer's short one put back — so
     the registration was refused much later inside the sender as
@@ -587,7 +587,7 @@ PRIVATE_RESOLVED_IP = "10.0.0.7"
 def test_register_webhook_refuses_a_hostname_that_resolves_into_a_private_range(
     authenticated_admin_client, seeded_principal, monkeypatch
 ):
-    """The deliberate security trade salesagent-pldmk.8 made, kept visible.
+    """The deliberate security trade GH #1802 made, kept visible.
 
     BEFORE pldmk.8 this route ran TWO gates: ``redirect_if_url_blocked``
     (``principals.py`` → ``url_policy._is_allowed`` → ``outbound_http.validate_url``

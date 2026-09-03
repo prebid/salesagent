@@ -11,7 +11,7 @@ The public default URL is a connection ALIAS for the configured agent: the
 wire-level federation identity (format_id.agent_url) is unchanged; only the
 transport connection reroutes.
 
-salesagent-4n88 moved the OPERATOR agent path off ``adcp.ADCPMultiAgentClient``
+GH #1802 moved the OPERATOR agent path off ``adcp.ADCPMultiAgentClient``
 onto the guarded MCP seam (``call_mcp_tool``, reached through
 ``src.core.utils.operator_mcp.call_operator_mcp_tool``) — the routing/aliasing
 tests below mock that seam instead of the deleted SDK client. They patch the
@@ -134,7 +134,7 @@ class TestAliasPreservesIdentity:
     string for the public default agent when CREATIVE_AGENT_URL is set — a
     destination change ahead of the seam that the destination-rewrite guard
     cannot see (no urlunparse/._replace spelling). This class is the
-    exemption's executable justification (GH #1589 / salesagent-9qe2): the
+    exemption's executable justification (GH #1589 / GH #1802): the
     swap touches ONLY the transport config of ONLY the public default agent,
     while the identity/cache-key URL stays byte-identical to the canonical
     public URL — graded through the registry's real fetch surface.

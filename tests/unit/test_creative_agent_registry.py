@@ -1,7 +1,7 @@
 """Unit tests for Creative Agent Registry.
 
 ``TestCreativeAgentRegistry`` (build/fetch against a mocked ``adcp.ADCPMultiAgentClient``)
-was retired by salesagent-4n88: the OPERATOR agent path no longer constructs
+was retired by GH #1802: the OPERATOR agent path no longer constructs
 that SDK client at all — it dials through the guarded MCP seam
 (``src.core.utils.mcp_client.call_mcp_tool``, reached through
 ``src.core.utils.operator_mcp.call_operator_mcp_tool``) instead, via

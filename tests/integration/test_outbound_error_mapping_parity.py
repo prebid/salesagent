@@ -1,4 +1,4 @@
-"""RED grader for salesagent-tbrk.4: one classifier, both seams agree (salesagent-16bhn.25).
+"""RED grader for GH #1802: one classifier, both seams agree (GH #1802).
 
 ``src/core/helpers/outbound_error_mapping.py`` housed ``raise_mapped_outbound_error``
 (the raw ``send``/``asend`` seam) and the now-deleted ``mcp_seam_error_mapping.py``
@@ -8,7 +8,7 @@ tbrk.4 collapses both onto one ``adcp_error_for_status(status, *, retry_after,
 provenance)`` classifier and, as part of that, retires ``raise_mapped_mcp_error``'s
 ``agent_label: str`` parameter in favour of the same ``provenance:
 UrlProvenance`` union ``raise_mapped_outbound_error`` already takes (Epic B,
-salesagent-6gpt.1) — D2 is binding: "the classifier takes the union, and
+GH #1802) — D2 is binding: "the classifier takes the union, and
 agent_label: str retires with Epic B's raise_mapped_outbound_error rewrite."
 
 This file drives the SAME simulated origin behavior through BOTH seams and
@@ -47,7 +47,7 @@ obligation, not a wire contract any ``dist/compliance/3.1.1/`` scenario
 exercises (same finding as the sibling files this test borrows its shape
 from, ``test_operator_agent_mcp_seam_egress.py`` / ``test_url_provenance_wire.py``).
 
-beads: salesagent-tbrk.4 / salesagent-16bhn.25
+beads: GH #1802 / GH #1802
 """
 
 from __future__ import annotations

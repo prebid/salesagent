@@ -21,7 +21,9 @@ from adcp import get_adcp_spec_version
 # Add parent directories to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
+from tests.a2a_helpers import a2a_auth_as, assert_task_not_found_nondisclosure
 from tests.e2e.conftest import e2e_host
+from tests.factories import PrincipalFactory
 
 
 def _a2a_base_url() -> str:
@@ -310,27 +312,36 @@ class TestA2ARequestHandler:
     async def test_unknown_task_id_raises_task_not_found(self, request_cls, method_name):
         """An unknown task id raises TaskNotFoundError, not the generic internal
         error a bare None return produces — cancel is the same not-found condition
-        as get, and both route through the shared ``_get_task_or_raise``.
+        as get, and both route through the shared ``_get_owned_in_memory_task_or_raise``.
 
         Fast smoke check on the raise only. It does NOT prove the wire code: the
         exception carries no code, and the client actually sees -32603 — see
-        ``_get_task_or_raise`` (src/a2a_server/adcp_a2a_server.py) and #1670 for
-        why, plus the xfail'd live-server test in TestA2AServerIntegration that
-        grades the code on the wire. Assert on str(exc), not exc.code — there is
-        none.
+        ``_task_not_found_error`` (src/a2a_server/adcp_a2a_server.py)
+        and #1670 for why, plus the xfail'd live-server test in
+        TestA2AServerIntegration that grades the code on the wire. Assert on
+        str(exc), not exc.code — there is none.
 
         Parametrized over both entry points so the shared assertion cannot drift
         between two byte-identical copies.
 
         Both halves of the raise are pinned: the human-readable message AND the
-        structured ``data`` payload clients actually parse. Asserting the message
-        alone would let ``data={"task_id": ...}`` be deleted with the suite still
-        green, since the id appears in the message either way.
+        structured ``data`` field on the exception object (two-layer AdCP
+        envelope + ``task_id``; JSON-RPC wire still returns ``data: null`` under
+        v0.3 compat — see #1670). Asserting the message alone would let the
+        envelope/``task_id`` payload be deleted with the suite still green.
+
+        Auth is mocked so this grades the not-found shape after the identity
+        gate (#1702), not an auth-failure collapse into the same error. Shape
+        matches ownership-deny via the shared nondisclosure oracle.
         """
-        with pytest.raises(TaskNotFoundError) as exc:
-            await getattr(self.handler, method_name)(request_cls(id="task_does_not_exist"), MagicMock())
-        assert "task_does_not_exist" in str(exc.value)  # the requested id is surfaced
-        assert exc.value.data == {"task_id": "task_does_not_exist"}  # ...and machine-readable
+        with a2a_auth_as(self.handler, PrincipalFactory.make_identity(protocol="a2a")):
+            with pytest.raises(TaskNotFoundError) as exc:
+                await getattr(self.handler, method_name)(request_cls(id="task_does_not_exist"), MagicMock())
+        assert_task_not_found_nondisclosure(
+            exc.value,
+            "task_does_not_exist",
+            forbidden_substrings=("test_tenant", "test_principal"),
+        )
 
     def test_handler_has_skill_methods(self):
         """Test that handler has skill-specific methods."""
@@ -365,12 +376,43 @@ class TestA2AServerIntegration:
     """Integration tests for complete A2A server setup."""
 
     @pytest.mark.integration
+    @pytest.mark.parametrize("method", ["tasks/get", "tasks/cancel"])
+    def test_unknown_task_id_returns_task_not_found_message_on_the_wire(self, method, live_server, test_auth_token):
+        """Live-server message oracle for the ownership/unknown-id branch.
+
+        Grades the buyer-visible message today (auth token reaches the gate).
+        Companion to the strict-xfail code check: an auth-gate regression that
+        exits before not-found would change this message and redden here, while
+        the code-only xfail would stay permanently red under v0.3 flattening.
+
+        Sends ``x-adcp-tenant: ci-test`` with ``test_auth_token`` (ci-test-token)
+        so tenant resolution matches the token's principal — without it the
+        server falls back to ``default`` and exits at auth before not-found.
+        """
+        # Token is scoped to ci-test (see test_auth_token); without x-adcp-tenant
+        # the server resolves tenant "default" and exits at auth before not-found.
+        response = requests.post(
+            f"{live_server['a2a']}/a2a",
+            json={"jsonrpc": "2.0", "id": 1, "method": method, "params": {"id": "task_does_not_exist"}},
+            headers={
+                "Authorization": f"Bearer {test_auth_token}",
+                "Content-Type": "application/json",
+                "x-adcp-tenant": "ci-test",
+            },
+            timeout=5,
+        )
+        assert response.status_code == 200, f"JSON-RPC errors ride a 200 envelope: {response.status_code}"
+        data = response.json()
+        assert "error" in data, f"unknown task id must produce a JSON-RPC error: {data}"
+        assert data["error"]["message"] == "Task not found: task_does_not_exist"
+
+    @pytest.mark.integration
     @pytest.mark.xfail(
         reason="v0.3 compat adapter maps A2AError to -32603; see #1670",
         strict=True,
     )
     @pytest.mark.parametrize("method", ["tasks/get", "tasks/cancel"])
-    def test_unknown_task_id_returns_task_not_found_code_on_the_wire(self, method, live_server):
+    def test_unknown_task_id_returns_task_not_found_code_on_the_wire(self, method, live_server, test_auth_token):
         """The deliverable of the TaskNotFoundError change is what an A2A client
         SEES: JSON-RPC error code -32001. That code is not carried by the
         exception — it is synthesized downstream — so the direct-call test in
@@ -383,14 +425,21 @@ class TestA2AServerIntegration:
         on the ad-hoc port — a skip under strict xfail is neither XFAIL nor XPASS,
         so the sole on-the-wire grade must never be allowed to no-op.
 
+        Sends a valid tenant Bearer token so the request reaches the
+        ownership/unknown-id branch rather than exiting at the auth gate (#1702).
+        Cross-principal ownership compare on the wire is graded in-process by
+        ``tests/unit/test_a2a_task_identity_wire.py`` (live_server has no seeded
+        in-memory owner map); this live_server case still POSTs an unknown id.
+
         Parametrized over both methods this PR changed. `tasks/cancel` of an
         unknown id went from a silent None to an error in this PR, so it needs the
         same wire tripwire as `tasks/get` — otherwise only half the contract gets
         locked in when #1670 lands.
 
         STRICT xfail against #1670: the code is -32603 today, not the spec's
-        -32001 — see ``_get_task_or_raise`` (src/a2a_server/adcp_a2a_server.py) and
-        #1670 for the enable_v0_3_compat dispatch path that flattens it. Both
+        -32001 — see ``_task_not_found_error``
+        (src/a2a_server/adcp_a2a_server.py) and #1670 for the
+        enable_v0_3_compat dispatch path that flattens it. Both
         `tasks/get` and `tasks/cancel` reach that path, so both are -32603 today
         whether they raise TaskNotFoundError or return None.
 
@@ -403,12 +452,22 @@ class TestA2AServerIntegration:
         response = requests.post(
             f"{live_server['a2a']}/a2a",
             json={"jsonrpc": "2.0", "id": 1, "method": method, "params": {"id": "task_does_not_exist"}},
+            headers={
+                "Authorization": f"Bearer {test_auth_token}",
+                "Content-Type": "application/json",
+                "x-adcp-tenant": "ci-test",
+            },
             timeout=5,
         )
 
         assert response.status_code == 200, f"JSON-RPC errors ride a 200 envelope: {response.status_code}"
         data = response.json()
         assert "error" in data, f"unknown task id must produce a JSON-RPC error: {data}"
+        # Branch-reached: token/init_db drift must not silently exit at the auth
+        # gate and still xfail on a non--32001 code for the wrong reason (#1720).
+        assert data["error"]["message"] != "Missing authentication token", (
+            f"unknown-id tripwire exited at auth instead of the ownership branch: {data['error']!r}"
+        )
         assert data["error"]["code"] == -32001, (
             f"A2A spec defines -32001 (TaskNotFoundError) for an unknown task id, got "
             f"{data['error']['code']} — see #1670"

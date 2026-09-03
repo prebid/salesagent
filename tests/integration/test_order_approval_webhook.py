@@ -26,7 +26,7 @@ classifies retryable as ``{429, 500, 502, 503, 504}`` and treats everything else
 — every other 4xx, every 3xx — as terminal, so adopting it is what turns that
 case green. That behaviour change is named in the PR, not smuggled.
 
-Why the signing obligations are graded HERE and not in BDD (salesagent-47n9.21):
+Why the signing obligations are graded HERE and not in BDD (GH #1802):
 ``_send_approval_webhook`` has exactly one production trigger — the GAM adapter
 body at ``src/adapters/google_ad_manager.py:757``, reached only when the
 synchronous ``approve_order`` returns False — and that trigger fires it on a
@@ -73,7 +73,7 @@ def _bearer_config(env: OrderApprovalWebhookEnv, token: str = "test_token", *, s
     verbatim. The fixture used to say lowercase ``"bearer"`` because that is
     what ``order_approval_service`` compares against, so it graded the sender's
     private spelling instead of the rows the sender really receives
-    (salesagent-47n9.20). It is a PARAMETER rather than a constant because both
+    (GH #1802). It is a PARAMETER rather than a constant because both
     spellings are rows a real buyer can produce — not because both authenticate.
     Only the canonical spelling does: a lowercase scheme is REFUSED rather than
     folded, graded by
@@ -99,7 +99,7 @@ def _hmac_config(env: OrderApprovalWebhookEnv, *, secret: str | None = None) -> 
     ``secret`` is the AdCP ``push_notification_config.authentication.credentials``
     value and lands in ``authentication_token`` — the column every writer in
     ``src/`` populates, and the one ``order_approval_service`` reads since
-    salesagent-47n9.20. ``secret=None`` leaves the credential genuinely absent
+    GH #1802. ``secret=None`` leaves the credential genuinely absent
     (``PushNotificationConfigFactory`` declares no default for it), which is the
     row a buyer who selected HMAC-SHA256 without supplying a secret produces.
 
@@ -223,12 +223,12 @@ class TestStoredCredential:
 class TestHmacSigning:
     """A ``HMAC-SHA256``-configured row must sign the webhook it sends.
 
-    salesagent-47n9.15: ``_approval_webhook_headers`` has bearer/basic/token
+    GH #1802: ``_approval_webhook_headers`` has bearer/basic/token
     branches but no HMAC-SHA256 branch at all, and ``_post_approval_webhook``
     hardcodes ``secret=None`` on every call -- so a config that ASKS for
     HMAC-SHA256 signing gets silent unsigned delivery instead, with no error.
 
-    salesagent-47n9.20 moves the secret to the column a real row actually
+    GH #1802 moves the secret to the column a real row actually
     carries. AdCP 3.1.1 puts the shared secret in
     ``push_notification_config.authentication.credentials``, which every writer
     in ``src/`` persists to ``authentication_token``; ``webhook_secret`` has
@@ -238,7 +238,7 @@ class TestHmacSigning:
     the sender's "no secret stored" refusal branch. Since 47n9.20 the sender
     takes its secret from ``authentication_token`` through the egress seam.
 
-    Both halves of the invariant are graded here (salesagent-47n9.21): a
+    Both halves of the invariant are graded here (GH #1802): a
     HMAC-SHA256 row either goes out carrying a signature that verifies over the
     exact bytes that crossed the socket, or it does not go out. There is no
     third outcome in which an unsigned request reaches a receiver that asked to
@@ -248,7 +248,7 @@ class TestHmacSigning:
     def test_hmac_sha256_config_signs_the_wire_body(self, integration_db):
         """A stored HMAC-SHA256 row produces a verifiable signature over the
         exact bytes that crossed the socket -- not a re-serialization of the
-        payload dict, per the wire-byte pattern salesagent-47n9.2 established.
+        payload dict, per the wire-byte pattern GH #1802 established.
         """
         secret = "s" * 32  # Meets the 32-char minimum every HMAC secret in this suite uses.
 
@@ -282,7 +282,7 @@ class TestHmacSigning:
         The obligation itself: a buyer who asked for HMAC-SHA256 will reject an
         unsigned POST, so sending one is strictly worse than sending none — it
         is an unauthenticated request to a third-party endpoint that no receiver
-        can attribute to us (salesagent-47n9.15/47n9.20).
+        can attribute to us (GH #1802/47n9.20).
         """
         with OrderApprovalWebhookEnv() as env:
             _hmac_config(env, secret=None)
@@ -297,7 +297,7 @@ class TestSigningIsGatedByTheScheme:
     """Only a row that ASKED for HMAC-SHA256 gets a signature.
 
     The sibling sender ``webhook_delivery_service`` shows what the other answer
-    costs (salesagent-ywzz): signing driven by "is a credential present" rather
+    costs (GH #1802): signing driven by "is a credential present" rather
     than "is the scheme HMAC-SHA256" starts signing rows that stored a bearer
     token, and a receiver expecting a plain bearer POST sees headers it did not
     ask for. Both non-HMAC paths are graded, because a regression in the gate

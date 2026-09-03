@@ -100,7 +100,7 @@ class TestSaveConfig:
         # ingest-time egress check added for discovery_url without depending
         # on real DNS to an actual internet host (the check now resolves the
         # hostname). https, not http — the seam requires it unconditionally
-        # now (salesagent-e6h0); no network dial happens here regardless.
+        # now (GH #1802); no network dial happens here regardless.
         set_flags(monkeypatch, private=True)
         tenant = TenantFactory()
         _auth_session(client, tenant.tenant_id)

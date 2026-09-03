@@ -1,6 +1,6 @@
 """src/admin/sync_api.py's 4 GAMOrdersService imports must actually resolve.
 
-salesagent-vwbj: all 4 route handlers do ``from gam_orders_service import
+GH #1802: all 4 route handlers do ``from gam_orders_service import
 GAMOrdersService`` -- a bare, non-absolute import. No ``gam_orders_service``
 module exists at the repo root; the real module is
 ``src.services.gam_orders_service``. Every route wraps the call in a broad
@@ -65,7 +65,7 @@ def sync_api_client(seeded_tenant, monkeypatch):
     Rebinding it here to a fresh engine on the CURRENT ``DATABASE_URL``
     (already pointed at this test's isolated database by ``seeded_tenant``)
     is test-side compensation for that pre-existing gap -- not a production
-    fix, out of salesagent-vwbj's scope (a bad import, not a session
+    fix, out of GH #1802's scope (a bad import, not a session
     lifecycle bug).
     """
     import os

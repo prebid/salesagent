@@ -292,7 +292,7 @@ class ProtocolWebhookService:
         what they KNOW (attempts, status, wording), not in what they must record.
         An arm that concludes on its own is an arm that can be written without
         recording anything, which for a refusal means a misconfigured destination
-        leaving no trace at all — the absence lane salesagent-gra7.1 closes.
+        leaving no trace at all — the absence lane GH #1802 closes.
 
         The outcome IS the conclusion: the returned bool is derived from it, not
         decided here, and the row is written from it rather than from arguments
@@ -461,7 +461,7 @@ class ProtocolWebhookService:
             # audit entry — a misconfigured destination that leaves no trace is
             # indistinguishable from one nobody configured. The honest attempt count
             # (0) and the ``refused`` spelling are the recorder's, not this arm's.
-            # Severity carried on the outcome, not chosen here (salesagent-pldmk.39).
+            # Severity carried on the outcome, not chosen here (GH #1802).
             logger.log(outcome.log_level, f"Webhook for task {ctx.task_id} was refused by egress policy")
         elif outcome.kind != "delivered":
             logger.error(

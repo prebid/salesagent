@@ -508,6 +508,13 @@ class TestFastAPIExceptionHandlers:
             response.json(), "VALIDATION_ERROR", recovery="correctable", message_substr="test validation error"
         )
 
+    def test_authentication_error_returns_401(self, exc_handler_test_app):
+        """AdCPAuthenticationError → 401 with AUTH_REQUIRED envelope on the wire."""
+        client = TestClient(exc_handler_test_app, raise_server_exceptions=False)
+        response = client.get("/test-exc/auth")
+        assert response.status_code == 401
+        assert_envelope_shape(response.json(), "AUTH_REQUIRED", recovery="correctable")
+
     def test_not_found_error_returns_404(self, exc_handler_test_app):
         """AdCPNotFoundError raised in a route must return 404 with INVALID_REQUEST wire code.
 
@@ -548,26 +555,29 @@ class TestFastAPIExceptionHandlers:
         assert_envelope_shape(response.json(), "CREATIVE_NOT_FOUND", recovery="correctable")
 
     def test_format_not_found_error_returns_404(self, exc_handler_test_app):
-        """AdCPFormatNotFoundError → 404, wire INVALID_REQUEST, correctable.
+        """AdCPFormatNotFoundError → 404, wire REFERENCE_NOT_FOUND, correctable.
 
-        FORMAT_NOT_FOUND translates to INVALID_REQUEST at the boundary;
-        recovery=correctable distinguishes it from the base (terminal).
+        FORMAT_NOT_FOUND translates to REFERENCE_NOT_FOUND at the boundary
+        (same typed-parameter rule as TASK_NOT_FOUND); recovery=correctable
+        distinguishes it from the base (terminal).
         """
         client = TestClient(exc_handler_test_app, raise_server_exceptions=False)
         response = client.get("/test-exc/format-not-found")
         assert response.status_code == 404
-        assert_envelope_shape(response.json(), "INVALID_REQUEST", recovery="correctable")
+        assert_envelope_shape(response.json(), "REFERENCE_NOT_FOUND", recovery="correctable")
 
     def test_task_not_found_error_returns_404(self, exc_handler_test_app):
-        """AdCPTaskNotFoundError → 404, wire INVALID_REQUEST, correctable.
+        """AdCPTaskNotFoundError → 404, wire REFERENCE_NOT_FOUND, correctable.
 
-        TASK_NOT_FOUND translates to INVALID_REQUEST at the boundary;
-        recovery=correctable distinguishes it from the base (terminal).
+        TASK_NOT_FOUND translates to REFERENCE_NOT_FOUND at the boundary — AdCP
+        3.1.1's generic inaccessible-reference code for a typed parameter
+        lacking a dedicated standard code (error-handling.mdx); recovery=
+        correctable distinguishes it from the base (terminal).
         """
         client = TestClient(exc_handler_test_app, raise_server_exceptions=False)
         response = client.get("/test-exc/task-not-found")
         assert response.status_code == 404
-        assert_envelope_shape(response.json(), "INVALID_REQUEST", recovery="correctable")
+        assert_envelope_shape(response.json(), "REFERENCE_NOT_FOUND", recovery="correctable")
 
     def test_adapter_error_returns_502(self, exc_handler_test_app):
         """AdCPAdapterError raised in a route must return 502."""
@@ -885,3 +895,32 @@ class TestRetryAfterSerializerParity:
         exc = AdCPRateLimitError("slow down", retry_after=7)
         envelope = build_two_layer_error_envelope(exc)
         assert envelope["adcp_error"]["retry_after"] == 7
+
+
+def test_spec_supplement_codes_match_class_defaults():
+    """Supplement code NAMES stay in the wire set; recovery comes from the pin.
+
+    ``_SPEC_SUPPLEMENT_CODES`` is membership-only (frozenset of names). Recovery
+    lives in ``RECOVERY_BY_WIRE_CODE`` (pinned enumMetadata). ClassVar
+    ``_default_recovery`` is only a fallback for unpinned codes — instance
+    ``.recovery`` must match the pin for every supplement-backed wire code.
+    """
+    from src.core.exceptions import (
+        _SPEC_SUPPLEMENT_CODES,
+        RECOVERY_BY_WIRE_CODE,
+        WIRE_STANDARD_CODES,
+        AdCPConfigurationError,
+        AdCPCreativeNotFoundError,
+        AdCPTaskNotFoundError,
+    )
+
+    assert _SPEC_SUPPLEMENT_CODES == frozenset({"CREATIVE_NOT_FOUND", "CONFIGURATION_ERROR", "REFERENCE_NOT_FOUND"})
+    assert _SPEC_SUPPLEMENT_CODES <= set(WIRE_STANDARD_CODES)
+
+    assert AdCPCreativeNotFoundError("x").recovery == RECOVERY_BY_WIRE_CODE["CREATIVE_NOT_FOUND"]
+    assert AdCPConfigurationError("x").recovery == RECOVERY_BY_WIRE_CODE["CONFIGURATION_ERROR"]
+    # REFERENCE_NOT_FOUND is the wire target for TASK_NOT_FOUND (and FORMAT).
+    task_exc = AdCPTaskNotFoundError("x")
+    assert task_exc.wire_error_code == "REFERENCE_NOT_FOUND"
+    assert task_exc.recovery == RECOVERY_BY_WIRE_CODE["REFERENCE_NOT_FOUND"]
+    assert RECOVERY_BY_WIRE_CODE["REFERENCE_NOT_FOUND"] == "correctable"

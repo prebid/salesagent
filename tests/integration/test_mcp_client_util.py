@@ -124,7 +124,7 @@ class TestCreateMCPClient:
 
     async def test_unresolvable_host_is_refused_before_dialling(self):
         """Invalid URL raises MCPConnectionError after retries."""
-        # Behaviour change (salesagent-jl08): an unresolvable host is now refused by
+        # Behaviour change (GH #1802): an unresolvable host is now refused by
         # egress policy before any connection is attempted, rather than being dialled,
         # retried and reported as a connection failure. The seam cannot pin a
         # connection to an address it could not resolve, so it declines to try.
@@ -142,7 +142,7 @@ class TestCreateMCPClient:
         # A loopback port with nothing listening: resolves, fails fast, and the retry
         # budget is what is graded. It needs the private-range hatch because policy
         # refuses loopback addresses by default (https is required unconditionally now
-        # regardless of any hatch, salesagent-e6h0 -- hence the scheme flip above). NOT a live origin — call_mcp_tool never
+        # regardless of any hatch, GH #1802 -- hence the scheme flip above). NOT a live origin — call_mcp_tool never
         # passes its timeout to the transport, so an origin that answers without speaking
         # MCP hangs instead of failing (a bug adjacent to this ticket, not fixed here).
         agent_url = "https://localhost:9999/mcp"
@@ -208,7 +208,7 @@ class TestErrorHandling:
         # Unchanged target: a loopback port with nothing listening, which fails fast.
         # It needs the private-range hatch because policy refuses loopback
         # addresses by default (https is required unconditionally now regardless of
-        # any hatch, salesagent-e6h0 -- hence the scheme flip above). NOT repointed at a live origin: call_mcp_tool accepts a timeout
+        # any hatch, GH #1802 -- hence the scheme flip above). NOT repointed at a live origin: call_mcp_tool accepts a timeout
         # and never passes it to the transport, so an origin that ANSWERS but does not
         # speak MCP hangs forever rather than timing out. That bug is adjacent to this
         # ticket and not fixed here.
@@ -279,7 +279,7 @@ def egress_hatches_closed(monkeypatch):
     files export ``ADCP_OUTBOUND_ALLOW_PRIVATE`` for the creative-agent stack,
     so a test that merely assumed it unset would grade nothing on exactly the
     machines this suite runs on. There is no scheme hatch to close anymore
-    (salesagent-e6h0 deleted it) — https is required unconditionally.
+    (GH #1802 deleted it) — https is required unconditionally.
     """
     monkeypatch.setenv(ALLOW_PRIVATE_ENV, "false")
 
@@ -372,7 +372,7 @@ class TestConnectionRetryBackoffSchedule:
         # A loopback port with nothing listening: resolves, fails fast, and the
         # sleeps between attempts are what is graded (the private-range hatch is open
         # because policy refuses loopback addresses by default; https is required
-        # unconditionally now regardless of any hatch, salesagent-e6h0 -- hence the
+        # unconditionally now regardless of any hatch, GH #1802 -- hence the
         # scheme flip above). Ends in /mcp so no
         # fallback candidate is synthesised — one URL, 3 attempts, 2 sleeps.
         agent_url = "https://localhost:9999/mcp"
@@ -449,7 +449,7 @@ class TestToolFailureIsRetriedByReexecutingTheBody:
     ):
         """Attempt 1's tool call raises, attempt 2's succeeds, and the caller gets attempt 2's result."""
         # The MCP origin is a loopback address, which egress policy refuses by
-        # default; https is required unconditionally regardless (salesagent-e6h0),
+        # default; https is required unconditionally regardless (GH #1802),
         # and the origin serves real TLS off the shared generated leaf.
         set_flags(monkeypatch, private=True)
 

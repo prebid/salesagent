@@ -187,7 +187,7 @@ class TestDailyDeliveryWebhookFlow:
             received = delivery_webhook_server["received"]
 
             # Wait for webhook. Each `received` access is now a readback HTTP round
-            # trip (salesagent-amht.3), not free like the old in-process shared
+            # trip (GH #1802), not free like the old in-process shared
             # list — wait_until's monotonic deadline keeps the actual wait bounded
             # at timeout_seconds regardless of readback latency, where an
             # iteration counter would silently drift past it.

@@ -29,7 +29,7 @@ NOT in ``src/core/helpers/adapter_helpers.py``. That module imports the
 ad-server adapters at module level, and the adapters are precisely the call
 sites that will use this mapper as the epic's remaining migrations land —
 importing it back would be a cycle. (Its former sibling ``raise_mapped_adcp_error``,
-for the adcp SDK's own exception hierarchy, was deleted by salesagent-4n88 once
+for the adcp SDK's own exception hierarchy, was deleted by GH #1802 once
 both callers moved off ``ADCPMultiAgentClient`` onto the guarded MCP seam.)
 
 ``MCPConnectionError`` looked, at first read, like it discarded the HTTP status

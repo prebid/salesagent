@@ -473,7 +473,7 @@ class TestWirePresenceIsNeverInferredFromTransportIdentity:
         ]
         assert offenders == [], (
             f"tests/bdd/steps/ still keys behavior on Transport.IMPL: {offenders}. "
-            "Transport.IMPL is being deleted (salesagent-a1-uc004/1210); a positive, "
+            "Transport.IMPL is being deleted (GH #1802-uc004/1210); a positive, "
             "dispatcher-declared predicate survives that removal unchanged."
         )
 

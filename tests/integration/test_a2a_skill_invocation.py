@@ -381,7 +381,7 @@ class TestA2ASkillInvocation:
     ):
         """A short webhook credential on the A2A protocol-layer config REFUSES the create.
 
-        INVERTED by salesagent-pldmk.8, deliberately. This test previously asserted
+        INVERTED by GH #1802, deliberately. This test previously asserted
         the opposite -- that an 18-character credential still created the buy --
         on the premise that ``params.configuration`` is a TRANSPORT-layer parameter
         outside request-body validation, citing gh-#1299.

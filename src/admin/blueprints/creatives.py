@@ -121,7 +121,7 @@ async def _deliver_sync_creatives_webhook(
         # in scope all along -- the caller raises without tenant_id, and the
         # creative row carries principal_id -- but neither reached the dict, so
         # records_delivery_log was False and every admin-originated delivery wrote
-        # no webhook_delivery_log row and said nothing about it (salesagent-pldmk.39).
+        # no webhook_delivery_log row and said nothing about it (GH #1802).
         await service.notify(
             push_notification_config,
             task=WebhookTaskContext(
@@ -277,7 +277,7 @@ async def _call_webhook_for_creative_status(
             # Read INSIDE the UoW, like every other attribute here: the row is
             # detached once the session closes. This is the identifier that never
             # reached the delivery, which is why admin-originated sends wrote no
-            # webhook_delivery_log row (salesagent-pldmk.39).
+            # webhook_delivery_log row (GH #1802).
             step_principal_id = next((c.principal_id for c in all_creatives if c.principal_id), None)
 
         # --- Session closed here; webhook delivery is outside the transaction ---

@@ -13,7 +13,7 @@ test fires.
 Boundaries enforced (production paths only — dead helpers are deliberately not
 pinned because a guard against unreachable code is a false positive of safety):
   - ``src/core/tool_error_logging.py::_translate_to_tool_error`` (MCP)
-  - ``src/a2a_server/adcp_a2a_server.py::AdCPRequestHandler._build_error_envelope`` (A2A — production path called from on_message_send)
+  - ``src/a2a_server/adcp_a2a_server.py::AdCPRequestHandler._build_error_envelope`` (A2A — shared skill + task error envelope builder)
   - ``src/app.py::adcp_error_handler`` (REST/FastAPI)
 """
 

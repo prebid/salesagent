@@ -117,7 +117,7 @@ _HMAC_WITHOUT_CREDENTIALS = [
     # into precisely the unservable state the exact-spelling rows are refused
     # for.
     #
-    # MOVED OUT of this list by Epic D lane C3 (salesagent-fo99.3): the A2A TOOL
+    # MOVED OUT of this list by Epic D lane C3 (GH #1802): the A2A TOOL
     # path now coerces through the pinned model like MCP and REST already did, so
     # ``hmac-sha256`` is refused for the SCHEME (it is not a member of the pinned
     # AuthenticationScheme enum) BEFORE the credential requirement is reached. It
@@ -234,7 +234,7 @@ _ADMIN_SAFE_URL = "https://127.0.0.1:9999/agent"
 
 
 class TestShortCredentialReachesOneVerdictOnEverySurface:
-    """REGRESSION PIN (salesagent-pldmk.8) — not the lane's red.
+    """REGRESSION PIN (GH #1802) — not the lane's red.
 
     The red for this lane lives where the behaviour actually changes: the A2A
     protocol envelope (``tests/bdd/features/local-egress-ssrf-refusal.feature``,
@@ -270,7 +270,7 @@ class TestShortCredentialReachesOneVerdictOnEverySurface:
     def test_every_protocol_transport_returns_the_same_triple(self, integration_db):
         """MCP, REST and A2A refuse the same short secret with the same triple.
 
-        A2A was the leg that differed before salesagent-pldmk.8: its document is
+        A2A was the leg that differed before GH #1802: its document is
         destructured to primitives and rebuilt in
         ``src/core/webhooks/registration.py``, which used to re-validate with a
         padded secret and restore the buyer's short one — so the create succeeded
@@ -315,7 +315,7 @@ class TestShortCredentialReachesOneVerdictOnEverySurface:
         ``src/admin/blueprints/principals.py`` with ``field_prefix="webhook"`` —
         an Admin HTML form, no A2A anywhere — so the "the A2A ``configuration``
         envelope is a transport-layer parameter" premise never applied to it.
-        RED before salesagent-pldmk.8 for the same reason as the A2A leg above.
+        RED before GH #1802 for the same reason as the A2A leg above.
 
         The admin surface answers in flashes, not envelopes, so the shapes cannot
         be compared byte-for-byte. What must match is the VERDICT: refused,

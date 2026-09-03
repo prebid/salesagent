@@ -46,7 +46,7 @@ exercises a creative-agent egress refusal on either tool (the same finding
 ``test_creative_agent_egress.py`` and ``test_creative_agent_dial_refusal_recovery.py``
 already record).
 
-beads: salesagent-6gpt.1
+beads: GH #1802
 """
 
 from __future__ import annotations

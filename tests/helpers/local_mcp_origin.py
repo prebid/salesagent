@@ -11,7 +11,7 @@ So this origin is a genuine ``fastmcp`` server served by uvicorn over TLS on an
 ephemeral loopback port, using the same generated CA/leaf every other in-process
 TLS front in this repo reuses (``scripts/dev/gen_test_tls.py``) — never a second
 mechanism. Callers reach it over https because the egress seam requires https
-unconditionally (salesagent-e6h0), and over loopback because a test origin must
+unconditionally (GH #1802), and over loopback because a test origin must
 not be reachable from outside this machine.
 
 The origin records every tool invocation it actually serves. That counter is the

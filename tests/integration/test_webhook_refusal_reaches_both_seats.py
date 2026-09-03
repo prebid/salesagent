@@ -1,6 +1,6 @@
 """A non-conforming registration refuses on BOTH seats — and only one of them has an outcome.
 
-Epic D lane C4 (salesagent-fo99.4), section 10 of the change-set. Ruling #2 says
+Epic D lane C4 (GH #1802), section 10 of the change-set. Ruling #2 says
 an authentication block that is not one of the two pinned schemes, or whose
 credential is under the pinned ``minLength: 32``, is not a delivery we should be
 making. That rule has to hold on both surfaces a stored registration can reach,

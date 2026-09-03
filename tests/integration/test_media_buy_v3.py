@@ -14,7 +14,7 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from adcp.types import MediaBuyStatus
@@ -645,7 +645,7 @@ class TestGetMediaBuysResponseFields:
         from src.core.tools.creatives import sync_creatives_raw
         from src.core.tools.media_buy_create import _create_media_buy_impl
         from src.core.tools.media_buy_list import _get_media_buys_impl
-        from tests.helpers.adcp_factories import create_test_format
+        from tests.helpers.adcp_factories import create_test_format_id
 
         create_req = _make_create_request(
             packages=[
@@ -661,24 +661,52 @@ class TestGetMediaBuysResponseFields:
         media_buy_id = create_result.response.media_buy_id
         package_id = create_result.response.packages[0].package_id
 
-        # Mock the creative agent format registry to avoid real HTTP calls
-        mock_format = create_test_format(
-            format_id="display_300x250",
-            name="Display 300x250",
-            type="display",
-        )
-        with patch(
-            "src.core.creative_agent_registry.CreativeAgentRegistry.get_format",
-            return_value=mock_format,
+        # Offline creative-agent stubs. Use a MagicMock with local-Format
+        # semantics (``.agent_url`` property) — ``create_test_format`` returns
+        # the library Format, which has no ``agent_url`` and blows up in
+        # ``is_agent_backed`` / preview dial (CI: SERVICE_UNAVAILABLE).
+        agent = "https://creative.adcontextprotocol.org"
+        mock_format = MagicMock()
+        mock_format.format_id = create_test_format_id("display_300x250", agent_url=agent)
+        mock_format.agent_url = agent
+        mock_format.output_format_ids = None  # static → preview_creative, not build
+        mock_preview = {
+            "previews": [
+                {
+                    "renders": [
+                        {
+                            "preview_url": "https://example.com/banner.png",
+                            "dimensions": {"width": 300, "height": 250},
+                        }
+                    ]
+                }
+            ]
+        }
+        with (
+            patch(
+                "src.core.creative_agent_registry.CreativeAgentRegistry.list_all_formats",
+                new_callable=AsyncMock,
+                return_value=[mock_format],
+            ),
+            patch(
+                "src.core.creative_agent_registry.CreativeAgentRegistry.get_format",
+                new_callable=AsyncMock,
+                return_value=mock_format,
+            ),
+            patch(
+                "src.core.creative_agent_registry.CreativeAgentRegistry.preview_creative",
+                new_callable=AsyncMock,
+                return_value=mock_preview,
+            ),
         ):
             # Sync a creative and assign it to the package
-            sync_creatives_raw(
+            sync_result = sync_creatives_raw(
                 creatives=[
                     {
                         "creative_id": "c_approval_test",
                         "name": "Approval Test Creative",
                         "format_id": {
-                            "agent_url": "https://creative.adcontextprotocol.org",
+                            "agent_url": agent,
                             "id": "display_300x250",
                         },
                         "assets": {},
@@ -690,6 +718,11 @@ class TestGetMediaBuysResponseFields:
                 assignments={"c_approval_test": [package_id]},
                 identity=mb_identity,
             )
+        assert any(
+            getattr(c, "creative_id", None) == "c_approval_test"
+            and getattr(c, "action", None) in {"created", "updated", "unchanged"}
+            for c in (sync_result.creatives or [])
+        ), f"sync_creatives failed before assignment: {sync_result}"
 
         # Use explicit status_filter to include all statuses — newly created media buys
         # may be pending_creatives (no creatives) or pending_start (future start), not active

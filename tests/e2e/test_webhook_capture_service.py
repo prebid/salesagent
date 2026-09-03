@@ -1,7 +1,7 @@
-"""Contract tests for the long-lived webhook-capture compose service (salesagent-amht.3).
+"""Contract tests for the long-lived webhook-capture compose service (GH #1802).
 
 ``tests/e2e/webhook_capture_service.py`` does not exist yet — this is the TDD
-red step for salesagent-amht.3's implementation plan. It pins the SERVICE'S OWN
+red step for GH #1802's implementation plan. It pins the SERVICE'S OWN
 request-handling contract in-process (no Docker, no compose network, no
 tls-proxy): per-key isolation, atomic drain-on-DELETE, and thread-safety under
 concurrent writers. Those are claims about this module's own logic, not about
@@ -28,7 +28,7 @@ from urllib.request import Request, urlopen
 import pytest
 
 # This import is the TDD red: tests/e2e/webhook_capture_service.py does not
-# exist yet (it is created by the implementation atom, salesagent-pwb1.7).
+# exist yet (it is created by the implementation atom, GH #1802).
 from tests.e2e.webhook_capture_service import run_capture_service
 
 _TIMEOUT_SECONDS = 5.0
@@ -232,7 +232,7 @@ class TestThreadSafetyUnderConcurrentWriters:
 class TestProgrammedRejections:
     """POST /control/{key} makes the service reject the next N deliveries to that key.
 
-    THIS IS A SUB-CLAIM, NOT THE REGRESSION TEST FOR salesagent-pldmk.41. It grades
+    THIS IS A SUB-CLAIM, NOT THE REGRESSION TEST FOR GH #1802. It grades
     the INSTRUMENT — whether the capture service can be made to fail on demand — and
     an instrument that works is not evidence that the thing it measures works. It
     earns its place for the opposite reason: a BROKEN instrument manufactures false
@@ -244,7 +244,7 @@ class TestProgrammedRejections:
     is settled by scripts/mutation-check-webhook-breaker.sh. Nothing in this file
     speaks to either.
 
-    salesagent-pldmk.41 plan step 2. Nothing in the compose stack can currently
+    GH #1802 plan step 2. Nothing in the compose stack can currently
     make the deployed server's webhook delivery FAIL: this service answers every
     delivery 200, so the server's circuit breaker never records a failure and the
     two circuit-breaker scenarios have no way to open it for real. A per-key

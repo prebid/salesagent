@@ -1065,8 +1065,13 @@ class TestA2AContextEcho:
         # so we don't need a real principal in DB (auth is optional).
         with patch.object(handler, "_handle_get_products_skill", raise_with_context):
             # Auth/identity layer mocked at the boundary (matches gold-standard pattern).
+            # Discovery resolve always returns ResolvedIdentity (possibly with a
+            # None principal_id) — never None; owner recording reads .tenant_id.
+            anonymous = PrincipalFactory.make_anonymous_a2a_identity(
+                tenant_id="test_tenant",
+            )
             handler._get_auth_token = MagicMock(return_value=None)
-            handler._resolve_a2a_identity = MagicMock(return_value=None)
+            handler._resolve_a2a_identity = MagicMock(return_value=anonymous)
 
             message = create_a2a_message_with_skill("get_products", {"brief": "test"})
             req_params = SendMessageRequest(message=message)

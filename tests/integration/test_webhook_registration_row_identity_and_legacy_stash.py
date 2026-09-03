@@ -1,6 +1,6 @@
 """What typing ``push_notification_config`` must NOT break.
 
-Epic D lane C3 (salesagent-fo99.3). The lane types the config parameter all the
+Epic D lane C3 (GH #1802). The lane types the config parameter all the
 way into ``_impl`` and stops ``schemes[0]`` from swallowing a scheme. Both of
 its two RED scenarios live in ``tests/bdd/features/local-egress-ssrf-refusal.feature``
 (a >1 ``schemes`` array and a too-short ``credentials``, refused at ingest on

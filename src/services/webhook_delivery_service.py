@@ -574,7 +574,7 @@ class WebhookDeliveryService:
         # serialization as two independent things to keep in sync.
         #
         # The auth DECISION above that transport is owned entirely by
-        # deliver_webhook/adeliver_webhook (salesagent-47n9.24, GH #1894). This
+        # deliver_webhook/adeliver_webhook (GH #1802, GH #1894). This
         # sender used to make
         # it inline and made it wrong four ways at once: it read webhook_secret (a
         # column with zero writers in src/, so the signing branch was unreachable
@@ -649,7 +649,7 @@ class WebhookDeliveryService:
                     outcome.http_status,
                 )
             elif outcome.kind == "refused_destination":
-                # Severity carried on the outcome, not chosen here (salesagent-pldmk.39).
+                # Severity carried on the outcome, not chosen here (GH #1802).
                 logger.log(outcome.log_level, "Webhook delivery to %s was refused by egress policy", safe_url)
             else:
                 cause = f"status {outcome.http_status}" if outcome.http_status is not None else "no response"

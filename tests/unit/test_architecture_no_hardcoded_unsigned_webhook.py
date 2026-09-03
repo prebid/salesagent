@@ -1,6 +1,6 @@
 """Structural guard: no webhook-signing seam call may hardcode an unsigned secret.
 
-Backstops salesagent-47n9.15: ``order_approval_service.py`` called the signing
+Backstops GH #1802: ``order_approval_service.py`` called the signing
 seam with a LITERAL ``None`` secret -- never deriving it from the stored
 ``PushNotificationConfig`` -- so a config that asked for
 ``authentication_type == "HMAC-SHA256"`` signing was silently delivered
@@ -16,7 +16,7 @@ bug hide for three independent webhook implementations before it was caught
 by a disease scan, not a test failure.
 
 The allowlist is empty and expected to stay empty: the disposition table in
-salesagent-47n9.15's codebase-scan atom found exactly one instance (the bug
+GH #1802's codebase-scan atom found exactly one instance (the bug
 itself, MIGRATEd by this same PR) and zero others.
 """
 
@@ -33,7 +33,7 @@ from tests.unit._architecture_helpers import (
 )
 
 # Repointed twice. Epic D lane C4: the two payload-taking helpers went module-private
-# and the seam gained two public entry points. salesagent-pldmk.3 then deleted the
+# and the seam gained two public entry points. GH #1802 then deleted the
 # two private signed-delivery helpers outright, and their only callers --
 # ``deliver_webhook`` / ``adeliver_webhook`` -- now
 # call ``prepare_signed_request`` themselves, so the seam is that ONE function. Without
@@ -55,7 +55,7 @@ _SIGNING_SEAM_FUNCTIONS = frozenset({"prepare_signed_request"})
 # positional index 1, and is a REQUIRED parameter, so "omitted entirely" is not an
 # expressible call shape (it is a TypeError, not a silent unsigned delivery). The two
 # keyword-only twins that made omission expressible -- and that this detector had a
-# dedicated arm for -- were deleted in salesagent-pldmk.3; that arm went with them.
+# dedicated arm for -- were deleted in GH #1802; that arm went with them.
 # Every seam function must have an entry here: see
 # test_every_seam_function_has_a_known_secret_slot below.
 _POSITIONAL_SECRET_INDEX = {"prepare_signed_request": 1}
@@ -117,7 +117,7 @@ class TestNoHardcodedUnsignedWebhookSecret:
 
         assert not all_violations, (
             "Signing-seam call(s) hardcode an unsigned secret (a literal None) "
-            f"-- silent-unsigned delivery, the salesagent-47n9.15 disease: {all_violations}"
+            f"-- silent-unsigned delivery, the GH #1802 disease: {all_violations}"
         )
 
 
@@ -204,7 +204,7 @@ def test_the_guard_has_subjects() -> None:
     reported green. A guard that cannot fail is worse than no guard, because it
     reads as coverage.
 
-    Strengthened in salesagent-pldmk.3 from "at least one resolves" to "all resolve":
+    Strengthened in GH #1802 from "at least one resolves" to "all resolve":
     that deletion took out two of the three names while ``prepare_signed_request``
     kept this test green, so two thirds of the scanned population went dead without
     a single failure. Partial drain is the same disease as total drain, just quieter.
@@ -223,7 +223,7 @@ def test_every_seam_function_has_a_known_secret_slot() -> None:
 
     It can do that only while every seam function takes its secret at a known
     positional slot. A future seam function whose secret is keyword-only would need
-    the omitted-secret arm this file deleted in salesagent-pldmk.3 brought back —
+    the omitted-secret arm this file deleted in GH #1802 brought back —
     this assertion is what forces that to be a deliberate decision rather than a
     KeyError at scan time.
     """

@@ -6,7 +6,7 @@ distinction is what lets ``products.py`` tell "agent up, genuinely 0 formats"
 apart from "agent unreachable" and trigger graceful degradation accordingly.
 
 ``TestFetchFormatsAnomalousStatusesMustRaise`` (anomalous ``status`` values on
-a mocked adcp SDK response) was retired by salesagent-4n88: the OPERATOR agent
+a mocked adcp SDK response) was retired by GH #1802: the OPERATOR agent
 path no longer goes through ``adcp.ADCPMultiAgentClient`` at all — there is no
 SDK-shaped ``status`` field to be anomalous. The invariant this file guards —
 a malformed/unparseable MCP response must raise, not silently validate into

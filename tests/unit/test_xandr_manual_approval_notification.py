@@ -1,4 +1,4 @@
-"""Regression: XandrAdapter's manual-approval path must actually notify Slack (salesagent-47n9.11).
+"""Regression: XandrAdapter's manual-approval path must actually notify Slack (GH #1802).
 
 ``XandrAdapter._create_human_task`` (src/adapters/xandr.py) does two bare,
 non-absolute imports inside its body:

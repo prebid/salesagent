@@ -1,13 +1,13 @@
 """One auth contract for every webhook sender, graded against real origins.
 
-salesagent-47n9.24 (GH #1893, #1894). ``salesagent-47n9.1`` converged the
+GH #1802 (GH #1893, #1894). ``GH #1802`` converged the
 TRANSPORT — every sender dials through ``src.core.security.outbound_http`` and
 ``json=`` is unreachable from a signing sender. What did not converge is the
 AUTH DECISION above it: three senders still answer "is this delivery signed,
 and with what" three different ways, and two of them answer it wrongly.
 
 The contract, stated once, is the one ``order_approval_service`` already keeps
-(salesagent-47n9.20, graded in ``tests/integration/test_order_approval_webhook.py``):
+(GH #1802, graded in ``tests/integration/test_order_approval_webhook.py``):
 
 1. The stored ``(authentication_type, authentication_token)`` pair becomes an
    auth decision in exactly ONE place — ``deliver_webhook``/``adeliver_webhook``.
@@ -27,7 +27,7 @@ The contract, stated once, is the one ``order_approval_service`` already keeps
 
 Every case here was RED until each sender routed its decision through the egress
 seam — ``deliver_webhook``/``adeliver_webhook`` in
-``src.core.security.webhook_egress`` (salesagent-47n9.24). They went green by
+``src.core.security.webhook_egress`` (GH #1802). They went green by
 CONVERGING on that seam, not by repairing the inline copies — repairing them in
 place would have made each the fourth divergent copy, which is the disease
 itself.
@@ -67,7 +67,7 @@ BEARER_SCHEME = "Bearer"
 
 # Any credential a buyer might store. There is deliberately no length
 # requirement to satisfy: the 32-char strength gate was deleted with the inline
-# resolver (salesagent-47n9.24) — it tested a column with no writers, so it had
+# resolver (GH #1802) — it tested a column with no writers, so it had
 # never once fired, and re-pointing it at authentication_token would have taken
 # short-credential buyers from "delivered" to "not delivered at all".
 STRONG_SECRET = "buyer-shared-secret-padded-to-the-pinned-32-char-min"
@@ -156,7 +156,7 @@ class TestWebhookDeliveryServiceResolvesAuthThroughTheResolver:
         """Defect 1: an ABSENT secret refuses; it is never downgraded to unsigned.
 
         This sender used to discard the secret and proceed UNSIGNED at WARNING
-        level — the same quiet failure salesagent-47n9.20 refused to commit one
+        level — the same quiet failure GH #1802 refused to commit one
         file over, and the reason a missing secret is a distinct refusal
         rather than a ``None``.
 

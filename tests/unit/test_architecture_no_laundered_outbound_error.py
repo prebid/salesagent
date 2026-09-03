@@ -13,13 +13,13 @@ seam (``call_mcp_tool`` -> ``validate_url``), which raises
 outbound_http.py``) — already correctly classified by the seam. A ``try``
 around one of these calls whose only broad handler is ``except Exception``
 (with no ``except OutboundError`` ahead of it) launders that classification
-into a generic message with the WRONG recovery hint (salesagent-ukln: a
+into a generic message with the WRONG recovery hint (GH #1802: a
 terminal refusal reported as ``recovery="transient"``, "Retry recommended").
 
-The fix (salesagent-ukln) added ``except OutboundError: raise_mapped_outbound_error(...)``
+The fix (GH #1802) added ``except OutboundError: raise_mapped_outbound_error(...)``
 ahead of the generic arm in both ``_create_new_creative`` and
 ``_update_existing_creative`` (``src/core/tools/creatives/_processing.py``).
-This guard pins that shape going forward — codebase-scan (salesagent-w517.4)
+This guard pins that shape going forward — codebase-scan (GH #1802)
 found exactly these 2 dial methods swallowed by exactly this arm ordering; the
 scan set is a fixed, named pair of registry methods, not a broad heuristic.
 """
@@ -40,7 +40,7 @@ from tests.unit._architecture_helpers import (
 
 # The two CreativeAgentRegistry methods that dial the egress seam and can
 # raise OutboundError. Not a broad heuristic — the exact pair codebase-scan
-# (salesagent-w517.4) enumerated.
+# (GH #1802) enumerated.
 DIALLING_METHODS = frozenset({"preview_creative", "build_creative"})
 
 
@@ -116,8 +116,8 @@ def _scan_src() -> dict[str, list[int]]:
 class TestNoLaunderedOutboundError:
     """No try/except under src/ launders OutboundError from a creative-agent dial.
 
-    There is no allowlist: the scan set (codebase-scan salesagent-w517.4) was
-    emptied by the salesagent-ukln fix and stays empty.
+    There is no allowlist: the scan set (codebase-scan GH #1802) was
+    emptied by the GH #1802 fix and stays empty.
     """
 
     @pytest.mark.arch_guard

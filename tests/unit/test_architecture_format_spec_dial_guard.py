@@ -7,16 +7,16 @@ provided pseudo-URL like ``broadstreet://<tenant_id>`` (served in-process by
 the adapter — ``src/core/tools/creative_formats.py``,
 ``src/adapters/broadstreet/adapter.py``) can never be resolved that way, so an
 unconditional call rejects a format the seller itself advertises
-(salesagent-ypgd). The fix wraps each call in
+(GH #1802). The fix wraps each call in
 ``if creative.agent_url and is_dialled_agent_url(creative.agent_url): ...`` —
 this guard pins that every call stays inside such a conditional.
 
 Scope: this checks ``src/core/tools/media_buy_create.py`` specifically — the
-two call sites codebase-scan (salesagent-w517.13) named. It does not attempt
+two call sites codebase-scan (GH #1802) named. It does not attempt
 to check ``src/core/tools/creatives/_validation.py`` (the reference
 implementation the guard above copies, already correct) or
 ``src/core/format_resolver.py`` (the DEFERRED single-choke-point candidate,
-salesagent-0tw6) — neither wraps the call in a local ``if`` the same way, so a
+GH #1802) — neither wraps the call in a local ``if`` the same way, so a
 generic scan would need a different shape per file. If a THIRD unguarded call
 site is added to media_buy_create.py, this guard fails it too — the check is
 "is `_get_format_spec_sync` ever called without an enclosing

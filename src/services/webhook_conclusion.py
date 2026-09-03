@@ -6,7 +6,7 @@ both must swallow a failure to do so: persistence here is observability, and a
 DB error must not propagate out of a function contracted ``-> bool`` and turn a
 webhook that WAS delivered into a failure, and upstream into a spurious retry.
 
-That epilogue was written twice (salesagent-pldmk.7, review pattern #4 / AR-01)
+That epilogue was written twice (GH #1802, review pattern #4 / AR-01)
 -- once as ``protocol_webhook_service._conclude`` and once inline in
 ``webhook_delivery_service``. Two copies of a swallow is two chances to swallow
 slightly differently, and they already did: only one rolled back.

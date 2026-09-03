@@ -2302,7 +2302,7 @@ class PushNotificationConfig(Base, JSONValidatorMixin):
     webhook_secret: Mapped[str | None] = mapped_column(String(500), nullable=True)
     # Which protocol the buyer registered over. NULL means a row written before
     # this column existed; readers fall back to MCP, which is what every sender
-    # did unconditionally before (salesagent-pldmk.39).
+    # did unconditionally before (GH #1802).
     protocol: Mapped[str | None] = mapped_column(String(20), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(

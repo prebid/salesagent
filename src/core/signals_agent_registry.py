@@ -111,7 +111,7 @@ class SignalsAgentRegistry:
         redirect-refusing — rather than ``adcp.ADCPMultiAgentClient``, whose own
         httpx stack no egress policy of ours could reach (adcp 6.6.0 exposes no
         transport injection point; upstream adcp-client-python#1004). Closes the
-        gap tracked by salesagent-4n88. Signals agents are ALWAYS
+        gap tracked by GH #1802. Signals agents are ALWAYS
         operator-configured (tenant DB rows) — there is no counterparty-supplied
         signals URL, so every call here takes this path.
 
@@ -150,7 +150,7 @@ class SignalsAgentRegistry:
             # block carried anything parseable. GetSignalsResponse.model_validate({})
             # would otherwise validate CLEANLY with signals=None — every field is
             # optional — silently producing signals=[] and masking a genuine
-            # agent failure as "agent up, 0 signals" (salesagent-9eu class bug).
+            # agent failure as "agent up, 0 signals" (GH #1802 class bug).
             raise AdCPConfigurationError(f"No parseable content in get_signals response from {agent.name}")
         try:
             parsed = LibraryGetSignalsResponse.model_validate(payload)

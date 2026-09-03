@@ -1,6 +1,6 @@
 """Non-disclosing messages for adcp's adagents.json fetch/validation exceptions.
 
-Core Invariant (salesagent-grgc): whatever the adcp library's own exception
+Core Invariant (GH #1802): whatever the adcp library's own exception
 text says (``str(exc)``) never reaches a persisted row or an admin-facing
 response -- the library's ``AdagentsValidationError`` can carry a resolved
 IP address and an SSRF range classification (confirmed by reading

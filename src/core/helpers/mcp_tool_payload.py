@@ -5,7 +5,7 @@ fastmcp's ``CallToolResult`` may carry the response as ``structured_content``
 ``.text`` is a JSON string. Every MCP tool call in this codebase reads a result
 the same way — this is that one place (DRY), replacing what was duplicated
 inline in ``preview_creative``/``build_creative`` and now also needed by the
-guarded creative-format/signals fetch paths (salesagent-4n88).
+guarded creative-format/signals fetch paths (GH #1802).
 """
 
 from __future__ import annotations

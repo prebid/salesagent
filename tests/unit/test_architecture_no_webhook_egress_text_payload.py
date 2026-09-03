@@ -1,6 +1,6 @@
 """Structural guard: webhook_egress.py's public payload parameter stays dict-only.
 
-salesagent-47n9.19: the signer-side duplicate-object-key MUST (AdCP 3.1.1
+GH #1802: the signer-side duplicate-object-key MUST (AdCP 3.1.1
 L1/security.mdx §Duplicate object keys) is satisfied *by construction* today
 -- ``prepare_signed_request``'s ``payload: dict[str, Any]`` cannot hold a
 duplicate key, so there is no runtime check to write. mypy already enforces
@@ -29,7 +29,7 @@ _MODULE_PATH = "src/core/security/webhook_egress.py"
 # Repointed in Epic D lane C4 alongside the private rename, and EXTENDED to the two
 # public entry points — leaving them out would let a future ``payload: bytes``
 # on the seam itself walk straight past this MUST. Repointed again in
-# salesagent-pldmk.3, which deleted the two private payload-taking helpers and
+# GH #1802, which deleted the two private payload-taking helpers and
 # folded their bodies into ``deliver_webhook`` / ``adeliver_webhook``. Every name here MUST resolve in the
 # module: see test_every_guarded_function_exists below, without which a deleted name
 # just stops being scanned and this guard degrades one silent notch at a time.
@@ -100,7 +100,7 @@ class TestWebhookEgressPayloadStaysDictOnly:
         violations = find_payload_annotation_violations(tree)
         assert not violations, (
             "webhook_egress.py's payload parameter must stay dict[str, Any]-only -- a text-accepting "
-            "signature reopens the signer-side duplicate-key gap (salesagent-47n9.19): "
+            "signature reopens the signer-side duplicate-key gap (GH #1802): "
             f"{violations}"
         )
 
@@ -156,7 +156,7 @@ def some_other_function(payload: bytes):
 class TestTheGuardHasSubjects:
     """Every guarded name must still be defined in the scanned module.
 
-    Added in salesagent-pldmk.3. That change deleted two of the five names this set
+    Added in GH #1802. That change deleted two of the five names this set
     then held, and nothing failed: a name that no longer resolves is simply never
     matched by the AST walk, so the guard quietly shrank its own population while
     still reporting green. This is the assertion that would have caught it.

@@ -1,6 +1,6 @@
 """The push-notification repository persists the VALUE, never loose strings.
 
-Epic D lane C2 (salesagent-fo99.2). ``ValidatedWebhookRegistration`` is the
+Epic D lane C2 (GH #1802). ``ValidatedWebhookRegistration`` is the
 receipt that BOTH ingest preconditions ran — the registration SSRF gate on the
 URL half and the pinned ``Authentication`` model built inside ``_accept`` on the credential
 half. Before this lane the

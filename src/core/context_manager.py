@@ -892,8 +892,8 @@ class ContextManager(DatabaseManager):
                         status_enum = GeneratedTaskStatus.unknown
 
                     # The dialect fork and the metadata dict both moved into
-                    # notify() (salesagent-pldmk.39). It keeps this site's
-                    # salesagent-yi3s invariant intact: the ORIGINAL task_type_str
+                    # notify() (GH #1802). It keeps this site's
+                    # GH #1802 invariant intact: the ORIGINAL task_type_str
                     # reaches the metadata and the guards that key on it, while the
                     # SDK payload gets validate_webhook_task_type's coerced COPY.
                     webhook_task = WebhookTaskContext(
