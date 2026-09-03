@@ -66,6 +66,35 @@ get_auth_context: Any = Depends(_get_auth_context)
 # ---------------------------------------------------------------------------
 
 
+def _resolve_rest_identity(auth_ctx: AuthContext, *, require_valid_token: bool) -> "ResolvedIdentity":
+    """Shared REST identity resolution (testing_context from headers + resolve_identity).
+
+    Both optional and required auth deps share this path so X-Mock-Time /
+    X-Dry-Run extraction cannot drift between discovery and require-auth.
+    """
+    from src.core.resolved_identity import resolve_identity
+    from src.core.testing_hooks import AdCPTestContext
+
+    headers = dict(auth_ctx.headers)
+    identity = resolve_identity(
+        headers=headers,
+        auth_token=auth_ctx.auth_token,
+        require_valid_token=require_valid_token,
+        protocol="rest",
+        testing_context=AdCPTestContext.from_headers(headers),
+    )
+
+    return identity
+
+
+def _set_tenant_from_identity(identity: "ResolvedIdentity") -> None:
+    """Pin tenant ContextVar only after auth gates pass."""
+    if identity.tenant:
+        from src.core.config_loader import set_current_tenant
+
+        set_current_tenant(identity.tenant)
+
+
 def _resolve_auth_dep(auth_ctx: AuthContext = get_auth_context) -> "ResolvedIdentity | None":
     """FastAPI dependency: resolve identity (auth-optional, for discovery endpoints).
 
@@ -75,24 +104,10 @@ def _resolve_auth_dep(auth_ctx: AuthContext = get_auth_context) -> "ResolvedIden
     if not auth_ctx.auth_token:
         return None
 
-    from src.core.resolved_identity import resolve_identity
-
-    identity = resolve_identity(
-        headers=dict(auth_ctx.headers),
-        auth_token=auth_ctx.auth_token,
-        require_valid_token=False,
-        protocol="rest",
-    )
-
+    identity = _resolve_rest_identity(auth_ctx, require_valid_token=False)
     if not identity.principal_id:
         return None
-
-    # Set tenant ContextVar at the REST transport boundary
-    if identity.tenant:
-        from src.core.config_loader import set_current_tenant
-
-        set_current_tenant(identity.tenant)
-
+    _set_tenant_from_identity(identity)
     return identity
 
 
@@ -110,24 +125,10 @@ def _require_auth_dep(auth_ctx: AuthContext = get_auth_context) -> "ResolvedIden
     if not auth_ctx.auth_token:
         raise AdCPAuthRequiredError("Authentication required", suggestion=AUTH_REQUIRED_SUGGESTION)
 
-    from src.core.resolved_identity import resolve_identity
-
-    identity = resolve_identity(
-        headers=dict(auth_ctx.headers),
-        auth_token=auth_ctx.auth_token,
-        require_valid_token=True,
-        protocol="rest",
-    )
-
+    identity = _resolve_rest_identity(auth_ctx, require_valid_token=True)
     if not identity.principal_id:
         raise AdCPAuthRequiredError("Authentication required", suggestion=AUTH_REQUIRED_SUGGESTION)
-
-    # Set tenant ContextVar at the REST transport boundary
-    if identity.tenant:
-        from src.core.config_loader import set_current_tenant
-
-        set_current_tenant(identity.tenant)
-
+    _set_tenant_from_identity(identity)
     return identity
 
 

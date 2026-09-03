@@ -82,7 +82,6 @@ REST_TOOL_ALIASES: dict[str, str] = {}
 REST_ABSENT_TOOLS: frozenset[str] = frozenset(
     {
         "complete_task",
-        "get_media_buys",
         "get_task",
         "list_tasks",
     }

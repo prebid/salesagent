@@ -496,7 +496,7 @@ class AdCPRequestHandler(RequestHandler):
             # row is expected and the registration this sender holds
             # (ValidatedWebhookRegistration) carries no scope ids to give it.
             # Stating them as None is what makes that visible -- the dict this
-            # replaced simply had no such keys (salesagent-pldmk.39).
+            # replaced simply had no such keys (#1802).
             webhook_task = WebhookTaskContext(
                 task_id=task.id,
                 task_type=skills[0] if skills else "unknown",
@@ -1251,7 +1251,7 @@ class AdCPRequestHandler(RequestHandler):
             # manufactures field="push_notification_config.url" plus the https SSRF
             # wording for a non-AdCP error -- so a credential refusal raised from
             # inside the repository would reach the buyer as "fix your URL" about a
-            # URL that is fine (salesagent-47n9.20).
+            # URL that is fine (#1802).
             registration = _accept_a2a_push_config(url, auth_type, auth_token_value)
 
             # No ValueError funnel around upsert any more: the repository no longer
@@ -1534,7 +1534,7 @@ class AdCPRequestHandler(RequestHandler):
         # order (``error.data.adcp_error``). Without it the A2A wire carried a
         # bare JSON-RPC error and the buyer-facing code and suggestion that REST
         # returns were simply absent, which the test harness was papering over by
-        # synthesizing an envelope production never sent (salesagent-pldmk.26).
+        # synthesizing an envelope production never sent (#1802).
         #
         # AUTH_REQUIRED is the correct code at the 3.1.1 pin, not merely the
         # consistent one. The pin's enum marks it deprecated in favour of
@@ -1545,7 +1545,7 @@ class AdCPRequestHandler(RequestHandler):
         # attached". The generated features grade AUTH_REQUIRED accordingly,
         # including for the invalid-token case (BR-UC-011:256). The pin
         # contradicts itself here -- transport-errors.mdx separately reserves
-        # -32028 for AUTH_MISSING -- and salesagent-pldmk.38 tracks raising that
+        # -32028 for AUTH_MISSING -- and #1802 tracks raising that
         # upstream and migrating when the pin actually performs the split.
         if skill_name not in DISCOVERY_SKILLS and (identity is None or not identity.principal_id):
             raise InvalidRequestError(
@@ -2106,8 +2106,8 @@ class AdCPRequestHandler(RequestHandler):
 
         params = {**parameters}
         include_snapshot = params.pop("include_snapshot", False)
-        # No REST route exists for get_media_buys; context string follows the
-        # same "<tool> request" convention as the sibling boundaries (klkg).
+        # REST sibling: POST /api/v1/media-buys/query. Context string follows
+        # the same "<tool> request" convention as the sibling boundaries.
         with adcp_validation_boundary(context="get_media_buys request"):
             req = GetMediaBuysRequest.model_validate(params)
         response = _get_media_buys_impl(req, identity=identity, include_snapshot=include_snapshot)

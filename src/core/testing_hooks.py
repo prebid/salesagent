@@ -217,6 +217,28 @@ TestContext = AdCPTestContext  # Intermediate name (was briefly used)
 TestingHookContext = AdCPTestContext  # Another intermediate name
 
 
+def resolve_now(testing_ctx: AdCPTestContext | None) -> datetime:
+    """Effective ``datetime`` under testing hooks: ``mock_time`` or wall-clock UTC.
+
+    Single source for the non-buy-scoped clock. ``jump_to_event`` stays
+    buy-scoped in delivery's ``_simulation_clock`` (needs flight windows).
+    """
+    if testing_ctx is not None and testing_ctx.mock_time is not None:
+        return testing_ctx.mock_time
+    return datetime.now(UTC)
+
+
+def resolve_clock(testing_ctx: AdCPTestContext | None) -> tuple[datetime, bool]:
+    """Effective (clock, simulate) for list-style reads under testing hooks.
+
+    ``mock_time`` supplies the controllable clock only (``simulate=False``):
+    #1830 needs date refinement for filtering without flipping persisted
+    status on live servers. ``jump_to_event`` simulation stays delivery-only
+    via ``_simulation_clock``.
+    """
+    return resolve_now(testing_ctx), False
+
+
 class NextEventCalculator:
     """Calculates next events and timing for AdCP response headers."""
 
@@ -642,7 +664,7 @@ def apply_testing_hooks(
         end_date = campaign_info.get("end_date")
         start_date = _ensure_aware(start_date) if start_date else start_date
         end_date = _ensure_aware(end_date) if end_date else end_date
-        current_time = testing_ctx.mock_time or datetime.now(UTC)
+        current_time = resolve_now(testing_ctx)
 
         if start_date and end_date:
             progress = TimeSimulator.calculate_campaign_progress(start_date, end_date, current_time)

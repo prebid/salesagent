@@ -283,6 +283,13 @@ def _deliver_e2e_rest(env: BaseTestEnv, address: ToolAddress, wrapped: dict[str,
 
     resolved_identity = env.identity_for(Transport.E2E_REST) if identity is NO_IDENTITY_OVERRIDE else identity
     headers = {"Content-Type": "application/json", **e2e_identity_headers(resolved_identity)}
+    from tests.harness.dispatchers import apply_testing_hook_headers
+
+    apply_testing_hook_headers(
+        headers,
+        resolved_identity,
+        fallback_mock_time=getattr(env, "mock_time", None),
+    )
     method = address.method or "post"
 
     with httpx.Client(base_url=env.e2e_config.base_url, timeout=30) as client:

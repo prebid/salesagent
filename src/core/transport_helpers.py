@@ -85,15 +85,13 @@ def resolve_identity_from_context(
         # No headers available — return minimal identity
         return ResolvedIdentity(protocol=protocol)
 
-    # Extract testing context from headers if present
-    testing_context = None
-    try:
-        from src.core.testing_hooks import TestContext
+    # Extract testing context from the resolved headers (not a second
+    # get_http_headers fetch via from_context). MCP Client harness patches
+    # transport_helpers.get_http_headers; re-fetching via testing_hooks would
+    # drop X-Mock-Time / X-Dry-Run on the real-token path.
+    from src.core.testing_hooks import AdCPTestContext
 
-        if ctx is not None:
-            testing_context = TestContext.from_context(ctx)
-    except Exception:
-        logger.debug("Could not extract testing context", exc_info=True)
+    testing_context = AdCPTestContext.from_headers(headers)
 
     return resolve_identity(
         headers=headers,

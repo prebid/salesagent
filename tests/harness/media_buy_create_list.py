@@ -13,23 +13,20 @@ and route by request type. The get_media_buys dispatch itself is inherited from
 ``MediaBuyListDispatchMixin`` rather than re-implemented, so this env and
 ``MediaBuyListEnv`` grade the same tool through the same code.
 
-REST is intentionally NOT routed: UC-019 is a ``_NO_REST_UC`` (get_media_buys has
-no REST route, tests/bdd/conftest.py:2885-2895), so the create and list REST
-bodies never both apply in one scenario and wiring an ungraded second REST path
-would be speculative. The inherited create REST dispatch is left untouched.
+REST is routed: ``POST /api/v1/media-buys/query`` (PR #1950 / #1830). List requests
+use ``MediaBuyListEnv``'s body builder + query endpoint; everything else falls
+through to the inherited create (or DualEnv update) REST path via ``super()``.
 
-GH #1900
+GH #1900 / #1830
 """
 
 from __future__ import annotations
 
 from typing import Any
 
-import pytest
-
 from src.core.schemas._base import GetMediaBuysRequest
 from tests.harness.media_buy_create import MediaBuyCreateEnv
-from tests.harness.media_buy_list import MediaBuyListDispatchMixin
+from tests.harness.media_buy_list import MediaBuyListDispatchMixin, MediaBuyListEnv
 from tests.harness.transport import DeliverResult
 
 
@@ -53,6 +50,8 @@ class MediaBuyCreateListEnv(MediaBuyListDispatchMixin, MediaBuyCreateEnv):
     and the inherited create patches target the create module only.
     """
 
+    _active_list: bool = False
+
     def call_impl(self, **kwargs: Any) -> Any:
         if _is_list_request(kwargs):
             return self._call_list_impl(**kwargs)
@@ -74,47 +73,55 @@ class MediaBuyCreateListEnv(MediaBuyListDispatchMixin, MediaBuyCreateEnv):
             return self._deliver_list_mcp(**kwargs)
         return super().deliver_mcp(**kwargs)
 
+    def _run_rest_request(self, endpoint: str, **kwargs: Any) -> Any:
+        """In-process RestDispatcher reads ``REST_ENDPOINT`` before body build.
+
+        Mirror ``MediaBuyDualEnv``: re-select the list query URL from request
+        content here so a stale create-collection endpoint cannot be POSTed.
+        Bypass DualEnv's update router (when present in MRO) by calling
+        ``MediaBuyCreateEnv`` directly for the list arm.
+        """
+        self._active_list = _is_list_request(kwargs)
+        if self._active_list:
+            return MediaBuyCreateEnv._run_rest_request(self, "/api/v1/media-buys/query", **kwargs)
+        self._active_list = False
+        return super()._run_rest_request(endpoint, **kwargs)
+
     def build_rest_body(self, **kwargs: Any) -> dict[str, Any]:
-        """Refuse to build a REST body for a list request; delegate everything else.
+        """List → MediaBuyListEnv body; else ``super()`` (create or DualEnv update).
 
-        ``get_media_buys`` has no REST route — ``src/routes/api_v1.py`` routes
-        create, update and delivery for media buys, nothing for the list. Without this
-        the inherited create builder handles the call: it is create-shaped, so it dies
-        inside ``_restore_creative_ids`` reading a ``packages`` attribute the list
-        request does not have, and the test grades a different call than it names.
-
-        Scope, precisely: this refuses the ``req=GetMediaBuysRequest(...)`` arm, keyed
-        on the same ``_is_list_request`` discriminator ``call_impl``/``call_a2a``/
-        ``call_mcp`` use. A flat-kwargs call still routes to create here exactly as it
-        does on every other transport of this env — consistent, not a REST-specific
-        mis-dispatch, and deliberately left alone.
-
-        The refusal is declared HERE, per env, and deliberately not derived from the
-        route table. The two staleness failures are not symmetric: a route DELETED
-        while deriving means the REST arm silently stops being graded and the suite
-        stays green, whereas a route ADDED while declaring means the first REST call
-        fails at this line — which is the line that must change anyway, since the list
-        mixin's body builder is flat-kwargs-only and could not dispatch correctly on
-        its own.
-
-        ``pytest.fail`` and not ``NotImplementedError`` or ``AssertionError``, because
-        this refusal has to survive two launderers to be loud at all:
-        ``tests/bdd/conftest.py`` converts a ``NotImplementedError`` raised in a call
-        phase into a skip + xfail — the silent matrix-shrink this exists to prevent —
-        and ``RestDispatcher.dispatch`` wraps the whole dispatch, this builder
-        included, in ``except Exception`` and returns the refusal as an error-shaped
-        result indistinguishable from a production error response. ``Failed`` derives
-        from ``BaseException`` and is not a ``NotImplementedError``, so neither can
-        eat it. Do not "simplify" the dialect.
+        RestE2EDispatcher reads ``REST_ENDPOINT`` after ``build_rest_body``, so the
+        ``_active_list`` flag must be set here for e2e_rest (same pattern as
+        ``MediaBuyDualEnv._active_update``).
         """
         if _is_list_request(kwargs):
-            pytest.fail(
-                f"{type(self).__name__} cannot build a REST body for a get_media_buys request: "
-                "the tool has no REST route. Dispatch it on A2A or MCP, or add the route "
-                "and a list body builder here together.",
-                pytrace=False,
+            self._active_list = True
+            req = kwargs["req"]
+            return MediaBuyListEnv.build_rest_body(
+                self,
+                media_buy_ids=req.media_buy_ids,
+                status_filter=req.status_filter,
+                include_snapshot=bool(kwargs.get("include_snapshot", False)),
+                account=getattr(req, "account", None),
+                context=getattr(req, "context", None),
             )
+        self._active_list = False
         # super(), not an explicit parent call: MediaBuyCreateUpdateListEnv resolves
         # this through MediaBuyDualEnv's stateful create/update routing, which naming
         # a parent directly would bypass.
         return super().build_rest_body(**kwargs)
+
+    @property
+    def REST_ENDPOINT(self) -> str:  # noqa: N802 — matches the inherited class-attr name
+        """List → query; update (DualEnv) → per-id PUT URL; else create collection."""
+        if self._active_list:
+            return "/api/v1/media-buys/query"
+        if getattr(self, "_active_update", False):
+            return f"/api/v1/media-buys/{getattr(self, '_update_target_id', 'NOT_SEEDED')}"
+        return "/api/v1/media-buys"
+
+    def parse_rest_response(self, data: dict[str, Any]) -> Any:
+        if self._active_list:
+            self._active_list = False
+            return MediaBuyListEnv.parse_rest_response(self, data)
+        return super().parse_rest_response(data)

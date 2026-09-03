@@ -2478,23 +2478,8 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 )
 
         # --- UC-019: HTTP transport xfails for auth suggestion mismatch ---
-        # impl/a2a/mcp graduated (kb7y); REST/e2e_rest suggestion string differs
-        # from spec ("authenticate" vs "authentication").
-        if (is_rest or is_e2e_rest) and "T-UC-019-ext-a" in marker_names:
-            item.add_marker(
-                pytest.mark.xfail(
-                    reason="HTTP transport: auth error suggestion says 'authenticate' not 'authentication' — spec-production gap",
-                    strict=False,
-                )
-            )
-        if (is_rest or is_e2e_rest) and "T-UC-019-partition-principal-invalid" in marker_names:
-            if "identity_missing" in nodeid:
-                item.add_marker(
-                    pytest.mark.xfail(
-                        reason="HTTP transport: auth error suggestion says 'authenticate' not 'authentication' — spec-production gap",
-                        strict=False,
-                    )
-                )
+        # T-UC-019-ext-a graduated: REST/A2A both emit AUTH_REQUIRED_SUGGESTION
+        # ("Provide valid credentials…") — see exceptions.py AUTH_REQUIRED_SUGGESTION.
 
         # --- UC-019: parametrization-specific xfails for partially-passing scenarios ---
         # These scenario outlines have some parametrizations that pass (graduated)
@@ -2543,43 +2528,16 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     item.add_marker(pytest.mark.xfail(reason=reason, strict=False))
                     break
 
-        # --- UC-019: e2e_rest xfails for datetime-mock-dependent tests ---
-        # These scenarios use `And today is "<date>"` which patches datetime
-        # in-process. The patch has no effect on Docker — real datetime.now()
-        # is used, so status assertions fail.
+        # --- UC-019: e2e_rest xfails (adapter-mock / fixture gaps) ---
+        # Datetime rows use X-Mock-Time end-to-end (REST from_headers + list
+        # mock clock + RestE2EDispatcher + given_today_is / set_mock_time).
+        # Remaining e2e_rest UC-019 gaps below are adapter-mock / fixture-only.
         if is_e2e_rest and any(t.startswith("T-UC-019") for t in marker_names):
-            _UC019_E2E_DATETIME_TAGS: set[str] = {
-                "T-UC-019-partition-status",
-                "T-UC-019-boundary-status",
-                "T-UC-019-inv-150-2",
-                "T-UC-019-inv-150-4",
-                "T-UC-019-inv-150-5",
-                # Default filter test creates flight dates relative to mock_today
-                # (default 2026-03-15), making both buys "completed" on real date.
-                "T-UC-019-inv-151-1",
-            }
             _UC019_E2E_MOCK_TAGS: set[str] = {
                 # Adapter mock (get_adapter patch) has no effect in Docker.
                 "T-UC-019-partition-snapshot",
                 "T-UC-019-boundary-snapshot",
             }
-            # Graduated e2e_rest examples that pass despite datetime/mock concern:
-            # These variants have expected status=completed, which matches the
-            # real date (all flight dates are in the past).
-            _UC019_E2E_DT_GRADUATED = {
-                ("T-UC-019-partition-status", "post_flight"),
-                ("T-UC-019-boundary-status", "day after end_date"),
-                ("T-UC-019-boundary-status", "start_date equals end_date and today is day after"),
-            }
-            _dt_graduated = any(tag in marker_names and substr in nodeid for tag, substr in _UC019_E2E_DT_GRADUATED)
-            _inv150_5_graduated = "T-UC-019-inv-150-5" in marker_names  # all examples pass
-            if marker_names & _UC019_E2E_DATETIME_TAGS and not _dt_graduated and not _inv150_5_graduated:
-                item.add_marker(
-                    pytest.mark.xfail(
-                        reason="e2e_rest: datetime.now() mock has no effect in Docker — status computed from real date",
-                        strict=False,
-                    )
-                )
             _UC019_E2E_MOCK_GRADUATED = {
                 ("T-UC-019-partition-snapshot", "supported_but_unavailable"),
                 # Only "snapshot null" passes on e2e_rest: Docker's mock adapter
@@ -3190,8 +3148,8 @@ _UC002_V31_SUCCESS_WIRED: set[str] = {
 _ADMIN_TAG_PREFIX = "T-ADMIN-"
 
 # UCs whose tool has no REST route — parametrize across A2A + MCP only (a REST
-# variant would 404). get_media_buys (UC-019) is A2A/MCP-only.
-_NO_REST_UC_TAG_PREFIXES = ("T-UC-019-",)
+# variant would 404). Empty: get_media_buys now has POST /api/v1/media-buys/query.
+_NO_REST_UC_TAG_PREFIXES: tuple[str, ...] = ()
 
 
 def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
@@ -3244,13 +3202,9 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
     transports = [Transport.A2A, Transport.MCP, Transport.REST]
     ids = ["a2a", "mcp", "rest"]
 
-    # UCs without a REST endpoint (get_media_buys has no REST route) are graded on
-    # the A2A + MCP wire transports only — including a REST variant would 404.
-    # This applies to e2e_rest too: it dispatches real HTTP REST to the live
-    # server, so a tool with no REST route 404s there identically (confirmed by
-    # the first in-network CI run: every UC-019 e2e_rest param died on a live
-    # 404). Skip the e2e append for these UCs instead of parking ~40 ledger
-    # entries for a definitionally-unsupported transport.
+    # UCs without a REST endpoint are graded on A2A + MCP only (a REST variant
+    # would 404). Same for e2e_rest (live HTTP). Currently empty — get_media_buys
+    # has POST /api/v1/media-buys/query.
     no_rest_uc = any(t.startswith(_uc_prefix) for _uc_prefix in _NO_REST_UC_TAG_PREFIXES for t in marker_names)
     if no_rest_uc:
         transports = [Transport.A2A, Transport.MCP]

@@ -36,6 +36,7 @@ from src.core.tools import capabilities as capabilities_module
 from src.core.tools import creative_formats as creative_formats_module
 from src.core.tools import media_buy_create as media_buy_create_module
 from src.core.tools import media_buy_delivery as media_buy_delivery_module
+from src.core.tools import media_buy_list as media_buy_list_module
 from src.core.tools import media_buy_update as media_buy_update_module
 from src.core.tools import performance as performance_module
 from src.core.tools import products as products_module
@@ -130,6 +131,19 @@ class UpdateMediaBuyBody(SalesAgentBaseModel):
     # still-xfailed gap (BR-RULE-215 partitions). Accepting it is transport parity, not
     # a claim that concurrency is enforced.
     revision: int | None = None
+    adcp_version: str = "1.0.0"
+
+
+class GetMediaBuysBody(SalesAgentBaseModel):
+    # Keep media_buy_ids / status_filter as Any so mistyped values reach
+    # get_media_buys_raw → adcp_validation_boundary (VALIDATION_ERROR), matching
+    # MCP/A2A. FastAPI list[str] typing would reject at the route with
+    # INVALID_REQUEST and diverge from T-UC-019-ext-d / other transports.
+    media_buy_ids: Any = None
+    status_filter: Any = None
+    include_snapshot: bool = False
+    account: dict[str, Any] | None = None
+    context: dict[str, Any] | None = None
     adcp_version: str = "1.0.0"
 
 
@@ -387,6 +401,28 @@ async def update_media_buy(media_buy_id: str, body: UpdateMediaBuyBody, identity
         ext=body.ext,
         idempotency_key=body.idempotency_key,
         revision=body.revision,
+        identity=identity,
+    )
+    return response.model_dump(mode="json")
+
+
+@router.post("/media-buys/query")
+async def get_media_buys(body: GetMediaBuysBody, identity: ResolvedIdentity = require_auth):
+    """Query media buys (auth required) — REST transport for get_media_buys."""
+    # Do not enrich identity from account: list _impl rejects account before any
+    # DB read (UNSUPPORTED_FEATURE). Enrichment would 404 ACCOUNT_NOT_FOUND on
+    # REST only. Coerce and forward so A2A/MCP/REST share that rejection.
+    account = None
+    if body.account is not None:
+        with adcp_validation_boundary(context="get_media_buys request"):
+            account = to_account_reference(body.account)
+
+    response = media_buy_list_module.get_media_buys_raw(
+        media_buy_ids=body.media_buy_ids,
+        status_filter=body.status_filter,
+        include_snapshot=body.include_snapshot,
+        account=account,
+        context=to_context_object(body.context),
         identity=identity,
     )
     return response.model_dump(mode="json")

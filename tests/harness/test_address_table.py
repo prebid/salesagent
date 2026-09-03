@@ -399,13 +399,15 @@ class TestCrossRegistryConsistencyGuard:
         invariant, CLAUDE.md)."""
         table = AddressTable()
         rest_names = table.all_tools(Transport.REST)
-        assert len(rest_names) == 12, rest_names
+        # 13 includes get_media_buys (POST /api/v1/media-buys/query — PR #1950 / #1830).
+        assert len(rest_names) == 13, rest_names
+        assert "get_media_buys" in rest_names
         assert "get_adcp_capabilities" in rest_names  # handler is named after its tool
         assert "get_capabilities" not in rest_names  # raw handler name, not a tool identity
         for absent_tool in REST_ABSENT_TOOLS:
             assert absent_tool not in rest_names
         assert REST_TOOL_ALIASES == {}
-        assert REST_ABSENT_TOOLS == frozenset({"complete_task", "get_media_buys", "get_task", "list_tasks"})
+        assert REST_ABSENT_TOOLS == frozenset({"complete_task", "get_task", "list_tasks"})
 
 
 class TestPathParamRegex:

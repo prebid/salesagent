@@ -14,7 +14,7 @@ from typing import Any
 from pytest_bdd import given, parsers, then, when
 
 from src.core.schemas._base import GetMediaBuysRequest
-from tests.bdd.steps._outcome_helpers import payload_or_none, require_payload, wire_dict, wire_field
+from tests.bdd.steps._outcome_helpers import payload_or_none, require_payload, wire_dict, wire_field, wire_objects
 from tests.bdd.steps.generic._create_request import build_create_request_kwargs
 from tests.bdd.steps.generic._dispatch import dispatch_request
 from tests.bdd.steps.generic.then_error import _wire_code, _wire_error_object, _wire_suggestion
@@ -158,26 +158,21 @@ def given_principal_owns_media_buy_with_dates(ctx: dict, principal_id: str, mb_i
 
 @given(parsers.parse('today is "{today_str}"'))
 def given_today_is(ctx: dict, today_str: str) -> None:
-    """Override 'today' for status computation.
+    """Override 'today' for status computation via testing_context.mock_time.
 
-    Production code uses ``datetime.now(UTC).date()`` in
-    ``src.core.tools.media_buy_list`` (line 116). We patch ``datetime``
-    in that module so ``now()`` returns a datetime whose ``.date()``
-    yields the desired date.
+    Production ``get_media_buys`` honors ``identity.testing_context.mock_time``
+    (same mock clock as delivery under X-Mock-Time). For e2e_rest,
+    RestE2EDispatcher forwards ``X-Mock-Time`` from ``env.mock_time``.
+    Seed helpers still read ``ctx["mock_today"]``.
     """
     from datetime import UTC, datetime
-    from unittest.mock import patch
 
     parsed = date.fromisoformat(today_str)
     ctx["mock_today"] = today_str
-
-    # Build a datetime that corresponds to the target date
     fake_now = datetime(parsed.year, parsed.month, parsed.day, 12, 0, 0, tzinfo=UTC)
 
-    patcher = patch("src.core.tools.media_buy_list.datetime", wraps=datetime)
-    mock_dt = patcher.start()
-    mock_dt.now.return_value = fake_now
-    ctx.setdefault("_patchers", []).append(patcher)
+    env = ctx["env"]
+    env.set_mock_time(fake_now)
 
 
 # Pre-flight window (far future) for persisted-status seeds that carry no
@@ -1312,11 +1307,8 @@ def _get_media_buys(ctx: dict) -> list:
     resp = payload_or_none(ctx)
     if resp is None and "error" in ctx:
         raise AssertionError(f"Expected a response but got error: {ctx['error']}")
-    assert resp is not None, "Expected a response"
-    buys = getattr(resp, "media_buys", None)
-    if buys is None and hasattr(resp, "model_dump"):
-        buys = resp.model_dump().get("media_buys", [])
-    return buys or []
+    buys = wire_field(ctx, "media_buys")
+    return wire_objects(buys or [])
 
 
 @then(parsers.parse('the response should include media buy "{mb_id}" with status "{status}"'))

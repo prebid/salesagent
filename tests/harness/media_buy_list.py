@@ -109,15 +109,10 @@ class MediaBuyListEnv(MediaBuyListDispatchMixin, IntegrationEnv):
     RESPONSE_MODEL = GetMediaBuysResponse
 
     EXTERNAL_PATCHES: dict[str, str] = {}
-    # No REST_ENDPOINT, deliberately: get_media_buys has NO REST route. One was
-    # declared here — `/api/v1/media-buys/query` — for a path that exists nowhere in
-    # src/, so the machinery read as though the transport were available and a REST
-    # parametrization would have failed as if production were broken rather than as
-    # if the route were absent. `src/routes/api_v1.py` exposes only POST /media-buys,
-    # PUT /media-buys/{id} and POST /media-buys/delivery.
-    #
-    # The body builder and response parser below OUTLIVE that endpoint on purpose;
-    # see their docstrings.
+    REST_ENDPOINT = "/api/v1/media-buys/query"
+    # POST /api/v1/media-buys/query in src/routes/api_v1.py — REST transport for
+    # get_media_buys (added GH #1830). The body builder and response parser below
+    # were kept through the no-route period; see their docstrings.
 
     def _configure_mocks(self) -> None:
         """No mocks needed for read-only list operation."""
@@ -167,13 +162,12 @@ class MediaBuyListEnv(MediaBuyListDispatchMixin, IntegrationEnv):
     def build_rest_body(self, **kwargs: Any) -> dict[str, Any]:
         """Convert kwargs to GetMediaBuysBody shape for REST POST.
 
-        Kept even though this env declares no REST_ENDPOINT, and NOT equivalent to
-        the inherited default: ``BaseTestEnv.build_rest_body`` serializes a ``req``
-        model wholesale via ``model_dump(mode="json", exclude_none=True)`` and returns
-        ``{}`` when there is no ``req`` — it cannot shape the flat kwargs this tool is
-        called with. Deleting the override would silently substitute that generic
-        behavior the moment a get_media_buys REST route is added and REST_ENDPOINT is
-        restored, which is exactly when a wrong body is hardest to notice.
+        NOT equivalent to the inherited default: ``BaseTestEnv.build_rest_body``
+        serializes a ``req`` model wholesale via ``model_dump(mode="json",
+        exclude_none=True)`` and returns ``{}`` when there is no ``req`` — it cannot
+        shape the flat kwargs this tool is called with. Deleting the override would
+        silently substitute that generic behavior, which is hardest to notice when
+        the REST route is live.
         """
         body: dict[str, Any] = {}
         for key in ("media_buy_ids", "status_filter", "account_id", "context"):

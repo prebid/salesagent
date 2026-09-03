@@ -78,8 +78,8 @@ EXPECTED_XFAIL_ROUTES: tuple[str, ...] = (
     "'T-UC-004-boundary-ownership' in marker_names and is_e2e_rest and ('differs from owner' in nodeid)",
     "'T-UC-004-dim-sortby-fallback' in marker_names and is_e2e_rest",
     "(is_rest or is_e2e_rest) and 'T-UC-019-boundary-principal' in marker_names",
-    "(is_rest or is_e2e_rest) and 'T-UC-019-ext-a' in marker_names",
-    "(is_rest or is_e2e_rest) and 'T-UC-019-partition-principal-invalid' in marker_names",
+    # T-UC-019-ext-a / partition-principal-invalid identity_missing REST xfails
+    # removed in #1950: AUTH_REQUIRED_SUGGESTION already matches the scenario.
     "_samp_is_named and (is_rest or is_e2e_rest)",
     "is_e2e_rest",
     "is_e2e_rest and 'T-UC-002-nfr-001-enforcement' in marker_names",

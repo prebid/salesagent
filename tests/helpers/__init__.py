@@ -34,6 +34,7 @@ def assert_resolve_auth_dep_passes_token(auth_token: str = "pre-extracted-token"
         auth_token=auth_token,
         require_valid_token=False,
         protocol="rest",
+        testing_context=None,
     )
 
 

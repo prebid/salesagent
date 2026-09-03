@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
 
 import factory
@@ -35,6 +36,7 @@ class PrincipalFactory(factory.alchemy.SQLAlchemyModelFactory):
         tenant_id: str = "test_tenant",
         protocol: str = "mcp",
         dry_run: bool = False,
+        mock_time: datetime | None = None,
         auth_token: str | None = None,
         tenant: Any = _UNSET,
         testing_context: AdCPTestContext | None = None,
@@ -59,7 +61,7 @@ class PrincipalFactory(factory.alchemy.SQLAlchemyModelFactory):
         if testing_context is None:
             testing_context = AdCPTestContext(
                 dry_run=dry_run,
-                mock_time=None,
+                mock_time=mock_time,
                 jump_to_event=None,
                 test_session_id=None,
             )

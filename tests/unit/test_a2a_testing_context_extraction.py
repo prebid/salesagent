@@ -24,6 +24,8 @@ class TestA2ATestingContextExtraction:
         Verifies _resolve_a2a_identity calls resolve_identity with testing_context
         that has dry_run=True when X-Dry-Run: true header is present.
         """
+        from src.core.testing_hooks import AdCPTestContext
+
         handler = AdCPRequestHandler()
 
         headers = {
@@ -32,6 +34,7 @@ class TestA2ATestingContextExtraction:
             "x-dry-run": "true",
         }
         ctx = make_a2a_context(auth_token="test-token", headers=headers)
+        expected_tc = AdCPTestContext.from_headers(headers)
 
         mock_identity = PrincipalFactory.make_identity(
             principal_id="test_principal",
@@ -43,16 +46,20 @@ class TestA2ATestingContextExtraction:
         with patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity) as mock_resolve:
             handler._resolve_a2a_identity("test-token", require_valid_token=True, context=ctx)
 
-        mock_resolve.assert_called_once()
-        call_kwargs = mock_resolve.call_args.kwargs
-        testing_ctx = call_kwargs.get("testing_context")
-        assert testing_ctx is not None, (
-            "_resolve_a2a_identity should pass testing_context to resolve_identity when test headers are present."
+        mock_resolve.assert_called_once_with(
+            headers=headers,
+            auth_token="test-token",
+            require_valid_token=True,
+            protocol="a2a",
+            testing_context=expected_tc,
         )
-        assert testing_ctx.dry_run is True, "X-Dry-Run: true header should set testing_context.dry_run=True"
+        assert expected_tc is not None
+        assert expected_tc.dry_run is True
 
     def test_test_session_id_passed_to_resolve_identity(self):
         """X-Test-Session-ID header should be extracted and passed to resolve_identity."""
+        from src.core.testing_hooks import AdCPTestContext
+
         handler = AdCPRequestHandler()
 
         headers = {
@@ -61,6 +68,7 @@ class TestA2ATestingContextExtraction:
             "x-test-session-id": "session-abc-123",
         }
         ctx = make_a2a_context(auth_token="test-token", headers=headers)
+        expected_tc = AdCPTestContext.from_headers(headers)
 
         mock_identity = PrincipalFactory.make_identity(
             principal_id="test_principal",
@@ -72,12 +80,15 @@ class TestA2ATestingContextExtraction:
         with patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity) as mock_resolve:
             handler._resolve_a2a_identity("test-token", require_valid_token=True, context=ctx)
 
-        call_kwargs = mock_resolve.call_args.kwargs
-        testing_ctx = call_kwargs.get("testing_context")
-        assert testing_ctx is not None, "_resolve_a2a_identity should pass testing_context to resolve_identity."
-        assert testing_ctx.test_session_id == "session-abc-123", (
-            "X-Test-Session-ID header should be extracted by A2A transport."
+        mock_resolve.assert_called_once_with(
+            headers=headers,
+            auth_token="test-token",
+            require_valid_token=True,
+            protocol="a2a",
+            testing_context=expected_tc,
         )
+        assert expected_tc is not None
+        assert expected_tc.test_session_id == "session-abc-123"
 
     def test_no_test_headers_passes_none_context(self):
         """When no test headers are present, testing_context=None should be passed."""
@@ -99,11 +110,12 @@ class TestA2ATestingContextExtraction:
         with patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity) as mock_resolve:
             handler._resolve_a2a_identity("test-token", require_valid_token=True, context=ctx)
 
-        call_kwargs = mock_resolve.call_args.kwargs
-        testing_ctx = call_kwargs.get("testing_context")
-        assert testing_ctx is None, (
-            "resolve_identity should receive testing_context=None when no test headers present. "
-            f"Got {testing_ctx}, which may activate testing behavior unconditionally."
+        mock_resolve.assert_called_once_with(
+            headers=headers,
+            auth_token="test-token",
+            require_valid_token=True,
+            protocol="a2a",
+            testing_context=None,
         )
 
 

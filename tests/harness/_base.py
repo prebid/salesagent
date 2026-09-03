@@ -441,6 +441,8 @@ class BaseTestEnv:
         self._principal_id = principal_id
         self._tenant_id = tenant_id
         self._dry_run = dry_run
+        # Controllable simulation clock for Given "today is …" (e2e_rest X-Mock-Time).
+        self._mock_time: datetime | None = None
         # E2E mode: bind factories to the live server's DB so the HTTP-reached
         # server sees Given-step data. Explicit database_url wins; else the
         # e2e_config's postgres_url. None => normal cached/integration engine.
@@ -507,6 +509,7 @@ class BaseTestEnv:
                 protocol=protocol,
                 dry_run=self._dry_run,
                 auth_token=auth_token,
+                mock_time=self._mock_time,
                 **self._tenant_overrides,
             )
         return self._identity_cache[protocol]
@@ -532,6 +535,17 @@ class BaseTestEnv:
         ).first()
         return token
 
+    def _invalidate_identity(self) -> None:
+        """Drop cached identities so the next access re-stamps from env fields.
+
+        All public writers (``switch_principal``, ``switch_tenant``,
+        ``set_mock_time``) call this — never poke ``_identity_cache`` /
+        ``__dict__["_identity"]`` from step functions.
+        """
+        self._identity_cache.clear()
+        if "_identity" in self.__dict__:
+            del self.__dict__["_identity"]
+
     def switch_principal(self, principal_id: str) -> None:
         """Re-point the env at *principal_id*, clearing cached identity.
 
@@ -542,8 +556,8 @@ class BaseTestEnv:
         picking up a principal row committed after the env was created (in
         integration mode this re-runs the auth-token lookup).
         """
-        self._identity_cache.clear()
         self._principal_id = principal_id
+        self._invalidate_identity()
 
     def switch_tenant(self, tenant_id: str) -> None:
         """Re-point the env at *tenant_id*, clearing cached identity.
@@ -554,8 +568,30 @@ class BaseTestEnv:
         Clearing the cache forces the next identity build to resolve the auth
         token against the new tenant's principal rows.
         """
-        self._identity_cache.clear()
         self._tenant_id = tenant_id
+        self._invalidate_identity()
+
+    @property
+    def mock_time(self) -> datetime | None:
+        """Public simulation clock set by ``set_mock_time`` / Given today is."""
+        return self._mock_time
+
+    def set_mock_time(self, mock_time: datetime | None) -> None:
+        """Set the controllable simulation clock and invalidate cached identities.
+
+        Public mutator for Given ``today is …``: steps must not poke
+        ``_mock_time`` / ``_identity_cache`` / ``__dict__["_identity"]``.
+        ``identity_for`` rebuilds ``AdCPTestContext(mock_time=…)`` on next access.
+        Coerce through ``AdCPTestContext`` so naive datetimes become UTC-aware
+        before header serialization (``apply_testing_hook_headers``).
+        """
+        from src.core.testing_hooks import AdCPTestContext
+
+        if mock_time is None:
+            self._mock_time = None
+        else:
+            self._mock_time = AdCPTestContext(mock_time=mock_time).mock_time
+        self._invalidate_identity()
 
     @property
     def identity(self) -> ResolvedIdentity:
@@ -797,11 +833,19 @@ class BaseTestEnv:
 
         if auth_token:
             from src.core.auth_context import AUTH_CONTEXT_STATE_KEY, AuthContext
+            from tests.harness.dispatchers import apply_testing_hook_headers
 
             headers = {
                 "x-adcp-auth": auth_token,
                 "x-adcp-tenant": a2a_identity.tenant_id or "",
             }
+            # Real-token path re-resolves identity via from_headers — forward
+            # X-Mock-Time / X-Dry-Run or UC-019 "today is" is wall-clock only.
+            apply_testing_hook_headers(
+                headers,
+                a2a_identity,
+                fallback_mock_time=self.mock_time,
+            )
             server_context = ServerCallContext(
                 state={AUTH_CONTEXT_STATE_KEY: AuthContext(auth_token=auth_token, headers=headers)}
             )
@@ -948,10 +992,17 @@ class BaseTestEnv:
             # Patch get_http_headers in BOTH modules that import it:
             # transport_helpers (called by resolve_identity_from_context) and
             # mcp_auth_middleware (called for context_id extraction).
+            from tests.harness.dispatchers import apply_testing_hook_headers
+
             headers = {
                 "x-adcp-auth": auth_token,
                 "x-adcp-tenant": mcp_identity.tenant_id or "",
             }
+            apply_testing_hook_headers(
+                headers,
+                mcp_identity,
+                fallback_mock_time=self.mock_time,
+            )
 
             async def _call():
                 mock_th = patch("src.core.transport_helpers.get_http_headers", return_value=headers)

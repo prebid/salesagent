@@ -14,13 +14,12 @@ routes ``req=UpdateMediaBuyRequest`` to the update dispatch and falls through to
 create. Inheriting both linearizes to list -> update -> create, so a third copy of
 either discriminator would be duplication (CLAUDE.md DRY invariant).
 
-REST is intentionally NOT routed, for the same reason ``MediaBuyCreateListEnv``
-gives: get_media_buys has no REST route in the composite's UC (tests/bdd/conftest.py
-``_NO_REST_UC``), so the create/update/list REST bodies never all apply in one
-flow. Use the A2A and MCP wire transports, which stash the real
-``wire_response``.
+REST is routed for all three arms: create collection, update per-id PUT, and
+get_media_buys ``POST /api/v1/media-buys/query`` (via ``MediaBuyCreateListEnv``).
+Use the A2A and MCP wire transports when grading envelope bytes that those
+pipelines stash as ``wire_response``.
 
-GH #1941
+GH #1941 / #1830
 """
 
 from __future__ import annotations

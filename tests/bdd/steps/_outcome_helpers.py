@@ -10,6 +10,7 @@ the repository owns the query, the helper owns the assertion.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any
 
 from tests.harness.transport import TransportResult
@@ -75,6 +76,22 @@ def _wire_or_none(ctx: dict) -> dict | None:
     # exists — from the dispatcher's declaration — and ``require_wire`` decides
     # whether the declared wire was actually captured.
     return result.require_wire()
+
+
+def wire_objects(value: Any) -> Any:
+    """Recursively wrap wire dicts for attribute-style oracles.
+
+    ``wire_field`` returns JSON-shaped dicts/lists (buyer wire). Many Then
+    steps still read ``buy.media_buy_id`` / ``pkg.package_id``. Wrapping here
+    keeps grading on wire values without ``getattr(dict, …)`` silently yielding
+    ``None`` (e2e_rest UC-019 regression after switching ``_get_media_buys`` to
+    ``wire_field``).
+    """
+    if isinstance(value, dict):
+        return SimpleNamespace(**{key: wire_objects(item) for key, item in value.items()})
+    if isinstance(value, list):
+        return [wire_objects(item) for item in value]
+    return value
 
 
 def wire_field(ctx: dict, field: str) -> Any:
