@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, ClassVar, TypeVar
 
@@ -141,7 +141,11 @@ class AdapterCapabilities:
     # Product configuration
     supports_dynamic_products: bool = False  # Supports AI-driven product configuration
 
-    # Pricing (None means all pricing models supported)
+    # Pricing. DERIVED — an adapter must NOT declare this here. For every AdServerAdapter
+    # subclass it is rebound from that class's ``supported_pricing_models`` frozenset by
+    # ``AdServerAdapter.__init_subclass__``, so the set this capabilities surface reports
+    # and the set validation enforces cannot drift apart. Stays None only on a bare
+    # AdapterCapabilities that belongs to no adapter.
     supported_pricing_models: list[str] | None = None
 
     # Reporting and webhooks
@@ -334,15 +338,44 @@ class AdServerAdapter(ABC):
             workflow_step_id=workflow_step_id,
         )
 
+    # Pricing models this adapter's ad server can execute (AdCP PR #88). Declared on the
+    # CLASS, not returned from an instance method, because a caller sometimes needs to ask
+    # "what may this tenant buy?" for an adapter it must NOT instantiate: the sandbox path
+    # executes on the mock but has to apply the tenant's declared adapter's constraints, and
+    # instantiating that adapter would mean loading its credentials. Override in subclasses;
+    # default is CPM only.
+    supported_pricing_models: frozenset[str] = frozenset({"cpm"})
+
+    def __init_subclass__(cls, **kwargs: object) -> None:
+        """Derive the reported capability from the executed one.
+
+        ``AdapterCapabilities.supported_pricing_models`` is the capabilities surface's set;
+        ``cls.supported_pricing_models`` is what ``validate_media_buy_request`` enforces.
+        Rebinding the first from the second at class-creation time leaves ONE declaration
+        per adapter, so the two cannot drift apart. ``replace`` rather than
+        mutation: adapters that declare no ``capabilities`` of their own inherit the base
+        instance, and mutating it in place would rewrite every other adapter's answer.
+        """
+        super().__init_subclass__(**kwargs)
+        cls.capabilities = replace(cls.capabilities, supported_pricing_models=sorted(cls.supported_pricing_models))
+
     def get_supported_pricing_models(self) -> set[str]:
         """Return set of pricing models this adapter supports (AdCP PR #88).
 
-        Default implementation supports only CPM. Override in subclasses.
+        Reads ``supported_pricing_models``, which is normally the subclass's class-level
+        declaration but may be shadowed per-instance when an adapter is executing on
+        another adapter's behalf (see ``MockAdServer.__init__``). This is the single
+        reader of that declaration — callers ask the adapter, never a parallel table.
+        The adapter's ``capabilities`` are no exception: their pricing field is derived by
+        ``__init_subclass__`` from the CLASS-level declaration, not restated beside it. A
+        per-instance shadow is therefore not reflected there: an instance constrained to
+        another adapter's set enforces the shadowed set while ``capabilities`` keep
+        reporting the class's own.
 
         Returns:
-            Set of pricing model strings: {"cpm", "cpcv", "cpp", "cpc", "cpv", "flat_rate"}
+            The set of pricing model strings this adapter accepts.
         """
-        return {"cpm"}
+        return set(self.supported_pricing_models)
 
     def get_targeting_capabilities(self) -> TargetingCapabilities:
         """Return targeting capabilities this adapter supports.

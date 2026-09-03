@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from src.adapters import get_adapter_class
+from src.adapters.base import AdServerAdapter
 from src.adapters.google_ad_manager import GoogleAdManager
 from src.adapters.kevel import Kevel
 from src.adapters.mock_ad_server import MockAdServer as MockAdServerAdapter
@@ -12,8 +14,64 @@ from src.core.database.database_session import get_db_session
 from src.core.schemas import Principal
 
 
+def _mock_adapter_config(*, manual_approval_required: bool) -> dict[str, Any]:
+    """Config dict for MockAdServerAdapter.
+
+    Unifies exactly two construction paths: the sandbox short-circuit (below, in
+    ``get_adapter``) and the tenant-configured mock branch (``adapter_type ==
+    "mock"`` under the ``AdapterConfig`` lookup). ``manual_approval_required`` is the
+    one field those two intentionally set differently; naming it as an argument here
+    — rather than each branch hand-building its own dict literal — means a field
+    added to one automatically reaches the other, where the two config dicts were
+    previously typed out separately and could drift on any key besides this one
+    without either branch noticing.
+
+    TWO further mock constructions exist in ``get_adapter`` and are NOT unified here:
+    the ``if selected_adapter == "mock":`` branch and the final ``else:`` "Default to
+    mock for unsupported adapters" branch both instantiate ``MockAdServerAdapter``
+    directly from ``adapter_config`` without going through this helper, so neither
+    sets ``manual_approval_required`` when they're reached with the bare dict. That
+    bare dict is not built by the ``if not selected_adapter:`` fallback — it comes
+    from the unconditional ``adapter_config: dict[str, Any] = {"enabled": True}``
+    initializer set right after ``with get_db_session() as session:``, before
+    ``if config_row:`` even runs; ``if not selected_adapter:`` only re-applies the
+    same literal when ``adapter_config`` is falsy at that point. Whether that fallback
+    is reachable depends on the SHAPE of ``tenant`` at ``get_adapter``'s entry, not on
+    "mock tenant" alone: the ORM branch (``tenant.ad_server or "mock"``) coerces a
+    falsy ``ad_server`` to ``"mock"`` immediately, so ``selected_adapter`` is already
+    truthy by the time the fallback is checked — dead code there. The dict branch
+    (``tenant.get("ad_server", "mock")``) only substitutes the default when the
+    ``"ad_server"`` key is ABSENT, not when its value is ``None`` — a tenant row with
+    ``ad_server IS NULL`` serializes to a dict carrying ``"ad_server": None``, leaving
+    ``selected_adapter = None`` and reaching the fallback for real. Any caller passing
+    a dict-shaped tenant is subject to this, not just the ones enumerated today.
+    Both non-unified branches are general "no adapter configured" / "unsupported
+    adapter type" default logic, not sandbox-specific, so folding them into this
+    helper is out of scope here (tracked as #1976).
+
+    One field the sandbox branch sets is deliberately NOT routed through here:
+    ``supported_pricing_models``, the constraint profile of the tenant's declared adapter,
+    is a ``MockAdServer`` constructor argument rather than a config key. It must NOT reach
+    the other construction paths — a tenant that configured the mock as its own ad server
+    really may buy all seven models, and pushing the profile into this shared dict would
+    hand every mock construction a constraint that only the sandbox substitution needs.
+    """
+    return {"enabled": True, "manual_approval_required": manual_approval_required}
+
+
 def get_adapter(
-    principal: Principal, dry_run: bool = False, testing_context: Any = None, tenant: Any = None
+    principal: Principal,
+    dry_run: bool = False,
+    testing_context: Any = None,
+    tenant: Any = None,
+    *,
+    # REQUIRED, no default. A default is what makes "forgot to decide" indistinguishable
+    # from "decided live" — and the wrong one books a real campaign for a sandbox buyer.
+    # The structural guard covers src/ only, so a default here silently un-guards every
+    # caller outside it. Same reasoning as the required `sanitize` on
+    # reject_unsafe_outbound_webhook_url: when the two values fail asymmetrically, the
+    # safe move is to make omission impossible rather than to pick a side.
+    sandbox: bool,
 ) -> MockAdServerAdapter | GoogleAdManager | Kevel | TritonDigital:
     """Get the appropriate adapter instance for the selected adapter type.
 
@@ -22,6 +80,18 @@ def get_adapter(
         dry_run: Whether to run in dry-run mode
         testing_context: Optional test context for simulations
         tenant: Tenant context (from identity.tenant). Falls back to ContextVar if not provided.
+        sandbox: True when the resolved account is a sandbox account
+            (``identity.sandbox``). Forces the mock adapter so no real ad-platform call
+            is ever made. AdCP 3.1.1 ``sandbox.mdx`` §Seller implementation: sandbox
+            requests "MUST NOT make real ad platform API calls (no real orders, line
+            items, etc.)" and "MUST NOT charge real money or create real billing records".
+            Keyword-only and explicit at every call site — enforced by
+            ``tests/unit/test_architecture_get_adapter_sandbox.py`` so a new call site
+            cannot silently default to the live adapter. The substitution covers who
+            EXECUTES, not what the tenant may buy: the returned mock still answers
+            ``get_supported_pricing_models()`` with the tenant's DECLARED adapter's models,
+            because the same spec section requires sandbox to "validate inputs the same way
+            as production".
     """
     import logging
 
@@ -43,6 +113,55 @@ def get_adapter(
         selected_adapter = tenant.ad_server or "mock"
     logger.info(f"[ADAPTER_SELECT] Initial selected_adapter from tenant.ad_server: {selected_adapter}")
 
+    if sandbox:
+        # Short-circuit BEFORE the AdapterConfig lookup: a sandbox account must never reach a
+        # real adapter — not its API, not even its credentials. The mock adapter is the
+        # simulator the spec asks for ("MUST return realistic response shapes with simulated
+        # data"). Adapters are configured per-tenant, so this is the only layer that can tell
+        # a sandbox request from a live one.
+        #
+        # The substitution covers EXECUTION only. Substituting the mock's own constraint
+        # DECLARATION as well would make the sandbox more permissive than production — the
+        # mock simulates all seven pricing models, so a cpcv buy a GAM tenant rejects would
+        # be accepted here — and AdCP 3.1.1 sandbox.mdx §Seller implementation requires
+        # sandbox to "validate inputs the same way as production" and to "Apply normal input
+        # validation (sandbox does not bypass validation)". What a tenant may buy is a
+        # property of the ad server it declared, so read that declaration off the declared
+        # adapter's CLASS — no instance, no credentials — and hand it to the simulator.
+        #
+        # An ad_server this process cannot resolve to an ad-server adapter — unregistered,
+        # or registered as something else entirely like "creative_engine" — is not an error
+        # here: the live path's final else-branch runs those on the mock too, so declaring
+        # anything narrower would make sandbox stricter than the production it mirrors.
+        try:
+            declared_adapter_class = get_adapter_class(selected_adapter or "mock")
+        except ValueError:
+            declared_adapter_class = MockAdServerAdapter
+        if not issubclass(declared_adapter_class, AdServerAdapter):
+            declared_adapter_class = MockAdServerAdapter
+        logger.info("[ADAPTER_SELECT] sandbox account — forcing mock adapter, no real ad-platform calls")
+        return MockAdServerAdapter(
+            # manual_approval_required=False is deliberate, not inherited. The tenant's
+            # own mock branch below defaults this to True "for safety" from
+            # AdapterConfig; this branch cannot read that row (the whole point of
+            # short-circuiting above is to touch no adapter config), so the two mock
+            # adapters would differ on a field _create_media_buy_impl actually reads —
+            # a sandbox buy auto-executing where the tenant's mock would queue for
+            # approval. A simulator that parks the buyer's request awaiting a human
+            # defeats what the sandbox is for, and the approval gate exists to protect
+            # real spend, which this adapter cannot incur. Named here rather than left
+            # to whatever _mock_adapter_config's caller happens to pass, so the
+            # divergence is a decision the next reader can see, instead of one produced
+            # by an absent key — a test asserting only "the mock was selected" cannot
+            # tell those apart.
+            _mock_adapter_config(manual_approval_required=False),
+            principal,
+            dry_run,
+            tenant_id=tenant_id,
+            strategy_context=testing_context,
+            supported_pricing_models=declared_adapter_class.supported_pricing_models,
+        )
+
     # Get adapter config via repository
     from src.core.database.repositories.adapter_config import AdapterConfigRepository
 
@@ -62,12 +181,13 @@ def get_adapter(
                 selected_adapter = adapter_type
                 logger.info(f"[ADAPTER_SELECT] Using AdapterConfig.adapter_type: {selected_adapter}")
             if adapter_type == "mock":
-                adapter_config["dry_run"] = config_row.mock_dry_run or False
                 # Default to True (require approval) for safety
-                adapter_config["manual_approval_required"] = (
-                    config_row.mock_manual_approval_required
-                    if config_row.mock_manual_approval_required is not None
-                    else True
+                adapter_config = _mock_adapter_config(
+                    manual_approval_required=(
+                        config_row.mock_manual_approval_required
+                        if config_row.mock_manual_approval_required is not None
+                        else True
+                    )
                 )
             elif adapter_type == "google_ad_manager":
                 adapter_config = repo.get_gam_config(config_row)
@@ -151,3 +271,28 @@ def get_adapter(
         return MockAdServerAdapter(
             adapter_config, principal, dry_run, tenant_id=tenant_id, strategy_context=testing_context
         )
+
+
+def adapter_for_mode(
+    principal: Principal,
+    *,
+    tenant: Any,
+    testing_ctx: Any,
+    sandbox: bool,
+) -> MockAdServerAdapter | GoogleAdManager | Kevel | TritonDigital:
+    """get_adapter() with the dry_run-from-testing_ctx boilerplate factored out.
+
+    Buy-keyed callers that build one adapter per sandbox/live partition
+    (get_media_buy_delivery, get_media_buy_deliveries) previously typed out this
+    exact five-argument call at each site; a change to how dry_run derives from
+    testing_ctx had to land at both by hand. sandbox is the caller's already-
+    resolved mode (BuyKeyedSandboxMixin.sandbox_mode / partition_by_sandbox_mode) —
+    this wrapper does not derive it.
+    """
+    return get_adapter(
+        principal,
+        dry_run=testing_ctx.dry_run if testing_ctx else False,
+        testing_context=testing_ctx,
+        tenant=tenant,
+        sandbox=sandbox,
+    )

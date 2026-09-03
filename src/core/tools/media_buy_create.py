@@ -125,6 +125,7 @@ from src.core.database.models import Principal as ModelPrincipal
 from src.core.database.models import Product as ModelProduct
 from src.core.database.models import Product as ProductModel
 from src.core.helpers import log_tool_activity
+from src.core.helpers.account_helpers import sandbox_wire_marker
 from src.core.helpers.adapter_helpers import get_adapter
 from src.core.helpers.creative_helpers import (
     extract_click_url,
@@ -588,6 +589,8 @@ def _execute_adapter_media_buy_creation(
     principal: Principal,
     testing_ctx: TestingContext | None = None,
     tenant: Any = None,
+    *,
+    sandbox: bool,
 ) -> schemas.CreateMediaBuyResponse:
     """Execute adapter's create_media_buy call.
 
@@ -602,6 +605,9 @@ def _execute_adapter_media_buy_creation(
         package_pricing_info: Pricing model info per package
         principal: The Principal object (buyer/advertiser)
         testing_ctx: Optional testing context for dry-run mode
+        tenant: Tenant context, forwarded to get_adapter (identity.tenant if omitted)
+        sandbox: True when the resolved account is a sandbox account. Required,
+            no default — see get_adapter's sandbox parameter for why.
 
     Returns:
         CreateMediaBuyResponse from the adapter
@@ -611,7 +617,7 @@ def _execute_adapter_media_buy_creation(
     """
     # Get adapter using helper
     dry_run = testing_ctx.dry_run if testing_ctx else False
-    adapter = get_adapter(principal, dry_run=dry_run, testing_context=testing_ctx, tenant=tenant)
+    adapter = get_adapter(principal, dry_run=dry_run, testing_context=testing_ctx, tenant=tenant, sandbox=sandbox)
 
     # Call adapter with detailed error logging
     try:
@@ -633,6 +639,10 @@ def _execute_adapter_media_buy_creation(
                 for i, pkg in enumerate(response.packages):
                     # response.packages are now always Package objects
                     logger.info(f"[ADAPTER] Response package {i}: {pkg.package_id}")
+            # Set here rather than in the adapter: the mock adapter also serves tenants
+            # whose ad_server is literally "mock", which is NOT a sandbox account, so
+            # the adapter cannot distinguish the two. This funnel knows the account mode.
+            response.sandbox = sandbox_wire_marker(sandbox)
         return response
     except Exception as adapter_error:
         import traceback
@@ -944,6 +954,16 @@ def execute_approved_media_buy(
                     error_msg=f"{len(unapproved)} creative(s) not approved: {unapproved}",
                 )
 
+            # Read the account id while the row is still attached: the adapter call below
+            # runs outside this session, where an expired attribute would raise
+            # DetachedInstanceError. Needed to re-derive sandbox mode at execution time.
+            mb_account_id = media_buy.account_id
+            # The UoW opened at the top of this block owns both repositories, so the
+            # decision goes through the same seam every other buy-keyed path uses
+            # rather than re-deriving it from a hand-built repository. media_buy is
+            # already attached and read synchronously, so this adds no lookup.
+            sandbox = uow.sandbox_mode(media_buy)
+
             # Reconstruct CreateMediaBuyRequest from raw_request
             try:
                 # Strip package_id from packages - it was added for UI tracking but isn't
@@ -1214,6 +1234,9 @@ def execute_approved_media_buy(
             principal,
             testing_ctx,
             tenant=tenant_obj,
+            # Deferred execution: the request identity is long gone, so re-derive the
+            # account's mode. An approved sandbox buy must not dispatch to a real adapter.
+            sandbox=sandbox,
         )
 
         # Check if adapter returned an error response
@@ -1329,7 +1352,13 @@ def execute_approved_media_buy(
                     logger.info(f"[APPROVAL] Uploading {len(assets)} creatives to adapter")
 
                     # Get adapter and upload creatives
-                    adapter = get_adapter(principal, dry_run=False, testing_context=testing_ctx, tenant=tenant_obj)
+                    adapter = get_adapter(
+                        principal,
+                        dry_run=False,
+                        testing_context=testing_ctx,
+                        tenant=tenant_obj,
+                        sandbox=sandbox,
+                    )
 
                     # Call adapter's add_creative_assets method
                     # For GAM, the media_buy_id is the GAM order ID
@@ -1382,7 +1411,13 @@ def execute_approved_media_buy(
         # 2. Creatives may have been uploaded after the initial approval attempt
         logger.info(log_safe(f"[APPROVAL] Attempting to approve order {response.media_buy_id} in GAM"))
         try:
-            adapter = get_adapter(principal, dry_run=False, testing_context=testing_ctx, tenant=tenant_obj)
+            adapter = get_adapter(
+                principal,
+                dry_run=False,
+                testing_context=testing_ctx,
+                tenant=tenant_obj,
+                sandbox=sandbox,
+            )
             if hasattr(adapter, "orders_manager") and adapter.orders_manager:
                 approval_success = adapter.orders_manager.approve_order(response.media_buy_id)
                 if approval_success:
@@ -1518,7 +1553,15 @@ def push_creative_to_existing_buy(
             if not principal:
                 return False, f"Principal {creative.principal_id} not found"
 
-            adapter = get_adapter(principal, dry_run=False, tenant=tenant_obj)
+            # Deferred path (no request identity): re-derive the buy's account mode so a
+            # creative push against a sandbox buy never reaches a real ad server.
+            # sandbox_mode_by_id asserts uow.media_buys is not None itself.
+            adapter = get_adapter(
+                principal,
+                dry_run=False,
+                tenant=tenant_obj,
+                sandbox=uow.sandbox_mode_by_id(media_buy_id),
+            )
             if not (hasattr(adapter, "creatives_manager") and adapter.creatives_manager):
                 return False, "Adapter does not support creative upload"
 
@@ -2922,7 +2965,9 @@ async def _create_media_buy_impl(
 
         # Get the appropriate adapter with testing context
         # Use dry_run from testing context (which comes from config or testing flags)
-        adapter = get_adapter(principal, dry_run=testing_ctx.dry_run, testing_context=testing_ctx, tenant=tenant)
+        adapter = get_adapter(
+            principal, dry_run=testing_ctx.dry_run, testing_context=testing_ctx, tenant=tenant, sandbox=identity.sandbox
+        )
 
         # Check if manual approval is required
         # Use tenant.human_review_required as the authoritative source, with adapter setting as fallback
@@ -3792,6 +3837,10 @@ async def _create_media_buy_impl(
                 revision=1,
                 context=req.context,
                 errors=property_list_unsupported_advisories(req.packages, adapter),
+                # This branch returns immediately, so the marker cannot be attached later
+                # as it is on the normal path: a sandbox account's success must carry it
+                # here too.
+                sandbox=sandbox_wire_marker(identity.sandbox),
             )
             return CreateMediaBuyResult(response=simulated_response, status=AdcpTaskStatus.completed.value)
 
@@ -3800,7 +3849,15 @@ async def _create_media_buy_impl(
         # This uses the same function as manual approval to ensure consistency across adapters
         try:
             response = _execute_adapter_media_buy_creation(
-                req, packages, start_time, end_time, package_pricing_info, principal, testing_ctx, tenant=tenant
+                req,
+                packages,
+                start_time,
+                end_time,
+                package_pricing_info,
+                principal,
+                testing_ctx,
+                tenant=tenant,
+                sandbox=identity.sandbox,
             )
         except Exception as adapter_error:
             raise
@@ -4339,6 +4396,13 @@ async def _create_media_buy_impl(
             # whole point: the previous default reported "now" for it.
             confirmed_at=persisted_confirmed_at,
             revision=persisted_revision,
+            # Carried from the adapter response because THIS object — not the adapter's
+            # — is what reaches the buyer; setting it upstream alone drops it. Direct
+            # attribute access, not getattr: response is narrowed to CreateMediaBuySuccess
+            # by the isinstance check above, which declares `sandbox` as a typed field —
+            # a default-argument fallback here would be dead and could mask the field
+            # being renamed or dropped from the base type.
+            sandbox=sandbox_wire_marker(response.sandbox),
             # AdCP 3.1 preferred status; mirrors deprecated `status`. Lifecycle on
             # the wire, from the same single source that drives valid_actions
             # (spec 3.1.1 create-media-buy-response.json;

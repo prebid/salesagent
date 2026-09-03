@@ -35,6 +35,12 @@ class ResolvedIdentity(BaseModel, frozen=True):
     protocol: Literal["mcp", "a2a", "rest"] = "mcp"
     testing_context: AdCPTestContext | None = None
     account_id: str | None = None  # Resolved account ID (from AccountReference at transport boundary)
+    # Sandbox mode of the resolved account (AdCP 3.1.1). Determined SOLELY by the account
+    # reference — never by request headers (sandbox.mdx deprecates X-Dry-Run/X-Test-Session-ID/
+    # X-Mock-Time with "Sellers MUST NOT alter behavior based on these headers").
+    # Defaults False so an unresolved account is treated as live: sandbox semantics suppress
+    # real side effects, so the safe default is the one that does NOT claim suppression.
+    sandbox: bool = False
     # Tenant-level billing policy (BR-RULE-059) and account approval mode (BR-RULE-060)
     # are NOT fields on ResolvedIdentity — they live on identity.tenant (TenantContext).
 

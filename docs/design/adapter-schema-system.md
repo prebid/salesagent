@@ -27,7 +27,9 @@ Each adapter declares three Pydantic schemas:
 | `ProductConfig` | Product-level settings | `Product.implementation_config` |
 | `InventoryConfig` | Inventory profile structure | `InventoryProfile.inventory_config` |
 
-Plus a capabilities declaration for UI feature flags.
+Plus a capabilities declaration for UI feature flags. Every capability is author-declared
+on that object except `supported_pricing_models`, which is derived from the adapter class's
+own `supported_pricing_models` frozenset (see section 3).
 
 ## Detailed Design
 
@@ -139,8 +141,8 @@ class AdapterCapabilities:
     # Products
     supports_dynamic_products: bool = False  # Signals-based variants
 
-    # Pricing
-    supported_pricing_models: list[str] = None  # ["cpm", "flat_rate", ...]
+    # Pricing. Derived at class-creation time — see section 4.
+    supported_pricing_models: list[str] | None = None
 
     # Reporting
     supports_webhooks: bool = False
@@ -166,17 +168,26 @@ class BroadstreetAdapter(AdServerAdapter):
     PRODUCT_CONFIG = BroadstreetProductConfig
     INVENTORY_CONFIG = BroadstreetInventoryConfig
 
-    # Capability declaration
+    # Capability declaration.
     CAPABILITIES = AdapterCapabilities(
         supports_inventory_sync=True,
         supports_inventory_profiles=True,
         inventory_entity_label="Zones",
         supports_custom_targeting=False,
         supports_dynamic_products=False,
-        supported_pricing_models=["cpm", "flat_rate"],
         supports_webhooks=False,
         supports_realtime_reporting=True,
     )
+
+    # The one place an adapter declares its pricing models. This frozenset is what
+    # validation enforces, and the capabilities object's `supported_pricing_models` is
+    # rebound from it by `AdServerAdapter.__init_subclass__` at class-creation time, so
+    # the reported set and the set validation enforces cannot drift apart.
+    #
+    # Declaring pricing models on the capabilities object instead is a convention the code
+    # does not check: nothing raises, the value is simply overwritten by the rebind. A
+    # guard for it is tracked in #2082.
+    supported_pricing_models = frozenset({"cpm", "flat_rate"})
 ```
 
 ### 5. Database Changes

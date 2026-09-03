@@ -94,6 +94,10 @@ _LAZY_EXPORTS: dict[str, str] = {
     "seed_cached_success": "tests.helpers.idempotency_seeds",
     "seed_media_buy": "tests.helpers.idempotency_seeds",
     "seed_principal": "tests.helpers.idempotency_seeds",
+    "assert_all_live": "tests.helpers.sandbox_assertions",
+    "assert_all_sandbox": "tests.helpers.sandbox_assertions",
+    "sandbox_modes": "tests.helpers.sandbox_assertions",
+    "bind_real_sandbox_seam": "tests.helpers.sandbox_seam",
 }
 
 
@@ -116,7 +120,11 @@ __all__ = [
     # Backoff schedule assertions
     "assert_backoff_schedule",
     # Envelope assertions
+    "assert_all_live",
+    "assert_all_sandbox",
     "assert_envelope_shape",
+    "bind_real_sandbox_seam",
+    "sandbox_modes",
     "assert_no_raw_validation_leak",
     # HMAC signature assertions
     "SIGNATURE_HEADER",

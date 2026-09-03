@@ -37,6 +37,7 @@ def adcp_validation_boundary(
     context: str = "parameters",
     field: str | None = None,
     field_prefix: str | None = None,
+    suggestion: str | None = None,
 ) -> Iterator[None]:
     """Translate a Pydantic ``ValidationError`` into a typed ``AdCPValidationError``.
 
@@ -66,6 +67,13 @@ def adcp_validation_boundary(
     ``authentication.schemes[0]`` — ``error.field`` is a path into the document
     the BUYER sent, and the buyer sent the outer field. Mutually exclusive with
     ``field``, which discards the inner path entirely.
+
+    ``suggestion`` is the companion override to ``field``: the derived hint is
+    built from the same pydantic location as the derived field, so pinning only
+    ``field`` would leave the internal model name in the buyer-visible hint (e.g.
+    "Correct the 'AccountReference1' field..."). Pass both together wherever the
+    pydantic location is not a request field path. When ``None`` (default) the
+    hint is derived from the validation error, unchanged.
     """
     if field is not None and field_prefix is not None:
         # A validator whose job is refusing quietly-wrong documents must not itself
@@ -78,7 +86,7 @@ def adcp_validation_boundary(
         raise AdCPValidationError(
             format_validation_error(e, context=context),
             field=field if field is not None else _qualified_field(e, field_prefix),
-            suggestion=suggest_validation_fix(e),
+            suggestion=suggestion if suggestion is not None else suggest_validation_fix(e),
             details=build_validation_error_details(errors),
         ) from e
 

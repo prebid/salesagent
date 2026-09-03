@@ -238,7 +238,7 @@ class TestGetAdapterGAMAuth:
         _set_tenant_context(oauth_tenant["tenant_id"])
         principal = _load_principal(oauth_tenant["tenant_id"], oauth_tenant["principal_id"])
 
-        adapter = get_adapter(principal, dry_run=True)
+        adapter = get_adapter(principal, dry_run=True, sandbox=False)
 
         assert isinstance(adapter, GoogleAdManager)
         assert adapter.refresh_token == "test_oauth_refresh_token"
@@ -260,7 +260,7 @@ class TestGetAdapterGAMAuth:
         principal = _load_principal(sa_tenant["tenant_id"], sa_tenant["principal_id"])
 
         # This should NOT raise — but currently does (#1163)
-        adapter = get_adapter(principal, dry_run=True)
+        adapter = get_adapter(principal, dry_run=True, sandbox=False)
 
         assert isinstance(adapter, GoogleAdManager)
         assert adapter.service_account_json is not None

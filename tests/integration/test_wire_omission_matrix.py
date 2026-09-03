@@ -209,6 +209,12 @@ _CASES = [
             "never had the leak. Their coverage is the null-omission suite for those wires."
         ),
         must_be_non_empty="creatives",
+        # _sync_creatives_env's request carries no account reference, so
+        # identity.sandbox is unenriched — sandbox_wire_marker(None) must omit the
+        # key rather than emit an explicit null (the pinned schema types sandbox
+        # boolean with no null variant, so this is also the case this matrix's
+        # own schema check would flag as a type violation if it regressed).
+        absent_paths=["sandbox"],
     ),
 ]
 

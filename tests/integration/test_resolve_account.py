@@ -39,7 +39,8 @@ class TestResolveAccountById:
                 repo = AccountRepository(session, tenant.tenant_id)
                 result = resolve_account(ref, env.identity, repo)
 
-            assert result == "acc_001"
+            assert result.account_id == "acc_001"
+            assert result.sandbox is False, "a non-sandbox account must not claim sandbox mode"
 
     def test_not_found_raises(self, integration_db):
         """Non-existent account_id → AdCPAccountNotFoundError."""
@@ -101,7 +102,8 @@ class TestResolveAccountByNaturalKey:
                 repo = AccountRepository(session, tenant.tenant_id)
                 result = resolve_account(ref, env.identity, repo)
 
-            assert result == "acc_nat"
+            assert result.account_id == "acc_nat"
+            assert result.sandbox is False, "a non-sandbox account must not claim sandbox mode"
 
     def test_natural_key_no_access_raises_not_found(self, integration_db):
         """Account exists but agent has no access → AdCPAccountNotFoundError.
@@ -148,3 +150,79 @@ class TestResolveAccountByNaturalKey:
                 repo = AccountRepository(session, "resolve_t5")
                 with pytest.raises(AdCPAccountNotFoundError):
                     resolve_account(ref, env.identity, repo)
+
+
+class TestResolveAccountCarriesSandboxMode:
+    """The mode a sandbox account is resolved WITH — the defect this PR opens on.
+
+    Both pre-existing assertions read ``result.sandbox is False`` against non-sandbox
+    accounts, so they hold under the original bug (a hardcoded ``False``) and under the
+    fix alike. Nothing drove the True side: every ``identity.sandbox`` in the suite was
+    an assignment to False, a comment, or an ``is False`` assert, so restoring
+    ``ResolvedAccount(account.account_id, False)`` at both production sites left 155
+    sandbox/account tests green.
+
+    Driven through ``MediaBuyAccountEnv`` rather than a hand-held session: its
+    ``call_impl`` runs production ``resolve_account`` inside an ``AccountUoW`` and
+    records the resolved mode, so these need no ``get_db_session()`` in the test body
+    (CLAUDE.md §Test Fixtures, enforced by test_architecture_repository_pattern). That
+    recorded mode had no reader before this class existed.
+    """
+
+    @staticmethod
+    def _resolved_sandbox(*, account_sandbox: bool | None, by_natural_key: bool = False) -> bool:
+        from adcp.types import AccountReference, AccountReferenceById, AccountReferenceByNaturalKey
+
+        from tests.harness.media_buy_account import MediaBuyAccountEnv
+
+        with MediaBuyAccountEnv() as env:
+            tenant, principal = env.setup_default_data()
+            AccountFactory(
+                tenant=tenant,
+                account_id="acc_mode",
+                sandbox=account_sandbox,
+                brand={"domain": "mode.example.com"},
+                operator="mode.example.com",
+            )
+            # Resolution enforces agent access; without the grant it fails
+            # authorization before the mode is ever read off the row.
+            AgentAccountAccessFactory(tenant_id=tenant.tenant_id, principal=principal, account_id="acc_mode")
+
+            if by_natural_key:
+                # sandbox is PART of the natural key — _resolve_by_natural_key passes
+                # ref.sandbox into the lookup — so the buyer selects the sandbox account
+                # explicitly; a live account with the same brand+operator is a different
+                # account, not the same one in another mode.
+                inner = AccountReferenceByNaturalKey(
+                    brand={"domain": "mode.example.com"},
+                    operator="mode.example.com",
+                    sandbox=bool(account_sandbox),
+                )
+            else:
+                inner = AccountReferenceById(account_id="acc_mode")
+
+            env.call_impl(account_ref=AccountReference(inner))
+            return env.last_resolved_sandbox
+
+    def test_sandbox_account_resolves_as_sandbox_by_id(self, integration_db):
+        assert self._resolved_sandbox(account_sandbox=True) is True, (
+            "a sandbox account resolved to LIVE mode — the defect this PR exists to fix, "
+            "and what routes a sandbox buyer to the real ad-server adapter"
+        )
+
+    def test_sandbox_account_resolves_as_sandbox_by_natural_key(self, integration_db):
+        """The by-natural-key path builds its own ResolvedAccount, so it fails independently."""
+        assert self._resolved_sandbox(account_sandbox=True, by_natural_key=True) is True, (
+            "the natural-key resolution path dropped the sandbox flag"
+        )
+
+    def test_null_sandbox_column_resolves_as_live(self, integration_db):
+        """The negative side, driven through production rather than computed in the test.
+
+        The previous namesake asserted ``ResolvedAccount("acc_1", bool(None)).sandbox is
+        False``, which evaluates ``bool()`` in the test body and reads a field back —
+        production's ``bool(account.sandbox)`` never ran.
+        """
+        assert self._resolved_sandbox(account_sandbox=None) is False, (
+            "a NULL sandbox column must coerce to LIVE, not to None or True"
+        )

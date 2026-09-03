@@ -97,6 +97,13 @@ class GoogleAdManager(AdServerAdapter):
         "notes": "Delivery measured by Google Ad Manager ad serving and reporting",
     }
 
+    # Pricing models GAM can execute:
+    # - CPM: All line item types
+    # - VCPM: STANDARD only (viewable CPM)
+    # - CPC: STANDARD, SPONSORSHIP, NETWORK, PRICE_PRIORITY
+    # - FLAT_RATE: SPONSORSHIP (translated to CPD internally)
+    supported_pricing_models = frozenset({"cpm", "vcpm", "cpc", "flat_rate"})
+
     def __init__(
         self,
         config: dict[str, Any],
@@ -336,20 +343,6 @@ class GoogleAdManager(AdServerAdapter):
     def _check_order_has_guaranteed_items(self, order_id):
         """Check if order has guaranteed line items (delegated to orders manager)."""
         return self._require_orders_manager().check_order_has_guaranteed_items(order_id)
-
-    def get_supported_pricing_models(self) -> set[str]:
-        """Return set of pricing models GAM adapter supports.
-
-        Google Ad Manager supports:
-        - CPM: All line item types
-        - VCPM: STANDARD only (viewable CPM)
-        - CPC: STANDARD, SPONSORSHIP, NETWORK, PRICE_PRIORITY
-        - FLAT_RATE: SPONSORSHIP (translated to CPD internally)
-
-        Returns:
-            Set of pricing model strings supported by this adapter
-        """
-        return {"cpm", "vcpm", "cpc", "flat_rate"}
 
     def get_targeting_capabilities(self) -> TargetingCapabilities:
         """Return targeting capabilities GAM adapter supports.

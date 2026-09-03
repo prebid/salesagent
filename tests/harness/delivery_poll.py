@@ -67,7 +67,7 @@ class DeliveryPollEnv(DeliveryPollMixin, IntegrationEnv):
         return self._run_a2a_handler("get_media_buy_delivery", GetMediaBuyDeliveryResponse, **kwargs)
 
     EXTERNAL_PATCHES = {
-        "adapter": "src.core.tools.media_buy_delivery.get_adapter",
+        "adapter": "src.core.helpers.adapter_helpers.get_adapter",
     }
     REST_ENDPOINT = "/api/v1/media-buys/delivery"
 
@@ -77,6 +77,80 @@ class DeliveryPollEnv(DeliveryPollMixin, IntegrationEnv):
 
     def _configure_mocks(self) -> None:
         self._configure_adapter_mock()
+
+    def associate_buys_with_account(self, media_buy_ids: list[str], account_id: str) -> None:
+        """Point specific media buys at an account, for scenarios that learn the account late.
+
+        AdCP 3.1.1 defines get_media_buy_delivery's ``account`` as a FILTER, so a scenario
+        naming a valid account must own buys in it. Some suites create the buy before the
+        account value is known, hence this after-the-fact association.
+
+        Scoped to the ids passed in — never "every unassociated buy in the tenant" — and
+        raises when a named buy is absent, so a mis-seeded scenario fails on its own terms
+        rather than silently returning an empty delivery set.
+        """
+        from src.core.database.repositories.media_buy import MediaBuyRepository
+
+        session = self._session
+        if session is None:  # pragma: no cover - env misuse
+            raise RuntimeError("associate_buys_with_account requires an active env session")
+
+        repo = MediaBuyRepository(session, self._tenant_id)
+        for media_buy_id in media_buy_ids:
+            # Write through the repository's own API rather than assigning to the ORM row:
+            # tests must not reach around the layer production writes through.
+            updated = repo.update_fields(media_buy_id, account_id=account_id)
+            if updated is None:
+                raise AssertionError(
+                    f"cannot associate media buy {media_buy_id!r} with account {account_id!r}: "
+                    "the buy does not exist in this scenario's database"
+                )
+        self._commit_factory_data()
+
+    def seed_decoy_buy_on_account(
+        self,
+        tenant: Any,
+        owner: Any,
+        *,
+        account_id: str,
+        media_buy_id: str,
+        brand_domain: str,
+        operator: str,
+    ) -> str | None:
+        """Create a buy on a DIFFERENT account, so an account-scope Then step has something to exclude.
+
+        Owned by ``owner`` — the scenario's own buy principal, not the env's default
+        identity — so ownership filtering does not remove it and only the account filter
+        can. Seeds adapter data too: a targeted buy whose adapter read fails degrades into
+        errors[] rather than appearing in media_buy_deliveries, which would make "excluded
+        when scoped" prove nothing (an unscoped response would be missing it either way).
+
+        Returns the seeded media_buy_id, or None when this env has no local session to
+        seed through. e2e mode still binds ``_session`` to the live server's own database
+        (see ``IntegrationEnv.__enter__`` / ``associate_buys_with_account``, which this
+        method also calls), so seeding proceeds there too — only a genuinely session-less
+        env (unit variants) skips. Declared as a return value rather than the step
+        function probing ``hasattr(env, "_session")`` directly — the env is what knows
+        whether it can seed, not the step.
+        """
+        if self._session is None:
+            return None
+
+        from tests.bdd.steps.generic._account_resolution import seed_account_with_access
+        from tests.factories import MediaBuyFactory
+
+        seed_account_with_access(
+            tenant,
+            owner,
+            account_id=account_id,
+            status="active",
+            brand_domain=brand_domain,
+            operator=operator,
+        )
+        MediaBuyFactory(tenant=tenant, principal=owner, media_buy_id=media_buy_id, status="active")
+        self.associate_buys_with_account([media_buy_id], account_id)
+        self.set_adapter_response(media_buy_id=media_buy_id)
+        return media_buy_id
 
     def build_rest_body(self, **kwargs: Any) -> dict[str, Any]:
         """Convert kwargs to GetMediaBuyDeliveryBody shape for REST POST."""

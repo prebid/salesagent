@@ -80,7 +80,7 @@ class TestDeliveryLoopErrorHandling:
 
         with (
             patch("src.core.auth.get_principal_object", return_value=MagicMock()),
-            patch("src.core.tools.media_buy_delivery.get_adapter", return_value=MagicMock()),
+            patch("src.core.helpers.adapter_helpers.get_adapter", return_value=MagicMock()),
             patch("src.core.tools.media_buy_delivery.MediaBuyUoW", return_value=mock_uow),
             patch("src.core.tools.media_buy_delivery._get_target_media_buys", return_value=target_buys),
             patch("src.core.tools.media_buy_delivery._get_pricing_options", return_value={}),

@@ -66,12 +66,15 @@ def _update_performance_index_impl(
     with MediaBuyUoW(tenant["tenant_id"]) as uow:
         assert uow.media_buys is not None
         _verify_principal(req.media_buy_id, identity, uow.media_buys, context=req.context)
+        # This operation is addressed by media_buy_id and carries no account reference,
+        # so identity.sandbox is structurally False here — the mode must come from the buy.
+        sandbox = uow.sandbox_mode_by_id(req.media_buy_id)
     principal_id = require_principal_id(identity, context=req.context)
 
     principal = resolve_principal_or_raise(principal_id, tenant_id=identity.tenant_id, context=req.context)
 
     # Get the appropriate adapter (no dry_run support for performance updates)
-    adapter = get_adapter(principal, dry_run=False, tenant=tenant)
+    adapter = get_adapter(principal, dry_run=False, tenant=tenant, sandbox=sandbox)
 
     # Convert ProductPerformance to PackagePerformance for the adapter
     package_performance = [

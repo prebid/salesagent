@@ -177,8 +177,10 @@ def _standard_patches(
             "src.core.auth.get_principal_object",
             return_value=principal_obj,
         ),
+        # media_buy_delivery calls adapter_for_mode, which resolves get_adapter through
+        # adapter_helpers' own module namespace — patch at that source.
         "adapter": patch(
-            f"{_PATCH_PREFIX}.get_adapter",
+            "src.core.helpers.adapter_helpers.get_adapter",
             return_value=adapter,
         ),
         "tenant": patch(
@@ -1332,7 +1334,7 @@ class TestDeliveryAuthErrors:
         req = GetMediaBuyDeliveryRequest(media_buy_ids=["mb_x"])
 
         with (
-            patch(f"{_PATCH_PREFIX}.get_adapter") as mock_adapter,
+            patch("src.core.helpers.adapter_helpers.get_adapter") as mock_adapter,
             patch(f"{_PATCH_PREFIX}._get_target_media_buys") as mock_target,
         ):
             with pytest.raises(AdCPAuthenticationError):

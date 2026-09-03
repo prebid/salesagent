@@ -378,20 +378,39 @@ _XFAIL_TAGS: dict[str, str] = {
     # FIXME: ASAP case sensitivity error code mismatch
     # Production: Pydantic rejects "ASAP" → ValidationError, spec expects INVALID_REQUEST.
     "T-UC-002-inv-013-5": "INVALID_REQUEST error code not implemented for wrong-case ASAP — spec-production gap",
-    # FIXME: sandbox mode not implemented in create_media_buy
-    # CreateMediaBuyResult has no sandbox field; no sandbox suppression logic exists.
-    # sandbox-production passes vacuously (sandbox absent from response by default).
-    "T-UC-002-sandbox-happy": "sandbox mode not implemented in create_media_buy — spec-production gap",
-    "T-UC-002-sandbox-validation": "sandbox mode not implemented in create_media_buy — spec-production gap",
-    # FIXME(production-gap bead): natural-key sandbox resolution
+    # Sandbox mode IS implemented in create_media_buy — the reason these two carried
+    # ("CreateMediaBuyResult has no sandbox field; no sandbox suppression logic exists")
+    # is no longer true. A sandbox account reference selects the mock adapter before any
+    # AdapterConfig read, and the response carries `sandbox: true`, graded on real wire
+    # bytes across mcp/a2a/rest by
+    # tests/integration/test_create_media_buy_account_wire.py::TestSandboxMarkerReachesTheBuyer
+    # (and ::TestSandboxMarkerOnTheDryRunBranch for the early-return path).
+    #
+    # These two are ALSO not parked by these entries: they xfail earlier, at the UC-002
+    # harness gate ("harness not yet wired for non-extension scenarios"), so deleting them
+    # changes nothing today. Kept with an accurate reason so whoever wires that harness
+    # inherits a true statement instead of a resolved gap — a reason that asserts
+    # something already fixed is how a scenario stays parked after the work it waited on
+    # landed. Whether they then pass is a harness question, not a production one.
+    "T-UC-002-sandbox-happy": "UC-002 harness not wired for this scenario; the sandbox marker and "
+    "adapter suppression it grades ARE implemented — re-check when the harness reaches it",
+    "T-UC-002-sandbox-validation": "UC-002 harness not wired for this scenario; sandbox validation "
+    "is production validation (no separate path) — re-check when the harness reaches it",
+    # FIXME(#1914): natural-key sandbox resolution
     # without prior provisioning is unimplemented. _resolve_by_natural_key
     # (account_helpers.py:110) requires the sandbox account to already exist —
-    # raises ACCOUNT_NOT_FOUND rather than auto-provisioning — and
-    # CreateMediaBuyResult exposes no sandbox field to echo. Step dispatches the
-    # real natural-key create on the wire; flips to a pass when sandbox
-    # auto-provisioning + the sandbox echo land. BR-RULE-209 INV-8.
-    "T-UC-002-sandbox-natural-key": "natural-key sandbox auto-provisioning + sandbox echo not implemented "
-    "in create_media_buy (ACCOUNT_NOT_FOUND without prior provisioning) — spec-production gap",
+    # raises ACCOUNT_NOT_FOUND rather than auto-provisioning. The "no sandbox field
+    # to echo" half of this reason is NO LONGER TRUE: create_media_buy sets
+    # response.sandbox for a sandbox account, graded on real wire bytes across
+    # mcp/a2a/rest by
+    # tests/integration/test_create_media_buy_account_wire.py::TestSandboxMarkerReachesTheBuyer.
+    # Only auto-provisioning remains, so that is what this reason now says — an xfail
+    # reason that asserts a resolved gap is how a scenario stays parked after the work
+    # it was waiting on has landed. Step dispatches the real natural-key create on the
+    # wire; flips to a pass when auto-provisioning lands. BR-RULE-209 INV-8.
+    "T-UC-002-sandbox-natural-key": "natural-key sandbox AUTO-PROVISIONING not implemented in create_media_buy "
+    "(ACCOUNT_NOT_FOUND without prior provisioning) — spec-production gap, github.com/prebid/salesagent#1914. "
+    "The sandbox response marker itself IS implemented and graded.",
     # FIXME: inline creative upload not persisted in create_media_buy
     # process_and_upload_package_creatives → _sync_creatives_impl should persist
     # creatives to DB, but the Then step "upload creatives to creative library" fails
@@ -1365,10 +1384,26 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 "compatible assignment — assigned_to is empty (BR-RULE-039 INV-5)"
             ),
             # T-UC-006-rule-037-inv5: e2e_rest only — handled below with transport check
-            # Sandbox: sync_creatives does not set sandbox=true on response
+            # Sandbox marker IS implemented in sync_creatives — the reason this carried
+            # ("sync_creatives does not set sandbox=true on response") is no longer true.
+            # identity.sandbox is populated via enrich_identity_with_account in
+            # sync_wrappers.py and the response carries sandbox=true, graded on real
+            # wire bytes across mcp/rest by
+            # tests/integration/test_creative_sync_transport.py::TestSyncCreativesSandboxMarkerTransport.
+            #
+            # This scenario is ALSO not parked by this entry: it xfails earlier, at the
+            # UC-006 harness gate (marker_names & {"account", "creative-invariant",
+            # "BR-RULE-034", "webhook-ssrf"} — @sandbox is not in that set), so deleting
+            # this entry changes nothing today. Even past that gate, given_sandbox_account
+            # (given_auth.py:66) seeds no Account row and no ctx["account_ref"], so
+            # identity.sandbox would still resolve False (#1875, dormant sandbox Given).
+            # Kept with an accurate reason so whoever wires the harness inherits a true
+            # statement instead of a resolved gap.
             "T-UC-006-sandbox-happy": (
-                "SPEC-PRODUCTION GAP: sync_creatives does not set sandbox=true on "
-                "response for sandbox accounts (BR-RULE-209 INV-4)"
+                "UC-006 harness not wired for this scenario (no marker in the gate's "
+                "allowlist), and given_sandbox_account seeds no real Account (#1875) — "
+                "the sandbox marker itself IS implemented and graded; re-check when the "
+                "harness reaches it"
             ),
             # Sandbox: invalid format_id does not trigger validation error at _impl level
             "T-UC-006-sandbox-validation": (
@@ -1447,9 +1482,32 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # Graduated: T-UC-004-webhook-circuit-halfopen (merge from main fixed circuit breaker probe timing)
             # Graduated: T-UC-004-webhook-retry-5xx (production fixed: retry count now correct)
             # Graduated: T-UC-004-webhook-retry-network (ebb527c6 fixed the off-by-one)
-            # Sandbox: not yet in delivery _impl
-            "T-UC-004-sandbox-happy": ("sandbox mode not implemented in delivery", True),
-            "T-UC-004-sandbox-validation": ("sandbox mode not implemented in delivery", True),
+            # Sandbox: HALF implemented in delivery, so the reason these carried
+            # ("sandbox mode not implemented in delivery") is no longer true — and a
+            # reason that asserts a gap already closed is how a scenario stays parked
+            # after the work it waited on landed. Same correction as the UC-002 pair.
+            #
+            # Implemented: per-buy adapter selection. partition_by_sandbox_mode resolves
+            # each targeted buy's account and each partition reads through its own
+            # adapter, so a sandbox buy's metrics come from the simulator and never reach
+            # the tenant's real ad server. Graded by
+            # tests/integration/test_sandbox_delivery_account_scoping.py.
+            #
+            # NOT implemented: the `sandbox: true` response marker these scenarios also
+            # assert. One delivery response can span both modes (the partition is per-buy),
+            # so a single top-level flag needs a decided rule rather than a line — #1874.
+            # Both scenarios assert the marker AND the suppression, so they still fail as
+            # a whole and the strict xfail remains correct.
+            "T-UC-004-sandbox-happy": (
+                "delivery routes sandbox buys to the mock adapter; the `sandbox: true` response "
+                "marker is still open (mixed-mode rule undecided) — #1874",
+                True,
+            ),
+            "T-UC-004-sandbox-validation": (
+                "delivery routes sandbox buys to the mock adapter; the `sandbox: true` response "
+                "marker is still open (mixed-mode rule undecided) — #1874",
+                True,
+            ),
         }
         for tag, (reason, strict) in _UC004_XFAIL_TAGS.items():
             if tag in marker_names:
@@ -2440,8 +2498,11 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 {"pending_activation", "expired"},
                 "status_filter value validation emits VALIDATION_ERROR, not STATUS_FILTER_INVALID_VALUE (unimplemented)",
             ),
-            # Sandbox echo (sandbox=true/false in the response) is not implemented;
-            # only the production-absent row is graded.
+            # Scoped to get_media_buys: create_media_buy DOES emit the marker (graded on
+            # the wire in tests/integration/test_create_media_buy_account_wire.py), but
+            # the query response carries no sandbox field, so only the production-absent
+            # row is graded here. Named per-tool rather than as a blanket "not
+            # implemented", which stopped being true for create.
             (
                 "T-UC-019-boundary-sandbox",
                 {"sandbox account", "explicit production"},

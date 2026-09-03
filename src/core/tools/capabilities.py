@@ -118,7 +118,15 @@ def _get_adcp_capabilities_impl(
         principal = get_principal_object(principal_id, tenant_id=identity.tenant_id) if principal_id else None
 
         if principal:
-            adapter = get_adapter(principal, dry_run=True, tenant=tenant)
+            adapter = get_adapter(
+                principal,
+                dry_run=True,
+                tenant=tenant,  # identity.sandbox is structurally False here — this module never calls
+                # enrich_identity_with_account, and GetAdcpCapabilitiesRequest has no account
+                # field in the pinned SDK, so unlike get_products the kwarg is dead by protocol
+                # rather than by omission. The literal says what the expression only implied.
+                sandbox=False,
+            )
             if adapter and hasattr(adapter, "default_channels"):
                 for channel_name in adapter.default_channels:
                     if channel_name.lower() in CHANNEL_MAPPING:

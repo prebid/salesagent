@@ -70,6 +70,7 @@ class GetProductsBody(SalesAgentBaseModel):
     # dict BrandReference or string domain/URL shorthand (#1324)
     brand: dict[str, Any] | str | None = None
     filters: dict[str, Any] | None = None
+    account: dict[str, Any] | None = None  # AccountReference; resolved at the transport boundary
     # Top-level property of get-products-request.json at AdCP 3.1.1. Omitting it
     # made the field MCP+A2A-only, which is a protocol gap rather than a REST
     # limitation.
@@ -244,10 +245,19 @@ async def get_products(body: GetProductsBody, identity: ResolvedIdentity | None 
     translation; no defensive catch needed here.
     """
     with adcp_validation_boundary(context="get_products request"):
+        account_ref = to_account_reference(body.account)
+
+    if account_ref is not None and identity is not None:
+        from src.core.transport_helpers import enrich_identity_with_account
+
+        identity = enrich_identity_with_account(identity, account_ref)
+
+    with adcp_validation_boundary(context="get_products request"):
         req = products_module.create_get_products_request(
             brief=body.brief,
             brand=body.brand,
             filters=body.filters,
+            account=account_ref,
             property_list=body.property_list,
         )
     response = await products_module._get_products_impl(req, identity)
@@ -395,11 +405,12 @@ async def update_media_buy(media_buy_id: str, body: UpdateMediaBuyBody, identity
 @router.post("/media-buys/delivery")
 async def get_media_buy_delivery(body: GetMediaBuyDeliveryBody, identity: ResolvedIdentity = require_auth):
     """Get delivery metrics for media buys (auth required)."""
-    if body.account is not None:
+    with adcp_validation_boundary(context="get_media_buy_delivery request"):
+        account_ref = to_account_reference(body.account)
+
+    if account_ref is not None:
         from src.core.transport_helpers import enrich_identity_with_account
 
-        with adcp_validation_boundary(context="get_media_buy_delivery request"):
-            account_ref = to_account_reference(body.account)
         enriched = enrich_identity_with_account(identity, account_ref)
         assert enriched is not None  # identity is non-None (from require_auth)
         identity = enriched

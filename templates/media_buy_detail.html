@@ -88,7 +88,16 @@
     </div>
 </div>
 
-{% if delivery_metrics %}
+{% if delivery_metrics_error %}
+<div class="custom-card">
+    <h2 style="margin: 0 0 1rem 0;">📊 Delivery Metrics</h2>
+    <p style="color: #b91c1c; margin: 0;">
+        <strong>⚠️ Could not resolve this media buy's account.</strong>
+        {{ delivery_metrics_error }} This is a seller-side data condition — check the
+        server log for the affected account reference, then re-run <code>sync_accounts</code>.
+    </p>
+</div>
+{% elif delivery_metrics %}
 <div class="custom-card">
     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
         <h2 style="margin: 0;">📊 Delivery Metrics</h2>

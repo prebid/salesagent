@@ -26,7 +26,10 @@ from src.core.database.models import Creative as DBCreative
 from src.core.exceptions import AdCPAuthenticationError, AdCPNotFoundError
 from tests.factories.creative_asset import build_assets, image_spec, text_spec
 from tests.harness import CreativeSyncEnv, Transport, assert_envelope, make_identity
+from tests.harness.assertions import assert_wire_omits_unset
 from tests.helpers.creative_test_helpers import assert_stored_creative_assets, creative_payload
+
+_SYNC_CREATIVES_SCHEMA = "creative/sync-creatives-response.json"
 
 
 def _error_messages(errors: list | None) -> list[str]:
@@ -157,6 +160,149 @@ def _creative(creative_id: str = "c1", name: str = "Test", **overrides) -> dict:
             **overrides,
         }
     )
+
+
+@pytest.mark.requires_db
+class TestSyncCreativesSandboxMarkerTransport:
+    """AdCP 3.1.1 sandbox.mdx SHOULD: a sync_creatives response carries sandbox: true
+    when scoped to a sandbox account. identity.sandbox is populated here (unlike
+    media_buy_create's request-scoped identity) via enrich_identity_with_account in
+    both sync_wrappers entry points before _sync_creatives_impl runs — the property
+    that made this a genuine one-liner marker (issue #1918 tracks the remaining
+    routed operations that cannot carry it, because their response types either have
+    no sandbox field or need a per-buy rule).
+
+    Uses ``to_account_reference`` to build a real typed ``AccountReference`` rather
+    than a raw dict: unlike the wire transports (MCP/REST), which validate the
+    request body through a Pydantic-typed parameter and coerce a dict automatically,
+    this harness's IMPL and A2A dispatch call ``_sync_creatives_impl`` /
+    ``sync_creatives_raw`` directly with no such boundary, so a raw dict reaches
+    ``enrich_identity_with_account`` unconverted and fails on ``.root`` access. The
+    same typed object works everywhere: REST's ``build_rest_body`` model_dumps it
+    for the JSON body, and MCP's in-memory client accepts it as a tool argument.
+
+    Parametrized over all four transports, but only MCP and REST cross a REAL wire
+    for the marker: ``CreativeSyncEnv.call_a2a`` calls ``sync_creatives_raw`` directly
+    rather than driving ``AdCPRequestHandler.on_message_send`` — its own docstring
+    notes the real A2A handler (``_handle_sync_creatives_skill``) has a pre-existing
+    bug constructing ``CreativeAsset`` from raw dicts (#1175) that this harness routes
+    around. So A2A here exercises the same in-process ``_sync_creatives_impl`` call as
+    IMPL, not real Task/Artifact serialization — useful regression coverage of the
+    marker-setting logic itself, but not wire-shape coverage. Both dispatchers leave
+    ``TransportResult.wire_response`` unset: ``env._last_wire_response`` is populated
+    by ``_run_a2a_handler`` AND ``_run_mcp_client`` (``tests/harness/_base.py``), but
+    this harness's ``call_a2a`` drives neither — it calls ``sync_creatives_raw``
+    directly, so no A2A wire capture ever happens here. IMPL has no wire by
+    definition; MCP's real ``_run_mcp_client`` path (used by ``call_mcp``) DOES
+    populate it, which is why the MCP arm below asserts on the wire.
+    """
+
+    @staticmethod
+    def _seed_account(env, tenant, principal, *, account_id: str, sandbox: bool) -> None:
+        from tests.factories import AccountFactory, AgentAccountAccessFactory
+
+        AccountFactory(tenant=tenant, account_id=account_id, sandbox=sandbox)
+        # Resolution enforces agent access; without the grant the request fails
+        # authorization before the marker is ever reached.
+        AgentAccountAccessFactory(
+            tenant_id=tenant.tenant_id,
+            principal_id=principal.principal_id,
+            account_id=account_id,
+        )
+
+    @pytest.mark.parametrize("transport", ALL_TRANSPORTS, ids=lambda t: t.value)
+    def test_sandbox_scoped_sync_carries_the_marker(self, integration_db, transport):
+        """Mirrors the negative control's wire-vs-payload branching (see its docstring).
+
+        ``payload.sandbox is True`` alone grades the parsed model, not the buyer-visible
+        bytes — a transport that dropped the key while the model kept a stale value from
+        elsewhere would still satisfy it. MCP and REST are asserted to HAVE a wire
+        explicitly; IMPL/A2A (no wire in this harness) fall back to the payload check.
+        """
+        from src.core.schema_helpers import to_account_reference
+
+        suffix = transport.value
+        with CreativeSyncEnv(tenant_id=f"t_sbxmark_{suffix}", principal_id=f"p_sbxmark_{suffix}") as env:
+            tenant, principal = env.setup_default_data()
+            self._seed_account(env, tenant, principal, account_id="acc_sbx", sandbox=True)
+
+            result = env.call_via(
+                transport,
+                creatives=[_creative(creative_id=f"c_sbx_{suffix}")],
+                account=to_account_reference({"account_id": "acc_sbx"}),
+            )
+
+        assert result.is_success, f"[{suffix}] dispatch failed: {result.error!r}"
+        assert_envelope(result, transport)
+
+        if transport in (Transport.MCP, Transport.REST):
+            assert result.wire_response is not None, (
+                f"[{suffix}] {transport.value} must capture a real wire response — a regression "
+                "here would silently fall back to the weaker payload-only assertion below"
+            )
+
+        if result.wire_response is not None:
+            assert result.wire_response.get("sandbox") is True, (
+                f"[{suffix}] sandbox-scoped sync_creatives must carry sandbox: true on the wire, "
+                f"got {result.wire_response.get('sandbox')!r}"
+            )
+        else:
+            assert result.payload.sandbox is True, (
+                f"[{suffix}] sandbox-scoped sync_creatives must carry sandbox: true, got {result.payload.sandbox!r}"
+            )
+
+    @pytest.mark.parametrize("transport", ALL_TRANSPORTS, ids=lambda t: t.value)
+    def test_live_scoped_sync_omits_the_marker(self, integration_db, transport):
+        """Negative control — 'always sandbox: true' would pass the test above.
+
+        Asserts on the real wire body (``result.wire_response``), not the parsed
+        ``payload``: ``payload.sandbox is None`` is satisfied identically by an
+        omitted key OR an explicit ``"sandbox": null`` — Pydantic can't tell them
+        apart on a nullable field. ``assert_wire_omits_unset`` additionally validates
+        the full response against the pinned schema, which types ``sandbox`` boolean
+        with no null variant — so an explicit null fails as a TYPE violation, not
+        just a hand-listed key check.
+
+        Branches on ``result.wire_response is not None`` rather than a hardcoded
+        transport list: IMPL never has a wire, and A2A doesn't in THIS harness (see
+        the class docstring) — but keying on the captured value itself, instead of
+        which transport this is, means that when #1175 lands and ``call_a2a`` starts
+        driving the real handler, this test auto-upgrades A2A to the wire assertion
+        with no code change here. MCP and REST are asserted to HAVE a wire
+        explicitly, so a regression that silently stopped capturing one there would
+        fail loudly instead of quietly falling back to the weaker payload check.
+        """
+        from src.core.schema_helpers import to_account_reference
+
+        suffix = transport.value
+        with CreativeSyncEnv(tenant_id=f"t_livemark_{suffix}", principal_id=f"p_livemark_{suffix}") as env:
+            tenant, principal = env.setup_default_data()
+            self._seed_account(env, tenant, principal, account_id="acc_live", sandbox=False)
+
+            result = env.call_via(
+                transport,
+                creatives=[_creative(creative_id=f"c_live_{suffix}")],
+                account=to_account_reference({"account_id": "acc_live"}),
+            )
+
+        assert result.is_success, f"[{suffix}] dispatch failed: {result.error!r}"
+        assert_envelope(result, transport)
+
+        if transport in (Transport.MCP, Transport.REST):
+            assert result.wire_response is not None, (
+                f"[{suffix}] {transport.value} must capture a real wire response — a regression "
+                "here would silently fall back to the weaker payload-only assertion below"
+            )
+
+        if result.wire_response is not None:
+            assert_wire_omits_unset(
+                result, schema=_SYNC_CREATIVES_SCHEMA, absent_paths=["sandbox"], transport=transport
+            )
+        else:
+            assert result.payload.sandbox is None, (
+                f"[{suffix}] live-scoped sync_creatives must omit the sandbox marker "
+                f"(None, not False, per AdCP 3.1.1), got {result.payload.sandbox!r}"
+            )
 
 
 @pytest.mark.requires_db

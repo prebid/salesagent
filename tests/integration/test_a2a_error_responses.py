@@ -286,6 +286,54 @@ class TestA2AErrorPropagation:
         assert_no_raw_validation_leak(artifact_data["errors"][0]["message"])
         assert "account" in (artifact_data["errors"][0].get("field") or "")
 
+    async def test_get_products_non_dict_account_wire_envelope(self, handler, test_tenant, test_principal):
+        """A non-dict account on get_products rejects on the wire, naming ``account``.
+
+        The get_products skill reads ``account`` straight off raw ``parameters`` and
+        coerces it with ``to_account_reference``, which is strict: a non-dict value
+        raises rather than degrading to ``None`` (a dropped account would leave
+        ``identity.sandbox`` False and dispatch a sandbox request to the LIVE adapter).
+
+        This drives the real ``on_message_send`` pipeline so what is graded is the
+        buyer-facing two-layer DataPart envelope, not a reconstructed exception —
+        including that the reported field and suggestion name the *request* field and
+        never the generated union-member model name (``AccountReference1``), which
+        appears in no buyer request.
+        """
+        identity = PrincipalFactory.make_identity(
+            principal_id=test_principal["principal_id"],
+            tenant_id=test_tenant["tenant_id"],
+            tenant=test_tenant,
+            auth_token=test_principal["access_token"],
+            protocol="a2a",
+        )
+        handler._get_auth_token = MagicMock(return_value=test_principal["access_token"])
+        handler._resolve_a2a_identity = MagicMock(return_value=identity)
+
+        from src.core.config_loader import set_current_tenant
+
+        set_current_tenant(test_tenant)
+
+        message = self.create_message_with_skill("get_products", {"brief": "video ads", "account": "acc_123"})
+        params = SendMessageRequest(message=message)
+
+        result = await handler.on_message_send(params, ServerCallContext())
+
+        assert isinstance(result, Task)
+        assert result.artifacts is not None
+        assert len(result.artifacts) > 0
+
+        artifact_data = self.extract_data_from_artifact(result.artifacts[0])
+        assert_envelope_shape(
+            artifact_data,
+            "VALIDATION_ERROR",
+            recovery="correctable",
+        )
+        wire_error = artifact_data["errors"][0]
+        assert wire_error.get("field") == "account"
+        assert "AccountReference" not in (wire_error.get("field") or "")
+        assert "AccountReference" not in (wire_error.get("suggestion") or "")
+
     async def test_create_media_buy_negative_budget_wire_envelope(self, handler, test_tenant, test_principal):
         """A negative package budget surfaces VALIDATION_ERROR on the A2A wire.
 

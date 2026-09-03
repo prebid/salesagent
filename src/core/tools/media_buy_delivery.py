@@ -82,12 +82,14 @@ PLATFORM_DEFAULT_ATTRIBUTION_MODEL = AttributionModel.last_touch
 # adcp 3.6.0: Use schemas.ReportingPeriod (extends creative ReportingPeriod) for adapter compat.
 # The media-buy-specific ReportingPeriod has identical fields (start, end) but different identity.
 # Adapters are typed to accept schemas.ReportingPeriod, so we use that here.
+from src.adapters.base import AdServerAdapter
 from src.core.auth import require_identity, require_principal_id, require_tenant, resolve_principal_or_raise
 from src.core.database.models import MediaBuy, PricingOption
 from src.core.database.repositories import MediaBuyRepository, MediaBuyUoW
 from src.core.database.repositories.delivery import POLL_SEQUENCE_TASK_TYPE, DeliveryRepository
 from src.core.database.repositories.product import ProductRepository
-from src.core.helpers.adapter_helpers import get_adapter
+from src.core.helpers.account_helpers import partition_by_sandbox_mode
+from src.core.helpers.adapter_helpers import adapter_for_mode
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import (
     AggregatedTotals,
@@ -199,11 +201,18 @@ def _get_media_buy_delivery_impl(
     # Tenant is resolved at the transport boundary (resolve_identity_from_context)
     tenant = require_tenant(identity, context=req.context)
 
-    # Get the appropriate adapter
-    # Use testing_ctx.dry_run if in testing mode, otherwise False
-    adapter = get_adapter(
-        principal, dry_run=testing_ctx.dry_run if testing_ctx else False, testing_context=testing_ctx, tenant=tenant
-    )
+    # Adapters are chosen per buy, not per request: a delivery read can span sandbox and
+    # live buys at once, and identity.sandbox is structurally False when the request is
+    # addressed by media_buy_ids alone. One adapter is built per mode, lazily, so a
+    # single-mode request still constructs exactly one.
+    _adapters_by_mode: dict[bool, AdServerAdapter] = {}
+
+    def _adapter_for(sandbox: bool) -> AdServerAdapter:
+        if sandbox not in _adapters_by_mode:
+            _adapters_by_mode[sandbox] = adapter_for_mode(
+                principal, tenant=tenant, testing_ctx=testing_ctx, sandbox=sandbox
+            )
+        return _adapters_by_mode[sandbox]
 
     # Determine reporting period
     if req.start_date and req.end_date:
@@ -236,7 +245,28 @@ def _get_media_buy_delivery_impl(
         assert uow.media_buys is not None
         repo = uow.media_buys
 
-        target_media_buys = _get_target_media_buys(req, principal_id, repo, reference_date, testing_ctx)
+        # Account scoping happens in the query (see MediaBuyRepository.get_by_principal):
+        # when the request carries an account reference, buys belonging to a DIFFERENT
+        # account of the same principal are never fetched. Without it, a request scoped
+        # to a sandbox account could pull in a live buy (explicitly or by browsing) and
+        # read it through the tenant's real adapter — defeating the sandbox guarantee via
+        # an account-scoping hole. Out-of-scope ids fall through to the not-found diff
+        # below, so the buyer is told rather than silently served less.
+        target_media_buys = _get_target_media_buys(
+            req, principal_id, repo, reference_date, testing_ctx, account_id=identity.account_id
+        )
+
+        # Resolve sandbox mode for every targeted buy BEFORE any adapter is built, so an
+        # unresolved account raises here rather than being read through the live adapter.
+        # Modes come from the caching partition helper: AccountRepository.get_by_id emits
+        # one SELECT per call, so resolving per buy would issue one query per buy on a
+        # request that is usually a handful of accounts.
+        assert uow.accounts is not None
+        sandbox_targets, _live_targets = partition_by_sandbox_mode(
+            uow.accounts, target_media_buys, lambda pair: pair[1].account_id
+        )
+        sandbox_ids = {buy_id for buy_id, _buy in sandbox_targets}
+        sandbox_by_buy: dict[str, bool] = {buy_id: buy_id in sandbox_ids for buy_id, _buy in target_media_buys}
 
         # Diff requested IDs vs found IDs to report missing ones
         not_found_errors: list[Error] = []
@@ -329,7 +359,7 @@ def _get_media_buy_delivery_impl(
                     # Call adapter to get per-package delivery metrics
                     # Note: Mock adapter returns simulated data, GAM adapter returns real data from Reporting API
                     try:
-                        adapter_response = adapter.get_media_buy_delivery(
+                        adapter_response = _adapter_for(sandbox_by_buy[media_buy_id]).get_media_buy_delivery(
                             media_buy_id=media_buy_id,
                             date_range=reporting_period,
                             today=simulation_datetime,
@@ -922,6 +952,7 @@ def _get_target_media_buys(
     repo: MediaBuyRepository,
     reference_date: date,
     testing_ctx: "AdCPTestContext | None" = None,
+    account_id: str | None = None,
 ) -> list[tuple[str, MediaBuy]]:
     # The internal delivery filter vocabulary is exactly the canonical status
     # set (pending_creatives, pending_start, active, paused, completed,
@@ -937,11 +968,12 @@ def _get_target_media_buys(
     else:
         filter_statuses = _resolve_delivery_status_filter(req.status_filter, valid_internal_statuses)
 
-    # Fetch media buys by IDs or all for principal
+    # Fetch media buys by IDs or all for principal, scoped to the referenced account
+    # when the request carries one — buys of another account are never loaded.
     if req.media_buy_ids:
-        fetched_buys = repo.get_by_principal(principal_id, media_buy_ids=req.media_buy_ids)
+        fetched_buys = repo.get_by_principal(principal_id, media_buy_ids=req.media_buy_ids, account_id=account_id)
     else:
-        fetched_buys = repo.get_by_principal(principal_id)
+        fetched_buys = repo.get_by_principal(principal_id, account_id=account_id)
 
     # Filter on the persisted status (authoritative), date-refined against the
     # SAME clock the reported status uses (_simulation_clock) so a time-simulation

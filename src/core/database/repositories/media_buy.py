@@ -142,10 +142,17 @@ class MediaBuyRepository:
         *,
         media_buy_ids: list[str] | None = None,
         statuses: list[PersistedMediaBuyStatus] | None = None,
+        account_id: str | None = None,
     ) -> list[MediaBuy]:
         """Get media buys for a principal within the tenant.
 
         Filters are combined with AND. Pass None to skip a filter.
+
+        ``account_id`` scopes the result to a single account of that principal. A
+        request carrying an account reference must never see another account's buys:
+        a sandbox-scoped request that pulled in a live buy would read it through the
+        tenant's real adapter. Scoping here means those rows are never loaded at all,
+        rather than being fetched and then discarded by whichever caller remembers to.
         """
         stmt = select(MediaBuy).where(
             MediaBuy.tenant_id == self._tenant_id,
@@ -155,6 +162,8 @@ class MediaBuyRepository:
             stmt = stmt.where(MediaBuy.media_buy_id.in_(media_buy_ids))
         if statuses is not None:
             stmt = stmt.where(MediaBuy.status.in_(statuses))
+        if account_id is not None:
+            stmt = stmt.where(MediaBuy.account_id == account_id)
         return list(self._session.scalars(stmt).all())
 
     def get_active(self) -> list[MediaBuy]:

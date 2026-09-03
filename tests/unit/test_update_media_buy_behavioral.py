@@ -2811,11 +2811,22 @@ class TestUC003StateMachine:
             assert isinstance(result.response, UpdateMediaBuySuccess)
 
     def test_paused_status_rejects_pause(self):
-        """A paused buy rejects another pause — 'pause' is not in valid_actions for 'paused'."""
+        """A paused buy rejects another pause — 'pause' is not in valid_actions for 'paused'.
+
+        Also the oracle for the sandbox-derivation ordering: ``paused_mb.account_id`` is
+        set to a real (non-None) value specifically so that IF ``uow.sandbox_mode``
+        reached its account lookup, ``accounts.get_by_id`` would be called —
+        ``_account_is_sandbox`` short-circuits to False on a None account_id, so a None
+        account_id here would make this assertion pass vacuously regardless of ordering.
+        Placing the derivation ahead of this raise (the position that caused the
+        DetachedInstanceError regression) would make this call happen; the fix's claim
+        is that the raise fires first and it never does.
+        """
         with MediaBuyUpdateEnv(principal_id="principal_test", tenant_id="tenant_test") as env:
             from src.core.exceptions import AdCPGoneError
 
             paused_mb = _make_mock_media_buy("mb_paused", status="paused")
+            paused_mb.account_id = "acct_would_be_looked_up"
             env.mock["uow"].return_value.media_buys.get_by_id.return_value = paused_mb
 
             identity = env.identity
@@ -2828,6 +2839,9 @@ class TestUC003StateMachine:
             assert exc_info.value.error_code == "INVALID_STATE"
             assert "pause" in exc_info.value.message
             assert "paused" in exc_info.value.message
+            # The ordering oracle: a disallowed-action rejection must precede the
+            # sandbox-mode account lookup, not just follow it eventually.
+            env.mock["uow"].return_value.accounts.get_by_id.assert_not_called()
 
     def test_paused_status_accepts_resume(self):
         """A paused buy accepts resume — 'resume' is in valid_actions for 'paused'."""

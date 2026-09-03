@@ -1,5 +1,6 @@
 import logging
 import random
+from collections.abc import Iterable
 from datetime import UTC, datetime
 from typing import Any
 
@@ -117,7 +118,6 @@ class MockAdServer(AdServerAdapter):
         supports_custom_targeting=False,
         supports_geo_targeting=True,
         supports_dynamic_products=False,
-        supported_pricing_models=["cpm", "vcpm", "cpcv", "cpp", "cpc", "cpv", "flat_rate"],
         supports_webhooks=False,
         supports_realtime_reporting=True,
     )
@@ -126,13 +126,46 @@ class MockAdServer(AdServerAdapter):
     SUPPORTED_DEVICE_TYPES = {"mobile", "desktop", "tablet", "ctv", "dooh", "audio"}
     SUPPORTED_MEDIA_TYPES = {"olv", "display", "social", "streaming_audio", "dooh"}
 
-    def __init__(self, config, principal, dry_run=False, creative_engine=None, tenant_id=None, strategy_context=None):
-        """Initialize mock adapter with GAM-like objects."""
+    # The simulator itself can simulate every AdCP pricing model. A tenant that CONFIGURED
+    # the mock as its ad server really may buy all seven; a sandbox account on a tenant
+    # configured for a real ad server may not — that request executes here but is
+    # constrained by its own adapter, passed as ``supported_pricing_models`` below.
+    supported_pricing_models = frozenset({"cpm", "vcpm", "cpcv", "cpp", "cpc", "cpv", "flat_rate"})
+
+    def __init__(
+        self,
+        config,
+        principal,
+        dry_run=False,
+        creative_engine=None,
+        tenant_id=None,
+        strategy_context=None,
+        supported_pricing_models: Iterable[str] | None = None,
+    ):
+        """Initialize mock adapter with GAM-like objects.
+
+        Args:
+            supported_pricing_models: Constraint profile to answer with instead of this
+                class's own. Passed by the sandbox short-circuit in ``get_adapter`` with
+                the TENANT's declared adapter's models: sandbox executes here, but AdCP
+                3.1.1 ``sandbox.mdx`` §Seller implementation requires sandbox to "validate
+                inputs the same way as production", and pricing support is a constraint of
+                the ad server the tenant declared, not of whoever executes the request.
+                ``None`` means "this really is the tenant's mock" — answer with all seven.
+        """
         super().__init__(config, principal, dry_run, creative_engine, tenant_id)
 
         # Store strategy context for simulation behavior
         self.strategy_context = strategy_context
-        self._current_simulation_time = None
+        # Annotated because set_simulation_time() assigns a datetime here; the bare
+        # ``= None`` narrowed the attribute to None once this __init__ became typed.
+        self._current_simulation_time: datetime | None = None
+
+        if supported_pricing_models is not None:
+            # Shadows the class attribute for this instance only; the single reader stays
+            # AdServerAdapter.get_supported_pricing_models, so validation and the
+            # get_products capability annotation both see the declared profile.
+            self.supported_pricing_models = frozenset(supported_pricing_models)
 
         # Initialize HITL configuration from principal's platform_mappings
         self._initialize_hitl_config()
@@ -182,10 +215,6 @@ class MockAdServer(AdServerAdapter):
     def set_simulation_time(self, simulation_time: datetime):
         """Set the current simulation time."""
         self._current_simulation_time = simulation_time
-
-    def get_supported_pricing_models(self) -> set[str]:
-        """Mock adapter supports all pricing models (AdCP PR #88)."""
-        return {"cpm", "vcpm", "cpcv", "cpp", "cpc", "cpv", "flat_rate"}
 
     def get_targeting_capabilities(self) -> TargetingCapabilities:
         """Mock adapter supports all targeting for testing flexibility."""

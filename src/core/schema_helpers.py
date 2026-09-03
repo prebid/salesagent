@@ -37,7 +37,11 @@ def _coerce_wire_object[ModelT: BaseModel](
     value: Any,
     model_cls: type[ModelT],
     context: str,
+    *,
+    strict: bool = False,
+    field: str | None = None,
     field_prefix: str | None = None,
+    suggestion: str | None = None,
 ) -> ModelT | None:
     """Shared dict → typed-model coercion with the boundary BUILT IN.
 
@@ -47,13 +51,29 @@ def _coerce_wire_object[ModelT: BaseModel](
     from EVERY call site — callers cannot forget the boundary
     (#1417; mirrors ``coerce_creative_filters``).
 
-    Returns ``None`` for non-dict unexpected types, preserving the helpers'
-    long-standing fallback behavior.
+    ``strict`` decides what an unexpected NON-dict type means:
+
+    * ``False`` (default) — return ``None``, preserving the helpers'
+      long-standing degrade-to-missing fallback. Required for ``context``,
+      whose schema calls it opaque correlation data that is "never parsed by
+      AdCP agents"; hard-failing a non-dict ``context`` would contradict that.
+    * ``True`` — route the value through ``model_validate`` anyway so Pydantic
+      rejects it and the boundary raises ``AdCPValidationError``. Used where a
+      silent ``None`` would be a fail-OPEN: a dropped ``account`` leaves
+      ``identity.sandbox`` ``False`` and dispatches to the LIVE adapter.
+
+    ``field``/``suggestion`` pin the buyer-visible request field and hint. Without
+    them both are derived from the pydantic location, which for these coercions is
+    the *model* name (``AccountReference1``) — a name that appears in no buyer
+    request. Passing them makes the two ways of malforming one value (non-dict and
+    malformed dict) report an identical ``field`` and ``suggestion``, and share the
+    ``Invalid <context>:`` message prefix; the message text after that prefix still
+    carries the differing pydantic detail.
     """
     if value is None or isinstance(value, model_cls):
         return value
-    if isinstance(value, dict):
-        with adcp_validation_boundary(context=context, field_prefix=field_prefix):
+    if isinstance(value, dict) or strict:
+        with adcp_validation_boundary(context=context, field=field, field_prefix=field_prefix, suggestion=suggestion):
             # model_validate handles plain models and RootModels alike
             # (AccountReference is a RootModel — field-unpacking would break it).
             return model_cls.model_validate(value)
@@ -232,8 +252,73 @@ def to_brand_reference(brand: dict[str, Any] | BrandReference | str | None) -> B
 
 
 def to_account_reference(account: dict[str, Any] | AccountReference | None) -> AccountReference | None:
-    """Convert dict to AccountReference for adcp compatibility."""
-    return _coerce_wire_object(account, AccountReference, "account value")
+    """Convert dict to AccountReference for adcp compatibility.
+
+    Strict: an unexpected non-dict ``account`` raises ``AdCPValidationError``
+    instead of degrading to ``None``. The A2A skills read ``account`` straight
+    off raw ``parameters`` with no model in front of them, so a coerced-away
+    account would skip identity enrichment, leave ``identity.sandbox`` ``False``,
+    and route a sandbox request to the LIVE adapter — a quiet failure on exactly
+    the axis account isolation defends.
+
+    Both rejection paths are tagged ``field="account"`` with a matching
+    ``suggestion`` (like ``to_brand_reference``'s ``field="brand"``) so wire
+    envelopes name the request field rather than the pydantic union-member model
+    name. On the malformed-dict path that is a FIX, not merely a scope note: the
+    previous behavior derived both channels from the pydantic location and told the
+    buyer to correct ``AccountReference1.account_id`` — a field no buyer request
+    contains.
+
+    That fix covers those two DIRECTIVE channels only. The generated names still
+    reach ``message`` (built by ``format_validation_error``) and
+    ``details.validation_errors[].loc`` (built by ``build_validation_error_details``)
+    — two different builders, both assembled inside ``adcp_validation_boundary``. So
+    the reach is every caller of that boundary plus ``format_validation_error``'s
+    three direct callers, NOT every boundary in the codebase:
+    ``normalize_to_adcp_error``, the three-transport normalizer, does not call it.
+
+    Provenance differs by path and is not one story. On the malformed-DICT path the
+    unscrubbed ``message``/``details`` are pre-existing, tracked at #1996. The
+    non-dict path is a NEW emission site introduced here: before this narrowing it
+    returned ``None`` with no error at all, so there was nothing to leak from.
+    """
+    # Error-code note for anyone tempted to "fix" this: the strict non-dict path
+    # deliberately emits the SAME code as the pre-existing malformed-dict path
+    # (both go through ``adcp_validation_boundary`` → VALIDATION_ERROR).
+    #
+    # What that choice rests on, and only this: nothing upstream grades it. No 3.1.1
+    # conformance-storyboard step sends a malformed account, and the pinned
+    # ``error-code.json`` lists BOTH candidate codes with recovery=correctable — so
+    # either one is enum-conformant and tells the buyer the same thing about what to
+    # do next. That is a reason the choice is not urgent; it is not a reason it is
+    # right.
+    #
+    # It is explicitly NOT justified by consistency, and this note must not be read
+    # as claiming any. ``src/app.py``'s RequestValidationError handler states the
+    # repo's own storyboard-grounded rule — a structurally malformed field is
+    # INVALID_REQUEST, a bad VALUE on a well-formed field is VALIDATION_ERROR — and a
+    # non-dict ``account`` is structural under that rule. A REST body that fails
+    # FastAPI's own parse already takes that handler and emits INVALID_REQUEST, so the
+    # two codes for "bad account" ALREADY coexist across entry points; routing both of
+    # THIS helper's paths through one boundary keeps them consistent with each other,
+    # not with the rest of the surface. The generated corpus is split the same way
+    # (BR-UC-002 grades the mutually-exclusive account shape VALIDATION_ERROR;
+    # BR-UC-004 grades the identical shape INVALID_REQUEST).
+    #
+    # So this is deferred, not settled, and it is deferred because the fix is a
+    # taxonomy decision rather than a code swap here: the value-vs-structural rule for
+    # schema failures is #1984, and the account-boundary rows a rule would retire are
+    # C1 (#1316), C2 (#1317) and C4 (#1319) in docs/test-debt-bdd-strict-markers.md.
+    # Changing this emission alone, ahead of that rule, moves one site of a split
+    # without closing it.
+    return _coerce_wire_object(
+        account,
+        AccountReference,
+        "account value",
+        strict=True,
+        field="account",
+        suggestion="Correct the 'account' field to match the AdCP specification and resend.",
+    )
 
 
 def to_property_list_reference(
@@ -279,6 +364,7 @@ def create_get_products_request(
     filters: dict[str, Any] | ProductFilters | None = None,
     property_list: dict[str, Any] | PropertyListReference | None = None,
     context: dict[str, Any] | ContextObject | None = None,
+    account: dict[str, Any] | AccountReference | None = None,
 ) -> GetProductsRequest:
     """Create GetProductsRequest aligned with adcp v3.6.0 spec.
 
@@ -289,9 +375,18 @@ def create_get_products_request(
         filters: Structured filters for product discovery (dict or ProductFilters)
         property_list: Property list reference for filtering by buyer's property list
         context: Application-level context (dict or ContextObject)
+        account: Account reference for multi-account rate-card lookup and sandbox scoping
 
     Returns:
         GetProductsRequest
+
+    Note:
+        ``account`` on the returned ``req`` is schema conformance only (adcp 3.1.1
+        declares ``account`` on ``GetProductsRequest``) — it has no production reader.
+        Account-based identity enrichment happens via the raw ``account`` argument
+        through ``enrich_identity_with_account``, independently of where this call sits
+        relative to that enrichment step at each caller (the relative ordering differs
+        per caller, so don't assume "above" or "below").
 
     Examples:
         >>> req = create_get_products_request(
@@ -313,6 +408,7 @@ def create_get_products_request(
         filters=filters_obj,
         property_list=to_property_list_reference(property_list),
         context=to_context_object(context),
+        account=to_account_reference(account),
     )
 
 

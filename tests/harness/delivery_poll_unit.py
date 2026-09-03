@@ -46,7 +46,10 @@ class DeliveryPollEnv(DeliveryPollMixin, BaseTestEnv):
     EXTERNAL_PATCHES = {
         "uow": f"{MODULE}.MediaBuyUoW",
         "principal": "src.core.auth.get_principal_object",
-        "adapter": f"{MODULE}.get_adapter",
+        # media_buy_delivery calls adapter_for_mode, which resolves get_adapter through
+        # adapter_helpers' own module namespace — patch at that source, not MODULE
+        # (which no longer imports get_adapter directly).
+        "adapter": "src.core.helpers.adapter_helpers.get_adapter",
         "pricing": f"{MODULE}._get_pricing_options",
         "circuit_open": f"{MODULE}._is_circuit_breaker_open",
     }

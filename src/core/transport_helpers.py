@@ -143,6 +143,19 @@ def enrich_identity_with_account(
 
     with AccountUoW(identity.tenant_id) as uow:
         assert uow.accounts is not None
-        account_id = resolve_account(account_ref, identity, uow.accounts)
+        resolved = resolve_account(account_ref, identity, uow.accounts)
 
-    return identity.model_copy(update={"account_id": account_id})
+    # The SOLE writer of ResolvedIdentity.sandbox in src/ — but not a funnel every
+    # request passes through, and the difference matters. This function is invoked from
+    # ten per-tool sites (create_media_buy x2, get_media_buy_delivery x2, get_products
+    # x2, sync_creatives x2, and the get_products + get_media_buy_delivery REST routes),
+    # so a NEW tool that accepts an account reference and forgets to call it gets
+    # sandbox=False for a real sandbox account, silently and with every guard still
+    # green. get_adcp_capabilities is the standing example: it declares no account
+    # field at all (GetAdcpCapabilitiesRequest has none in the pinned SDK), so it has
+    # no enrichment call to forget.
+    #
+    # Downstream has no other way to learn the mode: adapters are selected per-tenant,
+    # so the Account row never reaches adapter selection otherwise.
+    # AdCP 3.1.1 sandbox.mdx: sandbox mode is determined SOLELY by the account reference.
+    return identity.model_copy(update={"account_id": resolved.account_id, "sandbox": resolved.sandbox})

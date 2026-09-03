@@ -54,4 +54,9 @@ class MediaBuyAccountEnv(IntegrationEnv):
         identity = kwargs.get("identity", self.identity)
 
         with AccountUoW(identity.tenant_id) as uow:
-            return resolve_account(account_ref, identity, uow.accounts)
+            resolved = resolve_account(account_ref, identity, uow.accounts)
+
+        # Keep returning the id — this env's contract — while exposing the mode so
+        # scenarios can grade sandbox resolution without a second lookup.
+        self.last_resolved_sandbox = resolved.sandbox
+        return resolved.account_id

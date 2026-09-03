@@ -13,6 +13,7 @@ from src.core.auth import require_identity, require_principal_id, require_tenant
 from src.core.database.repositories.uow import CreativeUoW
 from src.core.exceptions import AdCPError
 from src.core.helpers import log_tool_activity
+from src.core.helpers.account_helpers import sandbox_wire_marker
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import SyncCreativeResult, SyncCreativesResponse
 from src.core.validation_helpers import format_validation_error, run_async_in_sync_context
@@ -497,4 +498,9 @@ def _sync_creatives_impl(
         creatives=results,
         dry_run=dry_run,
         context=context,
+        # AdCP 3.1.1 sandbox.mdx SHOULD: identity.sandbox is populated here — unlike
+        # media_buy_create's request-scoped identity.sandbox, this path enriches via
+        # enrich_identity_with_account in both sync_wrappers entry points before
+        # _sync_creatives_impl runs.
+        sandbox=sandbox_wire_marker(identity.sandbox),
     )

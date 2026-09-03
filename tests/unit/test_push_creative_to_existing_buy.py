@@ -8,6 +8,7 @@ time due to pending_review status (prebid#1038).
 from unittest.mock import ANY, MagicMock, patch
 
 from src.core.schemas import AssetStatus
+from tests.helpers.sandbox_seam import bind_real_sandbox_seam
 
 # Patch targets
 _MODULE = "src.core.tools.media_buy_create"
@@ -24,6 +25,7 @@ def _make_uow(*, tenant=None, creative=None, assignments=None, package=None):
     uow.creatives.admin_get_by_id.return_value = creative
     uow.assignments.get_by_creative.return_value = assignments if assignments is not None else []
     uow.media_buys.get_package.return_value = package
+    bind_real_sandbox_seam(uow)
     uow.__enter__ = MagicMock(return_value=uow)
     uow.__exit__ = MagicMock(return_value=False)
     return uow
@@ -492,3 +494,58 @@ class TestPushCreativeToExistingBuy:
         _, assets_arg, *_ = call_args.args
         package_ids = {pa["package_id"] for pa in assets_arg[0]["package_assignments"]}
         assert package_ids == {"pkg_1", "pkg_2"}
+
+
+class TestSandboxAdapterSelection:
+    """Deferred creative push must derive sandbox mode from the buy's account.
+
+    This path runs after the request identity is gone, so nothing carries the mode for
+    it — the only correct source is the account owning the buy. Without these, a
+    regression passing sandbox=False would push a sandbox creative to a real ad server
+    with every existing test still green.
+    """
+
+    def _adapter_modes(self, *, account_sandbox: bool) -> MagicMock:
+        creative = _make_creative()
+        uow = _make_uow(
+            tenant=_make_tenant(),
+            creative=creative,
+            assignments=[_make_assignment()],
+            package=_make_package(),
+        )
+        # The buy and the account the deferred path resolves the mode from.
+        buy = MagicMock()
+        buy.account_id = "acc_1"
+        uow.media_buys.get_by_id.return_value = buy
+        account = MagicMock()
+        account.sandbox = account_sandbox
+        uow.accounts.get_by_id.return_value = account
+
+        mock_get_adapter = MagicMock(return_value=_make_adapter())
+
+        with (
+            patch(_UOW_PATCH, return_value=uow),
+            patch("src.core.config_loader.get_tenant_by_id", return_value=None),
+            patch("src.core.config_loader.set_current_tenant"),
+            patch(f"{_MODULE}.get_principal_object", return_value=MagicMock()),
+            patch(f"{_MODULE}.get_adapter", mock_get_adapter),
+            patch(
+                f"{_MODULE}.extract_media_url_and_dimensions", return_value=("https://ad.example.com/ad.jpg", 300, 250)
+            ),
+            patch(f"{_MODULE}.extract_click_url", return_value=None),
+            patch(f"{_MODULE}.extract_impression_tracker_url", return_value=None),
+        ):
+            _call()
+
+        return mock_get_adapter
+
+    def test_sandbox_buy_selects_sandbox_adapter(self):
+        from tests.helpers.sandbox_assertions import assert_all_sandbox
+
+        assert_all_sandbox(self._adapter_modes(account_sandbox=True), context="deferred creative push")
+
+    def test_live_buy_selects_live_adapter(self):
+        """Negative control — 'always sandbox' would silently stop real creative pushes."""
+        from tests.helpers.sandbox_assertions import assert_all_live
+
+        assert_all_live(self._adapter_modes(account_sandbox=False), context="deferred creative push")

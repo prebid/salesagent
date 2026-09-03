@@ -1567,6 +1567,8 @@ class TestCreateMediaBuyAdapterInteraction:
                 end_time=datetime.now(UTC) + timedelta(days=7),
                 package_pricing_info={},
                 principal=mock_principal,
+                # Live account: this suite grades the real-adapter dispatch path.
+                sandbox=False,
             )
 
         assert isinstance(result, CreateMediaBuyError)
@@ -1598,6 +1600,8 @@ class TestCreateMediaBuyAdapterInteraction:
                     end_time=datetime.now(UTC) + timedelta(days=7),
                     package_pricing_info={},
                     principal=mock_principal,
+                    # Live account: this suite grades the real-adapter dispatch path.
+                    sandbox=False,
                 )
 
     @pytest.mark.asyncio
@@ -3394,7 +3398,7 @@ class TestDeliveryImplSingleBuy:
         _PATCH = "src.core.tools.media_buy_delivery"
         with (
             patch("src.core.auth.get_principal_object") as mock_principal,
-            patch(f"{_PATCH}.get_adapter", return_value=adapter_mock),
+            patch("src.core.helpers.adapter_helpers.get_adapter", return_value=adapter_mock),
             patch(f"{_PATCH}._get_target_media_buys", return_value=[("mb_1", buy)]),
             patch(f"{_PATCH}._get_pricing_options", return_value={}),
             patch(f"{_PATCH}.MediaBuyUoW") as mock_uow_cls,
@@ -3446,7 +3450,7 @@ class TestDeliveryImplSingleBuy:
         _PATCH = "src.core.tools.media_buy_delivery"
         with (
             patch("src.core.auth.get_principal_object") as mock_principal,
-            patch(f"{_PATCH}.get_adapter", return_value=adapter_mock),
+            patch("src.core.helpers.adapter_helpers.get_adapter", return_value=adapter_mock),
             patch(f"{_PATCH}._get_target_media_buys", return_value=[("mb_1", buy)]),
             patch(f"{_PATCH}._get_pricing_options", return_value={}),
             patch(f"{_PATCH}.MediaBuyUoW") as mock_uow_cls,
@@ -3505,7 +3509,7 @@ class TestDeliveryImplSingleBuy:
         _PATCH = "src.core.tools.media_buy_delivery"
         with (
             patch("src.core.auth.get_principal_object") as mock_principal,
-            patch(f"{_PATCH}.get_adapter", return_value=adapter_mock),
+            patch("src.core.helpers.adapter_helpers.get_adapter", return_value=adapter_mock),
             patch(
                 f"{_PATCH}._get_target_media_buys",
                 return_value=[("mb_1", buy1), ("mb_2", buy2)],
@@ -3569,7 +3573,7 @@ class TestDeliveryImplSingleBuy:
         _PATCH = "src.core.tools.media_buy_delivery"
         with (
             patch("src.core.auth.get_principal_object") as mock_principal,
-            patch(f"{_PATCH}.get_adapter", return_value=adapter_mock),
+            patch("src.core.helpers.adapter_helpers.get_adapter", return_value=adapter_mock),
             patch(
                 f"{_PATCH}._get_target_media_buys",
                 return_value=[("mb_1", buy1), ("mb_2", buy2)],
@@ -3627,7 +3631,7 @@ class TestDeliveryImplStatusFilter:
         _PATCH = "src.core.tools.media_buy_delivery"
         with (
             patch("src.core.auth.get_principal_object") as mock_principal,
-            patch(f"{_PATCH}.get_adapter", return_value=adapter_mock),
+            patch("src.core.helpers.adapter_helpers.get_adapter", return_value=adapter_mock),
             patch(
                 f"{_PATCH}._get_target_media_buys",
                 return_value=[("mb_active", active_buy)],
@@ -3697,7 +3701,7 @@ class TestDeliveryImplStatusFilter:
         _PATCH = "src.core.tools.media_buy_delivery"
         with (
             patch("src.core.auth.get_principal_object") as mock_principal,
-            patch(f"{_PATCH}.get_adapter", return_value=adapter_mock),
+            patch("src.core.helpers.adapter_helpers.get_adapter", return_value=adapter_mock),
             patch(
                 f"{_PATCH}._get_target_media_buys",
                 return_value=[("mb_active", active_buy), ("mb_done", completed_buy)],
@@ -3739,7 +3743,7 @@ class TestDeliveryImplStatusFilter:
         _PATCH = "src.core.tools.media_buy_delivery"
         with (
             patch("src.core.auth.get_principal_object") as mock_principal,
-            patch(f"{_PATCH}.get_adapter", return_value=adapter_mock),
+            patch("src.core.helpers.adapter_helpers.get_adapter", return_value=adapter_mock),
             patch(f"{_PATCH}._get_target_media_buys", return_value=[]) as mock_get_buys,
             patch(f"{_PATCH}._get_pricing_options", return_value={}),
             patch(f"{_PATCH}.MediaBuyUoW") as mock_uow_cls,
@@ -3780,7 +3784,7 @@ class TestDeliveryImplStatusFilter:
         _PATCH = "src.core.tools.media_buy_delivery"
         with (
             patch("src.core.auth.get_principal_object") as mock_principal,
-            patch(f"{_PATCH}.get_adapter", return_value=adapter_mock),
+            patch("src.core.helpers.adapter_helpers.get_adapter", return_value=adapter_mock),
             # No buys match the status filter — returns empty, not error
             patch(f"{_PATCH}._get_target_media_buys", return_value=[]),
             patch(f"{_PATCH}._get_pricing_options", return_value={}),
@@ -3822,7 +3826,7 @@ class TestDeliveryImplDateRange:
         _PATCH = "src.core.tools.media_buy_delivery"
         with (
             patch("src.core.auth.get_principal_object") as mock_principal,
-            patch(f"{_PATCH}.get_adapter", return_value=adapter_mock),
+            patch("src.core.helpers.adapter_helpers.get_adapter", return_value=adapter_mock),
             patch(f"{_PATCH}._get_target_media_buys", return_value=[]),
             patch(f"{_PATCH}._get_pricing_options", return_value={}),
             patch(f"{_PATCH}.MediaBuyUoW") as mock_uow_cls,
@@ -3865,7 +3869,7 @@ class TestDeliveryImplDateRange:
         _PATCH = "src.core.tools.media_buy_delivery"
         with (
             patch("src.core.auth.get_principal_object") as mock_principal,
-            patch(f"{_PATCH}.get_adapter", return_value=adapter_mock),
+            patch("src.core.helpers.adapter_helpers.get_adapter", return_value=adapter_mock),
             patch(f"{_PATCH}._get_target_media_buys", return_value=[]),
             patch(f"{_PATCH}._get_pricing_options", return_value={}),
             patch(f"{_PATCH}.MediaBuyUoW") as mock_uow_cls,
@@ -3900,7 +3904,7 @@ class TestDeliveryImplDateRange:
 
         with (
             patch("src.core.auth.get_principal_object") as mock_principal,
-            patch("src.core.tools.media_buy_delivery.get_adapter") as mock_adapter,
+            patch("src.core.helpers.adapter_helpers.get_adapter") as mock_adapter,
         ):
             mock_principal.return_value = MagicMock(principal_id="test_principal")
             mock_adapter.return_value = MagicMock()
@@ -3968,7 +3972,7 @@ class TestDeliveryImplErrors:
         _PATCH = "src.core.tools.media_buy_delivery"
         with (
             patch("src.core.auth.get_principal_object") as mock_principal,
-            patch(f"{_PATCH}.get_adapter", return_value=adapter_mock),
+            patch("src.core.helpers.adapter_helpers.get_adapter", return_value=adapter_mock),
             patch(f"{_PATCH}._get_target_media_buys", return_value=[("mb_1", buy)]),
             patch(f"{_PATCH}._get_pricing_options", return_value={}),
             patch(f"{_PATCH}.MediaBuyUoW") as mock_uow_cls,
@@ -4005,7 +4009,7 @@ class TestDeliveryImplErrors:
         _PATCH = "src.core.tools.media_buy_delivery"
         with (
             patch("src.core.auth.get_principal_object") as mock_principal,
-            patch(f"{_PATCH}.get_adapter", return_value=adapter_mock),
+            patch("src.core.helpers.adapter_helpers.get_adapter", return_value=adapter_mock),
             patch(f"{_PATCH}._get_target_media_buys", return_value=[]),
             patch(f"{_PATCH}._get_pricing_options", return_value={}),
             patch(f"{_PATCH}.MediaBuyUoW") as mock_uow_cls,
@@ -4090,7 +4094,7 @@ class TestDeliveryImplPricingLookup:
         _PATCH = "src.core.tools.media_buy_delivery"
         with (
             patch("src.core.auth.get_principal_object") as mock_principal,
-            patch(f"{_PATCH}.get_adapter", return_value=adapter_mock),
+            patch("src.core.helpers.adapter_helpers.get_adapter", return_value=adapter_mock),
             patch(f"{_PATCH}._get_target_media_buys", return_value=[("mb_1", buy)]),
             patch(f"{_PATCH}._get_pricing_options", return_value={"42": mock_po}),
             patch(f"{_PATCH}.MediaBuyUoW") as mock_uow_cls,
@@ -4599,7 +4603,7 @@ class TestBRRule043ContextEcho:
         _PATCH = "src.core.tools.media_buy_delivery"
         with (
             patch("src.core.auth.get_principal_object") as mock_principal,
-            patch(f"{_PATCH}.get_adapter", return_value=adapter_mock),
+            patch("src.core.helpers.adapter_helpers.get_adapter", return_value=adapter_mock),
             patch(f"{_PATCH}._get_target_media_buys", return_value=[]),
             patch(f"{_PATCH}._get_pricing_options", return_value={}),
             patch(f"{_PATCH}.MediaBuyUoW") as mock_uow_cls,

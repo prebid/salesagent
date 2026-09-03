@@ -245,7 +245,7 @@ class TestAdapterFactory:
 
                 # Test instantiation via factory function
                 try:
-                    adapter = get_adapter(principal, dry_run=True)
+                    adapter = get_adapter(principal, dry_run=True, sandbox=False)
                     assert adapter is not None, f"get_adapter() returned None for {adapter_type}"
 
                     # Verify correct adapter type
@@ -302,7 +302,7 @@ class TestAdapterFactory:
             )
 
             # This should work without TypeError
-            adapter = get_adapter(principal, dry_run=True)
+            adapter = get_adapter(principal, dry_run=True, sandbox=False)
 
             # Verify it's actually a GAM adapter, not mock fallback
             from src.adapters.google_ad_manager import GoogleAdManager

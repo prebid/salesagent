@@ -40,6 +40,9 @@ from src.core.tools.media_buy_delivery import _get_media_buy_delivery_impl
 # ---------------------------------------------------------------------------
 
 _PATCH_PREFIX = "src.core.tools.media_buy_delivery"
+# media_buy_delivery calls adapter_for_mode, which resolves get_adapter through
+# adapter_helpers' own module namespace — patch at that source.
+_ADAPTER_HELPERS = "src.core.helpers.adapter_helpers"
 
 
 def _make_identity(
@@ -282,7 +285,7 @@ class TestDeliverySingleBuyIntegration:
         )
         identity = _make_identity()
 
-        with patch(f"{_PATCH_PREFIX}.get_adapter", return_value=mock_adapter):
+        with patch(f"{_ADAPTER_HELPERS}.get_adapter", return_value=mock_adapter):
             response = _get_media_buy_delivery_impl(req, identity)
 
         # reporting_period matches provided dates
@@ -350,7 +353,7 @@ class TestDeliverySingleBuyIntegration:
         )
         identity = _make_identity()
 
-        with patch(f"{_PATCH_PREFIX}.get_adapter", return_value=mock_adapter):
+        with patch(f"{_ADAPTER_HELPERS}.get_adapter", return_value=mock_adapter):
             response = _get_media_buy_delivery_impl(req, identity)
 
         assert len(response.media_buy_deliveries) == 1
@@ -425,7 +428,7 @@ class TestDeliveryStatusFilterIntegration:
 
         identity = _make_identity()
 
-        with patch(f"{_PATCH_PREFIX}.get_adapter", return_value=mock_adapter):
+        with patch(f"{_ADAPTER_HELPERS}.get_adapter", return_value=mock_adapter):
             response = _get_media_buy_delivery_impl(req, identity)
 
         returned_ids = {d.media_buy_id for d in response.media_buy_deliveries}
@@ -472,7 +475,7 @@ class TestDeliveryStatusFilterIntegration:
         )
         identity = _make_identity()
 
-        with patch(f"{_PATCH_PREFIX}.get_adapter", return_value=mock_adapter):
+        with patch(f"{_ADAPTER_HELPERS}.get_adapter", return_value=mock_adapter):
             response = _get_media_buy_delivery_impl(req, identity)
 
         assert len(response.media_buy_deliveries) == 1
@@ -504,7 +507,7 @@ class TestDeliveryStatusFilterIntegration:
         )
         identity = _make_identity()
 
-        with patch(f"{_PATCH_PREFIX}.get_adapter", return_value=MagicMock()):
+        with patch(f"{_ADAPTER_HELPERS}.get_adapter", return_value=MagicMock()):
             response = _get_media_buy_delivery_impl(req, identity)
 
         assert response.media_buy_deliveries == []
@@ -560,7 +563,7 @@ class TestDeliveryPricingOptionIntegration:
         )
         identity = _make_identity()
 
-        with patch(f"{_PATCH_PREFIX}.get_adapter", return_value=mock_adapter):
+        with patch(f"{_ADAPTER_HELPERS}.get_adapter", return_value=mock_adapter):
             response = _get_media_buy_delivery_impl(req, identity)
 
         # Pricing option resolved successfully
@@ -622,7 +625,7 @@ class TestDeliveryOwnershipIntegration:
         )
         identity = _make_identity(principal_id="test_principal")
 
-        with patch(f"{_PATCH_PREFIX}.get_adapter", return_value=MagicMock()):
+        with patch(f"{_ADAPTER_HELPERS}.get_adapter", return_value=MagicMock()):
             response = _get_media_buy_delivery_impl(req, identity)
 
         # Not found (ownership isolation)
@@ -669,7 +672,7 @@ class TestDeliveryOwnershipIntegration:
         )
         identity = _make_identity(principal_id="test_principal")
 
-        with patch(f"{_PATCH_PREFIX}.get_adapter", return_value=MagicMock()):
+        with patch(f"{_ADAPTER_HELPERS}.get_adapter", return_value=MagicMock()):
             response = _get_media_buy_delivery_impl(req, identity)
 
         assert response.errors is not None
@@ -729,7 +732,7 @@ class TestDeliveryOwnershipIntegration:
         )
         identity = _make_identity(principal_id="test_principal")
 
-        with patch(f"{_PATCH_PREFIX}.get_adapter", return_value=mock_adapter):
+        with patch(f"{_ADAPTER_HELPERS}.get_adapter", return_value=mock_adapter):
             response = _get_media_buy_delivery_impl(req, identity)
 
         # Owned buy returned
@@ -784,7 +787,7 @@ class TestDeliverySerializationIntegration:
         )
         identity = _make_identity()
 
-        with patch(f"{_PATCH_PREFIX}.get_adapter", return_value=mock_adapter):
+        with patch(f"{_ADAPTER_HELPERS}.get_adapter", return_value=mock_adapter):
             response = _get_media_buy_delivery_impl(req, identity)
 
         # Serialize via model_dump

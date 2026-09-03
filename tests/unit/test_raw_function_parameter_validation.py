@@ -122,7 +122,8 @@ class TestRawFunctionParameterValidation:
 
         # adcp 3.6.0: brand_manifest removed, only brand (BrandReference) remains.
         # Note: promoted_offering removed per adcp v1.2.1 migration
-        expected_params = ["brief", "brand", "filters", "property_list", "context"]
+        # account added for multi-account rate-card lookup / sandbox scoping (#1864).
+        expected_params = ["brief", "brand", "filters", "property_list", "context", "account"]
 
         assert params == expected_params, (
             f"create_get_products_request signature changed!\n"
@@ -191,7 +192,8 @@ class TestHelperFunctionDocumentation:
         # Verify create_get_products_request (the one that caused the bug)
         assert "create_get_products_request" in signatures
         # adcp 3.6.0: brand_manifest removed, only brand (BrandReference) remains.
-        expected = ["brief", "brand", "filters", "property_list", "context"]
+        # account added for multi-account rate-card lookup / sandbox scoping (#1864).
+        expected = ["brief", "brand", "filters", "property_list", "context", "account"]
         actual = signatures["create_get_products_request"]
         assert actual == expected, (
             f"create_get_products_request signature changed!\n"

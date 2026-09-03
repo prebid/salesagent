@@ -470,6 +470,28 @@ def _update_media_buy_impl(
                         suggestion=(f"Valid actions for status '{_current_status}': {sorted(_allowed) or '[]'}."),
                     )
 
+            # update_media_buy is addressed by media_buy_id and carries no account
+            # reference, so identity.sandbox is structurally False here. The mode must
+            # come from the buy being mutated, or a sandbox buy hits the live adapter.
+            # Passing the already-fetched row avoids a second lookup. Derived HERE,
+            # past both the terminal-state and the action-guard checks above (a
+            # rejected update should reject on INVALID_STATE, not pay an account
+            # lookup that could raise ACCOUNT_NOT_FOUND for a buy that was never
+            # going through the adapter anyway), and BEFORE any of the three
+            # session-commit boundaries below — ctx_manager.get_or_create_context,
+            # ctx_manager.create_workflow_step, and resolve_principal_or_raise each
+            # opens/commits its own session, which expires _current_mb, so reading
+            # _current_mb.account_id (inside sandbox_mode) after any of them raises
+            # DetachedInstanceError. This is the only window that is both past the
+            # state guards and ahead of every commit boundary — do not move this
+            # call past any of the three without moving this comment with it.
+            # An ACCOUNT_NOT_FOUND raised for a dangling account_id still fires
+            # here with `step` unset (None) — like the sibling pre-step guards
+            # above, it records no workflow-step audit entry and fires no
+            # buyer-facing status="failed" push, since
+            # audit_workflow_step_failure_ctx has nothing to mark failed yet.
+            sandbox = uow.sandbox_mode(_current_mb)
+
             # Extract testing context early (needed for dry_run check)
             testing_ctx = identity.testing_context if identity.testing_context else AdCPTestContext()
 
@@ -508,7 +530,13 @@ def _update_media_buy_impl(
 
             principal = resolve_principal_or_raise(principal_id, tenant_id=identity.tenant_id, context=req.context)
 
-            adapter = get_adapter(principal, dry_run=testing_ctx.dry_run, testing_context=testing_ctx, tenant=tenant)
+            adapter = get_adapter(
+                principal,
+                dry_run=testing_ctx.dry_run,
+                testing_context=testing_ctx,
+                tenant=tenant,
+                sandbox=sandbox,
+            )
             today = req.today or date.today()
 
             # AdCP 3.0.0 spec (core/product.json `property_targeting_allowed`): reject property_list targeting
