@@ -1,0 +1,142 @@
+diff --git a/node_modules/@a2a-js/sdk/dist/client/index.cjs b/node_modules/@a2a-js/sdk/dist/client/index.cjs
+index 728a388..98ffba1 100644
+--- a/node_modules/@a2a-js/sdk/dist/client/index.cjs
++++ b/node_modules/@a2a-js/sdk/dist/client/index.cjs
+@@ -443,6 +443,34 @@ var AuthenticatedExtendedCardNotConfiguredJSONRPCError = class extends Authentic
+ };
+
+ // src/client/client.ts
++// PATCHED for prebid/salesagent -- A2A 1.0 agent-card discovery (issue #1440).
++//
++// An A2A 1.0 AgentCard carries its service endpoint in `supportedInterfaces[]`
++// and has NO top-level `url` (A2A spec sec. 8.3.1). This 0.3-line client reads
++// only the top-level field, so it rejects EVERY spec-current card with
++// "does not contain a valid 'url'" before a single conformance check is graded.
++//
++// @a2a-js/sdk 1.x reads `supportedInterfaces` natively, and @adcp/sdk moved onto
++// that line in 14.0.0-beta.11 (2026-08-26) -- but 14.0.0 has not reached the
++// `latest` dist-tag, and @adcp/sdk 11.0.0, which this runner pins, still declares
++// a `^0.3.4` peer. This backports just the endpoint resolution.
++//
++// DELETE THIS PATCH when the runner moves to @adcp/sdk >= 14.
++function resolveServiceEndpointUrl(agentCard) {
++  if (agentCard.url) return agentCard.url;
++  const interfaces = agentCard.supportedInterfaces;
++  if (!Array.isArray(interfaces)) return void 0;
++  const usable = interfaces.filter(
++    (entry) => entry && typeof entry.url === "string" && entry.url.length > 0
++  );
++  // This client speaks JSON-RPC only. `protocolBinding` is an open string whose
++  // core values are JSONRPC / GRPC / HTTP+JSON, and a card MAY omit it (protobuf
++  // drops the empty default), so an absent binding counts as JSON-RPC.
++  const jsonRpc = usable.find(
++    (entry) => !entry.protocolBinding || entry.protocolBinding === "JSONRPC"
++  );
++  return (jsonRpc || usable[0])?.url;
++}
+ var A2AClient = class _A2AClient {
+   static emptyOptions = void 0;
+   agentCardPromise;
+@@ -467,12 +495,13 @@ var A2AClient = class _A2AClient {
+       );
+       this.agentCardPromise = this._fetchAndCacheAgentCard(agentCard, options?.agentCardPath);
+     } else {
+-      if (!agentCard.url) {
++      const serviceEndpointUrl = resolveServiceEndpointUrl(agentCard);
++      if (!serviceEndpointUrl) {
+         throw new Error(
+           "Provided Agent Card does not contain a valid 'url' for the service endpoint."
+         );
+       }
+-      this.serviceEndpointUrl = agentCard.url;
++      this.serviceEndpointUrl = serviceEndpointUrl;
+       this.agentCardPromise = Promise.resolve(agentCard);
+     }
+   }
+@@ -705,12 +734,13 @@ var A2AClient = class _A2AClient {
+         );
+       }
+       const agentCard = await response.json();
+-      if (!agentCard.url) {
++      const serviceEndpointUrl = resolveServiceEndpointUrl(agentCard);
++      if (!serviceEndpointUrl) {
+         throw new Error(
+           "Fetched Agent Card does not contain a valid 'url' for the service endpoint."
+         );
+       }
+-      this.serviceEndpointUrl = agentCard.url;
++      this.serviceEndpointUrl = serviceEndpointUrl;
+       return agentCard;
+     } catch (error) {
+       console.error("Error fetching or parsing Agent Card:", error);
+diff --git a/node_modules/@a2a-js/sdk/dist/client/index.js b/node_modules/@a2a-js/sdk/dist/client/index.js
+index abc4947..dbb4cc5 100644
+--- a/node_modules/@a2a-js/sdk/dist/client/index.js
++++ b/node_modules/@a2a-js/sdk/dist/client/index.js
+@@ -321,6 +321,34 @@ var AuthenticatedExtendedCardNotConfiguredJSONRPCError = class extends Authentic
+ };
+
+ // src/client/client.ts
++// PATCHED for prebid/salesagent -- A2A 1.0 agent-card discovery (issue #1440).
++//
++// An A2A 1.0 AgentCard carries its service endpoint in `supportedInterfaces[]`
++// and has NO top-level `url` (A2A spec sec. 8.3.1). This 0.3-line client reads
++// only the top-level field, so it rejects EVERY spec-current card with
++// "does not contain a valid 'url'" before a single conformance check is graded.
++//
++// @a2a-js/sdk 1.x reads `supportedInterfaces` natively, and @adcp/sdk moved onto
++// that line in 14.0.0-beta.11 (2026-08-26) -- but 14.0.0 has not reached the
++// `latest` dist-tag, and @adcp/sdk 11.0.0, which this runner pins, still declares
++// a `^0.3.4` peer. This backports just the endpoint resolution.
++//
++// DELETE THIS PATCH when the runner moves to @adcp/sdk >= 14.
++function resolveServiceEndpointUrl(agentCard) {
++  if (agentCard.url) return agentCard.url;
++  const interfaces = agentCard.supportedInterfaces;
++  if (!Array.isArray(interfaces)) return void 0;
++  const usable = interfaces.filter(
++    (entry) => entry && typeof entry.url === "string" && entry.url.length > 0
++  );
++  // This client speaks JSON-RPC only. `protocolBinding` is an open string whose
++  // core values are JSONRPC / GRPC / HTTP+JSON, and a card MAY omit it (protobuf
++  // drops the empty default), so an absent binding counts as JSON-RPC.
++  const jsonRpc = usable.find(
++    (entry) => !entry.protocolBinding || entry.protocolBinding === "JSONRPC"
++  );
++  return (jsonRpc || usable[0])?.url;
++}
+ var A2AClient = class _A2AClient {
+   static emptyOptions = void 0;
+   agentCardPromise;
+@@ -345,12 +373,13 @@ var A2AClient = class _A2AClient {
+       );
+       this.agentCardPromise = this._fetchAndCacheAgentCard(agentCard, options?.agentCardPath);
+     } else {
+-      if (!agentCard.url) {
++      const serviceEndpointUrl = resolveServiceEndpointUrl(agentCard);
++      if (!serviceEndpointUrl) {
+         throw new Error(
+           "Provided Agent Card does not contain a valid 'url' for the service endpoint."
+         );
+       }
+-      this.serviceEndpointUrl = agentCard.url;
++      this.serviceEndpointUrl = serviceEndpointUrl;
+       this.agentCardPromise = Promise.resolve(agentCard);
+     }
+   }
+@@ -583,12 +612,13 @@ var A2AClient = class _A2AClient {
+         );
+       }
+       const agentCard = await response.json();
+-      if (!agentCard.url) {
++      const serviceEndpointUrl = resolveServiceEndpointUrl(agentCard);
++      if (!serviceEndpointUrl) {
+         throw new Error(
+           "Fetched Agent Card does not contain a valid 'url' for the service endpoint."
+         );
+       }
+-      this.serviceEndpointUrl = agentCard.url;
++      this.serviceEndpointUrl = serviceEndpointUrl;
+       return agentCard;
+     } catch (error) {
+       console.error("Error fetching or parsing Agent Card:", error);

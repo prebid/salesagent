@@ -64,9 +64,12 @@ _DEFAULT_AGENT_URLS: dict[str, str] = {
     "a2a": "http://proxy:8000",
 }
 
-# Env vars the CI job (the storyboard-conformance job Implementation Plan step 6) must set. No defaults
-# for the compliance/schema paths — those come from a pinned GitHub release
-# asset (see .github/actions/_adcp-bundle), never guessed at.
+# Env vars the storyboard-conformance job MAY set. The compliance/schema paths
+# have no default LITERAL, but they are DERIVED when unset: _bundle_path() resolves
+# them through storyboard_spec.adcp_home(), whose second candidate is the pinned
+# GitHub release bundle that .github/actions/_adcp-bundle extracts in-tree. The CI
+# job therefore sets neither of them, and set-ness is NOT what decides whether a
+# session can run — resolvability is (see _bundle_resolution_failure).
 _AUTH_TOKEN_ENV = "STORYBOARD_AUTH_TOKEN"
 _COMPLIANCE_DIR_ENV = "STORYBOARD_COMPLIANCE_DIR"
 _SCHEMA_ROOT_ENV = "STORYBOARD_SCHEMA_ROOT"
@@ -116,8 +119,31 @@ def _webhook_port(protocol: str) -> str:
     return str(base + _PROTOCOLS.index(protocol))
 
 
-def _missing_env() -> list[str]:
-    return [name for name in (_COMPLIANCE_DIR_ENV, _SCHEMA_ROOT_ENV) if not os.environ.get(name)]
+def _bundle_resolution_failure() -> str | None:
+    """Why the pinned bundle cannot be used, or ``None`` when it resolves.
+
+    Set-ness of the two env vars is NOT the question: they are overrides, and
+    _bundle_path() derives the paths when they are absent. Asking whether they were
+    exported made this suite collect ONE skipped item and exit 0 in every automated
+    run since it landed -- the CI job sets neither, because the bundle action puts
+    the tree exactly where adcp_home() looks. Ask the resolver that already feeds
+    the runner's own CLI args instead, so the gate cannot disagree with what the
+    runner is handed.
+
+    Resolution can itself fail: adcp_home() -> pinned_version() reads
+    docs/adcp-spec-version.md and raises StoryboardAuditError on doc/SDK pin drift
+    (or OSError when the file is missing). A contributor in a drifted or incomplete
+    checkout must get the same SKIP as one who simply has no bundle -- never a
+    collection error.
+    """
+    try:
+        resolved = [_bundle_path(name) for name in (_COMPLIANCE_DIR_ENV, _SCHEMA_ROOT_ENV)]
+    except (storyboard_spec.StoryboardAuditError, OSError) as exc:
+        return f"pinned bundle could not be resolved: {type(exc).__name__}: {exc}"
+    absent = [path for path in resolved if not Path(path).is_dir()]
+    if absent:
+        return "pinned bundle not found at: " + ", ".join(absent)
+    return None
 
 
 def _bundle_path(env_name: str) -> str:
@@ -344,11 +370,11 @@ def _stale_ledger_entries(collected_ids: list[str]) -> list[str]:
 def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
     if "storyboard_check" not in metafunc.fixturenames:
         return
-    missing = _missing_env()
-    if missing:
+    unusable = _bundle_resolution_failure()
+    if unusable:
         metafunc.parametrize(
             "storyboard_check",
-            [{"status": "skip", "reason": f"missing env: {', '.join(missing)}", "reason_kind": "config"}],
+            [{"status": "skip", "reason": unusable, "reason_kind": "config"}],
             ids=["environment-not-configured"],
         )
         return

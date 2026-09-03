@@ -16,9 +16,10 @@ check is renamed upstream.
 **Why the e2e_rest test cannot be ported verbatim.** That one re-collects the
 suite in a subprocess (``pytest tests/bdd --collect-only``) and joins the ledger
 against the collected nodeids. The storyboard suite's parametrization is not
-static: ``pytest_generate_tests`` SHELLS OUT TO A LIVE AGENT, and without
-``STORYBOARD_COMPLIANCE_DIR``/``STORYBOARD_SCHEMA_ROOT`` it short-circuits to a
-single ``environment-not-configured`` id. A verbatim port would therefore either
+static: ``pytest_generate_tests`` SHELLS OUT TO A LIVE AGENT, and when the pinned
+compliance/schema bundle cannot be RESOLVED it short-circuits to a single
+``environment-not-configured`` id. (Resolvability, not env-var set-ness: the two
+STORYBOARD_* vars are overrides, and the paths are derived when they are absent.) A verbatim port would therefore either
 declare every entry stale on every developer machine, or skip and grade
 nothing. The join must be computed **in-session**, from the ids
 ``pytest_generate_tests`` itself produced — which means it only BITES in the
@@ -58,49 +59,27 @@ precondition.
 
 from __future__ import annotations
 
-import json
-import os
-import re
 import subprocess
-import sys
 from pathlib import Path
-from typing import Any
 
 import pytest
 
 from scripts.audit import ledger
+from tests.helpers import storyboard_session as rig
 from tests.helpers.ledger import load_ledger_nodeids
 from tests.unit import test_storyboard_ledger_state as ledger_state
 
 pytestmark = [pytest.mark.integration]
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+REPO_ROOT = rig.REPO_ROOT
 LEDGER = REPO_ROOT / "tests" / "storyboard" / "known_failures.txt"
 
-# The one module under measurement (see this module's docstring). Named
-# explicitly rather than by directory so the graded outcome counts stay a
-# function of the ledger join alone, not of which sibling guards the ambient
-# environment happens to satisfy. ``tests/storyboard/conftest.py`` — the ledger
-# xfail router this module is grading — still loads, it is the directory's
-# conftest.
-CONFORMANCE_MODULE = "tests/storyboard/test_storyboard_conformance.py"
-
-# Injected via ``-p`` into the nested session. Replaces the one function that
-# needs a live agent + npm deps; every other production code path
-# (``_collect_checks``, ``pytest_generate_tests``, ``LedgerCheckId.format``,
-# ``conftest.pytest_collection_modifyitems``) runs for real.
-_STUB_PLUGIN = """
-import json
-import os
-from pathlib import Path
-
-
-def pytest_configure(config):
-    from tests.storyboard import test_storyboard_conformance as mod
-
-    summaries = json.loads(Path(os.environ["STUB_STORYBOARD_SUMMARIES"]).read_text(encoding="utf-8"))
-    mod._run_storyboard_runner = lambda protocol: summaries[protocol]
-"""
+# The nested-session rig (which module is collected, the runner stub, the
+# outcome parser) lives in ``tests/helpers/storyboard_session.py``: the
+# collection-gate grader
+# (``tests/integration/test_storyboard_collection_gate_real_session.py``) drives
+# the same sessions, and two copies of it would be two things to keep true.
+_SYNTHETIC_REASON = "synthetic failure injected by the ledger-fitness grader"
 
 
 def _ledger_entries() -> list[ledger.LedgerCheckId]:
@@ -132,66 +111,44 @@ def _ledger_entries() -> list[ledger.LedgerCheckId]:
     return entries
 
 
-def _summaries(entries: list[ledger.LedgerCheckId]) -> dict[str, dict[str, Any]]:
-    """One synthetic runner summary per protocol, failing exactly ``entries``."""
-    summaries: dict[str, dict[str, Any]] = {}
-    for protocol in ("mcp", "a2a"):
-        failures = [
-            {
-                "track": e.track,
-                "storyboard_id": e.storyboard_id,
-                "step_id": e.step_id,
-                "reason": "synthetic failure injected by the ledger-fitness grader",
-                "reason_kind": "synthetic",
-            }
-            for e in entries
-            if e.protocol == protocol
-        ]
-        summaries[protocol] = {
-            "agent_url": f"stub://{protocol}",
-            "overall_status": "fail",
-            # Non-zero graded total, so `_no_graded_checks` does not inject its
-            # own synthetic reachability check and change the id set.
-            "passed": 1,
-            "failed": len(failures),
-            "skipped": 0,
-            "failures": failures,
-            "skip_causes": [],
-        }
-    return summaries
-
-
 def _run_storyboard_session(
     tmp_path: Path, entries: list[ledger.LedgerCheckId] | None
 ) -> subprocess.CompletedProcess[str]:
-    """Run ``pytest`` on the conformance module for real; ``entries=None`` leaves the env unconfigured."""
-    env = dict(os.environ)
-    env["PYTHONPATH"] = os.pathsep.join([str(tmp_path), str(REPO_ROOT), env.get("PYTHONPATH", "")])
-    args = [sys.executable, "-m", "pytest", CONFORMANCE_MODULE, "-q", "-o", "addopts=", "-p", "no:randomly"]
+    """Run ``pytest`` on the conformance module for real; ``entries=None`` leaves it unconfigured.
 
-    if entries is not None:
-        (tmp_path / "_stub_storyboard_runner.py").write_text(_STUB_PLUGIN, encoding="utf-8")
-        summaries_path = tmp_path / "summaries.json"
-        summaries_path.write_text(json.dumps(_summaries(entries)), encoding="utf-8")
-        env["STUB_STORYBOARD_SUMMARIES"] = str(summaries_path)
-        # Only these two decide `_missing_env()`; the stub means their values are
-        # never dereferenced.
-        env["STORYBOARD_COMPLIANCE_DIR"] = str(tmp_path)
-        env["STORYBOARD_SCHEMA_ROOT"] = str(tmp_path)
-        args += ["-p", "_stub_storyboard_runner"]
-    else:
-        env.pop("STORYBOARD_COMPLIANCE_DIR", None)
-        env.pop("STORYBOARD_SCHEMA_ROOT", None)
+    Unconfigured means the pinned bundle does not RESOLVE, so the two overrides point
+    at a path that does not exist. Removing them instead would no longer work: the
+    conformance gate derives the paths when they are unset, and the derivation finds
+    the in-repo bundle that CI extracts -- the nested session would flip to configured
+    and shell out toward an agent that is not there.
+    """
+    if entries is None:
+        absent = tmp_path / "no-bundle-here"
+        return rig.run_conformance_session(
+            tmp_path,
+            env={
+                "STORYBOARD_COMPLIANCE_DIR": str(absent / "compliance"),
+                "STORYBOARD_SCHEMA_ROOT": str(absent / "schemas"),
+            },
+        )
 
-    return subprocess.run(args, cwd=REPO_ROOT, env=env, capture_output=True, text=True, timeout=600)
+    stub_name, stub_env = rig.stub_runner(tmp_path, rig.synthetic_summaries(entries, _SYNTHETIC_REASON))
+    return rig.run_conformance_session(
+        tmp_path,
+        env={
+            **stub_env,
+            # These two are the overrides that make the bundle resolve, so the
+            # session counts as configured; the stub means the paths themselves are
+            # never dereferenced. tmp_path exists, which is all the gate checks.
+            "STORYBOARD_COMPLIANCE_DIR": str(tmp_path),
+            "STORYBOARD_SCHEMA_ROOT": str(tmp_path),
+        },
+        plugins=(stub_name,),
+    )
 
 
 def _outcome_counts(proc: subprocess.CompletedProcess[str]) -> dict[str, int]:
-    """Parse pytest's ``-q`` summary line into ``{outcome: count}``."""
-    output = proc.stdout + proc.stderr
-    matches = re.findall(r"(\d+) (passed|failed|xfailed|xpassed|skipped|error|errors)", output)
-    assert matches, f"could not read a pytest summary line from:\n{output[-4000:]}"
-    return {outcome.rstrip("s") if outcome == "errors" else outcome: int(count) for count, outcome in matches}
+    return rig.outcome_counts(proc)
 
 
 def test_a_ledger_entry_whose_check_no_longer_collects_fails_the_session(tmp_path: Path) -> None:
@@ -237,9 +194,8 @@ def test_a_fully_resolving_ledger_passes_the_session(tmp_path: Path) -> None:
 def test_unconfigured_session_does_not_report_stale_entries(tmp_path: Path) -> None:
     """Off the in-network job the join has no ids to join against — it must stay silent.
 
-    Without ``STORYBOARD_COMPLIANCE_DIR``/``STORYBOARD_SCHEMA_ROOT``,
-    ``pytest_generate_tests`` emits the single ``environment-not-configured``
-    id. Treating that as "every entry but one is stale" is the failure mode that
+    With no resolvable pinned bundle, ``pytest_generate_tests`` emits the single
+    ``environment-not-configured`` id. Treating that as "every entry but one is stale" is the failure mode that
     makes a verbatim port of the e2e_rest fitness test unusable, and it would
     red every offline run of this suite.
     """

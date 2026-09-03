@@ -114,19 +114,14 @@ tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::core
 
 
 
-# --- webhook_emission (1) ---
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::core::webhook_emission::get_capabilities]
+# --- webhook_emission — GRADUATED, removed 2026-09-03 ---
+# All 8 entries passed on the first run in which this job collected anything
+# (#2191). Earned by the SSRF-seam work in #1802 / #1697; nothing could
+# observe it before, because the job graded zero checks while green.
 # Newly gradable once the run hosted a reachable webhook receiver
 # (adcontextprotocol/adcp-client#2448 + the patch-package bridge). Previously the
 # whole storyboard skipped as `requirement_unmet: webhook_receiver`, so these are
 # not regressions — they are gaps that were never measured before.
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::core::webhook_emission::assert_webhook_signing_key_present]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::core::webhook_emission::fetch_brand_json]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::core::webhook_emission::trigger_idempotent_webhook_initial]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::core::webhook_emission::trigger_operation_id_echo]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::core::webhook_emission::trigger_retry_scenario]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::core::webhook_emission::trigger_signed_webhook]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::core::webhook_emission::trigger_webhook_operation]
 
 
 # ---- RFC 9421 request signing (#1291) -------------------------------------
@@ -196,27 +191,67 @@ tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::sign
 
 # ============================ a2a ============================
 #
-# NOT MEASURED at this head — ONE entry, not 32.
+# MEASURED. The axis grades for the first time as of #2191.
 #
-# The card-discovery fix that made this axis gradable was a production change,
-# and 19116bf7e reverted every production change to narrow #1858 to measurement
-# only. So the app's only card path (`/.well-known/agent-card.json`) again
-# serves an A2A 1.0 shape (endpoint under `supportedInterfaces[0].url`) while
-# the runner's bundled `@a2a-js/sdk` 0.3.14 client reads only a top-level
-# `url`. The runner rejects the card and grades ZERO checks
-# (overall_status=unreachable) — #1440.
+# `a2a::_runner::agent_reachability::graded_checks_produced` GRADUATED and is
+# removed: it existed to say "this protocol graded NOTHING", and the protocol now
+# grades 36 checks. Three changes had to compose for that — the collection gate
+# (the job never collected at all), the bundle reaching the runner host, and the
+# runner's 0.3-line A2A client learning to read `supportedInterfaces[]`. Remove
+# any one and this axis is back to grading nothing.
 #
-# "Not measured" is NOT "measured and absent", and that distinction is worth
-# keeping. This file states it with the mechanism the module already provides:
-# `_no_graded_checks` (test_storyboard_conformance.py:234-261) turns a protocol
-# that graded nothing into one ordinary failing check, ledgerable and
-# graduating like any other. The day the card is fixed, this entry XPASSes and
-# the axis's real checks arrive un-ledgered and fail CI until they are triaged.
+# The entries below are FIRST-SIGHT measurements of a surface that has never been
+# graded. Nothing here regressed; it became visible. Two groups, deliberately
+# cited to different issues so they cannot be confused:
 #
-# The 32 per-check a2a entries seeded from run 32027922014 (commit 6d16d9b1e,
-# pre-revert) were REMOVED here. They resolved to no collected check, so they
-# graded nothing and made ledger/fitness::stale_entries a permanent hard
-# failure — the job could never go green while they sat there, which blocks
-# promoting this job into the required gate. They remain in git history and
-# will be re-seeded from a real run when the axis is reachable again.
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::_runner::agent_reachability::graded_checks_produced]
+#   #2192 — 36 conformance gaps. 22 are a2a TWINS of gaps already ledgered above
+#           for mcp (same defect, other transport — exactly the drift this file's
+#           header says the two-protocol split exists to expose); they graduate
+#           with their mcp twin. 14 have no mcp twin and are a2a-only findings.
+#   #1859 — probe_unauth ONLY. An unauthenticated call to a protected tool is
+#           ACCEPTED. That is a security gap, not a conformance gap, and it is
+#           ledgered separately so a bulk graduation of #2192 can never silently
+#           take it along.
+#
+# The ledger only shrinks: each line leaves when its gap is fixed, not when the
+# noise becomes tiresome.
+
+# --- a2a security: unauthenticated access accepted (#1859) ---
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::security::security_baseline::probe_unauth]
+
+# --- a2a conformance gaps, first measurement (#2192) ---
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::core::capability_discovery::get_capabilities]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::core::capability_discovery::get_capabilities_filtered]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::core::notification_config_event_scope::sync_accounts_rejects_scheduled_account_notification]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::core::notification_config_lifecycle::sync_accounts_create_paused_notification_config]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::core::notification_config_rejections::sync_accounts_rejects_duplicate_subscriber_id]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::core::read_tool_idempotency::assert_omitted_key_grace_handled]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::core::read_tool_idempotency::get_capabilities_with_idempotency_key]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::core::read_tool_idempotency::get_capabilities_without_idempotency_key_3_1_accept]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::core::read_tool_idempotency::get_capabilities_without_idempotency_key_3_1_reject]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::core::read_tool_idempotency::list_creative_formats_with_idempotency_key]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::core::v3_envelope_integrity::no_legacy_status_fields]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::core::version_negotiation::get_capabilities_with_version]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::creative::media_buy_seller/creative_reception::get_capabilities]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::creative::media_buy_seller/creative_reception::sync_creatives]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::error_handling::billing_gate_dispatch::get_capabilities]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::error_handling::billing_gate_dispatch::sync_accounts_passthrough_rejects_agent]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::error_handling::error_compliance::get_capabilities]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::error_handling::error_compliance::nonexistent_product]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::error_handling::error_compliance::reversed_dates_error]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::error_handling::error_compliance::unsupported_major_version]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::error_handling::error_compliance::unsupported_release_version]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::error_handling::stale_response_advisory::get_capabilities]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::media_buy::media_buy_seller/creative_fate_after_cancellation::get_products_brief]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::media_buy::media_buy_seller/inline_creatives_without_sync::get_capabilities]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::media_buy::media_buy_seller/inline_creatives_without_sync::get_products_canonical_format]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::media_buy::media_buy_seller/inline_creatives_without_sync::get_products_legacy_format]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::media_buy::media_buy_seller/invalid_transitions::get_products_brief]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::media_buy::media_buy_seller/invalid_transitions::update_unknown_package]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::media_buy::media_buy_seller/inventory_list_no_match::get_products_brief]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::media_buy::media_buy_seller/inventory_list_targeting::get_products_brief]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::media_buy::media_buy_seller/measurement_terms_rejected::create_media_buy_aggressive_terms]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::media_buy::media_buy_seller/measurement_terms_rejected::get_products_brief]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::media_buy::media_buy_seller/refine_products::get_products_brief]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::media_buy::media_buy_seller/refine_products::sync_accounts]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::security::security_baseline::assert_mechanism]

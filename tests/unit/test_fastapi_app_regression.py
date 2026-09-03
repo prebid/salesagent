@@ -15,6 +15,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from tests.helpers.agent_card import host_routes_to_no_tenant
+
 # ---------------------------------------------------------------------------
 # [P0]: Async receive callable in messageId middleware
 # ---------------------------------------------------------------------------
@@ -192,13 +194,14 @@ class TestHostnameValidation:
 
         client = TestClient(app)
 
-        response = client.get(
-            "/.well-known/agent-card.json",
-            headers={
-                "Apx-Incoming-Host": "evil.com/../../etc/passwd",
-                "Host": "localhost:8000",
-            },
-        )
+        with host_routes_to_no_tenant("localhost:8000"):
+            response = client.get(
+                "/.well-known/agent-card.json",
+                headers={
+                    "Apx-Incoming-Host": "evil.com/../../etc/passwd",
+                    "Host": "localhost:8000",
+                },
+            )
 
         assert response.status_code == 200
         card = response.json()
@@ -214,12 +217,13 @@ class TestHostnameValidation:
 
         client = TestClient(app)
 
-        response = client.get(
-            "/.well-known/agent-card.json",
-            headers={
-                "Host": "evil.com/../../etc/passwd",
-            },
-        )
+        with host_routes_to_no_tenant():
+            response = client.get(
+                "/.well-known/agent-card.json",
+                headers={
+                    "Host": "evil.com/../../etc/passwd",
+                },
+            )
 
         assert response.status_code == 200
         card = response.json()
