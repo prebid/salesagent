@@ -386,6 +386,25 @@ class TestOidcCallbackCompatibility:
         assert redirect_uri.endswith("/auth/oidc/callback")
 
 
+class TestOAuthRouteCompatibility:
+    """MCP OAuth routes must remain on the composed FastAPI app."""
+
+    def test_oauth_routes_are_reachable_before_admin_fallback(self):
+        from starlette.testclient import TestClient
+
+        from src.app import _install_admin_mounts, app
+
+        _install_admin_mounts()
+        client = TestClient(app)
+
+        metadata_response = client.get("/.well-known/oauth-protected-resource")
+        token_response = client.post("/oauth/token", data={"grant_type": "unsupported"})
+
+        assert metadata_response.status_code == 200
+        assert token_response.status_code == 400
+        assert token_response.json()["error"] == "unsupported_grant_type"
+
+
 class TestA2ATrailingSlashCompatibility:
     """A2A trailing-slash requests should stay on the FastAPI surface."""
 

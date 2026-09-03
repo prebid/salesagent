@@ -47,6 +47,7 @@ from src.core.exceptions import (
 from src.core.http_utils import get_header_case_insensitive as _get_header_case_insensitive
 from src.core.lifecycle import run_all_shutdown_callbacks
 from src.core.main import mcp
+from src.core.mcp_oauth_challenge_middleware import MCPOAuthChallengeMiddleware
 from src.core.resolved_identity import resolve_identity
 from src.core.tool_error_logging import handle_tool_error, record_boundary_error
 from src.landing import generate_tenant_landing_page
@@ -54,6 +55,7 @@ from src.landing.landing_page import generate_fallback_landing_page
 from src.routes.api_v1 import router as api_v1_router
 from src.routes.health import debug_router as health_debug_router
 from src.routes.health import router as health_router
+from src.routes.oauth import router as oauth_router
 from src.routes.rest_compat_middleware import RestCompatMiddleware
 
 logger = logging.getLogger(__name__)
@@ -110,7 +112,8 @@ async def app_lifespan(app: FastAPI):
 
 # Build the MCP sub-application.
 # path="/" because we mount it at /mcp — routes inside are relative.
-mcp_app = mcp.http_app(path="/")
+raw_mcp_app = mcp.http_app(path="/")
+mcp_app = MCPOAuthChallengeMiddleware(raw_mcp_app)
 
 # Create the root FastAPI app with combined lifespans so that both
 # the MCP schedulers (delivery webhooks, media-buy status) and any
@@ -119,7 +122,7 @@ app = FastAPI(
     title="AdCP Sales Agent",
     description="Unified REST API for the AdCP Sales Agent. Also serves MCP at /mcp and A2A at /a2a.",
     version="1.0.0",
-    lifespan=combine_lifespans(app_lifespan, mcp_app.lifespan),
+    lifespan=combine_lifespans(app_lifespan, raw_mcp_app.lifespan),
 )
 
 # Mount MCP at /mcp
@@ -469,6 +472,7 @@ async def a2a_messageid_compatibility_middleware(request: Request, call_next):
 # ---------------------------------------------------------------------------
 
 app.include_router(api_v1_router)
+app.include_router(oauth_router)
 app.include_router(health_router)
 app.include_router(health_debug_router)
 

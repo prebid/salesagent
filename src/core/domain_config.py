@@ -12,15 +12,20 @@ import os
 
 
 def _is_localhost(domain: str | None) -> bool:
-    """Check if domain is localhost or 127.0.0.1."""
+    """Check if domain is localhost or a loopback IP."""
     if not domain:
         return False
-    # Strip port if present
-    host = domain.split(":")[0]
-    return host in ("localhost", "127.0.0.1")
+    value = domain.strip().lower()
+    if value.startswith("["):
+        host = value[1:].split("]", 1)[0]
+    elif value.count(":") == 1:
+        host = value.split(":", 1)[0]
+    else:
+        host = value
+    return host in ("localhost", "127.0.0.1", "::1")
 
 
-def _get_protocol_for_domain(domain: str | None) -> str:
+def get_protocol_for_domain(domain: str | None) -> str:
     """Return http for localhost, https for production domains."""
     return "http" if _is_localhost(domain) else "https"
 
@@ -97,7 +102,7 @@ def get_a2a_server_url(protocol: str | None = None) -> str | None:
         return None
     # Auto-detect protocol if not specified
     if protocol is None:
-        protocol = _get_protocol_for_domain(domain)
+        protocol = get_protocol_for_domain(domain)
     if url := get_sales_agent_url(protocol):
         return f"{url}/a2a"
     return None

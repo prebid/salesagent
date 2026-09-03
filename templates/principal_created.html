@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+
+{% block title %}Advertiser Created - Sales Agent Admin{% endblock %}
+
+{% block content %}
+<div class="card" style="max-width: 760px; margin: 0 auto;">
+    <h2>Advertiser Created</h2>
+
+    <div class="alert alert-success">Advertiser '{{ principal_name }}' was created successfully.</div>
+
+    <div style="background: #fff3cd; border: 1px solid #ffe69c; padding: 1rem; border-radius: 8px; margin: 1.5rem 0;">
+        <strong>Save these credentials now.</strong> The OAuth client secret is shown only once.
+    </div>
+
+    <div class="form-group">
+        <label>Permanent API Token</label>
+        <input type="text" readonly value="{{ access_token }}" onclick="this.select()">
+    </div>
+
+    <div class="form-group">
+        <label>OAuth Client ID</label>
+        <input type="text" readonly value="{{ oauth_client_id }}" onclick="this.select()">
+    </div>
+
+    <div class="form-group">
+        <label>OAuth Client Secret</label>
+        <input type="text" readonly value="{{ oauth_client_secret }}" onclick="this.select()">
+    </div>
+
+    <div style="display: flex; gap: 1rem; margin-top: 2rem;">
+        <a href="{{ url_for('tenants.tenant_settings', tenant_id=tenant_id, section='advertisers') }}" class="btn">Done</a>
+        <a href="{{ url_for('principals.create_principal', tenant_id=tenant_id) }}" class="btn btn-secondary">Add Another Advertiser</a>
+    </div>
+</div>
+{% endblock %}

@@ -133,6 +133,9 @@ class Tenant(Base, JSONValidatorMixin):
     # Relationships
     products = relationship("Product", back_populates="tenant", cascade="all, delete-orphan")
     principals = relationship("Principal", back_populates="tenant", cascade="all, delete-orphan")
+    oauth_clients = relationship(
+        "OAuthClient", back_populates="tenant", cascade="all, delete-orphan", overlaps="principal"
+    )
     users = relationship("User", back_populates="tenant", cascade="all, delete-orphan")
     accounts = relationship("Account", back_populates="tenant", cascade="all, delete-orphan")
     media_buys = relationship("MediaBuy", back_populates="tenant", cascade="all, delete-orphan", overlaps="media_buys")
@@ -555,6 +558,12 @@ class Principal(Base, JSONValidatorMixin):
     tenant = relationship("Tenant", back_populates="principals")
     media_buys = relationship("MediaBuy", back_populates="principal", overlaps="media_buys")
     strategies = relationship("Strategy", back_populates="principal", overlaps="strategies")
+    oauth_clients = relationship(
+        "OAuthClient",
+        back_populates="principal",
+        cascade="all, delete-orphan",
+        overlaps="oauth_clients,tenant",
+    )
     push_notification_configs = relationship(
         "PushNotificationConfig",
         back_populates="principal",
@@ -575,6 +584,75 @@ class Principal(Base, JSONValidatorMixin):
         from src.core.platform_mappings import resolve_adapter_id
 
         return resolve_adapter_id(self.platform_mappings, adapter_name)
+
+
+class OAuthClient(Base):
+    __tablename__ = "oauth_clients"
+
+    tenant_id: Mapped[str] = mapped_column(String(50), primary_key=True)
+    client_id: Mapped[str] = mapped_column(String(120), primary_key=True)
+    principal_id: Mapped[str] = mapped_column(String(50), nullable=False)
+    client_secret_hash: Mapped[str] = mapped_column(String(500), nullable=False)
+    scopes: Mapped[list[str]] = mapped_column(JSONType, nullable=False, default=list)
+    redirect_uris: Mapped[list[str]] = mapped_column(JSONType, nullable=False, default=list)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    tenant = relationship("Tenant", back_populates="oauth_clients", overlaps="principal")
+    principal = relationship(
+        "Principal",
+        back_populates="oauth_clients",
+        overlaps="oauth_clients,tenant",
+        foreign_keys=[tenant_id, principal_id],
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "principal_id"],
+            ["principals.tenant_id", "principals.principal_id"],
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(["tenant_id"], ["tenants.tenant_id"], ondelete="CASCADE"),
+        Index("idx_oauth_clients_tenant_principal", "tenant_id", "principal_id"),
+        Index("idx_oauth_clients_client_id", "client_id"),
+        UniqueConstraint("client_id", name="uq_oauth_clients_client_id"),
+    )
+
+
+class OAuthAuthorizationCode(Base):
+    __tablename__ = "oauth_authorization_codes"
+
+    code_hash: Mapped[str] = mapped_column(String(128), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(50), nullable=False)
+    client_id: Mapped[str] = mapped_column(String(120), nullable=False)
+    principal_id: Mapped[str] = mapped_column(String(50), nullable=False)
+    redirect_uri: Mapped[str] = mapped_column(String(1000), nullable=False)
+    code_challenge: Mapped[str] = mapped_column(String(256), nullable=False)
+    code_challenge_method: Mapped[str] = mapped_column(String(20), nullable=False)
+    scopes: Mapped[list[str]] = mapped_column(JSONType, nullable=False, default=list)
+    resource: Mapped[str] = mapped_column(String(1000), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "client_id"],
+            ["oauth_clients.tenant_id", "oauth_clients.client_id"],
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "principal_id"],
+            ["principals.tenant_id", "principals.principal_id"],
+            ondelete="CASCADE",
+        ),
+        Index("idx_oauth_authorization_codes_client", "tenant_id", "client_id"),
+        Index("idx_oauth_authorization_codes_expires_at", "expires_at"),
+    )
 
 
 class User(Base):
