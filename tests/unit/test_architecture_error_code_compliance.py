@@ -25,6 +25,7 @@ logger = logging.getLogger(__name__)
 # These are mandated by AdCP BDD feature files but the SDK hasn't added them yet.
 _SPEC_CODES = {
     "BILLING_NOT_SUPPORTED",  # BR-UC-011 BR-RULE-059: unsupported billing model
+    "TARGETING_REHYDRATION_FAILED",  # FIXME(#1646): platform-specific per AdCP core/error.json MAY
 }
 
 # All acceptable codes: wire-standard (SDK + spec supplement) + justified

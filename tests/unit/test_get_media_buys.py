@@ -716,20 +716,24 @@ class TestTargetingOverlayRoundTrip:
         assert good_response_pkg.targeting_overlay.property_list.list_id == "v1"
 
         # Failure surfaced via the response errors channel — buyer can reconcile.
-        # CONFIGURATION_ERROR / recovery "terminal", not the sibling per-creative
-        # advisory's SERVICE_UNAVAILABLE. Selected by lookup rather than by name: the
-        # pin gives SERVICE_UNAVAILABLE recovery "transient", which advises a retry that
-        # can never succeed against a permanently corrupt stored blob. Both halves are
-        # asserted because the code alone cannot carry the claim -- core/error.json makes
-        # error.recovery authoritative and enumMetadata only its documentary mirror, so a
-        # test checking the code would pass with the buyer still told to retry forever.
+        # Wire ``TARGETING_REHYDRATION_FAILED`` + ``recovery="terminal"``
+        # (seller/admin must repair; retry cannot help).
         assert response.errors is not None
         assert len(response.errors) == 1
         err = response.errors[0]
-        assert err.code == "CONFIGURATION_ERROR"
+        assert err.code == "TARGETING_REHYDRATION_FAILED"
+        assert "could not be rehydrated" in err.message
+        # JSONPath-lite numeric indices (pinned core/error.json); ids in details.
+        assert err.field == "media_buys[0].packages[0].targeting_overlay"
+        assert err.details == {"media_buy_id": buy.media_buy_id, "package_id": bad_pkg.package_id}
+        # BR-RULE-294 / UC-019: seller-side imperative suggestion (buyer cannot
+        # repair persisted targeting). Do not pin internal storage key names.
+        assert err.suggestion is not None
+        suggestion_lower = err.suggestion.lower()
+        assert "seller" in suggestion_lower
+        assert "repair" in suggestion_lower
+        assert "package_config" not in suggestion_lower
         assert err.recovery == "terminal"
-        assert "TARGETING_REHYDRATION_FAILED" in err.message
-        assert err.field is not None and "targeting_overlay" in err.field
 
 
 class TestGetMediaBuysResponseStructure:

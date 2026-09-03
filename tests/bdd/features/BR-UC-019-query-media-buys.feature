@@ -1199,7 +1199,7 @@ Feature: BR-UC-019 Query Media Buys
     When the Buyer Agent sends a get_media_buys request for media_buy_ids ["mb-001"]
     Then the response should include media buy "mb-001" with package "pkg-001"
     And the package "pkg-001" wire field <field> should be null or absent
-    And response.errors[] should carry exactly one advisory for package "pkg-001" field <field> with code "CONFIGURATION_ERROR" and recovery "terminal"
+    And response.errors[] should carry exactly one advisory for package "pkg-001" field <field> with code "<code>" and recovery "terminal"
     And response.errors[] should carry no advisory with code "SERVICE_UNAVAILABLE"
     # THE BLOB RULE. `package_config` is an untyped JSON column, so
     # every value read out of it is a legacy value the current pinned types may reject.
@@ -1226,12 +1226,12 @@ Feature: BR-UC-019 Query Media Buys
     # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buys-response.json
 
     Examples:
-      | field             | legacy_value          |
-      | product_id        | 123                   |
-      | start_time        | "2026-01-01T00:00:00" |
-      | end_time          | "2026-01-31T00:00:00" |
-      | paused            | "maybe"               |
-      | targeting_overlay | "not a dict"          |
+      | field             | legacy_value          | code                         |
+      | product_id        | 123                   | CONFIGURATION_ERROR          |
+      | start_time        | "2026-01-01T00:00:00" | CONFIGURATION_ERROR          |
+      | end_time          | "2026-01-31T00:00:00" | CONFIGURATION_ERROR          |
+      | paused            | "maybe"               | CONFIGURATION_ERROR          |
+      | targeting_overlay | "not a dict"          | TARGETING_REHYDRATION_FAILED |
 
   @T-UC-019-blob-rule-raw-request @invariant @BR-RULE-150 @schema-v3.1
   Scenario: a legacy-invalid buyer_campaign_ref in raw_request degrades that field alone

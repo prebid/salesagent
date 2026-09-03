@@ -248,11 +248,12 @@ def _get_media_buys_impl(
 
     # Build response
     response_media_buys = []
-    buyer_named_rows = _buyer_named_rows(req)
-    for buy in target_media_buys:
-        # No policy here, and none is possible: the row's status was resolved at the
-        # fetch seam and a row whose status could not be resolved never became a
-        # _MediaBuyData. This loop projects; it does not decide.
+    # Accumulate non-fatal targeting-rehydration failures here; one row per
+    # affected (media_buy_id, package_id). Surfaced on the response so the
+    # buyer can reconcile out-of-band — beats silently coercing to
+    # targeting_overlay=None which is indistinguishable from "no targeting".
+    hydration_errors: list[Error] = []
+    for buy_i, buy in enumerate(target_media_buys):
         status = buy.wire_status
 
         # Build packages
@@ -260,7 +261,7 @@ def _get_media_buys_impl(
         response_packages = []
         buy_snapshots = snapshot_data.get(buy.media_buy_id, {})
 
-        for pkg in packages:
+        for pkg_i, pkg in enumerate(packages):
             pkg_config = pkg.package_config or {}
             pkg_id = pkg.package_id
 
@@ -275,13 +276,12 @@ def _get_media_buys_impl(
 
             # Materialize targeting_overlay from package_config so callers can verify
             # what was persisted. Tolerates the legacy "targeting" key for data written
-            # before the targeting_overlay rename.
-            # OPTIONAL-field branch of the module's per-row failure policy (see the
-            # module docstring): targeting_overlay has a legal empty value, so a
-            # single corrupted package_config row renders as None with a non-fatal
-            # TARGETING_REHYDRATION_FAILED advisory rather than crashing the whole
-            # tenant's get_media_buys response. The REQUIRED-field branch of the same
-            # policy is _persisted_revision / _compute_status, which refuse.
+            # before the targeting_overlay rename (see media_buy_create.py:638-642).
+            # A single corrupted package_config row must not crash the whole tenant's
+            # get_media_buys response — log the bad row, surface a non-fatal
+            # platform-specific ``TARGETING_REHYDRATION_FAILED`` advisory on errors[],
+            # and set this package's targeting_overlay=None so the rest of the buy
+            # still renders.
             #
             # Narrow ``except`` to ``TypeError`` only: production
             # ``extra="ignore"`` already absorbs unknown-field drift, so
@@ -304,25 +304,39 @@ def _get_media_buys_impl(
                         pkg_id,
                         exc,
                     )
-                    # Seller-side data-integrity failure (the buyer can't fix it),
-                    # surfaced with ``CONFIGURATION_ERROR`` / recovery ``terminal``
-                    # (see _BLOB_DEFECT_CODE) rather than the ``SERVICE_UNAVAILABLE``
-                    # the sibling per-creative advisory in creatives/_processing.py
-                    # uses: that code's pinned recovery is ``transient``, which advises
-                    # a retry that can never succeed against a permanently corrupt
-                    # stored blob. The ``TARGETING_REHYDRATION_FAILED`` shape stays in
-                    # the message so callers can still grep/route on it.
-                    row_advisories.append(
+                    # Seller-side persisted-data integrity failure (buyer cannot
+                    # fix the row). Platform-specific code per AdCP 3.1.1
+                    # ``core/error.json`` (MAY use codes outside the standard
+                    # vocabulary; agents fall back to ``recovery``).
+                    # ``recovery="terminal"`` — corrupt persisted row never
+                    # self-heals (MUST NOT auto-retry).
+                    hydration_errors.append(
                         Error(  # structural-guard: advisory per-package result in GetMediaBuysResponse.errors[]
-                            code=_BLOB_DEFECT_CODE,
-                            recovery=_BLOB_DEFECT_RECOVERY,
+                            code="TARGETING_REHYDRATION_FAILED",
+                            # Discriminator lives in ``code`` only — do not
+                            # restate the token in ``message``.
                             message=(
-                                f"TARGETING_REHYDRATION_FAILED: targeting overlay for "
-                                f"package '{pkg_id}' on media buy '{buy.media_buy_id}' "
-                                f"could not be rehydrated; returning "
-                                f"targeting_overlay=None for this package."
+                                f"targeting overlay for package '{pkg_id}' on "
+                                f"media buy '{buy.media_buy_id}' could not be "
+                                f"rehydrated; returning targeting_overlay=None "
+                                f"for this package."
                             ),
-                            field=f"media_buys[].packages[{pkg_id}].targeting_overlay",
+                            # JSONPath-lite per pinned core/error.json — numeric
+                            # indices only; buy/package ids stay in message/details.
+                            field=(f"media_buys[{buy_i}].packages[{pkg_i}].targeting_overlay"),
+                            details={
+                                "media_buy_id": buy.media_buy_id,
+                                "package_id": pkg_id,
+                            },
+                            # Buyer hint for BR-RULE-294 / UC-019: seller-side
+                            # persisted-targeting corruption — buyer cannot fix
+                            # the row; contact seller to repair it.
+                            suggestion=(
+                                "Contact the seller to repair the stored package "
+                                "targeting data; this package's targeting_overlay "
+                                "stays null until then."
+                            ),
+                            recovery="terminal",
                         )
                     )
                     targeting_overlay = None
@@ -394,10 +408,11 @@ def _get_media_buys_impl(
             )
         )
 
+    all_advisories = row_advisories + hydration_errors
     return GetMediaBuysResponse(
         media_buys=response_media_buys,
         context=req.context,
-        errors=row_advisories or None,
+        errors=all_advisories or None,
     )
 
 
