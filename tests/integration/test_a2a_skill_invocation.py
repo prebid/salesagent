@@ -685,42 +685,25 @@ class TestA2ASkillInvocation:
     # grades the response — not just "or errors or warnings".)
 
     def test_skill_handler_mapping(self, handler):
-        """Test that all advertised skills have handlers."""
-        # Get skills from agent card
-        from src.a2a_server.adcp_a2a_server import create_agent_card
+        """Every skill advertised in the agent card has a real dispatch handler.
+
+        Both sides are read from production (src.a2a_server.adcp_a2a_server) --
+        no hand-copied roster here. A hand-typed allowlist previously drifted
+        from the real dispatch map (missing create_creative/assign_creative,
+        and carrying a phantom "get_creative_delivery" that was never a real
+        skill), so this assertion silently stopped meaning anything
+        (GH #1940).
+        """
+        from src.a2a_server.adcp_a2a_server import SKILL_HANDLER_NAMES, create_agent_card
 
         agent_card = create_agent_card()
+        advertised_skills = {skill.name for skill in agent_card.skills}
 
-        # Verify all skills have handlers
-        expected_skills = {skill.name for skill in agent_card.skills}
-
-        # Test that _handle_explicit_skill can handle all advertised skills
-        for skill_name in expected_skills:
-            # This should not raise an exception for any advertised skill
-            try:
-                # We can't easily test the actual execution without full setup,
-                # but we can at least verify the skill name is recognized
-                assert skill_name in [
-                    "get_adcp_capabilities",  # AdCP v3 discovery endpoint
-                    "get_products",
-                    "create_media_buy",
-                    "update_media_buy",  # Added for media buy management
-                    "get_media_buy_delivery",  # Added for delivery metrics
-                    "get_creative_delivery",  # Added for creative-level delivery metrics
-                    "update_performance_index",  # Added for performance optimization
-                    "sync_creatives",
-                    "list_creatives",
-                    "approve_creative",
-                    "get_media_buy_status",
-                    "optimize_media_buy",
-                    "list_creative_formats",  # Keep existing creative format endpoint
-                    "list_authorized_properties",  # Added for AdCP compliance
-                    "get_media_buys",
-                    "list_accounts",  # Added for account management (UC-011)
-                    "sync_accounts",  # Added for account sync (UC-011)
-                ], f"Skill {skill_name} not in expected skill list"
-            except Exception as e:
-                pytest.fail(f"Skill {skill_name} should be handled but caused error: {e}")
+        for skill_name in advertised_skills:
+            assert skill_name in SKILL_HANDLER_NAMES, f"Skill {skill_name} is advertised but has no dispatch handler"
+            assert hasattr(handler, SKILL_HANDLER_NAMES[skill_name]), (
+                f"Skill {skill_name} maps to {SKILL_HANDLER_NAMES[skill_name]}, which doesn't exist on the handler"
+            )
 
     # Phase 2: Tests for previously untested skills
 
