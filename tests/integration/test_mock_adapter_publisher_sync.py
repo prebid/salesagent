@@ -9,6 +9,7 @@ to show empty property/tag lists.
 """
 
 import pytest
+from flask import session
 from sqlalchemy import select
 
 from src.core.database.database_session import get_db_session
@@ -21,9 +22,24 @@ from src.core.database.models import (
 )
 
 
+def _authorize_direct_sync_call(tenant_id: str) -> None:
+    """Populate a super-admin test-mode session for direct view-function calls."""
+    session["authenticated"] = True
+    session["user"] = {"email": "test@example.com", "is_super_admin": True}
+    session["email"] = "test@example.com"
+    session["test_user"] = "test@example.com"
+    session["test_user_role"] = "super_admin"
+    session["test_user_name"] = "Test User"
+    session["test_tenant_id"] = tenant_id
+
+
 @pytest.mark.requires_db
 class TestMockAdapterPublisherSync:
     """Test that mock adapter publisher sync creates properties and tags."""
+
+    @pytest.fixture(autouse=True)
+    def _enable_test_mode(self, monkeypatch):
+        monkeypatch.setenv("ADCP_AUTH_TEST_MODE", "true")
 
     @pytest.fixture
     def mock_tenant(self, integration_db):
@@ -105,6 +121,7 @@ class TestMockAdapterPublisherSync:
         app = create_app()
 
         with app.test_request_context():
+            _authorize_direct_sync_call(mock_tenant)
             with patch("src.admin.blueprints.publisher_partners.get_config", return_value=mock_config):
                 with patch(
                     "src.admin.blueprints.publisher_partners.get_tenant_url",
@@ -139,6 +156,7 @@ class TestMockAdapterPublisherSync:
         app = create_app()
 
         with app.test_request_context():
+            _authorize_direct_sync_call(mock_tenant)
             with patch("src.admin.blueprints.publisher_partners.get_config", return_value=mock_config):
                 with patch(
                     "src.admin.blueprints.publisher_partners.get_tenant_url",
@@ -181,6 +199,7 @@ class TestMockAdapterPublisherSync:
         app = create_app()
 
         with app.test_request_context():
+            _authorize_direct_sync_call(mock_tenant)
             with patch("src.admin.blueprints.publisher_partners.get_config", return_value=mock_config):
                 with patch(
                     "src.admin.blueprints.publisher_partners.get_tenant_url",
@@ -213,6 +232,7 @@ class TestMockAdapterPublisherSync:
 
         # Run sync twice
         with app.test_request_context():
+            _authorize_direct_sync_call(mock_tenant)
             with patch("src.admin.blueprints.publisher_partners.get_config", return_value=mock_config):
                 with patch(
                     "src.admin.blueprints.publisher_partners.get_tenant_url",
