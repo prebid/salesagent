@@ -108,6 +108,7 @@ from src.services.targeting_capabilities import (
     validate_property_targeting_allowed,
     validate_unknown_targeting_fields,
 )
+from src.services.tmp_provider_sync import fires_tmp_sync
 
 
 def _adcp_status_and_actions(buy: "MediaBuy", today: date | None = None) -> tuple[MediaBuyStatus | None, list[str]]:
@@ -223,7 +224,6 @@ def _validate_creatives_for_assignment(
     requested_ids = list(dict.fromkeys(creative_ids))  # de-dup, preserve order
 
     # (a) Existence — principal-scoped multi-get via repository.
-    assert uow.creatives is not None, "MediaBuyUoW.creatives required for creative validation"
     creatives_list = uow.creatives.get_by_ids(requested_ids, principal_id)
     found_by_id = {c.creative_id: c for c in creatives_list}
     missing_ids = [cid for cid in requested_ids if cid not in found_by_id]
@@ -344,8 +344,10 @@ def _verify_principal(
         )
 
 
+@fires_tmp_sync
 def _update_media_buy_impl(
     req: UpdateMediaBuyRequest,
+    *,
     identity: ResolvedIdentity | None = None,
     context_id: str | None = None,
 ) -> UpdateMediaBuyResult | UpdateMediaBuySubmitted:
@@ -425,7 +427,6 @@ def _update_media_buy_impl(
     with ctx_manager.audit_workflow_step_failure_ctx(lambda: step):
         # Single UoW for entire update operation — one session, one transaction
         with MediaBuyUoW(tenant["tenant_id"]) as uow:
-            assert uow.media_buys is not None
             # FIXME(#2128): raw session usages below should migrate to repository methods
             assert uow.session is not None
             session = uow.session
@@ -519,7 +520,6 @@ def _update_media_buy_impl(
             # same details). The boundary's AdCPError handler updates any in-flight
             # workflow step to status="failed" for the audit trail.
             if req.packages:
-                assert uow.products is not None, "MediaBuyUoW.products required for product targeting validation"
                 # Run the same per-package targeting validators the create path runs, so a buyer
                 # can't bypass unknown-field rejection, managed-only dimension checks, or
                 # same-value geo inclusion/exclusion overlap by sending changes through update.
@@ -678,7 +678,6 @@ def _update_media_buy_impl(
                     else:
                         request_currency = str(media_buy.currency) if media_buy.currency else "USD"
 
-                    assert uow.currency_limits is not None
                     currency_limit = uow.currency_limits.get_for_currency(request_currency)
 
                     if not currency_limit:
@@ -851,7 +850,6 @@ def _update_media_buy_impl(
                             budget_amount = float(pkg_update.budget.total)
                             currency = str(pkg_update.budget.currency) if pkg_update.budget.currency else "USD"
 
-                        assert uow.currency_limits is not None
                         _cl = uow.currency_limits.get_for_currency(currency)
                         if _cl and _cl.min_package_budget:
                             package_min_budget_error: str | None = validate_min_package_budget(
@@ -934,7 +932,6 @@ def _update_media_buy_impl(
                             if db_package and db_package.package_config
                             else None
                         )
-                        assert uow.products is not None
                         product = uow.products.get_by_id(product_id) if product_id else None
                         _validate_creatives_for_assignment(
                             pkg_update.creative_ids,
@@ -1085,7 +1082,6 @@ def _update_media_buy_impl(
                             if ca_package and ca_package.package_config
                             else None
                         )
-                        assert uow.products is not None
                         ca_product = uow.products.get_by_id(ca_product_id) if ca_product_id else None
                         _validate_creatives_for_assignment(
                             [ca.creative_id for ca in pkg_update.creative_assignments],
@@ -1641,8 +1637,7 @@ async def update_media_buy(
     # Read identity and context_id pre-resolved by MCPAuthMiddleware
     identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None
     _ctx_id = (await ctx.get_state("context_id")) if isinstance(ctx, Context) else None
-    response = _update_media_buy_impl(req=req, identity=identity, context_id=_ctx_id)
-    return mcp_result(response)
+    return mcp_result(_update_media_buy_impl(req=req, identity=identity, context_id=_ctx_id))
 
 
 def update_media_buy_raw(

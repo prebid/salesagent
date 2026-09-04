@@ -100,9 +100,23 @@ class ThreadRegistry:
         self._fire_callbacks(reaped)
 
     def _reap_locked(self) -> list[str]:
-        """Drop entries whose threads are dead. Returns the reaped keys."""
+        """Drop entries whose threads are dead. Returns the reaped keys.
+
+        ``t.ident is not None`` is what makes "registered" mean registered.
+        ``Thread.is_alive()`` is ``False`` BEFORE ``start()`` as well as after
+        the thread finishes, so a reap that ran in the window between ``add()``
+        and ``start()`` dropped a live registration. Every read on this class
+        reaps, so any concurrent ``contains``/``get``/``list_active`` could do it.
+
+        The consequences were real for callers that register-then-start: two
+        rapid writes to the same key could each see no predecessor and run
+        concurrently (defeating the ordering the registry is used for), and a
+        drain that joins the registered threads could miss one. ``ident`` is
+        ``None`` until the thread is started, which distinguishes "not yet
+        started" from "finished" (#1197 review).
+        """
         with self._lock:
-            dead = [key for key, t in self._reg.items() if not t.is_alive()]
+            dead = [key for key, t in self._reg.items() if t.ident is not None and not t.is_alive()]
             for key in dead:
                 self._reg.pop(key, None)
         return dead

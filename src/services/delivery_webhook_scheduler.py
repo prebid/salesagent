@@ -5,9 +5,7 @@ Sends daily delivery reports via webhooks for media buys that have configured re
 This runs as a background task and sends reports when GAM data is fresh (after 4 AM PT daily).
 """
 
-import asyncio
 import logging
-import os
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -27,66 +25,26 @@ from src.core.tools.media_buy_delivery import _get_media_buy_delivery_impl
 from src.core.utils import utc_flight_start
 from src.core.webhooks.delivery import WebhookTaskContext
 from src.core.webhooks.registration import accept_push_notification_config
+from src.services._scheduler_base import IntervalScheduler, make_singleton, parse_interval_env
 from src.services.protocol_webhook_service import get_protocol_webhook_service
 
 logger = logging.getLogger(__name__)
 
 # 1 hour because AdCP protocol has frequency options hourly, daily and monthly
 # Configurable via env var for testing
-SLEEP_INTERVAL_SECONDS = int(os.getenv("DELIVERY_WEBHOOK_INTERVAL") or "3600")
+SLEEP_INTERVAL_SECONDS: int = parse_interval_env("DELIVERY_WEBHOOK_INTERVAL", 3600)
 
 
-class DeliveryWebhookScheduler:
+class DeliveryWebhookScheduler(IntervalScheduler):
     """Scheduler for sending delivery reports via webhooks."""
 
     def __init__(self) -> None:
+        super().__init__(interval_seconds=SLEEP_INTERVAL_SECONDS, name="delivery webhook")
         self.webhook_service = get_protocol_webhook_service()
-        self.is_running = False
-        self._task: asyncio.Task | None = None
-        self._lock = asyncio.Lock()
 
-    async def start(self) -> None:
-        """Start the scheduler background task."""
-        async with self._lock:
-            if self.is_running:
-                logger.warning("Delivery webhook scheduler is already running")
-                return
-
-            self.is_running = True
-            self._task = asyncio.create_task(self._run_scheduler())
-            logger.info("Delivery webhook scheduler started")
-
-    async def stop(self) -> None:
-        """Stop the scheduler background task."""
-        async with self._lock:
-            if not self.is_running:
-                return
-
-            self.is_running = False
-            if self._task:
-                self._task.cancel()
-                try:
-                    await self._task
-                except asyncio.CancelledError:
-                    pass
-            logger.info("Delivery webhook scheduler stopped")
-
-    async def _run_scheduler(self) -> None:
-        """Main scheduler loop - runs on a fixed hourly cadence.
-
-        Sends immediately on startup (duplicate check prevents re-sending if
-        already sent in last 24 hours), then continues on hourly cadence.
-        """
-        while self.is_running:
-            try:
-                await self._send_reports()
-            except asyncio.CancelledError:
-                break
-            except Exception as e:
-                logger.error(f"Error in delivery webhook scheduler: {e}", exc_info=True)
-            finally:
-                # Wait before next batch
-                await asyncio.sleep(SLEEP_INTERVAL_SECONDS)
+    async def tick(self) -> None:
+        """Send reports for all active media buys with configured webhooks."""
+        await self._send_reports()
 
     async def _send_reports(self) -> None:
         """Send reports for all active media buys with configured webhooks."""
@@ -390,25 +348,14 @@ class DeliveryWebhookScheduler:
             raise
 
 
-# Global scheduler instance
-_scheduler: DeliveryWebhookScheduler | None = None
+# ---------------------------------------------------------------------------
+# Global singleton — derived from the shared factory, not hand-rolled.
+# make_singleton also registers the start/stop pair under the display name
+# below, which is what the app entry point iterates (#1197 review).
+# ---------------------------------------------------------------------------
 
-
-def get_delivery_webhook_scheduler() -> DeliveryWebhookScheduler:
-    """Get or create global scheduler instance."""
-    global _scheduler
-    if _scheduler is None:
-        _scheduler = DeliveryWebhookScheduler()
-    return _scheduler
-
-
-async def start_delivery_webhook_scheduler():
-    """Start the delivery webhook scheduler (called at application startup)."""
-    scheduler = get_delivery_webhook_scheduler()
-    await scheduler.start()
-
-
-async def stop_delivery_webhook_scheduler():
-    """Stop the delivery webhook scheduler (called at application shutdown)."""
-    scheduler = get_delivery_webhook_scheduler()
-    await scheduler.stop()
+(
+    get_delivery_webhook_scheduler,
+    start_delivery_webhook_scheduler,
+    stop_delivery_webhook_scheduler,
+) = make_singleton(DeliveryWebhookScheduler, name="delivery webhook")

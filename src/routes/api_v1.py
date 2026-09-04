@@ -355,11 +355,16 @@ async def create_media_buy(
         identity=identity,
         raw_wire_payload=raw_wire_payload,
     )
+
     return response.model_dump(mode="json")
 
 
 @router.put("/media-buys/{media_buy_id}")
-async def update_media_buy(media_buy_id: str, body: UpdateMediaBuyBody, identity: ResolvedIdentity = require_auth):
+async def update_media_buy(
+    media_buy_id: str,
+    body: UpdateMediaBuyBody,
+    identity: ResolvedIdentity = require_auth,
+):
     """Update an existing media buy (auth required)."""
     # Same context string as _build_update_request's boundary, so a malformed
     # object rejects with an identical message prefix wherever it validates.
@@ -389,6 +394,7 @@ async def update_media_buy(media_buy_id: str, body: UpdateMediaBuyBody, identity
         revision=body.revision,
         identity=identity,
     )
+
     return response.model_dump(mode="json")
 
 

@@ -9,10 +9,11 @@ from functools import wraps
 from typing import TYPE_CHECKING, NamedTuple, TypeVar
 
 from adcp.types import ContextObject
-from flask import abort, g, jsonify, redirect, session, url_for
+from flask import abort, flash, g, jsonify, redirect, session, url_for
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 from sqlalchemy.sql import Select
+from werkzeug.wrappers import Response
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Tenant, TenantManagementConfig, User
@@ -595,6 +596,22 @@ def echo_context(request_data: dict) -> ContextObject | None:
     if context_data and isinstance(context_data, dict):
         return ContextObject.model_construct(**context_data)
     return None
+
+
+def tenant_not_found_redirect() -> Response:
+    """Flash "Tenant not found" and redirect to the index.
+
+    Here rather than private to one blueprint: 37 sites across the admin
+    blueprints carry this same flash + redirect pair, and a module-private copy in
+    the newest of them was invisible to the other 13 (#1197 review). Returns the
+    response so callers can ``return`` it directly::
+
+        tenant = uow.tenant_config.get_tenant()
+        if not tenant:
+            return tenant_not_found_redirect()
+    """
+    flash("Tenant not found", "error")
+    return redirect(url_for("core.index"))
 
 
 def approve_media_buy_through_writer(media_buy_id: str, tenant_id: str, *, approved_by: str) -> ApprovalResult:

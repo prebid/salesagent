@@ -15,6 +15,8 @@ from unittest.mock import MagicMock, patch
 import pytest
 from sqlalchemy.exc import IntegrityError
 
+from src.core.exceptions import AdCPServiceUnavailableError
+
 
 class TestMediaBuyUoWCommitFailureCleanup:
     """MediaBuyUoW must clean up session even when commit() raises."""
@@ -82,7 +84,13 @@ class TestMediaBuyUoWCommitFailureCleanup:
 
         # After commit failure, session should still be cleaned up
         assert uow.session is None, "UoW.session not cleared after commit failure"
-        assert uow.media_buys is None, "UoW.media_buys not cleared after commit failure"
+        # "Cleared" is observable as the accessor REFUSING the read: repositories are
+        # exposed through RepositoryAccessor, which hands back the concrete
+        # repository inside an open block and raises the typed
+        # AdCPServiceUnavailableError outside one. Asserting `is None` would be
+        # asserting the shape the accessor exists to remove (#1197 review).
+        with pytest.raises(AdCPServiceUnavailableError):
+            _ = uow.media_buys
 
 
 class TestProductUoWCommitFailureCleanup:
@@ -140,4 +148,5 @@ class TestProductUoWCommitFailureCleanup:
                     pass
 
         assert uow.session is None, "UoW.session not cleared after commit failure"
-        assert uow.products is None, "UoW.products not cleared after commit failure"
+        with pytest.raises(AdCPServiceUnavailableError):
+            _ = uow.products

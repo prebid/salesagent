@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import os
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from src.core.resolved_identity import ResolvedIdentity
 from tests.factories.principal import PrincipalFactory
@@ -19,6 +19,24 @@ from tests.factories.principal import PrincipalFactory
 
 def _make_identity() -> ResolvedIdentity:
     return PrincipalFactory.make_identity(protocol="mcp")
+
+
+def _no_tmp_providers():
+    """Patch the TMP provider read ``get_adcp_capabilities`` performs.
+
+    The tool derives ``experimental_features`` from whether the tenant has a
+    syncable TMP provider, so it opens a ``TMPProviderUoW`` — this file's subject
+    is the MCP client pipeline, and it must not reach for Postgres to exercise it.
+    The handler deliberately catches only ``SQLAlchemyError`` (so a programming
+    error surfaces rather than silently un-declaring a live surface), which is why
+    the unit suite's no-real-connections tripwire is not swallowed and the
+    dependency has to be arranged here (#1197 review).
+    """
+    uow = MagicMock()
+    uow.__enter__ = MagicMock(return_value=uow)
+    uow.__exit__ = MagicMock(return_value=False)
+    uow.tmp_providers.has_syncable.return_value = False
+    return patch("src.core.tools.capabilities.TMPProviderUoW", return_value=uow)
 
 
 class TestMcpClientDispatch:
@@ -33,9 +51,12 @@ class TestMcpClientDispatch:
         identity = _make_identity()
 
         async def _call():
-            with patch(
-                "src.core.mcp_auth_middleware.resolve_identity_from_context",
-                return_value=identity,
+            with (
+                patch(
+                    "src.core.mcp_auth_middleware.resolve_identity_from_context",
+                    return_value=identity,
+                ),
+                _no_tmp_providers(),
             ):
                 async with Client(mcp) as client:
                     result = await client.call_tool("get_adcp_capabilities", {})
@@ -58,9 +79,12 @@ class TestMcpClientDispatch:
         identity = _make_identity()
 
         async def _call():
-            with patch(
-                "src.core.mcp_auth_middleware.resolve_identity_from_context",
-                return_value=identity,
+            with (
+                patch(
+                    "src.core.mcp_auth_middleware.resolve_identity_from_context",
+                    return_value=identity,
+                ),
+                _no_tmp_providers(),
             ):
                 async with Client(mcp) as client:
                     result = await client.call_tool(
@@ -91,6 +115,7 @@ class TestMcpClientDispatch:
                     return_value=identity,
                 ),
                 patch.dict(os.environ, {"ENVIRONMENT": "production"}),
+                _no_tmp_providers(),
             ):
                 async with Client(mcp) as client:
                     result = await client.call_tool(

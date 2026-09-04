@@ -7,7 +7,6 @@ header-read → key-lookup → hmac-compare flow.
 
 from __future__ import annotations
 
-import hmac
 import logging
 import os
 from functools import wraps
@@ -16,6 +15,7 @@ from typing import Any
 from flask import jsonify, request
 from sqlalchemy import select
 
+from src.core.auth_utils import credentials_equal
 from src.core.database.database_session import get_db_session
 from src.core.database.models import TenantManagementConfig
 
@@ -63,7 +63,7 @@ def require_api_key_auth(*, env_var: str, config_key: str, header: str) -> Any:
                 logger.error(f"API key not configured (env: {env_var}, db: {config_key})")
                 return jsonify({"error": f"API not configured. Set {env_var} environment variable."}), 503
 
-            if not hmac.compare_digest(api_key, valid_key):
+            if not credentials_equal(api_key, valid_key):
                 logger.warning(f"Invalid API key attempted (header: {header})")
                 return jsonify({"error": "Invalid API key"}), 401
 

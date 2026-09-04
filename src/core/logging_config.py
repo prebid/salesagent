@@ -231,9 +231,25 @@ def setup_oauth_logging() -> None:
 def log_safe(value: object) -> str:
     """Neutralize CR/LF in request-provided values before logging.
 
-    Buyer-supplied ids (creative_id, package_id) flow into log lines; a
-    newline embedded in one would forge log entries (CodeQL py/log-injection).
-    Response payloads and exception messages are NOT sanitized — buyers
-    correlate on exact ids.
+    The one CWE-117 / CodeQL ``py/log-injection`` neutralizer in the codebase.
+    Buyer-supplied ids (creative_id, package_id), tenant ids, provider names and
+    endpoints all flow into log lines; a newline embedded in one would forge log
+    entries.  Response payloads and exception messages are NOT sanitized —
+    buyers correlate on exact ids.
+
+    CR/LF are REMOVED, not replaced with a space.  That is what this function's
+    50 call sites were written against and what its downstream expectations
+    assert (``tests/unit/test_creative_blob_coercers.py`` pins
+    ``principal_id=p9`` for a value carrying an embedded newline).
+
+    #1197 deleted a second, diverged copy of this helper from
+    ``src/core/security/url_validator`` — the right move — but briefly settled
+    the divergence by retuning THIS one to substitute a space, which is a
+    behavior change across the whole call graph rather than a de-duplication.
+    A substitution character is arguably the better neutralizer (dropping the
+    break can weld ``id=abc\ndef`` into the plausible ``id=abcdef``), but
+    changing it is its own swept change: it needs a direct test for this helper
+    and every downstream expectation updated in the same commit.  Filed as a
+    separate concern rather than smuggled through a refactor (#1197 review).
     """
     return str(value).replace("\r", "").replace("\n", "")

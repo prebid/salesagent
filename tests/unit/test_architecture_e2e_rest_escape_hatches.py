@@ -413,6 +413,23 @@ EXPECTED_UNSUPPORTED_DECLARATIONS: frozenset[tuple[str, str, str]] = frozenset(
             "set_adapter_error",
             "adapter fault-injection has no server surface; needs an ADCP_TESTING fault-injection control (#1418)",
         ),
+        # TMP package sync: the collector must be reachable FROM the app
+        # container and serve TLS the generated CA covers. The compose capture
+        # service (webhooks.adcp.test, behind the shared tls-proxy) satisfies
+        # both, but records the JSON body only — while these scenarios assert the
+        # method, the /packages/sync path that grades provider_url(), and the
+        # Authorization header that is the one credential this feature transmits
+        # to a third party. Recording those on a service the webhook suites share
+        # is prebid/salesagent#2098. The same scenarios grade the fan-out on
+        # impl/a2a/mcp/rest, so the obligation is not un-graded — only this
+        # transport's copy of it is.
+        (
+            "tests/harness/_mixins.py",
+            "_ensure_tmp_collector",
+            "TMP package-sync needs a container-reachable collector serving TLS the generated CA covers; "
+            "the compose capture service is the only such endpoint and programming it is "
+            "prebid/salesagent#2098. The same scenarios grade the fan-out on impl/a2a/mcp/rest.",
+        ),
         # #1802 replaces the old _NO_E2E_REST_TAGS silent
         # parametrize-drop (invisible to both detectors in this module) with a
         # reviewable, pinned declaration. then_webhook_skipped_no_post's other

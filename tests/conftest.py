@@ -215,6 +215,7 @@ _ENTITY_PATTERNS: dict[str, list[str]] = {
         "mock_server_response",
         "tool_result_format",
         "tool_registration",
+        "http_utils",
     ],
     "workflow": [
         "workflow",
@@ -235,6 +236,10 @@ _ENTITY_PATTERNS: dict[str, list[str]] = {
         "review_agent",
         "task_management",
         "signals_agent",
+        "tmp_provider",
+        "tmp_health",
+        "tmp_sync",
+        "tmp_package_sync",
     ],
     "infra": [
         "tox_config",
@@ -248,6 +253,7 @@ _ENTITY_PATTERNS: dict[str, list[str]] = {
         "encryption",
         "json_type",
         "pgbouncer",
+        "scheduler",
         "scheduler_env",
         "slack_notification",
         "performance_index",

@@ -40,6 +40,8 @@ Covers:
 import os
 from unittest.mock import MagicMock, patch
 
+from tests.helpers.admin_client import make_super_admin_client
+
 
 class TestValidateAgentUrl:
     """validate_agent_url in media_buy_create validates format only (scheme + netloc).
@@ -95,15 +97,7 @@ SAFE_PUBLIC_URL = "https://93.184.216.34/agent"
 
 def _make_signals_agent_client():
     """Create a Flask test client authenticated as super admin for signals agent endpoints."""
-    from src.admin.app import create_app
-
-    app = create_app({"TESTING": True, "SECRET_KEY": "test-secret", "WTF_CSRF_ENABLED": False})
-    client = app.test_client()
-    with client.session_transaction() as sess:
-        sess["test_user"] = "test_super_admin@example.com"
-        sess["test_user_role"] = "super_admin"
-        sess["authenticated"] = True
-    return client
+    return make_super_admin_client()
 
 
 def _mock_db_for_signals_add(mock_db, tenant_id="default"):

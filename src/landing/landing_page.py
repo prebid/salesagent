@@ -8,6 +8,7 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from src.core.domain_config import (
     extract_subdomain_from_host,
+    get_protocol_for_domain,
     get_sales_agent_url,
     get_tenant_url,
     is_sales_agent_domain,
@@ -47,9 +48,9 @@ def _determine_base_url(virtual_host: str | None = None) -> str:
 
     # Development/local mode: use virtual_host if provided
     if virtual_host:
-        # Use http for localhost, https for everything else
-        scheme = "http" if "localhost" in virtual_host or virtual_host.startswith("127.") else "https"
-        return f"{scheme}://{virtual_host}"
+        # Shared predicate (src.core.domain_config): the substring form this
+        # replaced called my-localhost-mirror.example.com a local host.
+        return f"{get_protocol_for_domain(virtual_host)}://{virtual_host}"
 
     # Local development fallback (should rarely be reached)
     port = os.getenv("ADCP_SALES_PORT", "8080")
@@ -241,9 +242,8 @@ def generate_tenant_landing_page(tenant: dict, virtual_host: str | None = None) 
         # Single-tenant mode: use full URLs based on virtual_host (passed from request)
         # This ensures users see copy-pasteable URLs like http://localhost:55030/mcp
         if virtual_host:
-            # Use http for localhost, https for everything else
-            scheme = "http" if "localhost" in virtual_host or virtual_host.startswith("127.") else "https"
-            single_tenant_base = f"{scheme}://{virtual_host}"
+            # Shared predicate (src.core.domain_config), same question as above.
+            single_tenant_base = f"{get_protocol_for_domain(virtual_host)}://{virtual_host}"
         else:
             # Fallback to base_url if no virtual_host
             single_tenant_base = base_url

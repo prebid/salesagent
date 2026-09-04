@@ -41,9 +41,46 @@ from src.core.database.repositories.media_buy import MediaBuyRepository
 from src.core.database.repositories.product import ProductRepository
 from src.core.database.repositories.push_notification_config import PushNotificationConfigRepository
 from src.core.database.repositories.tenant_config import TenantConfigRepository
+from src.core.database.repositories.tmp_provider import TMPProviderRepository
 from src.core.database.repositories.workflow import WorkflowRepository
+from src.core.exceptions import AdCPServiceUnavailableError
 
 logger = logging.getLogger(__name__)
+
+
+class RepositoryAccessor[RepoT]:
+    """Exposes a UoW repository as a non-optional attribute.
+
+    The repositories a UoW owns are created by ``_init_repos`` on ``__enter__``
+    and cleared on ``__exit__``, so inside the ``with`` block they are always
+    present.  Typing them ``Repository | None`` pushed that fact onto every call
+    site, which then invented its own narrowing — bare ``assert`` in some files,
+    a typed ``raise`` in others, sixteen of them in one feature (#1197 review).
+    ``assert`` is the wrong one twice over: ``python -O`` strips it, and an
+    ``AssertionError`` escapes a protocol surface as an un-enveloped 500 rather
+    than the typed AdCP envelope the contract promises.
+
+    This descriptor answers the question once.  Callers read
+    ``uow.tmp_providers`` with no guard and get the concrete repository; reading
+    it outside an open session raises the typed
+    :class:`AdCPServiceUnavailableError` that the surfaces want anyway.
+    """
+
+    def __set_name__(self, owner: type, name: str) -> None:
+        self._name = name
+        self._slot = f"_repo_{name}"
+
+    def __get__(self, instance: object, owner: type | None = None) -> RepoT:
+        repo = getattr(instance, self._slot, None)
+        if repo is None:
+            raise AdCPServiceUnavailableError(
+                f"{self._name} repository unavailable.",
+                suggestion="Retry shortly; the sales agent could not open a database session.",
+            )
+        return repo
+
+    def __set__(self, instance: object, value: RepoT | None) -> None:
+        setattr(instance, self._slot, value)
 
 
 class BaseUoW:
@@ -129,11 +166,11 @@ class MediaBuyUoW(BaseUoW):
         tenant_id: Tenant scope for all repository queries.
     """
 
-    media_buys: MediaBuyRepository | None
-    products: ProductRepository | None
-    creatives: CreativeRepository | None
-    currency_limits: CurrencyLimitRepository | None
-    idempotency_attempts: IdempotencyAttemptRepository | None
+    media_buys: RepositoryAccessor[MediaBuyRepository] = RepositoryAccessor()
+    products: RepositoryAccessor[ProductRepository] = RepositoryAccessor()
+    creatives: RepositoryAccessor[CreativeRepository] = RepositoryAccessor()
+    currency_limits: RepositoryAccessor[CurrencyLimitRepository] = RepositoryAccessor()
+    idempotency_attempts: RepositoryAccessor[IdempotencyAttemptRepository] = RepositoryAccessor()
 
     def _init_repos(self) -> None:
         assert self._session is not None
@@ -161,7 +198,7 @@ class ProductUoW(BaseUoW):
         tenant_id: Tenant scope for all repository queries.
     """
 
-    products: ProductRepository | None
+    products: RepositoryAccessor[ProductRepository] = RepositoryAccessor()
 
     def _init_repos(self) -> None:
         assert self._session is not None
@@ -181,7 +218,7 @@ class WorkflowUoW(BaseUoW):
         tenant_id: Tenant scope for all repository queries.
     """
 
-    workflows: WorkflowRepository | None
+    workflows: RepositoryAccessor[WorkflowRepository] = RepositoryAccessor()
 
     def _init_repos(self) -> None:
         assert self._session is not None
@@ -201,7 +238,8 @@ class TenantConfigUoW(BaseUoW):
         tenant_id: Tenant scope for all repository queries.
     """
 
-    tenant_config: TenantConfigRepository | None
+    # Non-optional to callers — see RepositoryAccessor.
+    tenant_config: RepositoryAccessor[TenantConfigRepository] = RepositoryAccessor()
 
     def _init_repos(self) -> None:
         assert self._session is not None
@@ -222,7 +260,7 @@ class AccountUoW(BaseUoW):
 
     """
 
-    accounts: AccountRepository | None
+    accounts: RepositoryAccessor[AccountRepository] = RepositoryAccessor()
 
     def _init_repos(self) -> None:
         assert self._session is not None
@@ -243,7 +281,7 @@ class PushNotificationConfigUoW(BaseUoW):
         tenant_id: Tenant scope for all repository queries.
     """
 
-    push_notification_configs: PushNotificationConfigRepository | None
+    push_notification_configs: RepositoryAccessor[PushNotificationConfigRepository] = RepositoryAccessor()
 
     def _init_repos(self) -> None:
         assert self._session is not None
@@ -263,14 +301,14 @@ class CreativeUoW(BaseUoW):
         tenant_id: Tenant scope for all repository queries.
     """
 
-    creatives: CreativeRepository | None
-    assignments: CreativeAssignmentRepository | None
+    creatives: RepositoryAccessor[CreativeRepository] = RepositoryAccessor()
+    assignments: RepositoryAccessor[CreativeAssignmentRepository] = RepositoryAccessor()
     # Assigning a creative can move its media buy out of draft, and a media-buy
     # status change carries the revision bump and the confirmed_at stamp — both
     # owned by MediaBuyRepository. The UoW already reaches the entity
     # (find_package_with_media_buy returns it), so it needs the repository that
     # may legally write it rather than a bare attribute assignment.
-    media_buys: MediaBuyRepository | None
+    media_buys: RepositoryAccessor[MediaBuyRepository] = RepositoryAccessor()
 
     def _init_repos(self) -> None:
         assert self._session is not None
@@ -299,12 +337,12 @@ class AdminCreativeUoW(BaseUoW):
 
     """
 
-    creatives: CreativeRepository | None
-    assignments: CreativeAssignmentRepository | None
-    media_buys: MediaBuyRepository | None
-    products: ProductRepository | None
-    workflows: WorkflowRepository | None
-    tenant_config: TenantConfigRepository | None
+    creatives: RepositoryAccessor[CreativeRepository] = RepositoryAccessor()
+    assignments: RepositoryAccessor[CreativeAssignmentRepository] = RepositoryAccessor()
+    media_buys: RepositoryAccessor[MediaBuyRepository] = RepositoryAccessor()
+    products: RepositoryAccessor[ProductRepository] = RepositoryAccessor()
+    workflows: RepositoryAccessor[WorkflowRepository] = RepositoryAccessor()
+    tenant_config: RepositoryAccessor[TenantConfigRepository] = RepositoryAccessor()
 
     def _init_repos(self) -> None:
         assert self._session is not None
@@ -321,4 +359,36 @@ class AdminCreativeUoW(BaseUoW):
         self.media_buys = None
         self.products = None
         self.workflows = None
+        self.tenant_config = None
+
+
+class TMPProviderUoW(BaseUoW):
+    """Unit of Work for TMP Provider operations.
+
+    Wraps a database session and provides a tenant-scoped TMPProviderRepository
+    and TenantConfigRepository.  The tenant_config repo is included so that
+    admin blueprint handlers can resolve the Tenant row without a raw
+    ``select(Tenant)`` — matching the pattern used by the discovery route.
+
+    Auto-commits on clean exit, rolls back on exception.
+
+    Args:
+        tenant_id: Tenant scope for all repository queries.
+
+    beads: salesagent-tmp-sync
+    """
+
+    # Non-optional to callers: see RepositoryAccessor. Reading either outside an
+    # open session raises AdCPServiceUnavailableError instead of handing back a
+    # None that every call site has to narrow for itself (#1197 review).
+    tmp_providers: RepositoryAccessor[TMPProviderRepository] = RepositoryAccessor()
+    tenant_config: RepositoryAccessor[TenantConfigRepository] = RepositoryAccessor()
+
+    def _init_repos(self) -> None:
+        assert self._session is not None
+        self.tmp_providers = TMPProviderRepository(self._session, self._tenant_id)
+        self.tenant_config = TenantConfigRepository(self._session, self._tenant_id)
+
+    def _clear_repos(self) -> None:
+        self.tmp_providers = None
         self.tenant_config = None

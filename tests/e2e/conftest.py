@@ -5,7 +5,9 @@ These fixtures are for complete system tests that exercise the full AdCP protoco
 Implements testing hooks from https://github.com/adcontextprotocol/adcp/pull/34
 """
 
+import functools
 import os
+import shutil
 import socket
 import subprocess
 import sys
@@ -27,6 +29,43 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 
 # Import contract validation - this automatically validates tool calls at test collection time
 from tests.e2e.conftest_contract_validation import pytest_collection_modifyitems  # noqa: F401
+
+
+@functools.cache
+def compose_cmd() -> list[str] | None:
+    """Resolve the Docker Compose CLI, or ``None`` when Compose is unavailable.
+
+    Prefers Compose v2 (``docker compose``, the plugin shipped with current
+    Docker) and falls back to the standalone v1 binary (``docker-compose``).
+    Every call site used to hardcode ``docker-compose``, so the whole e2e suite
+    errored with ``FileNotFoundError`` on any machine that has only v2 —
+    which is the default on current Docker installs.
+
+    ``None`` means no usable Compose: that is the in-network runner, which
+    drives the stack by other means (see the seed-script branch in
+    ``docker_services_e2e``).
+
+    Each candidate is probed with ``ls``, which contacts the daemon — not with
+    ``version``, which succeeds from a CLI that has no socket. Every call site
+    here needs the daemon (``up``, ``down``, ``exec``, ``ps``), so a CLI-present
+    but daemon-less runner must resolve to ``None`` exactly as it did when the
+    check was ``shutil.which("docker-compose")``.
+    """
+    for candidate in (["docker", "compose"], ["docker-compose"]):
+        if not shutil.which(candidate[0]):
+            continue
+        probe = subprocess.run([*candidate, "ls"], capture_output=True, check=False)
+        if probe.returncode == 0:
+            return candidate
+    return None
+
+
+def _compose_or_fail() -> list[str]:
+    """``compose_cmd()`` for call sites that cannot proceed without Compose."""
+    cmd = compose_cmd()
+    if cmd is None:
+        pytest.skip("Docker Compose not available (neither `docker compose` nor `docker-compose`)")
+    return cmd
 
 
 def e2e_host() -> str:
@@ -258,7 +297,7 @@ def docker_services_e2e(request):
         # Always clean up existing services and volumes to ensure fresh state
         print("Cleaning up any existing Docker services and volumes...")
         subprocess.run(
-            ["docker-compose", "-f", "docker-compose.e2e.yml", "down", "-v"], capture_output=True, check=False
+            [*_compose_or_fail(), "-f", "docker-compose.e2e.yml", "down", "-v"], capture_output=True, check=False
         )
 
         # Explicitly remove volumes in case docker-compose down -v didn't work
@@ -347,7 +386,7 @@ def docker_services_e2e(request):
         print("Step 1/2: Building Docker images...")
         compose_files = ["-f", "docker-compose.e2e.yml", "-f", "docker-compose.e2e.ports.yml"]
         build_result = subprocess.run(
-            ["docker-compose", *compose_files, "build", "--progress=plain"],
+            [*_compose_or_fail(), *compose_files, "build", "--progress=plain"],
             env=env,
             capture_output=False,  # Show build output
         )
@@ -356,7 +395,7 @@ def docker_services_e2e(request):
             raise subprocess.CalledProcessError(build_result.returncode, "docker-compose build")
 
         print("Step 2/2: Starting services...")
-        subprocess.run(["docker-compose", *compose_files, "up", "-d"], check=True, env=env)
+        subprocess.run([*_compose_or_fail(), *compose_files, "up", "-d"], check=True, env=env)
 
         # Wait for unified server to be healthy (MCP + A2A + Admin all on same port)
         max_wait = 120  # Increased from 60 to 120 seconds for CI
@@ -376,7 +415,7 @@ def docker_services_e2e(request):
                 # Show container status for debugging
                 try:
                     ps_result = subprocess.run(
-                        ["docker-compose", "-f", "docker-compose.e2e.yml", "ps", "--format", "table"],
+                        [*_compose_or_fail(), "-f", "docker-compose.e2e.yml", "ps", "--format", "table"],
                         capture_output=True,
                         text=True,
                         timeout=2,
@@ -411,7 +450,7 @@ def docker_services_e2e(request):
                 try:
                     print(f"\n📋 {service} logs (last 100 lines):")
                     result = subprocess.run(
-                        ["docker-compose", "-f", "docker-compose.e2e.yml", "logs", "--tail=100", service],
+                        [*_compose_or_fail(), "-f", "docker-compose.e2e.yml", "logs", "--tail=100", service],
                         capture_output=True,
                         text=True,
                         timeout=5,
@@ -427,7 +466,10 @@ def docker_services_e2e(request):
             try:
                 print("\n📊 Container status:")
                 ps_result = subprocess.run(
-                    ["docker-compose", "-f", "docker-compose.e2e.yml", "ps"], capture_output=True, text=True, timeout=2
+                    [*_compose_or_fail(), "-f", "docker-compose.e2e.yml", "ps"],
+                    capture_output=True,
+                    text=True,
+                    timeout=2,
                 )
                 print(ps_result.stdout)
             except Exception as e:
@@ -469,11 +511,13 @@ def docker_services_e2e(request):
     # binary, so it runs the seed script itself using init_env above (which
     # carries the corrected DATABASE_URL set above) — the script only needs a
     # DB connection, not Docker.
-    import shutil
-
-    if shutil.which("docker-compose"):
+    #
+    # compose_cmd() resolves whichever CLI is present ("docker compose" v2 or
+    # the legacy "docker-compose"), so a v2-only host still takes the exec path.
+    _compose = compose_cmd()
+    if _compose is not None:
         init_cmd = [
-            "docker-compose",
+            *_compose,
             "-f",
             "docker-compose.e2e.yml",
             "exec",
@@ -607,7 +651,7 @@ def docker_services_e2e(request):
         try:
             # Stop and remove containers + volumes
             subprocess.run(
-                ["docker-compose", "-f", "docker-compose.e2e.yml", "down", "-v"],
+                [*_compose_or_fail(), "-f", "docker-compose.e2e.yml", "down", "-v"],
                 capture_output=True,
                 check=False,
                 timeout=30,

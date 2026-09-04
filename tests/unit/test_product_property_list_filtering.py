@@ -331,9 +331,17 @@ class TestCapabilitiesPropertyListFiltering:
         mock_uow.__exit__ = MagicMock(return_value=False)
         mock_uow.tenant_config = mock_repo
 
+        # The experimental-features read opens a real TMPProviderUoW; this is a
+        # unit test about a feature flag, so it must not reach for Postgres.
+        mock_tmp_uow = MagicMock()
+        mock_tmp_uow.__enter__ = MagicMock(return_value=mock_tmp_uow)
+        mock_tmp_uow.__exit__ = MagicMock(return_value=False)
+        mock_tmp_uow.tmp_providers.has_syncable.return_value = False
+
         with (
             patch("src.core.tools.capabilities.get_principal_object", return_value=None),
             patch("src.core.tools.capabilities.TenantConfigUoW", return_value=mock_uow),
+            patch("src.core.tools.capabilities.TMPProviderUoW", return_value=mock_tmp_uow),
         ):
             response = _get_adcp_capabilities_impl(None, identity)
 

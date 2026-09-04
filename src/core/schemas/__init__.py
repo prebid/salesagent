@@ -16,6 +16,7 @@ from src.core.schemas.product import *  # noqa: F401,F403
 from src.core.schemas.delivery import *  # noqa: F401,F403
 from src.core.schemas.creative import *  # noqa: F401, F403
 from src.core.schemas.account import *  # noqa: F401, F403
+from src.core.schemas.tmp_provider import *  # noqa: F401, F403
 from src.core.schemas.creative import Creative as _Creative
 from src.core.schemas.creative import CreativeApproval as _CreativeApproval
 # isort: on

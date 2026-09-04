@@ -45,12 +45,14 @@ class ResolvedIdentity(BaseModel, frozen=True):
 
 
 from src.core.http_utils import get_header_case_insensitive as _get_header_case_insensitive
+from src.core.http_utils import parse_bearer_token as _parse_bearer_token
 
 
 def _extract_auth_token(headers: dict) -> tuple[str | None, str | None]:
     """Extract auth token from headers.
 
-    Checks x-adcp-auth first, then Authorization: Bearer.
+    Checks x-adcp-auth first, then Authorization: Bearer via the shared
+    ``parse_bearer_token()`` helper (canonical Bearer parser).
 
     Returns:
         (token, source) tuple — source is "x-adcp-auth" or "Authorization: Bearer"
@@ -59,11 +61,10 @@ def _extract_auth_token(headers: dict) -> tuple[str | None, str | None]:
     if token:
         return token, "x-adcp-auth"
 
-    authorization = _get_header_case_insensitive(headers, "Authorization")
-    if authorization and authorization.lower().startswith("bearer "):
-        potential_token = authorization[7:].strip()
-        if potential_token:
-            return potential_token, "Authorization: Bearer"
+    authorization = _get_header_case_insensitive(headers, "Authorization") or ""
+    bearer_token = _parse_bearer_token(authorization)
+    if bearer_token:
+        return bearer_token, "Authorization: Bearer"
 
     return None, None
 

@@ -22,6 +22,7 @@ from src.core.schemas._base import (
     CreateMediaBuySuccess,
 )
 from tests.harness._base import IntegrationEnv
+from tests.harness._mixins import TMPSyncMixin
 from tests.harness.egress import EgressHatchMixin
 from tests.harness.transport import DeliverResult
 
@@ -68,7 +69,7 @@ def _restore_creative_ids(req: CreateMediaBuyRequest, flat: dict[str, Any]) -> N
             flat_pkgs[i]["creative_ids"] = cids
 
 
-class MediaBuyCreateEnv(EgressHatchMixin, IntegrationEnv):
+class MediaBuyCreateEnv(TMPSyncMixin, EgressHatchMixin, IntegrationEnv):
     """Integration test environment for _create_media_buy_impl.
 
     Mocks external services (adapter, audit, slack, context manager).
@@ -76,6 +77,16 @@ class MediaBuyCreateEnv(EgressHatchMixin, IntegrationEnv):
     including the egress seam's ingest verdict on webhook URLs, which is why
     the env carries ``set_egress_hatches`` (the @egress ingest-twin scenarios
     pin the hatch posture the refusal is graded under).
+
+    :class:`~tests.harness._mixins.TMPSyncMixin` is mixed in because every
+    create/update dispatched here fires the TMP package sync at the transport
+    boundary. Scenarios that grade it call ``register_tmp_provider()`` /
+    ``await_tmp_sync()``; every other scenario gets the same seam as a no-op and,
+    crucially, gets its fire-and-forget threads drained at ``__exit__`` instead of
+    leaving them to open DB sessions after the test's scope (#1197 review).
+
+    Both mixins are method-only (``EgressHatchMixin`` registers its posture
+    patcher through ``_guard``), so the order carries no lifecycle meaning.
     """
 
     EXTERNAL_PATCHES = {

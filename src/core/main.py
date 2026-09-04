@@ -1,5 +1,5 @@
 import logging
-from typing import Any
+from typing import Any, Literal
 
 from fastmcp import FastMCP
 from fastmcp.server.context import Context
@@ -76,6 +76,67 @@ except (RuntimeError, Exception) as e:
 
 from contextlib import asynccontextmanager
 
+# ---------------------------------------------------------------------------
+# Scheduler registry — the three interval schedulers, in startup order.
+#
+# These are module *imports*, not dotted strings resolved at runtime: a
+# scheduler module that is renamed, moved or stops registering its lifecycle
+# pair fails here, at import, instead of being silently absent behind the
+# startup `except Exception` below.  Each module registers its own start/stop
+# callables and display name via `make_singleton` (#1197 review).
+#
+# Order is explicit rather than inherited from whichever import ran first:
+# startup iterates forward, shutdown in reverse (LIFO).
+# ---------------------------------------------------------------------------
+from src.services import (
+    delivery_webhook_scheduler,
+    media_buy_status_scheduler,
+    tmp_health_scheduler,
+)
+from src.services._scheduler_base import RegisteredScheduler, registered_scheduler
+
+_SCHEDULER_MODULES = (
+    delivery_webhook_scheduler,
+    media_buy_status_scheduler,
+    tmp_health_scheduler,
+)
+
+
+def _registered_schedulers() -> list[RegisteredScheduler]:
+    """The registered lifecycle pairs, in declared startup order."""
+    return [registered_scheduler(module) for module in _SCHEDULER_MODULES]
+
+
+# Explicit verb forms for _run_scheduler log messages.
+# Using string templates like "%sing" / "%sed" produces "Stoping"/"stoped" —
+# anyone grepping deploy logs for "Stopping"/"stopped" misses all three
+# schedulers. The verb is typed, and this table is indexed directly rather than
+# via .get(<derivation>), so there is no wrong-form fallback to retain.
+_SCHEDULER_VERB_FORMS: dict[Literal["start", "stop"], tuple[str, str]] = {
+    "start": ("Starting", "started"),
+    "stop": ("Stopping", "stopped"),
+}
+
+
+async def _run_scheduler(verb: Literal["start", "stop"], scheduler: RegisteredScheduler) -> None:
+    """Call one scheduler lifecycle function, logging success/failure.
+
+    Extracted from the identical ``_start_scheduler`` / ``_stop_scheduler``
+    pair — they differed only in the verb string used in log messages.
+
+    Args:
+        verb:      Lifecycle verb — ``"start"`` or ``"stop"``.
+        scheduler: The registered scheduler to act on.
+    """
+    present, past = _SCHEDULER_VERB_FORMS[verb]
+    fn = scheduler.start if verb == "start" else scheduler.stop
+    logger.info("%s %s scheduler...", present, scheduler.name)
+    try:
+        await fn()
+        logger.info("✅ %s scheduler %s", scheduler.name, past)
+    except Exception as e:
+        logger.error("Failed to %s %s scheduler: %s", verb, scheduler.name, e, exc_info=True)
+
 
 def _background_schedulers_enabled() -> bool:
     """Whether to start the background schedulers on app startup.
@@ -99,7 +160,11 @@ def _background_schedulers_enabled() -> bool:
 # Lifespan context manager for FastMCP startup/shutdown
 @asynccontextmanager
 async def lifespan_context(app):
-    """Handle application startup and shutdown."""
+    """Handle application startup and shutdown.
+
+    Schedulers are started in registry order and stopped in reverse (LIFO)
+    so dependencies are torn down cleanly.
+    """
     schedulers_enabled = _background_schedulers_enabled()
     if not schedulers_enabled:
         # WARNING, not INFO: this is a test-only knob (see
@@ -110,52 +175,18 @@ async def lifespan_context(app):
             "media-buy status transitions and delivery webhooks will NOT run. "
             "This is a test-only knob; unset it in production."
         )
+        yield
+        return
 
-    if schedulers_enabled:
-        # Startup: Initialize delivery webhook scheduler
-        from src.services.delivery_webhook_scheduler import start_delivery_webhook_scheduler
+    schedulers = _registered_schedulers()
 
-        logger.info("Starting delivery webhook scheduler...")
-        try:
-            await start_delivery_webhook_scheduler()
-            logger.info("✅ Delivery webhook scheduler started")
-        except Exception as e:
-            logger.error(f"Failed to start delivery webhook scheduler: {e}", exc_info=True)
-
-        # Startup: Initialize media buy status scheduler
-        from src.services.media_buy_status_scheduler import start_media_buy_status_scheduler
-
-        logger.info("Starting media buy status scheduler...")
-        try:
-            await start_media_buy_status_scheduler()
-            logger.info("✅ Media buy status scheduler started")
-        except Exception as e:
-            logger.error(f"Failed to start media buy status scheduler: {e}", exc_info=True)
+    for scheduler in schedulers:
+        await _run_scheduler("start", scheduler)
 
     yield
 
-    if not schedulers_enabled:
-        return
-
-    # Shutdown: Stop media buy status scheduler
-    from src.services.media_buy_status_scheduler import stop_media_buy_status_scheduler
-
-    logger.info("Stopping media buy status scheduler...")
-    try:
-        await stop_media_buy_status_scheduler()
-        logger.info("✅ Media buy status scheduler stopped")
-    except Exception as e:
-        logger.error(f"Failed to stop media buy status scheduler: {e}", exc_info=True)
-
-    # Shutdown: Stop delivery webhook scheduler
-    from src.services.delivery_webhook_scheduler import stop_delivery_webhook_scheduler
-
-    logger.info("Stopping delivery webhook scheduler...")
-    try:
-        await stop_delivery_webhook_scheduler()
-        logger.info("✅ Delivery webhook scheduler stopped")
-    except Exception as e:
-        logger.error(f"Failed to stop delivery webhook scheduler: {e}", exc_info=True)
+    for scheduler in reversed(schedulers):
+        await _run_scheduler("stop", scheduler)
 
 
 mcp = FastMCP(

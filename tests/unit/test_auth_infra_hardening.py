@@ -71,3 +71,53 @@ class TestNoRelativePathOpens:
         for lineno, line in enumerate(source.splitlines(), 1):
             if 'open("src/' in line or "open('src/" in line:
                 pytest.fail(f"{rel_path}:{lineno} uses relative open() path: {line.strip()}")
+
+
+class TestCredentialCompareSurvivesNonAsciiHeaders:
+    """A malformed credential header must be a non-match, never an exception.
+
+    ``hmac.compare_digest`` raises ``TypeError`` on ``str`` operands carrying a
+    non-ASCII character, and every credential compare in this codebase reads its
+    presented value from a request header — which Starlette/Werkzeug decode as
+    latin-1, so any byte > 0x7F arrives as exactly such a character. Before
+    ``credentials_equal`` that raised out of the authentication check with no
+    handler above it, so one malformed ``Authorization`` header returned 500
+    instead of 401 on public endpoints (#1197 review).
+    """
+
+    def test_non_ascii_presented_credential_is_a_non_match(self):
+        """A non-ASCII presented credential returns False rather than raising."""
+        from src.core.auth_utils import credentials_equal
+
+        assert credentials_equal("kéy-from-header", "stored-admin-token") is False
+
+    def test_non_ascii_stored_credential_is_a_non_match(self):
+        """The same holds when the *stored* side carries the non-ASCII character."""
+        from src.core.auth_utils import credentials_equal
+
+        assert credentials_equal("token-from-header", "stored-tökén") is False
+
+    def test_identical_non_ascii_credentials_still_match(self):
+        """Non-ASCII is not rejected wholesale — an exact match is still a match."""
+        from src.core.auth_utils import credentials_equal
+
+        assert credentials_equal("tökén", "tökén") is True
+
+    def test_equal_and_unequal_ascii_credentials_are_unchanged(self):
+        """The ASCII behaviour compare_digest provided is preserved exactly."""
+        from src.core.auth_utils import credentials_equal
+
+        assert credentials_equal("same-token", "same-token") is True
+        assert credentials_equal("some-token", "other-token") is False
+
+    def test_no_raw_string_compare_digest_remains_on_a_credential_path(self):
+        """No call site may re-introduce the raising ``str`` compare.
+
+        Both header-fed credential compares (``get_principal_from_token``'s
+        admin-token branch and ``admin.auth_helpers``' API-key decorator) route
+        through the one helper; a third copy would carry the 500 back.
+        """
+        for module in ("src/core/auth_utils.py", "src/admin/auth_helpers.py"):
+            source = (PROJECT_ROOT / module).read_text()
+            compares = [line for line in source.splitlines() if "compare_digest(" in line and "def " not in line]
+            assert all("encode(" in line for line in compares), f"{module}: raw str compare_digest on a credential"

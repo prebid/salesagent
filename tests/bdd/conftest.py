@@ -82,6 +82,8 @@ pytest_plugins = [
     "tests.bdd.steps.domain.uc_brand_shorthand",
     "tests.bdd.steps.domain.compat_normalization",
     "tests.bdd.steps.domain.local_constraint_relaxations",
+    "tests.bdd.steps.domain.tmp_capability_declaration",
+    "tests.bdd.steps.domain.tmp_package_sync",
 ]
 
 # ---------------------------------------------------------------------------
@@ -3680,6 +3682,13 @@ def _seed_update_with_mb_existing(ctx: dict, env: object) -> None:
     ctx["existing_media_buy"] = existing_media_buy
 
 
+def _seed_tmp_capabilities(ctx: dict, env: object) -> None:
+    """CapabilitiesEnv seeding: the TMP capability steps read tenant + principal."""
+    tenant, principal = env.setup_default_data()
+    ctx["tenant"] = tenant
+    ctx["principal"] = principal
+
+
 def _seed_default_data(ctx: dict, env: object) -> None:
     """Envs whose setup is a bare ``setup_default_data()``."""
     env.setup_default_data()
@@ -4069,6 +4078,34 @@ ENV_ROUTES: list[EnvRoute] = [
         when=_uc("UC-004", lambda m: storyboard_spec.uc004_harness(m) == "poll"),
         env_builder=_env("tests.harness.delivery_poll.DeliveryPollEnv", principal_id="buyer-001"),
         seed=_seed_delivery_poll,
+    ),
+    # ── TMP (locally-added features, no upstream storyboard) ───────────────
+    # Routed by `when` rather than a `uc` bucket: `storyboard_spec.detect_uc`
+    # answers for the upstream BR-UC storyboards, and these two features are
+    # local to this branch, so widening the shared resolver would put a bucket
+    # there that no storyboard backs. A predicate row is exactly the shape the
+    # registry documents for that case, and it keeps both sides — the fixture and
+    # scripts/audit — answering from the same row (#1197 review).
+    EnvRoute(
+        tag="tmp-package-sync",
+        when=lambda m: any(t.startswith("T-TMP-SYNC") for t in m),
+        # MediaBuyDualEnv, not MediaBuyCreateEnv: the update scenario needs the
+        # real per-transport update wrappers, and the create scenario runs on the
+        # same env so both halves of the obligation are graded through one seam.
+        # The TMP observable itself lives on TMPSyncMixin (inherited from
+        # MediaBuyCreateEnv).
+        env_builder=_env("tests.harness.media_buy_dual.MediaBuyDualEnv"),
+        seed=_seed_media_buy_chain,
+    ),
+    EnvRoute(
+        tag="tmp-capability-declaration",
+        when=lambda m: any(t.startswith("T-TMP-CAPS") for t in m),
+        # CapabilitiesEnv, not MediaBuyDualEnv: the obligation is what
+        # get_adcp_capabilities emits, and this env is the one that dispatches it
+        # on every transport (REST_ENDPOINT = /api/v1/capabilities). Registering
+        # the provider row is the Given's job, so nothing here presumes one.
+        env_builder=_env("tests.harness.capabilities.CapabilitiesEnv"),
+        seed=_seed_tmp_capabilities,
     ),
     # ── UC-019 ──────────────────────────────────────────────────────────────
     EnvRoute(

@@ -1481,11 +1481,6 @@ def push_creative_to_existing_buy(
 
     try:
         with AdminCreativeUoW(tenant_id) as uow:
-            assert uow.creatives is not None
-            assert uow.assignments is not None
-            assert uow.media_buys is not None
-            assert uow.tenant_config is not None
-
             tenant_obj = uow.tenant_config.get_tenant()
             if not tenant_obj:
                 return False, f"Tenant {tenant_id} not found"
@@ -1830,6 +1825,7 @@ async def _validate_and_convert_format_ids(
 
 from src.services.setup_checklist_service import SetupIncompleteError, validate_setup_complete
 from src.services.slack_notifier import get_slack_notifier
+from src.services.tmp_provider_sync import fires_tmp_sync
 
 # Scope component of the idempotency cache key (see IdempotencyAttempt.tool_name).
 _IDEMPOTENCY_TOOL_NAME = "create_media_buy"
@@ -1867,8 +1863,6 @@ def _raise_degraded_replay_outcome(
     from src.core.database.repositories import MediaBuyUoW
 
     with MediaBuyUoW(tenant_id) as uow:
-        assert uow.media_buys is not None
-        assert uow.idempotency_attempts is not None
         existing = uow.media_buys.find_by_idempotency_key(idempotency_key, principal_id, account_id=account_id)
         if existing is None:
             # Impossible-state guard: the race resolved, yet no buy carries the key.
@@ -1986,7 +1980,6 @@ def _lookup_cached_replay(
     from src.core.database.repositories import MediaBuyUoW
 
     with MediaBuyUoW(tenant_id) as uow:
-        assert uow.idempotency_attempts is not None
         cached = uow.idempotency_attempts.find_by_key(
             principal_id=principal_id,
             account_id=account_id,
@@ -2028,7 +2021,6 @@ def _maybe_evict_expired(tenant_id: str) -> None:
 
     try:
         with MediaBuyUoW(tenant_id) as uow:
-            assert uow.idempotency_attempts is not None
             uow.idempotency_attempts.expire_old()
     except Exception:
         logger.warning("Best-effort idempotency cache eviction failed for tenant %s", tenant_id, exc_info=True)
@@ -2088,7 +2080,6 @@ def _cache_and_return(
 
     try:
         with MediaBuyUoW(identity.tenant_id) as uow:
-            assert uow.idempotency_attempts is not None
             uow.idempotency_attempts.record_success(
                 principal_id=identity.principal_id,
                 account_id=identity.account_id,
@@ -2214,8 +2205,10 @@ def _resolve_idempotency_race_or_raise(
     )
 
 
+@fires_tmp_sync
 async def _create_media_buy_impl(
     req: CreateMediaBuyRequest,
+    *,
     push_notification_config: PushNotificationConfig | None = None,
     config_id: str | None = None,
     identity: ResolvedIdentity | None = None,
@@ -2393,7 +2386,6 @@ async def _create_media_buy_impl(
             row_id = config_id or f"pnc_{uuid.uuid4().hex[:16]}"
 
             with PushNotificationConfigUoW(tenant["tenant_id"]) as pnc_uow:
-                assert pnc_uow.push_notification_configs is not None
                 _config, created = pnc_uow.push_notification_configs.upsert(
                     registration,
                     config_id=row_id,
@@ -3076,7 +3068,6 @@ async def _create_media_buy_impl(
             # Repository handles raw_request serialization + package_id injection at the DB boundary
             try:
                 with MediaBuyUoW(tenant["tenant_id"]) as pending_uow:
-                    assert pending_uow.media_buys is not None
                     pending_uow.media_buys.create_from_request(
                         media_buy_id=media_buy_id,
                         req=req,
@@ -3245,7 +3236,6 @@ async def _create_media_buy_impl(
                 with MediaBuyUoW(tenant["tenant_id"]) as assign_uow:
                     # FIXME(#1788): assignment creation should use repository methods
                     assert assign_uow.session is not None
-                    assert assign_uow.creatives is not None
                     session = assign_uow.session
                     # Batch load all creatives upfront
                     all_creative_ids = []
@@ -3865,7 +3855,10 @@ async def _create_media_buy_impl(
         # Repository handles raw_request serialization at the DB boundary
         try:
             with MediaBuyUoW(tenant["tenant_id"]) as create_uow:
-                assert create_uow.media_buys is not None
+                # No `assert create_uow.media_buys is not None` here: MediaBuyUoW
+                # exposes its repositories through RepositoryAccessor, which hands
+                # back the concrete repository inside the `with` block and raises the
+                # typed AdCPServiceUnavailableError outside it (#1197 review).
                 created_row = create_uow.media_buys.create_from_request(
                     # The adapter has already returned by this point (`response` is
                     # its reply), so the seller HAS committed -- including when the
@@ -3947,6 +3940,13 @@ async def _create_media_buy_impl(
                         "creative_ids": getattr(resp_package, "creative_ids", None),
                         "creative_assignments": getattr(resp_package, "creative_assignments", None),
                         "format_ids_to_provide": getattr(resp_package, "format_ids_to_provide", None),
+                        # The REQUEST's eligible formats for this package. The
+                        # approval path already persists this key; this path did
+                        # not, so the value existed on some rows and not others —
+                        # and the TMP package sync, which puts it on the wire as
+                        # available-package.json's `format_ids`, could never find
+                        # it for a normally-created buy (#1197 review).
+                        "format_ids": getattr(request_pkg, "format_ids", None) if request_pkg else None,
                         "paused": paused,  # Store paused state (adcp 2.12.0)
                         "pricing_info": pricing_info_for_package,  # Store pricing info for UI display
                         "impressions": impressions,  # Store impressions for display
@@ -3991,7 +3991,6 @@ async def _create_media_buy_impl(
                 platform_line_item_ids = getattr(response, "_platform_line_item_ids", {})
 
                 if response.media_buy_id:
-                    assert auto_pkg_uow.media_buys is not None
                     _persist_adapter_package_ids(
                         auto_pkg_uow.media_buys,
                         media_buy_id=response.media_buy_id,
@@ -4007,7 +4006,6 @@ async def _create_media_buy_impl(
             with MediaBuyUoW(tenant["tenant_id"]) as creative_uow:
                 # FIXME(#1788): creative assignment should use repository methods
                 assert creative_uow.session is not None
-                assert creative_uow.creatives is not None
                 session = creative_uow.session
                 # Batch load all creatives upfront to avoid N+1 queries
                 all_creative_ids = []

@@ -158,3 +158,45 @@ def test_add_replaces_existing_key():
     finally:
         _release(t1, r1)
         _release(t2, r2)
+
+
+def test_unstarted_thread_survives_a_read_before_start():
+    """A registered-but-not-yet-started thread is NOT reaped.
+
+    Callers register before starting (``add(key, t)`` then ``t.start()``), and
+    every read on this class reaps. ``Thread.is_alive()`` is False before
+    ``start()`` just as it is after the thread finishes, so a concurrent read in
+    that window used to drop a live registration — which defeats the ordering
+    the registry is used for (two rapid writes to one key each see no
+    predecessor) and lets a drain miss a thread. ``ident is None`` distinguishes
+    "not started yet" from "finished" (#1197 review).
+    """
+    reg = ThreadRegistry()
+    t, release = _live_thread(start=False)
+    try:
+        reg.add("pending", t)
+
+        # The read that used to reap it.
+        assert reg.list_active() == ["pending"]
+        assert reg.contains("pending")
+        assert reg.get("pending") is t
+
+        t.start()
+        assert reg.list_active() == ["pending"], "a started thread must still be registered"
+    finally:
+        _release(t, release)
+
+
+def test_finished_thread_is_still_reaped():
+    """The counterpart: once the thread has run and exited, the entry goes.
+
+    Pins that the ``ident is not None`` guard narrowed the reap to the
+    not-yet-started case only, rather than disabling reaping.
+    """
+    reg = ThreadRegistry()
+    t, release = _live_thread()
+    reg.add("finished", t)
+    _release(t, release)
+    t.join(timeout=5)
+
+    assert reg.list_active() == []

@@ -713,6 +713,11 @@ class TestErrorCodeVocabularyConsistency:
     # After error-code compliance (#1248), all class-level codes are either
     # SDK-standard or explicitly internal (see INTERNAL_CODES in exceptions.py).
     CANONICAL_ERROR_CODES = {
+        # AdCP 3.1.1 split the deprecated AUTH_REQUIRED into these two, whose
+        # recovery values differ (correctable vs terminal) — see
+        # _SPEC_SUPPLEMENT_CODES in src/core/exceptions.py (#1197).
+        "AUTH_MISSING",
+        "AUTH_INVALID",
         # SDK standard codes used by our exception classes
         "INTERNAL_ERROR",  # Base-class default (internal only, never on wire)
         "VALIDATION_ERROR",  # adcp-req: Generic Errors

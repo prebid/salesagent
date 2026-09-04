@@ -24,6 +24,35 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from tests.helpers.adcp_factories import create_test_media_buy_request_dict
 
 
+def _make_impl_result() -> Any:
+    """Build the ``CreateMediaBuyResult`` the patched ``_impl`` returns.
+
+    A real model, not ``MagicMock(spec=CreateMediaBuyResult)``: the wrappers
+    hand this result to ``fire_tmp_sync``, which narrows the result union with
+    ``isinstance`` and then reads ``.response`` as a typed attribute. Pydantic
+    fields are not class attributes, so a spec'd mock passes the isinstance
+    check and then raises on the field access.
+
+    The inner response is the error variant, so ``fire_tmp_sync`` finds no
+    ``media_buy_id`` and spawns no sync thread. That is a scope choice, not a
+    workaround for a missing seam: the seam exists
+    (``tests.harness._mixins.TMPSyncMixin`` for the observable,
+    ``src.services.tmp_provider_sync.join_active_syncs`` for completion), but the
+    sync body opens real UoW sessions, and these helpers run in the UNIT suite
+    where there is no database. Returning a success variant here would make a
+    push-notification-forwarding test depend on Postgres to grade a serialization
+    contract. What the sync actually delivers is graded where it belongs — one BDD
+    scenario over every transport (#1197 review).
+    """
+    from src.core.schemas import CreateMediaBuyResult, Error
+    from src.core.schemas._base import CreateMediaBuyError
+
+    return CreateMediaBuyResult(
+        status="failed",
+        response=CreateMediaBuyError(errors=[Error(code="capture_stub", message="capture helper stub")]),
+    )
+
+
 def _make_mock_ctx() -> AsyncMock:
     """Build a minimal FastMCP Context mock with identity and context_id state."""
     mock_ctx = AsyncMock()
@@ -56,12 +85,10 @@ async def capture_mcp_forwarded_pnc(pnc: Any) -> Any:
         The push_notification_config value received by _impl, or None if _impl
         was not called.
     """
-    from src.core.schemas import CreateMediaBuyResult
     from src.core.tools.media_buy_create import create_media_buy
 
     req_dict = create_test_media_buy_request_dict()
-    mock_result = MagicMock(spec=CreateMediaBuyResult)
-    mock_result.__str__ = lambda self: "mock_result"
+    mock_result = _make_impl_result()
     mock_ctx = _make_mock_ctx()
 
     captured: dict[str, Any] = {}
@@ -102,12 +129,10 @@ async def capture_a2a_forwarded_pnc(pnc: Any) -> Any:
         The push_notification_config value received by _impl, or None if _impl
         was not called.
     """
-    from src.core.schemas import CreateMediaBuyResult
     from src.core.tools.media_buy_create import create_media_buy_raw
 
     req_dict = create_test_media_buy_request_dict()
-    mock_result = MagicMock(spec=CreateMediaBuyResult)
-    mock_result.__str__ = lambda self: "mock_result"
+    mock_result = _make_impl_result()
     mock_identity = MagicMock()
 
     captured: dict[str, Any] = {}

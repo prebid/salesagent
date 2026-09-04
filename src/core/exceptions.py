@@ -122,7 +122,21 @@ RECOVERY_BY_WIRE_CODE: dict[str, RecoveryHint] = _load_pinned_recovery()
 # here — this is a set of code NAMES; RECOVERY_BY_WIRE_CODE answers what they
 # mean. The remaining demoted spec code (BILLING_NOT_SUPPORTED) is tracked for
 # the same treatment in #1602.
-_SPEC_SUPPLEMENT_CODES: frozenset[str] = frozenset({"CREATIVE_NOT_FOUND", "CONFIGURATION_ERROR"})
+_SPEC_SUPPLEMENT_CODES: frozenset[str] = frozenset(
+    {
+        "CREATIVE_NOT_FOUND",
+        "CONFIGURATION_ERROR",
+        # The 3.1.1 replacements for the now-deprecated AUTH_REQUIRED. Both are in
+        # the pinned enum and neither is in the SDK's STANDARD_ERROR_CODES, so they
+        # reach the wire table only through this supplement. Their recovery split is
+        # the point of the code split — AUTH_MISSING correctable, AUTH_INVALID
+        # terminal — and it is DERIVED from the enum here rather than restated: a
+        # polling consumer told a rejected credential is correctable retries forever
+        # (#1197 review).
+        "AUTH_MISSING",
+        "AUTH_INVALID",
+    }
+)
 
 # Codes the SDK helper ships that the PINNED spec does not define. The pin is the
 # authority and the helper is a cross-check (CLAUDE.md spec-grounding gate), so a
@@ -698,11 +712,11 @@ AUTH_REQUIRED_SUGGESTION = "Provide valid credentials (x-adcp-auth token)."
 class AdCPAuthenticationError(AdCPError):
     """Missing or invalid authentication credentials (401).
 
-    Emits the standard ``AUTH_REQUIRED`` wire code — the sole authentication
-    error code in the AdCP 3.1 error-code enum and adcp 5.7
-    ``STANDARD_ERROR_CODES``. Its enum description explicitly covers both
-    "credentials missing" and "credentials presented but rejected", so it is
-    the canonical code for every authentication failure.
+    Emits ``AUTH_REQUIRED`` by default. That was the sole authentication code in
+    AdCP 3.1.0; **3.1.1 deprecated it** in favour of ``AUTH_MISSING`` (correctable)
+    and ``AUTH_INVALID`` (terminal), which this class's two subclasses below emit.
+    New surfaces should raise one of those; the pre-existing raise sites still
+    emit ``AUTH_REQUIRED`` and re-mapping them app-wide is tracked in #2019.
 
     Recovery is ``correctable`` per the pinned AdCP error-code enum
     (``AUTH_REQUIRED.recovery == "correctable"``; released 3.1.0 agrees) —
@@ -726,7 +740,41 @@ class AdCPAuthRequiredError(AdCPAuthenticationError):
 
     Raised when the request contains no auth token at all. Inherits the
     standard ``AUTH_REQUIRED`` wire code from its parent.
+
+    Prefer :class:`AdCPAuthMissingError` / :class:`AdCPAuthInvalidError` on new
+    surfaces: ``AUTH_REQUIRED`` is marked **Deprecated** in the pinned
+    ``adcp/_schemas/3.1/enums/error-code.json``. Re-mapping the pre-existing raise
+    sites is an app-wide change tracked separately (#2019).
     """
+
+
+class AdCPAuthMissingError(AdCPAuthenticationError):
+    """No credential was presented (401, AUTH_MISSING, correctable).
+
+    The pinned enum (``adcp/_schemas/3.1/enums/error-code.json`` @3.1.1) replaces
+    the deprecated ``AUTH_REQUIRED`` with two codes whose *recovery* differs, which
+    is the whole point of the split: this one is ``correctable`` — its suggestion
+    metadata reads "provide credentials when missing" — so a client that simply
+    forgot to send a token learns to send one and retry.
+    """
+
+    _default_error_code: ClassVar[str] = "AUTH_MISSING"
+    _default_recovery: ClassVar[RecoveryHint] = "correctable"
+
+
+class AdCPAuthInvalidError(AdCPAuthenticationError):
+    """A credential was presented and rejected (401, AUTH_INVALID, terminal).
+
+    ``terminal`` per the pinned enum, whose suggestion metadata is explicit: "do
+    NOT auto-retry — credentials were rejected; rotate keys, refresh OAuth tokens
+    once if applicable, otherwise escalate to a human". This matters for a polling
+    consumer: the TMP Router polls discovery every 30 s, so telling it a rejected
+    credential is ``correctable`` invites an endless retry loop against a
+    credential that will never work.
+    """
+
+    _default_error_code: ClassVar[str] = "AUTH_INVALID"
+    _default_recovery: ClassVar[RecoveryHint] = "terminal"
 
 
 class AdCPAuthorizationError(AdCPError):

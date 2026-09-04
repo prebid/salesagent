@@ -156,6 +156,11 @@ class Tenant(Base, JSONValidatorMixin):
         back_populates="tenant",
         cascade="all, delete-orphan",
     )
+    tmp_providers = relationship(
+        "TMPProvider",
+        back_populates="tenant",
+        cascade="all, delete-orphan",
+    )
     auth_config = relationship(
         "TenantAuthConfig",
         back_populates="tenant",
@@ -1617,6 +1622,113 @@ class SignalsAgent(Base):
         Index("idx_signals_agents_tenant", "tenant_id"),
         Index("idx_signals_agents_enabled", "enabled"),
     )
+
+
+class TMPProvider(Base):
+    """Buyer-side TMP provider endpoint registration.
+
+    Each tenant can register one or more TMP providers (buyer-side agents that
+    implement the Trusted Match Protocol). The Sales Agent exposes these
+    registrations over the versioned REST contract
+    ``GET`` :data:`src.routes.tmp_providers.DISCOVERY_ROUTE`. The router polls
+    that endpoint — it never reads from this table directly.
+
+    Schema alignment: :data:`src.routes.tmp_providers.PROVIDER_REGISTRATION_SCHEMA`
+    (the pinned file, referenced rather than re-typed as prose — #1197 review).
+    """
+
+    __tablename__ = "tmp_providers"
+
+    # A hyphen-free UUID (``uuid4().hex``), not a canonical UUID: the pinned
+    # provider-registration.json constrains provider_id to
+    # ``^[A-Za-z0-9_]+$`` (charset kept safe for logs, metrics and cache keys),
+    # which the hyphenated form violates — every entry the discovery endpoint
+    # emitted was rejected by the schema it claims to conform to (#1197 review).
+    # Hence a String column: a Postgres ``uuid`` column re-renders any input in
+    # canonical hyphenated form, so the constraint cannot be met while the
+    # database owns the formatting.
+    provider_id: Mapped[str] = mapped_column(
+        String(64),
+        primary_key=True,
+        default=lambda: uuid4().hex,
+        server_default=text("replace(gen_random_uuid()::text, '-', '')"),
+    )
+    tenant_id: Mapped[str] = mapped_column(
+        String(50),
+        ForeignKey("tenants.tenant_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    endpoint: Mapped[str] = mapped_column(String(500), nullable=False)
+    context_match: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    identity_match: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    # Conditional: MUST be present and non-empty when identity_match is true.
+    countries: Mapped[list[str] | None] = mapped_column(JSONType, nullable=True)
+    uid_types: Mapped[list[str] | None] = mapped_column(JSONType, nullable=True)
+    # Optional: property RIDs this provider serves. When absent, serves all properties.
+    properties: Mapped[list[str] | None] = mapped_column(JSONType, nullable=True)
+    timeout_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=50)
+    priority: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="active")
+    auth_type: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    # Stored encrypted via Fernet (same helper as Tenant._gemini_api_key).
+    # Use the auth_credentials property to read/write — never access the column directly.
+    _auth_credentials: Mapped[str | None] = mapped_column("auth_credentials", Text, nullable=True)
+    # Background health-check results (written by TMP health scheduler, read by admin UI).
+    health_status: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    last_health_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    # Relationships
+    tenant = relationship("Tenant", back_populates="tmp_providers")
+
+    __table_args__ = (
+        Index("idx_tmp_providers_tenant", "tenant_id"),
+        Index("idx_tmp_providers_status", "status"),
+    )
+
+    @property
+    def auth_credentials(self) -> str | None:
+        """Get decrypted auth credentials."""
+        if not self._auth_credentials:
+            return None
+        from src.core.utils.encryption import decrypt_api_key
+
+        try:
+            return decrypt_api_key(self._auth_credentials)
+        except ValueError as exc:
+            from src.core.exceptions import AdCPConfigurationError
+
+            raise AdCPConfigurationError(
+                f"Failed to decrypt auth credentials for TMP provider {self.provider_id}"
+            ) from exc
+
+    @auth_credentials.setter
+    def auth_credentials(self, value: str | None) -> None:
+        """Encrypt and store auth credentials."""
+        if not value:
+            self._auth_credentials = None
+            return
+        from src.core.utils.encryption import encrypt_api_key
+
+        self._auth_credentials = encrypt_api_key(value)
+
+    @property
+    def has_auth_credentials(self) -> bool:
+        """True when a credential is stored, without decrypting it.
+
+        The public presence check for the private ``_auth_credentials`` column.
+        Callers that only need "is a credential set?" (the admin edit form,
+        which renders a placeholder rather than the value) must not reach past
+        the property API into the column, and must not go through the
+        decrypting :attr:`auth_credentials` getter either — that raises on a
+        rotated or corrupted ciphertext, turning a form render into a 500
+        (#1197 review).
+        """
+        return self._auth_credentials is not None
 
 
 class GAMInventory(Base):

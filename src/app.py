@@ -32,7 +32,7 @@ from src.a2a_server.adcp_a2a_server import (
 from src.a2a_server.context_builder import AdCPCallContextBuilder
 from src.admin.app import create_app
 from src.core.auth_middleware import UnifiedAuthMiddleware
-from src.core.domain_config import get_a2a_server_url, get_sales_agent_domain
+from src.core.domain_config import get_a2a_server_url, get_sales_agent_domain, is_local_host
 from src.core.domain_routing import route_landing_page
 from src.core.exceptions import (
     INVALID_REQUEST_SUGGESTION,
@@ -55,6 +55,7 @@ from src.routes.api_v1 import router as api_v1_router
 from src.routes.health import debug_router as health_debug_router
 from src.routes.health import router as health_router
 from src.routes.rest_compat_middleware import RestCompatMiddleware
+from src.routes.tmp_providers import router as tmp_providers_router
 
 logger = logging.getLogger(__name__)
 
@@ -360,11 +361,16 @@ def _create_dynamic_agent_card(request: Request):
             proto = forwarded_proto.split(",")[0].strip().lower()
             if proto in ("http", "https"):
                 return proto
-        return "http" if hostname.startswith("localhost") or hostname.startswith("127.0.0.1") else "https"
+        # Shared predicate (src.core.domain_config.is_local_host): exact
+        # equality / suffix checks, port stripped, and *.localhost counted as
+        # local so a per-tenant dev host like "tenant.localhost" advertises http.
+        # The TMP seller-URL resolver asks the same question and calls the same
+        # function — they disagreed on *.localhost before (#1197 review).
+        return "http" if is_local_host(hostname) else "https"
 
     apx_incoming_host = _get_header_case_insensitive(request.headers, "Apx-Incoming-Host")
     if apx_incoming_host and not _is_valid_hostname(apx_incoming_host):
-        logger.warning(f"Invalid Apx-Incoming-Host header value, ignoring: {apx_incoming_host!r}")
+        logger.warning("Invalid Apx-Incoming-Host header value, ignoring: %r", apx_incoming_host)
         apx_incoming_host = None
     if apx_incoming_host:
         protocol = get_protocol(apx_incoming_host)
@@ -372,7 +378,7 @@ def _create_dynamic_agent_card(request: Request):
     else:
         host = _get_header_case_insensitive(request.headers, "Host") or ""
         if host and not _is_valid_hostname(host):
-            logger.warning(f"Invalid Host header value, ignoring: {host!r}")
+            logger.warning("Invalid Host header value, ignoring: %r", host)
             host = ""
         sales_domain = get_sales_agent_domain()
         if host and host != sales_domain:
@@ -471,6 +477,10 @@ async def a2a_messageid_compatibility_middleware(request: Request, call_next):
 app.include_router(api_v1_router)
 app.include_router(health_router)
 app.include_router(health_debug_router)
+# TMP Router discovery endpoint — gated by a credential resolved inside the
+# path's tenant (src.routes.tmp_providers._require_tenant_credential).
+# GET /tenant/{tenant_id}/tmp-providers/discovery
+app.include_router(tmp_providers_router)
 
 # ---------------------------------------------------------------------------
 # Middleware stack (via add_middleware — outermost = last registered):

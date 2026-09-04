@@ -11,6 +11,32 @@ from src.core.database.models import Principal, Tenant
 logger = logging.getLogger(__name__)
 
 
+def credentials_equal(presented: str, expected: str) -> bool:
+    """Constant-time credential compare that cannot raise on a hostile header.
+
+    ``hmac.compare_digest`` raises ``TypeError`` when either ``str`` operand
+    carries a non-ASCII character, and both operands at every call site are
+    header-derived — Starlette/Werkzeug decode request headers as latin-1, so
+    any byte > 0x7F arrives as exactly such a character.  One malformed
+    ``Authorization`` header was therefore a ``TypeError`` raised from inside an
+    authentication check.
+
+    Callers do not observe a 500 today: ``get_principal_from_token`` wraps the
+    lookup in a blanket ``except Exception`` and returns "no principal", so the
+    request fails closed with a 401.  It gets there by logging the type error as
+    "Database error during principal lookup", though — a wrong diagnosis for an
+    operator reading logs, and a fail-closed that depends on a catch-all rather
+    than on the compare being total.  Comparing the UTF-8 encodings makes a
+    malformed credential an honest non-match at the compare itself, while
+    staying constant-time for equal-length inputs (#1197 review).
+
+    ``surrogatepass`` is belt-and-braces: latin-1 decoding cannot produce lone
+    surrogates, but a caller passing a value from another decoder must not get
+    an exception out of an authentication check.
+    """
+    return hmac.compare_digest(presented.encode("utf-8", "surrogatepass"), expected.encode("utf-8", "surrogatepass"))
+
+
 def get_principal_from_token(token: str, tenant_id: str | None = None) -> tuple[str | None, dict | None]:
     """Looks up a principal_id from the database using a token with retry logic.
 
@@ -37,7 +63,7 @@ def get_principal_from_token(token: str, tenant_id: str | None = None) -> tuple[
             # Check if it's the admin token for this specific tenant
             tenant_stmt = select(Tenant).filter_by(tenant_id=tenant_id, is_active=True)
             tenant_obj = session.scalars(tenant_stmt).first()
-            if tenant_obj and tenant_obj.admin_token and hmac.compare_digest(tenant_obj.admin_token, token):
+            if tenant_obj and tenant_obj.admin_token and credentials_equal(token, tenant_obj.admin_token):
                 logger.debug("Token matches admin token for tenant '%s'", tenant_id)
                 return f"{tenant_id}_admin", None
 

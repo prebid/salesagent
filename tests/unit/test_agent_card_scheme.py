@@ -32,6 +32,12 @@ def _scheme(headers: dict) -> str:
         ("tenant.example.com", "ftp", "https"),  # invalid scheme -> fall back to heuristic
         ("tenant.example.com", None, "https"),  # header absent -> heuristic (non-localhost -> https)
         ("localhost", None, "http"),  # header absent -> heuristic (localhost -> http)
+        # The heuristic is the shared is_local_host() predicate, so the per-tenant
+        # dev host resolves local here exactly as it does for the TMP seller URL —
+        # the two forked on *.localhost before they shared it (#1197 review).
+        ("tenant.localhost", None, "http"),
+        ("localhost:8080", None, "http"),  # port stripped before the comparison
+        ("localhost.evil.com", None, "https"),  # substring near-miss stays public
     ],
 )
 def test_agent_card_scheme(host, xfp, expected):

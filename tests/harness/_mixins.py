@@ -10,10 +10,11 @@ Mixins may call ``self._commit_factory_data()`` which is a no-op in unit mode.
 
 from __future__ import annotations
 
+import logging
 import os
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypedDict
 from unittest.mock import MagicMock, patch
 
 from src.adapters.mock_ad_server import simulate_breakdowns
@@ -1142,3 +1143,322 @@ class ProductMixin:
             **extra,
         )
         return await _get_products_impl(req, identity)
+
+
+class TMPSyncDelivery(TypedDict):
+    """One request a stub TMP provider received.
+
+    Typed rather than described in prose because a prose key list has no consumer:
+    the mixin's docstring said the record was ``{"path", "body"}`` while
+    ``record()`` returned four keys and the Then-steps read all four — including
+    ``headers``, the only credential-bearing observable in the feature (#1197
+    review). A renamed or dropped key is now a type error at the reader.
+    """
+
+    method: str
+    path: str
+    #: Lower-cased header names — the wire is case-insensitive, so the steps assert
+    #: on one spelling.
+    headers: dict[str, str]
+    body: Any
+
+
+class TMPSyncMixin:
+    """The TMP package-sync observable, owned by the env instead of by each test.
+
+    Package sync is transport-blind buyer-triggered behavior: *a buyer creates or
+    updates a media buy, and every registered active/draining provider holds
+    current package data*. Before this mixin, that observable had no seam, so
+    each tier invented one — a process-wide ``httpx.Client`` patch plus a
+    ``threading.Thread.start`` patch in the integration file, a second
+    independent seed→dispatch→collect→assert implementation over a socket in the
+    e2e file, and a third file asserting the thread was *constructed*. Three
+    incompatible observables, two grading implementations that disagreed on which
+    transports were covered (#1197 review).
+
+    One implementation serves every transport because nothing here depends on
+    which process the sync thread runs in:
+
+    * **The collector is a real HTTP receiver**, recording the whole request as a
+      :class:`TMPSyncDelivery` (method, path, headers, body). No client stubbing,
+      so the URL construction, the auth header and the JSON body are production's,
+      and the arrival IS the observable whether the thread ran in this process
+      (a2a/mcp/rest) or in the server container (e2e_rest).
+    * **Completion is the production registry**, via
+      :func:`src.services.tmp_provider_sync.join_active_syncs` in-process and by
+      polling the collector out-of-process — never by patching a stdlib
+      constructor.
+
+    Envs mixing this in get the seam whether or not a scenario uses it: with no
+    provider registered the sync short-circuits, and ``__exit__`` still drains
+    the threads, so no unrelated media-buy scenario leaves an unjoined daemon
+    opening DB sessions after its own teardown.
+    """
+
+    # Set on first register_tmp_provider(); None means "this scenario never
+    # registered a provider", which is the no-op case.
+    _tmp_collector: dict[str, Any] | None = None
+    _tmp_collector_ctx: Any = None
+
+    #: The public host planted on the tenant so ``_resolve_seller_agent_url``
+    #: yields a spec-valid https ``seller_agent.agent_url``. A constant so the
+    #: Then-step can assert the exact URL production emitted.
+    TMP_SELLER_AGENT_HOST = "tmp-sync-seller.publisher.example.com"
+
+    @property
+    def tmp_seller_agent_url(self) -> str:
+        """The ``seller_agent.agent_url`` production must put on every package."""
+        return f"https://{self.TMP_SELLER_AGENT_HOST}/mcp"
+
+    def register_tmp_provider(self, *, auth_credentials: str | None = None, **fields: Any) -> str:
+        """Register one active TMP provider pointed at this env's collector.
+
+        Starts the collector on first call and replaces any provider rows the
+        tenant already had, so the fan-out reaches exactly this endpoint.
+        Returns the registered endpoint.
+
+        ``auth_credentials`` is a first-class parameter because the credential is
+        half of the cross-transport claim: a scenario registers a credentialed
+        provider and asserts the ``Authorization`` header arrives, or registers an
+        uncredentialed one and asserts it does not. It is written through the
+        model's encrypting property, so the row is what production would store.
+        """
+        from tests.factories import plant_seller_agent_host, replace_tmp_providers
+
+        collector = self._ensure_tmp_collector()
+        tenant_id = self._tenant_id  # type: ignore[attr-defined]
+
+        plant_seller_agent_host(self, tenant_id, self.TMP_SELLER_AGENT_HOST)
+        fields.setdefault("name", "Package Sync Collector")
+        fields.setdefault("endpoint", collector["endpoint"])
+        fields.setdefault("timeout_ms", 2000)
+        if auth_credentials is not None:
+            # `auth_credentials` is the encrypting property; the factory writes
+            # columns, so set it after construction to exercise the real path.
+            fields.setdefault("auth_type", "bearer")
+        provider = replace_tmp_providers(self, tenant_id, **fields)
+        if auth_credentials is not None:
+            provider.auth_credentials = auth_credentials
+            self.get_session().commit()  # type: ignore[attr-defined]
+        return str(fields["endpoint"])
+
+    def tmp_sync_deliveries(self) -> list[TMPSyncDelivery]:
+        """Every ``POST /packages/sync`` the collector has received, in order.
+
+        Entries are :class:`TMPSyncDelivery`. The path is carried because "the
+        server POSTed *something*" and "the server POSTed to /packages/sync" are
+        different claims, and only the second one grades ``provider_url()``; the
+        headers because the Bearer credential is the third thing that must be
+        identical across transports.
+        """
+        if self._tmp_collector is None:
+            return []
+        origin = self._tmp_collector["origin"]
+        return [
+            TMPSyncDelivery(
+                method=req.method,
+                path=req.path,
+                # Header names are case-insensitive on the wire; normalize so a
+                # step asserts on one spelling.
+                headers={name.lower(): value for name, value in dict(req.headers).items()},
+                body=req.json(),
+            )
+            for req in origin.requests
+            if str(req.path).endswith("/packages/sync")
+        ]
+
+    #: How long to keep watching AFTER the expected deliveries arrive, before a
+    #: Then step asserts the exact count. Without a settle window, "exactly one"
+    #: is unfalsifiable: a second, duplicate delivery in flight would simply not
+    #: have landed yet (#1197 review).
+    TMP_SYNC_SETTLE_SECONDS = 0.75
+
+    def await_tmp_sync(self, count: int = 1, timeout: float = 30.0) -> TMPSyncDelivery:
+        """Block until *count* package-sync deliveries have arrived; return the *count*-th.
+
+        This is the LIVENESS signal, so it waits for "at least count" — the
+        correctness signal is the Then step's exact ``len(...) == count``, which is
+        what makes a double-fire fail. Reusing a ``>=`` wait as the assertion let a
+        duplicate delivery pass green on every transport, including the REST
+        double-fire that finding 5's placement argument exists to prevent.
+
+        In-process, the production registry gives an exact completion signal, so
+        the poll below normally returns on its first iteration. Out-of-process the
+        thread is in the server container and polling is the only observation —
+        hence one method with both, rather than a per-tier waiter.
+        """
+        import time
+
+        if self._tmp_collector is None:
+            raise AssertionError(
+                "await_tmp_sync() called before register_tmp_provider() — there is no collector to wait on."
+            )
+
+        if not self.is_e2e:  # type: ignore[attr-defined]
+            self.join_tmp_syncs(timeout=timeout)
+
+        deadline = time.monotonic() + timeout
+        while True:
+            deliveries = self.tmp_sync_deliveries()
+            if len(deliveries) >= count:
+                # Let any duplicate that is already in flight land, so the caller's
+                # exact-count assertion can see it.
+                time.sleep(self.TMP_SYNC_SETTLE_SECONDS)
+                return self.tmp_sync_deliveries()[count - 1]
+            if time.monotonic() >= deadline:
+                paths = [e["path"] for e in self._tmp_collector["received"]]
+                raise AssertionError(
+                    f"Expected {count} POST /packages/sync delivery(ies) within {timeout}s, "
+                    f"got {len(deliveries)}. Captured paths: {paths}"
+                )
+            time.sleep(0.1)
+
+    def settle_tmp_sync(self) -> None:
+        """Wait out the settle window with no delivery expected.
+
+        The counterpart to :meth:`await_tmp_sync` for a scenario asserting that
+        NOTHING arrives: there is no arrival to wait for, so without a bounded wait
+        "no delivery" would pass merely because the request had not landed yet.
+        """
+        import time
+
+        time.sleep(self.TMP_SYNC_SETTLE_SECONDS)
+
+    def join_tmp_syncs(self, timeout: float = 30.0) -> None:
+        """Drain in-flight in-process syncs. No-op out-of-process (nothing local to join).
+
+        Best-effort by design: this is the cleanup half of the seam, so a wedged
+        thread is reported, not raised. The assertion belongs to
+        :meth:`await_tmp_sync`, where a missing delivery is the actual failure —
+        raising here would turn an unrelated media-buy scenario's slow teardown
+        into that scenario's failure.
+        """
+        if self.is_e2e:  # type: ignore[attr-defined]
+            return
+        from src.services.tmp_provider_sync import join_active_syncs
+
+        stragglers = join_active_syncs(timeout=timeout)
+        if stragglers:
+            logging.getLogger(__name__).warning(
+                "TMP sync threads still running after %.0fs at env teardown: %s", timeout, stragglers
+            )
+
+    def _ensure_tmp_collector(self) -> dict[str, Any]:
+        """Acquire the stub-provider origin once per env, lazily.
+
+        A REAL TLS origin off the generated CA, not a hand-rolled receiver: #1802
+        routed every outbound call through the egress seam, which requires https
+        and refuses private addresses, so a plain-http loopback collector is no
+        longer reachable by the code under test. Reusing
+        ``run_local_origin`` + the generated CA + the private hatch is the same
+        set of primitives ``LocalOriginMixin`` composes for the webhook envs —
+        never a second mechanism.
+
+        Acquired HERE rather than by composing ``LocalOriginMixin`` on the env:
+        that mixin opens the private hatch for the whole env lifetime, and this
+        env is shared with the ``@egress`` ingest-twin scenarios whose subject is
+        the hatch POSTURE. Forcing ``private=True`` on every scenario in the env
+        would decide, for those scenarios, the very thing they grade. Lazy means
+        only a scenario that actually registers a TMP provider changes posture.
+
+        Every resource is registered with ``_guard`` on the line it is acquired,
+        so a failure part-way through releases exactly what was started.
+        """
+        if self._tmp_collector is not None:
+            return self._tmp_collector
+
+        if self.is_e2e:  # type: ignore[attr-defined]
+            # The container cannot reach the runner's loopback, so the collector
+            # has to be the compose stack's own capture service — which IS
+            # reachable and IS covered by the generated CA
+            # (``webhooks.adcp.test`` behind the shared tls-proxy, under
+            # ``*.adcp.test``). What it cannot do is grade this feature's claim:
+            # it records the JSON body ONLY (``store.append(key, payload)`` in
+            # ``tests/e2e/webhook_capture_service.py``), while these scenarios
+            # assert the method, the ``/packages/sync`` path that grades
+            # ``provider_url()``, and the ``Authorization`` header that is the
+            # one credential this feature transmits to a third party. Recording
+            # those on a service shared with the webhook suites is
+            # prebid/salesagent#2098's work, not this merge's. Declared, not
+            # silently skipped.
+            from tests.harness._realize import E2EUnsupportedSetup
+
+            raise E2EUnsupportedSetup(
+                "TMP package-sync needs a container-reachable collector serving TLS the "
+                "generated CA covers; the compose capture service is the only such endpoint "
+                "and programming it is prebid/salesagent#2098. The same scenarios grade the "
+                "fan-out on impl/a2a/mcp/rest."
+            )
+
+        from tests.helpers.egress_hatches import egress_hatch_env
+        from tests.helpers.local_http_origin import run_local_origin
+        from tests.helpers.test_tls_material import load_gen_test_tls, server_ssl_context
+
+        gen_test_tls = load_gen_test_tls()
+        gen_test_tls.ensure_test_tls()
+        ssl_cert_file = patch.dict(os.environ, {"SSL_CERT_FILE": str(gen_test_tls.COMBINED_CERT)})
+        ssl_cert_file.start()
+        self._guard("tmp_ssl_cert_file", ssl_cert_file.stop)  # type: ignore[attr-defined]
+
+        origin_ctx = run_local_origin(ssl_context=server_ssl_context(gen_test_tls))
+        origin = origin_ctx.__enter__()
+        # No guard of its own: the drain registered at entry closes it, AFTER
+        # joining the in-flight syncs, so no thread is mid-POST when the socket
+        # goes away. A separate guard here would be released newest-first — i.e.
+        # BEFORE the drain — which is the wrong order.
+        self._tmp_collector_ctx = origin_ctx
+
+        # The origin necessarily listens on loopback, which the seam refuses by
+        # default — the same statement the seam's own integration tests make with
+        # ``set_flags(private=True)``.
+        hatches = patch.dict(os.environ, egress_hatch_env(private=True))
+        hatches.start()
+        self._guard("tmp_egress_hatches", hatches.stop)  # type: ignore[attr-defined]
+
+        self._tmp_collector = {"endpoint": f"{origin.base_url}/tmp", "origin": origin}
+        return self._tmp_collector
+
+    def _enter_post(self) -> None:
+        """Register the sync drain for EVERY scenario in this env.
+
+        Not in ``_ensure_tmp_collector``: ``fire_tmp_sync`` starts its thread on
+        any successful media-buy write that carries a tenant, whether or not a
+        provider is registered — so a plain UC-002 create in this env spawns one
+        too. Draining only the scenarios that registered a collector would leave
+        those threads to open DB sessions after their test's scope, which is the
+        defect this mixin's docstring claims to prevent (and which registering
+        the drain in the lazy path reintroduced).
+
+        ``_enter_post``, not a hand-rolled ``__exit__``: the body runs inside
+        ``BaseTestEnv.__enter__``'s unwind guard, which is what
+        ``test_harness_base::test_harness_envs_define_no_enter_exit`` requires.
+        """
+        super()._enter_post()  # type: ignore[misc]
+        self._guard("tmp_sync_drain", self._teardown_tmp_sync)  # type: ignore[attr-defined]
+
+    def _teardown_tmp_sync(self) -> None:
+        """Join in-flight syncs, drop the provider rows, then close the origin.
+
+        One cleanup owns the whole sequence because the order matters: joining
+        first means no thread is still POSTing when the origin socket closes
+        (which would surface as a connection error in the sync's fan-out log),
+        and dropping the rows before the socket goes away stops a later scenario
+        sharing an e2e database from fanning out to a dead port.
+
+        Every step is conditional on having got that far, so this is also the
+        release path for a scenario whose ``__enter__`` failed midway — and for
+        one that never registered a provider, where it is just the join.
+        """
+        try:
+            self.join_tmp_syncs(timeout=30.0)
+        finally:
+            try:
+                if self._tmp_collector is not None:
+                    from tests.factories import delete_tmp_providers
+
+                    delete_tmp_providers(self, self._tenant_id)  # type: ignore[attr-defined]
+            finally:
+                ctx, self._tmp_collector_ctx = self._tmp_collector_ctx, None
+                self._tmp_collector = None
+                if ctx is not None:
+                    ctx.__exit__(None, None, None)

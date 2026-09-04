@@ -217,15 +217,11 @@ class TestGetAdcpCapabilitiesWithTenant:
         current_tenant.set(mock_tenant)
 
         try:
-            # Mock TenantConfigUoW to avoid actual DB calls
-            mock_repo = MagicMock()
-            mock_repo.list_publisher_partners.return_value = []
-            mock_uow = MagicMock()
-            mock_uow.__enter__ = MagicMock(return_value=mock_uow)
-            mock_uow.__exit__ = MagicMock(return_value=False)
-            mock_uow.tenant_config = mock_repo
-
-            with patch("src.core.tools.capabilities.TenantConfigUoW", return_value=mock_uow):
+            # Through the shared helper: it is the one declaration of the patch
+            # set every capabilities test needs, and it includes the TMP
+            # experimental-features read. Hand-rolling a TenantConfigUoW patch
+            # here left that read hitting Postgres (#1197 review).
+            with _patch_capabilities_deps():
                 from tests.factories import PrincipalFactory
 
                 identity = PrincipalFactory.make_identity(
@@ -296,14 +292,7 @@ class TestGetAdcpCapabilitiesWithTenant:
                 us_zip=True,
             )
 
-            mock_repo = MagicMock()
-            mock_repo.list_publisher_partners.return_value = []
-            mock_uow = MagicMock()
-            mock_uow.__enter__ = MagicMock(return_value=mock_uow)
-            mock_uow.__exit__ = MagicMock(return_value=False)
-            mock_uow.tenant_config = mock_repo
-
-            with patch("src.core.tools.capabilities.TenantConfigUoW", return_value=mock_uow):
+            with _patch_capabilities_deps(adapter=mock_adapter):
                 from tests.factories import PrincipalFactory
 
                 identity = PrincipalFactory.make_identity(
@@ -385,16 +374,32 @@ def _make_capabilities_identity(
 def _patch_capabilities_deps(
     adapter=None,
     db_partners=None,
+    tmp_has_syncable=False,
 ):
     """Return a context manager stack patching common capabilities dependencies.
 
     Args:
         adapter: Mock adapter to return from get_adapter (None = no adapter).
         db_partners: List of mock PublisherPartner objects from DB query.
+        tmp_has_syncable: What the TMP provider repository reports for this
+            tenant. Patched (rather than left to hit the DB) because
+            ``_has_syncable_providers`` opens a real ``TMPProviderUoW``: these
+            tests are about channel mapping and response shape, and a unit test
+            must not reach for Postgres. It used to "work" only because a
+            blanket ``except Exception`` swallowed the unit-suite's
+            no-real-connections guard — narrowing that except to
+            ``SQLAlchemyError`` (#1197 review) made the reliance visible.
     """
     from contextlib import ExitStack
 
     stack = ExitStack()
+
+    # Mock TMPProviderUoW — the experimental-features read.
+    mock_tmp_uow = MagicMock()
+    mock_tmp_uow.__enter__ = MagicMock(return_value=mock_tmp_uow)
+    mock_tmp_uow.__exit__ = MagicMock(return_value=False)
+    mock_tmp_uow.tmp_providers.has_syncable.return_value = tmp_has_syncable
+    stack.enter_context(patch("src.core.tools.capabilities.TMPProviderUoW", return_value=mock_tmp_uow))
 
     # Mock TenantConfigUoW — the repository pattern replacement for get_db_session
     mock_repo = MagicMock()
@@ -510,17 +515,10 @@ class TestGracefulDegradation:
 
         identity = _make_capabilities_identity()
 
-        mock_repo = MagicMock()
-        mock_repo.list_publisher_partners.return_value = []
-        mock_uow = MagicMock()
-        mock_uow.__enter__ = MagicMock(return_value=mock_uow)
-        mock_uow.__exit__ = MagicMock(return_value=False)
-        mock_uow.tenant_config = mock_repo
-
+        # The shared helper carries the TMP experimental-features patch too; the
+        # adapter fault is the only thing this test injects itself.
         with (
-            patch("src.core.tools.capabilities.TenantConfigUoW", return_value=mock_uow),
-            patch("src.core.tools.capabilities.log_tool_activity"),
-            patch("src.core.tools.capabilities.get_principal_object", return_value=MagicMock()),
+            _patch_capabilities_deps(),
             patch("src.core.tools.capabilities.get_adapter", side_effect=Exception("Adapter init failed")),
         ):
             response = _get_adcp_capabilities_impl(None, identity)
@@ -537,9 +535,12 @@ class TestGracefulDegradation:
             tenant={"tenant_id": "t1", "name": "Test", "subdomain": "testpub"},
         )
 
+        # TenantConfigUoW must RAISE here, so this test keeps its own patch for it
+        # and layers the shared set underneath for everything else (including the
+        # TMP read, which would otherwise reach for Postgres).
         with (
+            _patch_capabilities_deps(),
             patch("src.core.tools.capabilities.TenantConfigUoW", side_effect=Exception("DB down")),
-            patch("src.core.tools.capabilities.log_tool_activity"),
             patch("src.core.tools.capabilities.get_principal_object", return_value=None),
         ):
             response = _get_adcp_capabilities_impl(None, identity)
@@ -754,3 +755,113 @@ class TestGeoPostalAreas:
             response = _get_adcp_capabilities_impl(None, identity)
 
         assert response.media_buy.execution.targeting.geo_postal_areas is None
+
+
+class TestExperimentalFeaturesDeclaration:
+    """``_has_syncable_providers`` — what the agent claims it implements.
+
+    AdCP 3.1.1 ``reference/experimental-status.mdx``: "Sellers that do not list
+    an experimental surface MUST NOT implement it — there is no 'silently
+    experimental' mode."  Omitting the field is therefore a positive claim, which
+    makes both branches below obligations rather than preferences (#1197 review).
+    """
+
+    @staticmethod
+    def _patch_uow(*, has_syncable=None, error=None):
+        """Patch TMPProviderUoW so the repository answers has_syncable()."""
+        mock_uow = MagicMock()
+        if error is not None:
+            mock_uow.tmp_providers.has_syncable.side_effect = error
+        else:
+            mock_uow.tmp_providers.has_syncable.return_value = has_syncable
+        mock_cls = MagicMock()
+        mock_cls.return_value.__enter__.return_value = mock_uow
+        mock_cls.return_value.__exit__.return_value = False
+        return patch("src.core.tools.capabilities.TMPProviderUoW", mock_cls), mock_uow
+
+    def test_reports_deployed_when_a_syncable_provider_exists(self):
+        from src.core.tools.capabilities import _has_syncable_providers
+
+        ctx, mock_uow = self._patch_uow(has_syncable=True)
+        with ctx:
+            assert _has_syncable_providers("tenant_x") is True
+        mock_uow.tmp_providers.has_syncable.assert_called_once_with()
+
+    def test_reports_not_deployed_when_no_syncable_provider_exists(self):
+        from src.core.tools.capabilities import _has_syncable_providers
+
+        ctx, _ = self._patch_uow(has_syncable=False)
+        with ctx:
+            assert _has_syncable_providers("tenant_x") is False
+
+    def test_both_tmp_declarations_come_from_the_one_predicate(self):
+        """``experimental_features`` and ``media_buy.execution.trusted_match`` agree.
+
+        The schema says the presence of ``trusted_match`` "indicates the seller has
+        TMP infrastructure deployed", which is the same question
+        ``experimental_features`` answers — so emitting one without the other would
+        have the agent claiming to implement ``trusted_match.core`` while the block
+        meaning "TMP is deployed here" was absent (#1197 review).
+        """
+        from src.core.tools.capabilities import TRUSTED_MATCH_FEATURE_ID, _get_adcp_capabilities_impl
+
+        for has_syncable in (True, False):
+            with _patch_capabilities_deps(tmp_has_syncable=has_syncable):
+                response = _get_adcp_capabilities_impl(None, _make_capabilities_identity())
+
+            declared = [str(f.root) for f in (response.experimental_features or [])]
+            block = response.media_buy.execution.trusted_match
+
+            assert (TRUSTED_MATCH_FEATURE_ID in declared) is has_syncable
+            assert (block is not None) is has_syncable, (
+                f"has_syncable={has_syncable}: experimental_features says "
+                f"{TRUSTED_MATCH_FEATURE_ID in declared} but trusted_match block is {block!r}"
+            )
+
+    def test_asks_the_syncable_predicate_not_list_all(self):
+        """The declaration must filter on the statuses the surfaces it advertises use.
+
+        ``list_all()`` made a tenant whose only registration is ``inactive``
+        advertise ``trusted_match.core`` while discovery returned ``[]`` and the
+        sync no-oped — the declaration and the surfaces disagreeing about the
+        same tenant.
+        """
+        from src.core.tools.capabilities import _has_syncable_providers
+
+        ctx, mock_uow = self._patch_uow(has_syncable=False)
+        with ctx:
+            _has_syncable_providers("tenant_x")
+
+        mock_uow.tmp_providers.has_syncable.assert_called_once_with()
+        mock_uow.tmp_providers.list_all.assert_not_called()
+
+    def test_storage_failure_degrades_to_omission_with_a_tagged_log_line(self, caplog):
+        """A DB outage must not fail capability discovery, but must be greppable.
+
+        The log line carries the ``[TMP ...]`` prefix its five sibling modules
+        use — it is the one line an operator gets when the declaration degrades.
+        """
+        import logging
+
+        from sqlalchemy.exc import OperationalError
+
+        from src.core.tools.capabilities import _has_syncable_providers
+
+        ctx, _ = self._patch_uow(error=OperationalError("SELECT 1", {}, Exception("down")))
+        with ctx, caplog.at_level(logging.WARNING):
+            assert _has_syncable_providers("tenant_x") is False
+
+        assert "[TMP capabilities]" in caplog.text
+
+    def test_programming_error_is_not_swallowed(self):
+        """A non-storage error must surface rather than silently un-declare a live surface.
+
+        The blanket ``except Exception`` turned a typo into a false "this seller
+        does not implement trusted_match" while ``fire_tmp_sync`` kept POSTing to
+        that tenant's providers.
+        """
+        from src.core.tools.capabilities import _has_syncable_providers
+
+        ctx, _ = self._patch_uow(error=AttributeError("has_syncabel"))
+        with ctx, pytest.raises(AttributeError):
+            _has_syncable_providers("tenant_x")

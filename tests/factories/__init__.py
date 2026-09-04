@@ -38,6 +38,12 @@ from tests.factories.targeting import (
     PropertyListReferenceFactory,
     TargetingFactory,
 )
+from tests.factories.tmp_provider import (
+    TMPProviderFactory,
+    delete_tmp_providers,
+    plant_seller_agent_host,
+    replace_tmp_providers,
+)
 from tests.factories.user import TenantAuthConfigFactory, UserFactory
 from tests.factories.webhook import PushNotificationConfigFactory, WebhookTaskContextFactory
 
@@ -66,6 +72,7 @@ ALL_FACTORIES = [
     FormatPerformanceMetricsFactory,
     UserFactory,
     TenantAuthConfigFactory,
+    TMPProviderFactory,
 ]
 
 __all__ = [
@@ -100,6 +107,10 @@ __all__ = [
     "TargetingFactory",
     "TenantAuthConfigFactory",
     "TenantFactory",
+    "TMPProviderFactory",
+    "delete_tmp_providers",
+    "plant_seller_agent_host",
+    "replace_tmp_providers",
     "UserFactory",
     "WebhookTaskContextFactory",
 ]

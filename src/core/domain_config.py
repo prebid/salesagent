@@ -11,18 +11,47 @@ no subdomain routing. In multi-tenant mode, you must set SALES_AGENT_DOMAIN.
 import os
 
 
-def _is_localhost(domain: str | None) -> bool:
-    """Check if domain is localhost or 127.0.0.1."""
-    if not domain:
+def is_local_host(host: str | None) -> bool:
+    """True if *host* (a hostname, optionally with ``:port``) is a local dev host.
+
+    The single local-host predicate in the codebase, and this module — which
+    already owns the http-vs-https question — is its home.  Every site that
+    decides "can this host serve https?" calls it, so they cannot disagree:
+
+    - :func:`get_protocol_for_domain` (below), used for the advertised
+      sales-agent/A2A URLs.
+    - ``src/app.py`` (``_create_dynamic_agent_card``) — picks ``http`` vs
+      ``https`` for the advertised A2A agent-card URL when no
+      ``X-Forwarded-Proto`` is present.
+    - ``src/landing/landing_page.py`` — the copy-pasteable MCP/A2A URLs shown
+      in single-tenant mode.
+    - ``src/services/tmp_provider_sync.py`` (``_resolve_seller_agent_url``) —
+      skips a tenant ``virtual_host`` that cannot produce a valid https
+      ``seller_agent.agent_url``.
+
+    Before these converged they forked three ways on the same question:
+    ``*.localhost`` (``tenant.localhost`` was public to one caller and local to
+    another) and the substring form ``"localhost" in host`` (#1197 review).
+
+    Uses exact equality / suffix checks rather than substring tests: a substring
+    test misclassifies ``my-localhost-mirror.example.com`` as local, and
+    ``host.startswith("127.0.0.1")`` misclassifies ``127.0.0.1.evil.com`` as
+    loopback.
+
+    Note this is a *deployment-shape* predicate, not a security boundary — SSRF
+    checks live in :func:`src.core.security.url_validator.check_url_ssrf`, which
+    resolves DNS and rejects the whole loopback/private range rather than these
+    three literal forms.
+    """
+    if not host:
         return False
-    # Strip port if present
-    host = domain.split(":")[0]
-    return host in ("localhost", "127.0.0.1")
+    hostname = host.split(":", 1)[0].lower()
+    return hostname == "localhost" or hostname.endswith(".localhost") or hostname == "127.0.0.1"
 
 
-def _get_protocol_for_domain(domain: str | None) -> str:
-    """Return http for localhost, https for production domains."""
-    return "http" if _is_localhost(domain) else "https"
+def get_protocol_for_domain(domain: str | None) -> str:
+    """Return http for local dev hosts, https for production domains."""
+    return "http" if is_local_host(domain) else "https"
 
 
 def get_sales_agent_domain() -> str | None:
@@ -97,7 +126,7 @@ def get_a2a_server_url(protocol: str | None = None) -> str | None:
         return None
     # Auto-detect protocol if not specified
     if protocol is None:
-        protocol = _get_protocol_for_domain(domain)
+        protocol = get_protocol_for_domain(domain)
     if url := get_sales_agent_url(protocol):
         return f"{url}/a2a"
     return None
