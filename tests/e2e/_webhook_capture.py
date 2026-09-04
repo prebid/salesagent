@@ -1,9 +1,9 @@
-"""HTTP-client webhook receiver for e2e tests (salesagent-amht.3).
+"""HTTP-client webhook receiver for e2e tests (GH #1802).
 
 Backed by the long-lived ``webhook-capture`` compose service
 (``tests/e2e/webhook_capture_service.py``), fronted by the shared
 ``tls-proxy`` at a fixed ``webhooks.adcp.test`` alias
-(salesagent-amht.2) — not a per-test, ephemeral-port, in-process receiver
+(GH #1802) — not a per-test, ephemeral-port, in-process receiver
 anymore. That is what a webhook receiver is in production.
 
 Two traffic patterns, never conflated:
@@ -22,7 +22,7 @@ Scope note: this module serves the 3 COMPOSE-COUPLED e2e consumers only.
 hermetic (no Docker stack — its sender runs in-process on the host) and
 cannot resolve ``webhooks.adcp.test`` at all; it keeps using
 ``tests.e2e._webhook_capture_loopback`` unchanged (owner scope decision,
-2026-08-05, recorded in salesagent-amht.3).
+2026-08-05, recorded in GH #1802).
 """
 
 from __future__ import annotations
@@ -51,7 +51,7 @@ class WebhookReadbackError(RuntimeError):
 
 def _readback_base_url() -> str:
     host = os.getenv("WEBHOOK_CAPTURE_HOST", "localhost")
-    port = os.getenv("WEBHOOK_CAPTURE_PORT", "8080")
+    port = os.getenv("WEBHOOK_CAPTURE_PORT", "8090")
     return f"http://{host}:{port}"
 
 

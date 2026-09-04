@@ -980,6 +980,49 @@ def runtime_user_directives(lines: Iterable[str]) -> list[str]:
 _PRE_COMMIT_CONFIG_PATH = Path(".pre-commit-config.yaml")
 
 
+def load_yaml_mapping(path: Path) -> dict[str, Any]:
+    """Read a YAML file and require a top-level mapping (shared guard preamble)."""
+    assert path.is_file(), f"missing {path}"
+    data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    assert isinstance(data, dict), f"{path} must parse to a mapping"
+    return data
+
+
+def job_run_text(job: dict[str, Any]) -> str:
+    """Flatten all ``run:`` step bodies from a workflow job into one string."""
+    chunks: list[str] = []
+    for step in job.get("steps") or []:
+        if isinstance(step, dict) and isinstance(step.get("run"), str):
+            chunks.append(step["run"])
+    return "\n".join(chunks)
+
+
+def find_step(
+    steps: list[dict[str, Any]],
+    *,
+    name_contains: str | None = None,
+    uses_contains: str | None = None,
+) -> dict[str, Any] | None:
+    """Locate the first workflow step matching name/uses substring predicates.
+
+    Returns the matched step mapping, or ``None``. At least one of
+    ``name_contains`` / ``uses_contains`` must be provided; when both are set,
+    both must match. Callers that need the index should enumerate ``steps``
+    themselves (see ``_find_free_disk_step``).
+    """
+    if name_contains is None and uses_contains is None:
+        raise ValueError("at least one of name_contains, uses_contains is required")
+    for step in steps:
+        if not isinstance(step, dict):
+            continue
+        if name_contains is not None and name_contains not in str(step.get("name", "")):
+            continue
+        if uses_contains is not None and uses_contains not in str(step.get("uses", "")):
+            continue
+        return step
+    return None
+
+
 def load_pre_commit_config(path: Path | None = None, repo: Path | None = None) -> dict[str, Any]:
     """Load ``.pre-commit-config.yaml`` anchored to *repo* (default: repo root)."""
     root = repo or repo_root()
