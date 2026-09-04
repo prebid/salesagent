@@ -7,7 +7,7 @@ shared implementation pattern from CLAUDE.md.
 import logging
 import os
 import time
-from typing import Annotated, Any, cast
+from typing import Annotated, Any
 
 # FIXME(#1388): FormatId, ProductFilters have local subclasses; import from src.core.schemas (Pattern #7/#4).
 from adcp import FormatId, ProductFilters
@@ -740,19 +740,17 @@ async def _get_products_impl(
         for product in eligible_products:
             product.pricing_options = []
 
-    # Our Product extends LibraryProduct - cast for type safety since list is invariant
-    # When serialized, Pydantic automatically uses library Product fields
-    # Internal-only fields (implementation_config) excluded by model_dump()
-    # Note: We use eligible_products (Product objects), not response_data (dicts)
-    # because Product objects have typed pricing_options (CpmFixedRatePricingOption, etc.)
-    # while dicts lose this type information during serialization
-    # adcp 2.16.0+ accepts subclass lists at runtime via BeforeValidator coercion,
-    # but mypy still needs cast() due to list invariance in static typing
-    resp = GetProductsResponse(
-        products=cast(list[LibraryProduct], eligible_products),
-        errors=None,
-        context=req.context,
-    )
+    # GetProductsResponse.products is declared list[LibraryProduct]
+    # (src/core/schemas/product.py:274, #1399 Plan-B) and list is invariant,
+    # so list[Product] is not assignable to it. Pydantic's synthesized __init__
+    # types its kwargs Any in this repo (no [pydantic-mypy] init_typed), so the
+    # annotated local below is where mypy verifies the widening: delete the copy
+    # or break the Product/LibraryProduct subclass relation and this line fails
+    # (#1785). Models, not serialized dicts: Product keeps typed pricing options
+    # through response construction, and its internal-only fields stay excluded
+    # at serialization.
+    widened_products: list[LibraryProduct] = [*eligible_products]
+    resp = GetProductsResponse(products=widened_products, errors=None, context=req.context)
 
     # Log successful get_products call
     elapsed_ms = int((time.time() - start_time) * 1000)
