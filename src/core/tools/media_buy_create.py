@@ -342,7 +342,7 @@ def _get_format_spec_sync(agent_url: str, format_id: str, *, provenance: UrlProv
     the seam's counterparty-aware path (VALIDATION_ERROR/correctable) instead of
     the operator path (CONFIGURATION_ERROR/terminal), UNLESS the url happens to
     also be a real tenant-registered operator agent, which stays terminal
-    regardless (salesagent-ypgd).
+    regardless (#1933).
     """
     from src.core.format_resolver import fetch_format_spec
 
@@ -433,7 +433,7 @@ def _validate_creatives_before_adapter_call(
         # broadstreet://<tenant_id>): those formats are served by the adapter
         # in-process, so no dialled agent could ever resolve them, and the
         # unconditional fetch below would reject a format the seller itself
-        # advertised (salesagent-ypgd). CounterpartyUrl marks BUYER provenance for
+        # advertised (#1933). CounterpartyUrl marks BUYER provenance for
         # a genuinely-dialled url — see _get_format_spec_sync's docstring. No
         # field: create-media-buy-request.json defines no creative:{id} path, so
         # there is no canonical request-document locator to name (a fabricated
@@ -719,7 +719,7 @@ def _build_adapter_asset_from_creative(
     #
     # Skip BOTH the fetch and the fallback for an adapter-provided pseudo-URL
     # (e.g. broadstreet://<tenant_id>) — served in-process, so no dialled agent
-    # could ever resolve it (salesagent-ypgd). Extraction below already falls
+    # could ever resolve it (#1933). Extraction below already falls
     # back to the creative's raw data fields when format_spec stays None.
     from src.core.format_resolver import is_dialled_agent_url
 
@@ -741,8 +741,7 @@ def _build_adapter_asset_from_creative(
                 product_id=None,
                 # Same buyer-supplied URL as the first fetch above — omitting
                 # provenance here would silently reclassify it as operator
-                # configuration and route it off the egress seam (salesagent-6gpt.1
-                # diff-review finding).
+                # configuration and route it off the egress seam (#1933).
                 provenance=CounterpartyUrl(field=None),
             )
         except AdCPFormatNotFoundError as e:
@@ -1750,7 +1749,15 @@ async def _validate_and_convert_format_ids(
         List of validated FormatId dicts with {agent_url, id}
 
     Raises:
-        ToolError: If any format_id is invalid, unregistered, or doesn't exist
+        AdCPValidationError: If any format_id is a plain string or malformed.
+        AdCPAuthorizationError: If the agent_url is not a registered creative agent.
+        AdCPFormatNotFoundError: If the format does not exist on the agent.
+        AdCPAdapterError: If the agent lookup itself fails.
+
+    Note:
+        Called from ``_create_media_buy_impl`` when a request package supplies
+        ``format_ids`` (#1962). Product-fallback formats (no request format_ids)
+        skip this helper and are checked against the product catalog later.
     """
     from src.core.creative_agent_registry import CreativeAgentRegistry
 
@@ -1771,56 +1778,81 @@ async def _validate_and_convert_format_ids(
     for idx, fmt_id in enumerate(format_ids):
         # STRICT ENFORCEMENT: Reject plain strings
         if isinstance(fmt_id, str):
+            field_path = f"packages[{package_idx}].format_ids[{idx}]"
             raise AdCPValidationError(
-                f"Package {package_idx + 1}, format_ids[{idx}]: Plain string format IDs are not supported. "
+                f"{field_path}: Plain string format IDs are not supported. "
                 f"Per AdCP spec, format_ids must be FormatId objects with {{agent_url, id}}. "
                 f'Example: {{"agent_url": "https://creative.adcontextprotocol.org", "id": "{fmt_id}"}}. '
                 f"Use list_creative_formats to discover available formats.",
+                field=field_path,
             )
+
+        field_path = f"packages[{package_idx}].format_ids[{idx}]"
 
         # Coerce to FormatId via Pydantic validation (handles dicts and FormatId objects)
         try:
             validated_fmt = FormatId.model_validate(fmt_id, from_attributes=True)
         except (ValueError, ValidationError) as e:
+            logger.warning("%s: invalid format_id structure: %s", field_path, e)
             raise AdCPValidationError(
-                f"Package {package_idx + 1}, format_ids[{idx}]: Invalid format_id structure: {e}",
+                f"{field_path}: Invalid format_id structure.",
+                field=field_path,
             ) from e
         agent_url = str(validated_fmt.agent_url).rstrip("/")
         format_id = validated_fmt.id
 
         if not agent_url or not format_id:
             raise AdCPValidationError(
-                f"Package {package_idx + 1}, format_ids[{idx}]: FormatId object missing required fields. "
-                f"Both agent_url and id are required. Got: agent_url={agent_url!r}, id={format_id!r}",
+                f"{field_path}: FormatId object missing required fields. Both agent_url and id are required.",
+                field=field_path,
             )
 
         # VALIDATION: Check agent is registered
         # Normalize incoming agent_url for comparison (strips /mcp, /a2a, /.well-known/*, trailing slashes)
         normalized_agent_url = normalize_agent_url(agent_url)
         if normalized_agent_url not in registered_agent_urls:
+            # Uniform response: do not leak the tenant's registered-agent inventory.
+            logger.warning(
+                "%s: creative agent not registered agent_url=%r registered=%s",
+                field_path,
+                agent_url,
+                sorted(registered_agent_urls),
+            )
             raise AdCPAuthorizationError(
-                f"Package {package_idx + 1}, format_ids[{idx}]: Creative agent not registered: {agent_url}. "
-                f"Registered agents: {', '.join(sorted(registered_agent_urls))}. "
-                f"Contact your administrator to register this creative agent.",
+                f"{field_path}: Creative agent not registered.",
+                field=field_path,
+                suggestion="Use a creative agent_url registered for this tenant (list_creative_formats).",
             )
 
         # VALIDATION: Verify format exists on agent
         try:
             format_obj = await registry.get_format(agent_url, format_id)
             if not format_obj:
-                raise AdCPFormatNotFoundError(
-                    f"Package {package_idx + 1}, format_ids[{idx}]: Format not found on agent. "
-                    f"agent_url={agent_url}, format_id={format_id!r}. "
-                    f"Use list_creative_formats to discover available formats.",
+                # Uniform response (AdCP 3.1.1): class default message; field is the
+                # indexed package path (buyer can locate which entry failed).
+                # Wire → REFERENCE_NOT_FOUND. Identifiers stay in server logs only.
+                logger.warning(
+                    "%s: FORMAT_NOT_FOUND format_id=%r agent_url=%r tenant_id=%r",
+                    field_path,
+                    format_id,
+                    agent_url,
+                    tenant_id,
                 )
+                raise AdCPFormatNotFoundError(field=field_path)
         except AdCPError:
             raise
         except Exception as e:
-            logger.exception(f"Error fetching format {format_id} from {agent_url}: {e}")
-            raise AdCPAdapterError(
-                f"Package {package_idx + 1}, format_ids[{idx}]: Failed to verify format on agent. "
-                f"agent_url={agent_url}, format_id={format_id!r}. Error: {e}",
+            logger.exception(
+                "%s: Error fetching format format_id=%r agent_url=%r: %s",
+                field_path,
+                format_id,
+                agent_url,
+                e,
             )
+            raise AdCPAdapterError(
+                f"{field_path}: Failed to verify format on agent.",
+                field=field_path,
+            ) from e
 
         # Format validated - add to results
         validated_format_ids.append({"agent_url": str(agent_url), "id": format_id})
@@ -2400,7 +2432,7 @@ async def _create_media_buy_impl(
                     principal_id=principal_id,
                     # Recorded so a later delivery knows which dialect to speak.
                     # The scheduler fires long after this request and has no
-                    # identity of its own (salesagent-pldmk.39).
+                    # identity of its own (#1933).
                     protocol=identity.protocol if identity else None,
                 )
                 logger.info(
@@ -2411,6 +2443,7 @@ async def _create_media_buy_impl(
 
     try:
         # Validate input parameters
+        validated_request_format_ids: dict[int, list[dict[str, str]]] = {}
         # 1. Budget validation (shared validator)
         total_budget = req.get_total_budget()
         budget_err = validate_budget_positive(total_budget, field=package_field_path("budget"))
@@ -2867,6 +2900,22 @@ async def _create_media_buy_impl(
                             suggestion="Check targeting constraints.",
                             field="targeting_overlay",
                         )
+
+        # Wire format_ids validation into create (#1962 / UC-002-EXT-H-02/H-03):
+        # FormatId shape, registered creative agent, and format existence on agent.
+        # Runs only when the buyer supplies package.format_ids (product fallback
+        # formats are publisher-configured and checked later against the catalog).
+        # Keep the returned normalized FormatId dicts — the helper's conversion
+        # (rstrip + normalize_agent_url) must reach format_ids_to_use below.
+        validated_request_format_ids = {}
+        if req.packages:
+            for package_idx, pkg in enumerate(req.packages):
+                if pkg.format_ids:
+                    validated_request_format_ids[package_idx] = await _validate_and_convert_format_ids(
+                        format_ids=list(pkg.format_ids),
+                        tenant_id=tenant["tenant_id"],
+                        package_idx=package_idx,
+                    )
 
     except (AdCPError, ValueError, PermissionError) as e:
         # Audit-update then re-raise via the shared helper so this early-validation
@@ -3491,6 +3540,8 @@ async def _create_media_buy_impl(
 
             # Use format_ids from request package if provided
             matching_package = pkg  # The package we're iterating over
+            # 0-based index matches early _validate_and_convert_format_ids call
+            validated_fmts = validated_request_format_ids.get(idx - 1)
 
             # If found and has format_ids, validate and use those
             if matching_package and matching_package.format_ids:
@@ -3503,11 +3554,16 @@ async def _create_media_buy_impl(
                         normalized_url = str(agent_url).rstrip("/") if agent_url else None
                         product_format_keys.add((normalized_url, fmt.id))
 
-                # Build set of requested format keys for comparison
+                # Build set of requested format keys for comparison.
+                # Prefer helper-normalized agent_url when the early gate ran.
                 requested_format_keys: set[tuple[str | None, str]] = set()
-                for fmt in matching_package.format_ids:
-                    normalized_url = str(fmt.agent_url).rstrip("/") if fmt.agent_url else None
-                    requested_format_keys.add((normalized_url, fmt.id))
+                if validated_fmts:
+                    for validated_fmt in validated_fmts:
+                        requested_format_keys.add((validated_fmt["agent_url"].rstrip("/"), validated_fmt["id"]))
+                else:
+                    for fmt in matching_package.format_ids:
+                        normalized_url = str(fmt.agent_url).rstrip("/") if fmt.agent_url else None
+                        requested_format_keys.add((normalized_url, fmt.id))
 
                 def format_display(url: str | None, fid: str) -> str:
                     """Format a (url, id) pair for display, handling trailing slashes."""
@@ -3583,16 +3639,24 @@ async def _create_media_buy_impl(
                                 fmt.duration_ms,
                             )
 
-                # Process request format_ids, merging dimensions from product if missing
-                for req_fmt in matching_package.format_ids:
-                    normalized_url = str(req_fmt.agent_url).rstrip("/") if req_fmt.agent_url else None
+                # Process request format_ids, merging dimensions from product if missing.
+                # agent_url/id come from the early validate-and-convert result when present
+                # so normalization is not discarded.
+                for fmt_i, req_fmt in enumerate(matching_package.format_ids):
+                    if validated_fmts and fmt_i < len(validated_fmts):
+                        use_agent_url: str | None = validated_fmts[fmt_i]["agent_url"]
+                        use_id = validated_fmts[fmt_i]["id"]
+                    else:
+                        use_agent_url = str(req_fmt.agent_url) if req_fmt.agent_url else None
+                        use_id = req_fmt.id
+                    normalized_url = use_agent_url.rstrip("/") if use_agent_url else None
                     # Check if request format has dimensions
                     if req_fmt.width is not None and req_fmt.height is not None:
                         # Request has dimensions, convert to our FormatId type
                         format_ids_to_use.append(
                             FormatId(
-                                agent_url=req_fmt.agent_url,
-                                id=req_fmt.id,
+                                agent_url=use_agent_url,
+                                id=use_id,
                                 width=req_fmt.width,
                                 height=req_fmt.height,
                                 duration_ms=req_fmt.duration_ms,
@@ -3600,13 +3664,13 @@ async def _create_media_buy_impl(
                         )
                     else:
                         # Try to get dimensions from product's format_ids
-                        product_dims = product_format_dimensions.get((normalized_url, req_fmt.id))
+                        product_dims = product_format_dimensions.get((normalized_url, use_id))
                         if product_dims and (product_dims[0] is not None or product_dims[1] is not None):
                             # Merge dimensions from product
                             format_ids_to_use.append(
                                 FormatId(
-                                    agent_url=req_fmt.agent_url,
-                                    id=req_fmt.id,
+                                    agent_url=use_agent_url,
+                                    id=use_id,
                                     width=product_dims[0],
                                     height=product_dims[1],
                                     duration_ms=product_dims[2] if product_dims[2] is not None else req_fmt.duration_ms,
@@ -3617,8 +3681,8 @@ async def _create_media_buy_impl(
                             # GAM adapter will try regex extraction from format_id string
                             format_ids_to_use.append(
                                 FormatId(
-                                    agent_url=req_fmt.agent_url,
-                                    id=req_fmt.id,
+                                    agent_url=use_agent_url,
+                                    id=use_id,
                                     width=req_fmt.width,
                                     height=req_fmt.height,
                                     duration_ms=req_fmt.duration_ms,

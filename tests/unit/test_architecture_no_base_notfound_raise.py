@@ -1,8 +1,8 @@
 """Guard: raise a typed AdCPNotFoundError subclass, never the base class.
 
 The base ``AdCPNotFoundError`` carries the internal ``NOT_FOUND`` code (wire →
-``INVALID_REQUEST``, recovery=terminal). Entity-specific subclasses carry a typed
-identity and recovery=correctable:
+``REFERENCE_NOT_FOUND``, recovery=correctable). Entity-specific subclasses carry a typed
+identity and (usually) recovery=correctable:
 
     AdCPMediaBuyNotFoundError, AdCPPackageNotFoundError, AdCPProductNotFoundError,
     AdCPAccountNotFoundError, AdCPContextNotFoundError, AdCPCreativeNotFoundError,

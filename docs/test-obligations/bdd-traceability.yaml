@@ -924,6 +924,12 @@ mappings:
       upstream_refs: ["BR-UC-002-ext-h"]
       business_rules: []
       status: new
+    - adcp_scenario_id: "T-UC-002-ext-h-format"
+      adcp_feature: "BR-UC-002-create-media-buy.feature"
+      obligation_id: "UC-002-EXT-H-03"
+      upstream_refs: ["BR-UC-002-ext-h"]
+      business_rules: []
+      status: mapped
     - adcp_scenario_id: "T-UC-002-ext-i"
       adcp_feature: "BR-UC-002-create-media-buy.feature"
       obligation_id: null

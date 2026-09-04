@@ -204,3 +204,20 @@ def validate_against_pinned_schema(filename: str, data: Any) -> None:
             f"  at {'.'.join(str(p) for p in e.absolute_path) or '<root>'}: {e.message}" for e in errors
         )
         raise AssertionError(f"Response is not schema-valid against {filename}:\n{details}")
+
+
+def error_code_suggestion(code: str) -> str:
+    """Pinned ``enumMetadata`` suggestion for *code* (spec pin, not production ClassVar).
+
+    Use this in wire-oracle asserts so a ClassVar edit cannot lockstep with the
+    test. Raises ``KeyError`` if the pin has no suggestion for *code*.
+
+    The ``not entry.get("suggestion")`` arm is forward-insurance: today's pin has
+    no dict entry with a falsy suggestion, but a future enum row must still fail
+    loud rather than return ``None``/``""`` into buyer-facing asserts.
+    """
+    meta = load("error-code.json")["enumMetadata"]
+    entry = meta.get(code)
+    if not isinstance(entry, dict) or not entry.get("suggestion"):
+        raise KeyError(f"pinned error-code.json has no suggestion for {code!r}")
+    return str(entry["suggestion"])

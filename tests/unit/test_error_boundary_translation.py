@@ -526,8 +526,8 @@ class TestRESTBoundaryAdCPErrorTranslation:
             response = client.get("/api/v1/capabilities")
             assert response.status_code == 404
             # AdCPNotFoundError's NOT_FOUND is INTERNAL_CODES; envelope translates
-            # to INVALID_REQUEST so the wire code stays in STANDARD_ERROR_CODES.
-            assert_envelope_shape(response.json(), "INVALID_REQUEST", recovery="correctable")
+            # to REFERENCE_NOT_FOUND so the wire code stays in STANDARD_ERROR_CODES.
+            assert_envelope_shape(response.json(), "REFERENCE_NOT_FOUND", recovery="correctable")
 
     def test_adcp_adapter_from_impl_returns_502(self):
         """AdCPAdapterError raised in _impl → REST returns 502 with transient recovery."""
@@ -800,7 +800,7 @@ class TestToDictRecoveryField:
         cases = [
             # Recovery follows the wire code : base
             # AdCPError→SERVICE_UNAVAILABLE=transient,
-            # AdCPNotFoundError→INVALID_REQUEST=correctable.
+            # AdCPNotFoundError→REFERENCE_NOT_FOUND=correctable.
             (AdCPError("internal"), "transient"),
             (AdCPValidationError("bad field"), "correctable"),
             (AdCPNotFoundError("missing"), "correctable"),
@@ -849,7 +849,7 @@ class TestCustomRecoveryOverrideMCPBoundary:
     """Custom recovery= override must propagate through MCP boundary (with_error_logging)."""
 
     def test_not_found_maps_to_invalid_request_through_mcp_boundary(self):
-        """AdCPNotFoundError -> ToolError carrying the wire code INVALID_REQUEST.
+        """AdCPNotFoundError -> ToolError carrying wire ``REFERENCE_NOT_FOUND``.
 
         This used to also assert that a hand-passed ``recovery="transient"``
         survived to the wire, on a code the pinned enumMetadata classifies
@@ -861,12 +861,13 @@ class TestCustomRecoveryOverrideMCPBoundary:
         ``tests/integration/test_error_paths.py`` — until the kwarg goes.
 
         What this pins is the half that outlives the kwarg: the internal
-        ``NOT_FOUND`` code is translated to the spec-standard ``INVALID_REQUEST``
-        at the boundary, with the message intact and the pinned recovery.
+        ``NOT_FOUND`` code is translated to spec ``REFERENCE_NOT_FOUND`` at the
+        boundary (typed identifier miss, AdCP L3), with the uniform buyer
+        message (raise-site text must not leak) and the pinned recovery.
         """
         from fastmcp.exceptions import ToolError
 
-        from src.core.exceptions import AdCPNotFoundError
+        from src.core.exceptions import REFERENCE_NOT_FOUND_MESSAGE, AdCPNotFoundError
         from src.core.tool_error_logging import with_error_logging
 
         def failing_tool():
@@ -879,10 +880,10 @@ class TestCustomRecoveryOverrideMCPBoundary:
 
         assert_envelope_shape(
             exc_info.value,
-            "INVALID_REQUEST",
+            "REFERENCE_NOT_FOUND",
             check_mcp_tool_error=True,
             recovery="correctable",
-            message_substr="temporarily missing",
+            message_substr=REFERENCE_NOT_FOUND_MESSAGE,
         )
 
     def test_extract_error_info_reports_the_derived_recovery(self):
@@ -925,7 +926,7 @@ class TestTypedErrorA2ABoundary:
         with patch.object(handler, "_handle_get_products_skill", mock_skill):
             with pytest.raises(AdCPNotFoundError) as exc_info:
                 await handler._handle_explicit_skill("get_products", {}, "token")
-            # NOT_FOUND translates to INVALID_REQUEST on the wire, which the pin
+            # NOT_FOUND translates to REFERENCE_NOT_FOUND on the wire, which the pin
             # classifies correctable — the buyer can fix the reference and resend.
             assert exc_info.value.recovery == "correctable"
 
@@ -1040,13 +1041,13 @@ class TestRecoveryRoundtrip:
 
         # AdCPError (INTERNAL_ERROR) and AdCPNotFoundError (NOT_FOUND) hold internal
         # codes; the boundary translates to STANDARD_ERROR_CODES (SERVICE_UNAVAILABLE
-        # and INVALID_REQUEST respectively). Other subclasses already use STANDARD codes.
+        # and REFERENCE_NOT_FOUND respectively). Other subclasses already use STANDARD codes.
         cases = [
             # Recovery matches the pinned classification of the WIRE code
             # : SERVICE_UNAVAILABLE=transient, INVALID_REQUEST=correctable.
             (AdCPError, "internal", "SERVICE_UNAVAILABLE", "transient"),
             (AdCPValidationError, "bad", "VALIDATION_ERROR", "correctable"),
-            (AdCPNotFoundError, "missing", "INVALID_REQUEST", "correctable"),
+            (AdCPNotFoundError, "missing", "REFERENCE_NOT_FOUND", "correctable"),
             (AdCPConflictError, "dup", "CONFLICT", "transient"),
             (AdCPGoneError, "expired", "INVALID_STATE", "correctable"),
             (AdCPBudgetExhaustedError, "broke", "BUDGET_EXHAUSTED", "terminal"),
@@ -1151,7 +1152,7 @@ class TestRecoveryRoundtrip:
             # Recovery matches the pinned classification of the WIRE code .
             (AdCPError, "internal", 500, "SERVICE_UNAVAILABLE", "transient"),
             (AdCPValidationError, "bad", 400, "VALIDATION_ERROR", "correctable"),
-            (AdCPNotFoundError, "missing", 404, "INVALID_REQUEST", "correctable"),
+            (AdCPNotFoundError, "missing", 404, "REFERENCE_NOT_FOUND", "correctable"),
             (AdCPConflictError, "dup", 409, "CONFLICT", "transient"),
             (AdCPGoneError, "expired", 410, "INVALID_STATE", "correctable"),
             (AdCPBudgetExhaustedError, "broke", 422, "BUDGET_EXHAUSTED", "terminal"),

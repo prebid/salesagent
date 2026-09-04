@@ -316,7 +316,19 @@ Feature: BR-UC-002 Create Media Buy
     But a package format_id references an unregistered agent_url
     When the Buyer Agent sends the create_media_buy request
     Then the operation should fail
+    And the error code should be "AUTH_REQUIRED"
     And the error message should contain "not registered"
+    And the error should include "suggestion" field
+
+  @T-UC-002-ext-h-format @extension @ext-h @error
+  Scenario: Format ID references unknown format on registered agent
+    Given a valid create_media_buy request
+    And the account exists and is active
+    But a package format_id references an unknown format on a registered agent
+    When the Buyer Agent sends the create_media_buy request
+    Then the operation should fail
+    And the error code should be "REFERENCE_NOT_FOUND"
+    And the error message should be "Reference not found"
     And the error should include "suggestion" field
     # --- ext-i: Authentication Error ---
 

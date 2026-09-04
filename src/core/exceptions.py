@@ -122,7 +122,12 @@ RECOVERY_BY_WIRE_CODE: dict[str, RecoveryHint] = _load_pinned_recovery()
 # here — this is a set of code NAMES; RECOVERY_BY_WIRE_CODE answers what they
 # mean. The remaining demoted spec code (BILLING_NOT_SUPPORTED) is tracked for
 # the same treatment in #1602.
-_SPEC_SUPPLEMENT_CODES: frozenset[str] = frozenset({"CREATIVE_NOT_FOUND", "CONFIGURATION_ERROR"})
+_SPEC_SUPPLEMENT_CODES: frozenset[str] = frozenset({"CREATIVE_NOT_FOUND", "CONFIGURATION_ERROR", "REFERENCE_NOT_FOUND"})
+
+# Repo-authored uniform buyer message for REFERENCE_NOT_FOUND (enumMetadata has
+# suggestion + recovery only — no canonical message field).
+REFERENCE_NOT_FOUND_MESSAGE = "Reference not found"
+REFERENCE_NOT_FOUND_SUGGESTION = "verify the referenced identifier exists and is accessible to the caller"
 
 # Codes the SDK helper ships that the PINNED spec does not define. The pin is the
 # authority and the helper is a cross-check (CLAUDE.md spec-grounding gate), so a
@@ -173,13 +178,15 @@ ERROR_CODE_MAPPING: dict[str, str] = {
     # instead of a specific subclass. Mapped to the closest WIRE_STANDARD_CODES
     # entry so the wire stays spec-compliant. Raise sites can later migrate to
     # specific subclasses; the mappings stay as a safety net.
-    "NOT_FOUND": "INVALID_REQUEST",
-    # Entity-specific not-found codes the pinned spec enum does NOT define
-    # (unlike CREATIVE_NOT_FOUND, which the enum defines and therefore passes
-    # through untranslated). The typed subclasses exist for
-    # recovery=correctable + guard-enforceability; the buyer-visible wire code
-    # is INVALID_REQUEST.
-    "FORMAT_NOT_FOUND": "INVALID_REQUEST",
+    # NOT_FOUND / FORMAT_NOT_FOUND: typed / generic referenced-identifier misses
+    # MUST use REFERENCE_NOT_FOUND (error-handling L3 since 3.0.0 + enumMetadata).
+    "NOT_FOUND": "REFERENCE_NOT_FOUND",
+    # Internal class code stays FORMAT_NOT_FOUND for typed identity; wire → REFERENCE_NOT_FOUND.
+    "FORMAT_NOT_FOUND": "REFERENCE_NOT_FOUND",
+    # TASK_NOT_FOUND: still demoted to INVALID_REQUEST on tip. Mandated wire target
+    # is REFERENCE_NOT_FOUND (same MUST — do not mint a custom TASK_NOT_FOUND wire
+    # code). Remap + genericize workflow.py raise message together in #1963
+    # (code-only remap would leave a resource-qualified buyer message).
     "TASK_NOT_FOUND": "INVALID_REQUEST",
     "INTERNAL_ERROR": "SERVICE_UNAVAILABLE",
     # Authentication / authorisation
@@ -237,7 +244,7 @@ INTERNAL_CODES: frozenset[str] = frozenset(
     {
         "INTERNAL_ERROR",  # Base-class default; never instantiated for wire
         "NOT_FOUND",  # Base-class for entity-specific NotFound subclasses
-        "FORMAT_NOT_FOUND",  # AdCPFormatNotFoundError; wire → INVALID_REQUEST
+        "FORMAT_NOT_FOUND",  # AdCPFormatNotFoundError; wire → REFERENCE_NOT_FOUND
         "TASK_NOT_FOUND",  # AdCPTaskNotFoundError; wire → INVALID_REQUEST
         "API_ERROR",  # Raw adapter API failure detail
         "WORKFLOW_CREATION_FAILED",  # GAM workflow orchestration detail
@@ -451,6 +458,11 @@ class AdCPError(Exception):
     # "provide valid credentials") sets this so no raise site can forget the
     # graded top-level ``suggestion``. Per-raise ``suggestion=`` overrides.
     _default_suggestion: ClassVar[str | None] = None
+    # Optional class-level message default: omitted ``message`` (None) falls
+    # back here so raise sites cannot omit (or drift from) the canonical
+    # buyer-facing text. Explicit ``""`` is preserved (None-sentinel, same as
+    # ``suggestion`` / ``error_code`` / ``recovery``).
+    _default_message: ClassVar[str | None] = None
 
     # Instance attributes — set in __init__ from _default_* unless overridden.
     # ``recovery`` is NOT among them: it is a read-only property, derived below.
@@ -459,7 +471,7 @@ class AdCPError(Exception):
 
     def __init__(
         self,
-        message: str = "",
+        message: str | None = None,
         *,
         error_code: str | None = None,
         status_code: int | None = None,
@@ -473,8 +485,9 @@ class AdCPError(Exception):
         # sanctioned ``synthesize()`` classmethod for boundary fallback paths
         # that need a wire code the typed class hierarchy doesn't model.
         # Direct raises use a typed subclass and inherit its ``_default_*``.
-        super().__init__(message)
-        self.message = message
+        resolved_message = message if message is not None else (type(self)._default_message or "")
+        super().__init__(resolved_message)
+        self.message = resolved_message
         self.details = details
         self.field = field
         self.suggestion = suggestion if suggestion is not None else type(self)._default_suggestion
@@ -756,7 +769,7 @@ class AdCPPolicyViolationError(AdCPAuthorizationError):
 class AdCPNotFoundError(AdCPError):
     """Requested resource does not exist (404).
 
-    Recovery=correctable: the wire code is INVALID_REQUEST (via
+    Recovery=correctable: the wire code is REFERENCE_NOT_FOUND (via
     ERROR_CODE_MAPPING), whose pinned enumMetadata classification is
     correctable — recovery follows the wire code (#1430 review).
     """
@@ -770,7 +783,7 @@ class AdCPAccountNotFoundError(AdCPNotFoundError):
 
     Recovery=terminal per the pinned enumMetadata for ACCOUNT_NOT_FOUND —
     declared explicitly (the AdCPNotFoundError parent is correctable to
-    match its INVALID_REQUEST wire code).
+    match its REFERENCE_NOT_FOUND wire code).
     """
 
     _default_error_code: ClassVar[str] = "ACCOUNT_NOT_FOUND"
@@ -1023,17 +1036,23 @@ class AdCPCreativeNotFoundError(AdCPNotFoundError):
 
 
 class AdCPFormatNotFoundError(AdCPNotFoundError):
-    """Requested creative format does not exist on the agent (404, wire → INVALID_REQUEST).
+    """Requested creative format does not exist on the agent (404, wire → REFERENCE_NOT_FOUND).
 
-    No standard ``FORMAT_NOT_FOUND`` SDK code exists, so the raw code is internal
-    and translated to ``INVALID_REQUEST`` at the wire boundary. The gain over the
-    bare ``AdCPNotFoundError`` is recovery=correctable + a typed identity.
+    No standard ``FORMAT_NOT_FOUND`` wire code exists in the pinned AdCP 3.1.1
+    enum, so the raw code is internal and translated to ``REFERENCE_NOT_FOUND``
+    (mandatory for typed params lacking a dedicated ``*_NOT_FOUND``). Uniform
+    response: buyer-facing ``message`` MUST be generic (no format_id / agent_url
+    in message or details). When the buyer parameter is the ``format_ids`` array,
+    ``error.field`` MUST name that array; library ``get_format`` has no buyer
+    parameter name and leaves ``field`` unset.
 
     Recovery=correctable: the buyer can correct by supplying a valid format_id
     (discoverable via list_creative_formats).
     """
 
     _default_error_code: ClassVar[str] = "FORMAT_NOT_FOUND"
+    _default_message: ClassVar[str | None] = REFERENCE_NOT_FOUND_MESSAGE
+    _default_suggestion: ClassVar[str | None] = REFERENCE_NOT_FOUND_SUGGESTION
 
 
 class AdCPTaskNotFoundError(AdCPNotFoundError):
@@ -1270,10 +1289,21 @@ def build_two_layer_error_envelope(exc: AdCPError) -> dict[str, Any]:
     so they always land in ``WIRE_STANDARD_CODES`` (the SDK's
     ``STANDARD_ERROR_CODES`` plus the pinned-spec supplement, e.g.
     ``CREATIVE_NOT_FOUND``).
+
+    Uniform-response wire codes (``REFERENCE_NOT_FOUND``): the buyer-facing
+    ``message`` is the repo-authored ``REFERENCE_NOT_FOUND_MESSAGE``, not
+    ``exc.message``. Raise-site positionals must not override the generic
+    message on the wire (AdCP L3 inaccessible-references rule; review A1 /
+    KM finding 2).
     """
+    wire_code = exc.wire_error_code
+    if wire_code == "REFERENCE_NOT_FOUND":
+        buyer_message = REFERENCE_NOT_FOUND_MESSAGE
+    else:
+        buyer_message = exc.message
     payload = adcp_error(
-        exc.wire_error_code,
-        exc.message,
+        wire_code,
+        buyer_message,
         recovery=exc.recovery,
         field=exc.field,
         suggestion=exc.suggestion,

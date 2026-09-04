@@ -135,7 +135,7 @@ def _process_assignments(
                         # Skip if in lenient mode, error if strict
                         if validation_mode == "strict":
                             # Use the specific subclass so the wire code is PACKAGE_NOT_FOUND
-                            # (STANDARD); the base AdCPNotFoundError would emit INVALID_REQUEST
+                            # (STANDARD); the base AdCPNotFoundError would emit REFERENCE_NOT_FOUND
                             # via the wire-safe translation and lose buyer-facing specificity.
                             raise AdCPPackageNotFoundError(error_msg)
                         else:

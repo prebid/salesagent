@@ -395,7 +395,7 @@ def _build_error_code_to_status() -> dict[str, int]:
     # correspond to any specific typed subclass — it's the translation target
     # for several upstream codes. Anchor it to HTTP 400 (the conventional
     # bad-request status) so propagation from differently-statused upstream
-    # codes (e.g., NOT_FOUND=404 -> INVALID_REQUEST) doesn't accidentally
+    # codes (e.g., NOT_FOUND=404 -> REFERENCE_NOT_FOUND) doesn't accidentally
     # promote it to 404.
     table: dict[str, int] = {"INVALID_REQUEST": 400}
     _GENERIC_CATCHALLS = {"INVALID_REQUEST"}

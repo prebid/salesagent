@@ -8,6 +8,8 @@ Validates that:
 
 """
 
+import json
+
 import pytest
 from starlette.testclient import TestClient
 
@@ -384,7 +386,7 @@ class TestRecoveryClassification:
 # ---------------------------------------------------------------------------
 
 
-from tests.helpers import assert_envelope_shape  # noqa: E402
+from tests.helpers import assert_envelope_shape, pinned_schema  # noqa: E402
 
 
 @pytest.fixture(scope="module")
@@ -397,9 +399,8 @@ def exc_handler_test_app():
     added dynamically after startup.
     """
     from fastapi import FastAPI
-    from fastapi.responses import JSONResponse
-    from starlette.requests import Request
 
+    from src.app import adcp_error_handler as production_adcp_error_handler
     from src.core.exceptions import (
         AdCPAdapterError,
         AdCPAuthenticationError,
@@ -414,17 +415,12 @@ def exc_handler_test_app():
         AdCPServiceUnavailableError,
         AdCPTaskNotFoundError,
         AdCPValidationError,
-        build_two_layer_error_envelope,
     )
 
     _app = FastAPI()
-
-    @_app.exception_handler(AdCPError)
-    async def adcp_error_handler(request: Request, exc: AdCPError) -> JSONResponse:
-        return JSONResponse(
-            status_code=exc.status_code,
-            content=build_two_layer_error_envelope(exc),
-        )
+    # Grade the production handler (record_boundary_error + envelope), not a
+    # test-authored copy that skips observability.
+    _app.add_exception_handler(AdCPError, production_adcp_error_handler)
 
     @_app.get("/test-exc/validation")
     def raise_validation():
@@ -448,7 +444,15 @@ def exc_handler_test_app():
 
     @_app.get("/test-exc/format-not-found")
     def raise_format_not_found():
-        raise AdCPFormatNotFoundError("Unknown format_id 'display_300x250'")
+        raise AdCPFormatNotFoundError(field="format_ids")
+
+    @_app.get("/test-exc/format-not-found-override")
+    def raise_format_not_found_override():
+        # Positional override must NOT reach the wire (uniform-response seam).
+        raise AdCPFormatNotFoundError(
+            "Format not found. format_id=secret_xyz, tenant=acme",
+            field="format_ids",
+        )
 
     @_app.get("/test-exc/task-not-found")
     def raise_task_not_found():
@@ -509,17 +513,17 @@ class TestFastAPIExceptionHandlers:
         )
 
     def test_not_found_error_returns_404(self, exc_handler_test_app):
-        """AdCPNotFoundError raised in a route must return 404 with INVALID_REQUEST wire code.
+        """AdCPNotFoundError raised in a route must return 404 with REFERENCE_NOT_FOUND.
 
         The base ``AdCPNotFoundError`` carries the internal ``NOT_FOUND`` code,
-        which the boundary translates to ``INVALID_REQUEST`` (STANDARD) so the
-        wire stays spec-compliant. Status 404 is preserved. Production code
-        should prefer specific subclasses (AdCPMediaBuyNotFoundError, etc.).
+        which the boundary translates to ``REFERENCE_NOT_FOUND`` (typed-param /
+        generic referenced-identifier MUST). Status 404 is preserved. Production
+        code should prefer specific subclasses (AdCPMediaBuyNotFoundError, etc.).
         """
         client = TestClient(exc_handler_test_app, raise_server_exceptions=False)
         response = client.get("/test-exc/notfound")
         assert response.status_code == 404
-        assert_envelope_shape(response.json(), "INVALID_REQUEST", recovery="correctable")
+        assert_envelope_shape(response.json(), "REFERENCE_NOT_FOUND", recovery="correctable")
 
     def test_context_not_found_error_returns_404(self, exc_handler_test_app):
         """AdCPContextNotFoundError raised in a route must return 404 with SESSION_NOT_FOUND.
@@ -548,15 +552,40 @@ class TestFastAPIExceptionHandlers:
         assert_envelope_shape(response.json(), "CREATIVE_NOT_FOUND", recovery="correctable")
 
     def test_format_not_found_error_returns_404(self, exc_handler_test_app):
-        """AdCPFormatNotFoundError → 404, wire INVALID_REQUEST, correctable.
+        """AdCPFormatNotFoundError → 404, wire REFERENCE_NOT_FOUND, correctable.
 
-        FORMAT_NOT_FOUND translates to INVALID_REQUEST at the boundary;
-        recovery=correctable distinguishes it from the base (terminal).
+        Internal FORMAT_NOT_FOUND maps to wire REFERENCE_NOT_FOUND (AdCP 3.1.1:
+        typed params without a dedicated *_NOT_FOUND MUST use REFERENCE_NOT_FOUND).
+        Recovery follows that wire code (correctable).
         """
         client = TestClient(exc_handler_test_app, raise_server_exceptions=False)
         response = client.get("/test-exc/format-not-found")
         assert response.status_code == 404
-        assert_envelope_shape(response.json(), "INVALID_REQUEST", recovery="correctable")
+        body = response.json()
+        assert_envelope_shape(body, "REFERENCE_NOT_FOUND", recovery="correctable", message_substr="Reference not found")
+        expected_suggestion = pinned_schema.error_code_suggestion("REFERENCE_NOT_FOUND")
+        assert body["errors"][0]["suggestion"] == expected_suggestion
+        assert body["adcp_error"]["suggestion"] == expected_suggestion
+        assert body["errors"][0].get("field") == "format_ids"
+        assert body["adcp_error"].get("field") == "format_ids"
+        assert body["errors"][0].get("details") is None
+        assert body["adcp_error"].get("details") is None
+
+    def test_format_not_found_positional_override_stripped_on_wire(self, exc_handler_test_app):
+        """Production handler: leaking positional must not appear under REFERENCE_NOT_FOUND.
+
+        Grades build_two_layer_error_envelope's uniform-response seam through the
+        real adcp_error_handler (not a test-authored copy).
+        """
+        client = TestClient(exc_handler_test_app, raise_server_exceptions=False)
+        response = client.get("/test-exc/format-not-found-override")
+        assert response.status_code == 404
+        body = response.json()
+        assert_envelope_shape(body, "REFERENCE_NOT_FOUND", recovery="correctable", message_substr="Reference not found")
+        assert body["errors"][0]["message"] == "Reference not found"
+        assert body["adcp_error"]["message"] == "Reference not found"
+        assert "secret_xyz" not in body["errors"][0]["message"]
+        assert "acme" not in json.dumps(body)
 
     def test_task_not_found_error_returns_404(self, exc_handler_test_app):
         """AdCPTaskNotFoundError → 404, wire INVALID_REQUEST, correctable.
@@ -704,7 +733,6 @@ class TestErrorCodeWireTranslation:
         that escape to the boundary now produce STANDARD_ERROR_CODES output
         instead of the previously-leaking internal codes.
         """
-        from adcp.server.helpers import STANDARD_ERROR_CODES
 
         from src.core.exceptions import INTERNAL_CODES, WIRE_STANDARD_CODES, translate_error_code
 
@@ -712,13 +740,13 @@ class TestErrorCodeWireTranslation:
         #   (a) has an explicit translation to a STANDARD code, OR
         #   (b) is documented as adapter-internal (never raised at the boundary).
         wire_safe = {
-            "NOT_FOUND": "INVALID_REQUEST",
+            "NOT_FOUND": "REFERENCE_NOT_FOUND",
             "INTERNAL_ERROR": "SERVICE_UNAVAILABLE",
         }
         for internal, expected_wire in wire_safe.items():
             assert internal in INTERNAL_CODES, f"{internal} should be in INTERNAL_CODES"
             assert translate_error_code(internal) == expected_wire
-            assert expected_wire in STANDARD_ERROR_CODES
+            assert expected_wire in WIRE_STANDARD_CODES
 
         # CONFIGURATION_ERROR is no longer internal/demoted: the pinned enum
         # defines it (recovery=terminal, "MUST NOT auto-retry"), so it passes

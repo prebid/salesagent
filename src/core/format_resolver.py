@@ -18,6 +18,7 @@ from adcp.types import FormatId as LibraryFormatId
 
 from src.core.database.database_session import get_db_session
 from src.core.exceptions import AdCPError, AdCPFormatNotFoundError, AdCPNotFoundError
+from src.core.logging_config import log_safe
 from src.core.schemas import Format
 from src.core.security.outbound_http import UrlProvenance
 from src.core.validation_helpers import run_async_in_sync_context
@@ -181,7 +182,12 @@ def fetch_format_spec(agent_url: str, format_id: str, *, provenance: UrlProvenan
     except AdCPError:
         raise
     except Exception as e:
-        logger.warning(f"Could not fetch format {format_id} from {agent_url}: {e}")
+        logger.warning(
+            "Could not fetch format %s from %s: %s",
+            log_safe(format_id),
+            log_safe(agent_url),
+            log_safe(e),
+        )
         return None
 
 
@@ -245,13 +251,18 @@ def get_format(
             if format_ref_id(fmt.format_id) == format_id:
                 return fmt
 
-    # Not found anywhere
-    error_msg = f"Unknown format_id '{format_id}'"
-    if agent_url:
-        error_msg += f" from agent {agent_url}"
-    if tenant_id:
-        error_msg += f" for tenant {tenant_id}"
-    raise AdCPFormatNotFoundError(error_msg)
+    # Uniform response (AdCP 3.1.1): class default message; no buyer parameter
+    # name here so field stays unset (do not bake format_id). Wire → REFERENCE_NOT_FOUND.
+    # Spec constrains the buyer-facing message only — keep identifiers in server logs
+    # (log_safe strips CR/LF so buyer-supplied ids cannot forge log lines — CodeQL).
+    logger.warning(
+        "FORMAT_NOT_FOUND: format_id=%s agent_url=%s tenant_id=%s product_id=%s",
+        log_safe(format_id),
+        log_safe(agent_url),
+        log_safe(tenant_id),
+        log_safe(product_id),
+    )
+    raise AdCPFormatNotFoundError()
 
 
 def _get_product_format_override(

@@ -48,6 +48,7 @@ import pytest
 from src.core.exceptions import AdCPFormatNotFoundError, AdCPNotFoundError
 from src.core.schemas import Format
 from tests.helpers.adcp_factories import create_test_format_id
+from tests.helpers.format_not_found_assertions import assert_format_not_found_uniform
 
 
 def _make_format(format_id_str: str = "display_300x250", name: str = "Test", **kwargs) -> Format:
@@ -293,7 +294,7 @@ class TestGetFormat:
         assert result.name == "Found Format"
 
     def test_search_all_agents_no_match_raises_not_found(self):
-        """get_format raises AdCPNotFoundError when format not found in any agent."""
+        """get_format raises AdCPFormatNotFoundError when format not found in any agent."""
         mock_fmt = MagicMock()
         mock_fmt.format_id = "video_1920x1080"  # Different format — won't match
 
@@ -303,39 +304,50 @@ class TestGetFormat:
         ):
             from src.core.format_resolver import get_format
 
-            with pytest.raises(AdCPFormatNotFoundError, match="Unknown format_id 'display_300x250'"):
+            with pytest.raises(AdCPFormatNotFoundError, match="Reference not found") as exc_info:
                 get_format("display_300x250", tenant_id="t1")
+            assert_format_not_found_uniform(
+                exc_info.value,
+                field=None,
+                forbidden_substrings=["display_300x250", "t1"],
+            )
 
-    def test_not_found_error_includes_agent_url(self):
-        """AdCPNotFoundError message includes agent_url when provided."""
+    def test_not_found_error_is_generic_with_agent_url(self):
+        """AdCPFormatNotFoundError message stays generic even when agent_url provided.
+
+        Uniform response (AdCP 3.1.1): no format_id / agent_url / tenant leak.
+        """
         with (
             patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_reg,
             patch("src.core.format_resolver.run_async_in_sync_context", return_value=None),
         ):
             from src.core.format_resolver import get_format
 
-            with pytest.raises(AdCPFormatNotFoundError, match="from agent https://agent.example.com") as exc_info:
+            with pytest.raises(AdCPFormatNotFoundError, match="Reference not found") as exc_info:
                 get_format("display_300x250", agent_url="https://agent.example.com", tenant_id="t1")
 
-            assert "for tenant t1" in str(exc_info.value)
-            assert exc_info.value.error_code == "FORMAT_NOT_FOUND"
-            assert exc_info.value.recovery == "correctable"
+            assert_format_not_found_uniform(
+                exc_info.value,
+                field=None,
+                forbidden_substrings=["display_300x250", "agent.example.com", "t1"],
+            )
 
     def test_not_found_error_no_agent_url_no_tenant(self):
-        """AdCPNotFoundError message is minimal without agent_url and tenant_id."""
+        """AdCPFormatNotFoundError message is generic without agent_url and tenant_id."""
         with (
             patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_reg,
             patch("src.core.format_resolver.run_async_in_sync_context", return_value=[]),
         ):
             from src.core.format_resolver import get_format
 
-            with pytest.raises(AdCPFormatNotFoundError, match="Unknown format_id 'nonexistent'") as exc_info:
+            with pytest.raises(AdCPFormatNotFoundError, match="Reference not found") as exc_info:
                 get_format("nonexistent")
 
-            error_msg = str(exc_info.value)
-            assert "from agent" not in error_msg
-            assert "for tenant" not in error_msg
-            assert exc_info.value.recovery == "correctable"
+            assert_format_not_found_uniform(
+                exc_info.value,
+                field=None,
+                forbidden_substrings=["nonexistent", "from agent", "for tenant"],
+            )
 
 
 # ---------------------------------------------------------------------------

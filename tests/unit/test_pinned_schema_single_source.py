@@ -97,3 +97,32 @@ class TestPinnedSchemaTracksSDKVersion:
             f"but the installed SDK is pinned to {adcp.get_adcp_spec_version()!r} — the "
             "derivation from the SDK's pin to the resolved schema tree is severed."
         )
+
+
+def test_error_code_suggestion_unknown_code_raises() -> None:
+    """Unknown codes fail loud (E5)."""
+    import pytest
+
+    from tests.helpers import pinned_schema
+
+    with pytest.raises(KeyError, match="no suggestion"):
+        pinned_schema.error_code_suggestion("TOTALLY_INVENTED_CODE_XYZ")
+
+
+def test_error_code_suggestion_entry_without_suggestion_raises(monkeypatch) -> None:
+    """Operand 2 (falsy suggestion) is forward-insurance — grade it explicitly (E5)."""
+    from tests.helpers import pinned_schema
+
+    real_load = pinned_schema.load
+
+    def fake_load(name: str):
+        data = real_load(name)
+        if name == "error-code.json":
+            data = {**data, "enumMetadata": {**data["enumMetadata"], "NO_SUGGESTION_CODE": {"recovery": "terminal"}}}
+        return data
+
+    monkeypatch.setattr(pinned_schema, "load", fake_load)
+    import pytest
+
+    with pytest.raises(KeyError, match="no suggestion"):
+        pinned_schema.error_code_suggestion("NO_SUGGESTION_CODE")

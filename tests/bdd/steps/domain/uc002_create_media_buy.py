@@ -647,12 +647,44 @@ def given_package_format_id_plain_string(ctx: dict, format_id: str) -> None:
 def given_package_format_id_unregistered_agent(ctx: dict) -> None:
     """Set a well-formed FormatId whose agent_url is not a registered creative agent.
 
-    Production gap: _validate_and_convert_format_ids (the unregistered-agent
-    check) is dead code — never called — so the unregistered agent_url is not
-    detected (ext-h-agent wants a 'not registered' error).
+    Wired via ``_validate_and_convert_format_ids`` in ``_create_media_buy_impl``
+    (#1962): unregistered agent_url → AdCPAuthorizationError / AUTH_REQUIRED with
+    a 'not registered' message (T-UC-002-ext-h-agent).
     """
     pkg = _first_package(ctx)
     pkg["format_ids"] = [{"agent_url": "https://unregistered-agent.example.com", "id": "banner_300x250"}]
+
+
+@given(parsers.parse("a package format_id references an unknown format on a registered agent"))
+def given_package_format_id_unknown_on_registered_agent(ctx: dict) -> None:
+    """Set FormatId for the default registered agent with an id that does not exist.
+
+    Wired via ``_validate_and_convert_format_ids`` (#1962 / UC-002-EXT-H-03):
+    registered agent + unknown id → AdCPFormatNotFoundError / wire REFERENCE_NOT_FOUND
+    with generic message.
+
+    Use ``CreativeAgentRegistry.DEFAULT_AGENT.agent_url`` (honours ``CREATIVE_AGENT_URL``)
+    so e2e_rest matches the Docker creative-agent pin — hardcoding the public host
+    yields AUTH_REQUIRED because that URL is not the in-network default.
+
+    In-process transports: patch ``get_format`` → None (no network). e2e_rest: the
+    patch cannot cross the HTTP boundary; the pinned creative-agent simply has no
+    ``nonexistent_format_999`` entry, so the server still emits REFERENCE_NOT_FOUND.
+    """
+    from unittest.mock import AsyncMock, patch
+
+    from src.core.creative_agent_registry import CreativeAgentRegistry
+
+    pkg = _first_package(ctx)
+    agent_url = str(CreativeAgentRegistry.DEFAULT_AGENT.agent_url)
+    pkg["format_ids"] = [{"agent_url": agent_url, "id": "nonexistent_format_999"}]
+    # Keep patch for in-process When via conftest ``_patchers`` teardown (UC-019).
+    patcher = patch(
+        "src.core.creative_agent_registry.CreativeAgentRegistry.get_format",
+        new=AsyncMock(return_value=None),
+    )
+    patcher.start()
+    ctx.setdefault("_patchers", []).append(patcher)
 
 
 @given(parsers.parse('a package has two catalogs both with type "{catalog_type}"'))

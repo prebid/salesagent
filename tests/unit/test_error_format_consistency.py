@@ -21,6 +21,10 @@ from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
 from src.core.exceptions import AdCPAuthenticationError, AdCPError, AdCPValidationError
 from src.core.resolved_identity import ResolvedIdentity
 
+# CreateMediaBuyRequest.packages has min_length=1 — auth-path tests need a
+# schema-valid request so construction reaches _impl (not Pydantic too_short).
+_MIN_PACKAGE = {"product_id": "prod_1", "budget": 5000.0, "pricing_option_id": "test_pricing"}
+
 
 class TestMCPErrorShapes:
     """Test that MCP tool errors have consistent structure."""
@@ -558,7 +562,7 @@ class TestMCPRecoveryInErrorResponses:
             # INVALID_REQUEST=correctable.
             ("AdCPError", "internal error", "SERVICE_UNAVAILABLE", "transient"),
             ("AdCPValidationError", "bad field", "VALIDATION_ERROR", "correctable"),
-            ("AdCPNotFoundError", "gone", "INVALID_REQUEST", "correctable"),
+            ("AdCPNotFoundError", "gone", "REFERENCE_NOT_FOUND", "correctable"),
             # The recovery-conformance oracle grades the CLASS ATTRIBUTE
             # (_default_recovery), not the MCP wire, so these two MUST stay here to pin
             # the real MCP ToolError recovery — matching the A2A table below. (#1417)
@@ -590,11 +594,14 @@ class TestMCPRecoveryInErrorResponses:
 
         from tests.helpers import assert_envelope_shape
 
+        # REFERENCE_NOT_FOUND: buyer message is forced from WIRE_STANDARD_CODES
+        # (uniform-response seam) — positional ``msg`` must not appear on the wire.
+        wire_message = "Reference not found" if expected_code == "REFERENCE_NOT_FOUND" else msg
         assert_envelope_shape(
             exc_info.value,
             expected_code,
             recovery=expected_recovery,
-            message_substr=msg,
+            message_substr=wire_message,
             check_mcp_tool_error=True,
         )
 
@@ -737,7 +744,7 @@ class TestErrorCodeVocabularyConsistency:
         "PRODUCT_NOT_FOUND",  # SDK standard: AdCPProductNotFoundError
         "SESSION_NOT_FOUND",  # SDK standard: AdCPContextNotFoundError (unresolvable context_id)
         "CREATIVE_NOT_FOUND",  # Spec supplement: AdCPCreativeNotFoundError (wire passthrough via WIRE_STANDARD_CODES)
-        "FORMAT_NOT_FOUND",  # Internal: AdCPFormatNotFoundError (wire → INVALID_REQUEST)
+        "FORMAT_NOT_FOUND",  # Internal: AdCPFormatNotFoundError (wire → REFERENCE_NOT_FOUND)
         "TASK_NOT_FOUND",  # Internal: AdCPTaskNotFoundError (wire → INVALID_REQUEST)
         "BUDGET_TOO_LOW",  # SDK standard: AdCPBudgetTooLowError
         "UNSUPPORTED_FEATURE",  # SDK standard: AdCPCapabilityNotSupportedError

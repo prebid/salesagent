@@ -22,7 +22,7 @@ OBLIGATION COVERAGE:
   UC-002-ALT-WITH-INLINE-CREATIVES-01, -02, -05
   UC-002-CC-ADAPTER-ATOMICITY-03, UC-002-CC-ATOMIC-RESPONSE-SEMANTICS-03
   UC-002-CC-CREATIVE-ASSIGNMENT-VALIDATION-03
-  UC-002-EXT-D-02, UC-002-EXT-F-01, -02, UC-002-EXT-H-02, -03
+  UC-002-EXT-D-02, UC-002-EXT-F-01, -02
   UC-002-EXT-I-03, UC-002-EXT-J-02, UC-002-EXT-K-03
   UC-002-EXT-L-01, -02, -03, UC-002-EXT-M-01, -03
   UC-002-EXT-N-02, UC-002-EXT-O-01, UC-002-EXT-Q-01, -02
@@ -41,7 +41,7 @@ do not use the harness.
 import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
-from unittest.mock import ANY, AsyncMock, MagicMock, patch
+from unittest.mock import ANY, MagicMock, patch
 
 import pytest
 from pydantic import ValidationError
@@ -53,7 +53,6 @@ from src.core.exceptions import (
     AdCPCapabilityNotSupportedError,
     AdCPConfigurationError,
     AdCPCreativeRejectedError,
-    AdCPFormatNotFoundError,
     AdCPNotFoundError,
     AdCPProductNotFoundError,
     AdCPValidationError,
@@ -1632,60 +1631,57 @@ class TestExtensionObligations:
         assert any("key_value_pairs" in v for v in violations)
         assert any("managed" in v.lower() for v in violations)
 
-    @pytest.mark.asyncio
-    async def test_unregistered_creative_agent_rejected(self):
-        """Unregistered creative agent in format_ids is rejected.
+    def test_unregistered_creative_agent_rejected(self, integration_db):
+        """Unregistered creative agent in package format_ids is rejected on create.
 
         Covers: UC-002-EXT-H-02
         """
-        from src.core.tools.media_buy_create import _validate_and_convert_format_ids
+        from src.core.exceptions import AdCPAuthorizationError
 
-        with patch("src.core.creative_agent_registry.CreativeAgentRegistry") as mock_registry_cls:
-            mock_registry = MagicMock()
-            mock_registry._get_tenant_agents.return_value = []  # No agents registered
-            mock_registry_cls.return_value = mock_registry
+        req = _make_request(
+            packages=[
+                {
+                    "product_id": "prod_1",
+                    "budget": 5000.0,
+                    "pricing_option_id": "cpm_usd_fixed",
+                    "format_ids": [
+                        {"agent_url": "https://unknown-agent.example.com", "id": "banner_300x250"},
+                    ],
+                }
+            ]
+        )
 
-            with patch("src.core.validation.normalize_agent_url", side_effect=lambda x: x):
-                from src.core.exceptions import AdCPAuthorizationError
+        with _env() as env:
+            tenant, _principal = env.setup_default_data()
+            env.setup_product_chain(tenant)
+            with pytest.raises(AdCPAuthorizationError) as exc_info:
+                env.call_impl(req=req)
 
-                with pytest.raises(AdCPAuthorizationError) as exc_info:
-                    await _validate_and_convert_format_ids(
-                        format_ids=[{"agent_url": "https://unknown-agent.example.com", "id": "banner_300x250"}],
-                        tenant_id="test_tenant",
-                        package_idx=0,
-                    )
-
-                assert "not registered" in str(exc_info.value).lower()
-                assert exc_info.value.error_code == "AUTH_REQUIRED"
+            assert "not registered" in str(exc_info.value).lower()
+            assert exc_info.value.error_code == "AUTH_REQUIRED"
+            assert exc_info.value.field == "packages[0].format_ids[0]"
+            assert exc_info.value.suggestion
+            assert "Registered agents" not in str(exc_info.value)
 
     @pytest.mark.asyncio
     async def test_format_not_found_on_agent(self):
-        """Format ID not found on registered agent returns error.
+        """Helper raises typed format miss with generic message and indexed field path.
 
-        Covers: UC-002-EXT-H-03
+        Covers: UC-002-EXT-H-03 (uniform raise site). Live create-path grading for
+        the same miss is ``@T-UC-002-ext-h-format`` (BDD) — keep this oracle free of
+        new ``patch()`` sites so the behavioral mock cap stays ≤30.
         """
-        from src.core.tools.media_buy_create import _validate_and_convert_format_ids
+        from tests.helpers.format_not_found_assertions import (
+            assert_format_not_found_uniform,
+            raise_format_not_found_from_validate_helper,
+        )
 
-        mock_agent = MagicMock()
-        mock_agent.agent_url = "https://creative.example.com"
-
-        with (
-            patch("src.core.creative_agent_registry.CreativeAgentRegistry") as mock_registry_cls,
-            patch("src.core.validation.normalize_agent_url", side_effect=lambda x: x),
-        ):
-            mock_registry = MagicMock()
-            mock_registry._get_tenant_agents.return_value = [mock_agent]
-            mock_registry.get_format = AsyncMock(return_value=None)  # Format not found
-            mock_registry_cls.return_value = mock_registry
-
-            with pytest.raises(AdCPFormatNotFoundError) as exc_info:
-                await _validate_and_convert_format_ids(
-                    format_ids=[{"agent_url": "https://creative.example.com", "id": "nonexistent_format"}],
-                    tenant_id="test_tenant",
-                    package_idx=0,
-                )
-
-            assert exc_info.value.error_code == "FORMAT_NOT_FOUND"
+        exc = await raise_format_not_found_from_validate_helper()
+        assert_format_not_found_uniform(
+            exc,
+            field="packages[0].format_ids[0]",
+            forbidden_substrings=["nonexistent_format", "creative.example.com"],
+        )
 
     @pytest.mark.asyncio
     async def test_authentication_always_required(self):

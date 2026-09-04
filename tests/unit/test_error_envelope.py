@@ -15,7 +15,9 @@ from __future__ import annotations
 import json
 
 from src.core.exceptions import (
+    REFERENCE_NOT_FOUND_MESSAGE,
     AdCPError,
+    AdCPFormatNotFoundError,
     AdCPNotFoundError,
     AdCPValidationError,
     build_two_layer_error_envelope,
@@ -42,21 +44,45 @@ class TestEnvelopeShape:
     def test_wire_translation_applied(self):
         """Internal error_code is translated through ERROR_CODE_MAPPING.
 
-        NOT_FOUND is an INTERNAL_CODES entry mapped to INVALID_REQUEST (a
-        spec STANDARD code). AUTH_REQUIRED passes through unchanged — it is a
+        NOT_FOUND is an INTERNAL_CODES entry mapped to REFERENCE_NOT_FOUND (a
+        spec wire code via _SPEC_SUPPLEMENT_CODES). AUTH_REQUIRED passes through unchanged — it is a
         translation target, not a key, in ERROR_CODE_MAPPING.
         """
         exc = AdCPError("resource gone")
         exc.error_code = "NOT_FOUND"
         envelope = build_two_layer_error_envelope(exc)
-        assert envelope["adcp_error"]["code"] == "INVALID_REQUEST"
-        assert envelope["errors"][0]["code"] == "INVALID_REQUEST"
+        assert envelope["adcp_error"]["code"] == "REFERENCE_NOT_FOUND"
+        assert envelope["errors"][0]["code"] == "REFERENCE_NOT_FOUND"
 
     def test_message_present_in_both_layers(self):
         exc = AdCPValidationError("budget must be positive")
         envelope = build_two_layer_error_envelope(exc)
         assert envelope["adcp_error"]["message"] == "budget must be positive"
         assert envelope["errors"][0]["message"] == "budget must be positive"
+
+    def test_reference_not_found_wire_message_ignores_positional_override(self):
+        """Uniform-response: REFERENCE_NOT_FOUND message comes from the wire table.
+
+        Raise-site positionals must not leak identifiers onto the buyer envelope
+        (ChrisHuie A1 / KonstantinMirin finding 2). Mutating the positional to a
+        tenant-leaking string must still yield the generic table message.
+        """
+        leaking = "Format not found. format_id=secret_xyz, tenant=acme"
+        exc = AdCPFormatNotFoundError(leaking, field="format_ids")
+        assert exc.message == leaking  # domain object still records the override
+        envelope = build_two_layer_error_envelope(exc)
+        assert envelope["adcp_error"]["code"] == "REFERENCE_NOT_FOUND"
+        assert envelope["errors"][0]["code"] == "REFERENCE_NOT_FOUND"
+        assert envelope["adcp_error"]["message"] == REFERENCE_NOT_FOUND_MESSAGE
+        assert envelope["errors"][0]["message"] == REFERENCE_NOT_FOUND_MESSAGE
+        assert "secret_xyz" not in envelope["adcp_error"]["message"]
+        assert "acme" not in envelope["errors"][0]["message"]
+
+        # Base NOT_FOUND also maps to REFERENCE_NOT_FOUND — same uniform message.
+        base = AdCPNotFoundError(leaking)
+        base_env = build_two_layer_error_envelope(base)
+        assert base_env["errors"][0]["code"] == "REFERENCE_NOT_FOUND"
+        assert base_env["errors"][0]["message"] == REFERENCE_NOT_FOUND_MESSAGE
 
     def test_recovery_present_in_both_layers(self):
         exc = AdCPValidationError("...")

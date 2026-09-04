@@ -13,7 +13,7 @@ from typing import Any
 from googleads import ad_manager
 
 from src.adapters.gam.utils.timeout_handler import timeout
-from src.core.exceptions import AdCPAdapterError, AdCPNotFoundError
+from src.core.exceptions import AdCPError
 
 logger = logging.getLogger(__name__)
 
@@ -493,10 +493,17 @@ class GAMOrdersManager:
                         format_obj = get_format(
                             format_id_str, agent_url=agent_url, tenant_id=tenant_id, product_id=product_id_for_format
                         )
-                    except (ValueError, AdCPNotFoundError, AdCPAdapterError) as e:
+                    except AdCPError:
+                        # Preserve typed AdCP errors (e.g. AdCPFormatNotFoundError →
+                        # wire REFERENCE_NOT_FOUND). Wrapping in ValueError demotes a
+                        # permanent miss to SERVICE_UNAVAILABLE / transient at the GAM
+                        # boundary (google_ad_manager except AdCPError: raise).
+                        log(f"[red]Error: Format lookup failed for '{format_display}'[/red]")
+                        raise
+                    except ValueError as e:
                         error_msg = f"Format lookup failed for '{format_display}': {e}"
                         log(f"[red]Error: {error_msg}[/red]")
-                        raise ValueError(error_msg)
+                        raise ValueError(error_msg) from e
 
                     # Check if format type is supported by product
                     # adcp 3.12: Format.type removed. Infer from format_id string.

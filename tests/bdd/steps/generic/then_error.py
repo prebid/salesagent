@@ -78,6 +78,21 @@ def _wire_error_object(ctx: dict) -> dict | None:
     return envelope.get("adcp_error") or {}
 
 
+def _wire_message(ctx: dict) -> str | None:
+    """Return the buyer-facing error message from the captured wire envelope.
+
+    Mirrors ``_wire_code`` / ``_wire_suggestion``: when a wire transport captured
+    an envelope, message equality (uniform-response) must read the real
+    ``errors[0].message`` / ``adcp_error.message``, not the reconstructed
+    ``ctx["error"]``. Returns ``None`` on IMPL / no-wire scenarios.
+    """
+    err = _wire_error_object(ctx)
+    if err is None:
+        return None
+    msg = err.get("message")
+    return msg if isinstance(msg, str) else None
+
+
 def _get_error_code(error: object) -> str:
     """Extract error code from an exception or Error model.
 
@@ -293,11 +308,31 @@ def then_error_code(ctx: dict, code: str) -> None:
 
 @then(parsers.parse('the error message should contain "{text}"'))
 def then_error_message_contains(ctx: dict, text: str) -> None:
-    """Assert error message contains the given text (case-insensitive)."""
-    error = ctx.get("error")
-    assert error is not None, "No error recorded in ctx"
-    msg = _get_error_message(error).lower()
-    assert text.lower() in msg, f"Expected '{text}' in error message: {_get_error_message(error)}"
+    """Assert error message contains the given text — wire-first, reconstructed fallback."""
+    wire_msg = _wire_message(ctx)
+    if wire_msg is not None:
+        msg = wire_msg
+    else:
+        error = ctx.get("error")
+        assert error is not None, "No error recorded in ctx"
+        msg = _get_error_message(error)
+    assert text.lower() in msg.lower(), f"Expected '{text}' in error message: {msg}"
+
+
+@then(parsers.parse('the error message should be "{text}"'))
+def then_error_message_equals(ctx: dict, text: str) -> None:
+    """Assert error message equals text exactly — wire-first, reconstructed fallback.
+
+    Uniform-response grading needs equality (generic message), not substring search.
+    """
+    wire_msg = _wire_message(ctx)
+    if wire_msg is not None:
+        actual = wire_msg
+    else:
+        error = ctx.get("error")
+        assert error is not None, "No error recorded in ctx"
+        actual = _get_error_message(error)
+    assert actual == text, f"Expected error message {text!r}, got {actual!r}"
 
 
 @then(parsers.parse('the suggestion should contain "{text}"'))

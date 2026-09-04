@@ -330,9 +330,9 @@ _XFAIL_TAGS: dict[str, str] = {
     # FIXME: creative/format_id validation errors lack suggestion field
     # ext-g: _validate_creatives_before_adapter_call raises INVALID_CREATIVES without suggestion
     # ext-h: plain string format_id caught by Pydantic, not structured AdCPError
-    # ext-h-agent: _validate_and_convert_format_ids is dead code — unregistered agent not detected
+    # T-UC-002-ext-h-agent graduated (#1962): helper wired into _create_media_buy_impl;
+    # unregistered agent_url is graded live (strict xfail removed — XPASS on CI).
     "T-UC-002-ext-h": "plain string format_id produces Pydantic error, not AdCPError with suggestion",
-    "T-UC-002-ext-h-agent": "unregistered agent_url validation not wired — _validate_and_convert_format_ids is dead code",
     # FIXME: auth error lacks suggestion field
     # AdCPAuthenticationError("Principal ID not found...") has no details["suggestion"].
     # Spec requires suggestion for buyer remediation (POST-F3).
