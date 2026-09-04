@@ -1,0 +1,315 @@
+{
+  "created": 1723123456.789,
+  "duration": 42.5,
+  "exitcode": 1,
+  "root": "/app",
+  "environment": {},
+  "summary": {
+    "passed": 1,
+    "skipped": 1,
+    "failed": 1,
+    "xfailed": 5,
+    "xpassed": 3,
+    "total": 11,
+    "collected": 11
+  },
+  "tests": [
+    {
+      "nodeid": "tests/bdd/test_uc004.py::test_vocab[a2a]",
+      "lineno": 20,
+      "outcome": "passed",
+      "keywords": [
+        "bdd",
+        "test_vocab",
+        "a2a",
+        "tests/bdd/test_uc004.py"
+      ],
+      "setup": {
+        "duration": 0.0012,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.014,
+        "outcome": "passed",
+        "longrepr": null
+      },
+      "teardown": {
+        "duration": 0.0008,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": "tests/bdd/test_uc004.py::test_outline[e2e_rest-ex1]",
+      "lineno": 40,
+      "outcome": "skipped",
+      "keywords": [
+        "bdd",
+        "test_outline",
+        "e2e_rest",
+        "tests/bdd/test_uc004.py"
+      ],
+      "setup": {
+        "duration": 0.0005,
+        "outcome": "skipped",
+        "longrepr": "('/app/tests/bdd/test_uc004.py', 41, 'Skipped: outline example gated')"
+      },
+      "teardown": {
+        "duration": 0.0,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": "tests/bdd/test_uc004.py::test_outline[e2e_rest-ex2]",
+      "lineno": 40,
+      "outcome": "xpassed",
+      "keywords": [
+        "bdd",
+        "test_outline",
+        "e2e_rest",
+        "tests/bdd/test_uc004.py"
+      ],
+      "setup": {
+        "duration": 0.0011,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.022,
+        "outcome": "passed",
+        "longrepr": null
+      },
+      "teardown": {
+        "duration": 0.0007,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": "tests/bdd/test_uc004.py::test_harness_env[a2a]",
+      "lineno": 60,
+      "outcome": "xfailed",
+      "keywords": [
+        "bdd",
+        "test_harness_env",
+        "a2a",
+        "tests/bdd/test_uc004.py"
+      ],
+      "setup": {
+        "duration": 0.0021,
+        "outcome": "skipped",
+        "crash": {
+          "path": "tests/bdd/conftest.py",
+          "lineno": 512,
+          "message": "_pytest.outcomes.XFailed: No harness environment for UC-004"
+        },
+        "longrepr": "tests/bdd/conftest.py:512: in pytest_bdd_before_scenario\n    _pytest.outcomes.XFailed: No harness environment for UC-004"
+      },
+      "call": {
+        "duration": 0.0,
+        "outcome": "skipped",
+        "longrepr": null
+      },
+      "teardown": {
+        "duration": 0.0006,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": "tests/bdd/test_uc004.py::test_harness_wired[mcp]",
+      "lineno": 72,
+      "outcome": "xfailed",
+      "keywords": [
+        "bdd",
+        "test_harness_wired",
+        "mcp",
+        "tests/bdd/test_uc004.py"
+      ],
+      "setup": {
+        "duration": 0.0019,
+        "outcome": "skipped",
+        "crash": {
+          "path": "tests/bdd/conftest.py",
+          "lineno": 520,
+          "message": "_pytest.outcomes.XFailed: UC harness not wired"
+        },
+        "longrepr": "tests/bdd/conftest.py:520: in pytest_bdd_before_scenario\n    _pytest.outcomes.XFailed: UC harness not wired"
+      },
+      "call": {
+        "duration": 0.0,
+        "outcome": "skipped",
+        "longrepr": null
+      },
+      "teardown": {
+        "duration": 0.0005,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": "tests/bdd/test_uc004.py::test_harness_yet[rest]",
+      "lineno": 84,
+      "outcome": "xfailed",
+      "keywords": [
+        "bdd",
+        "test_harness_yet",
+        "rest",
+        "tests/bdd/test_uc004.py"
+      ],
+      "setup": {
+        "duration": 0.0018,
+        "outcome": "skipped",
+        "crash": {
+          "path": "tests/bdd/conftest.py",
+          "lineno": 528,
+          "message": "_pytest.outcomes.XFailed: UC harness not yet wired"
+        },
+        "longrepr": "tests/bdd/conftest.py:528: in pytest_bdd_before_scenario\n    _pytest.outcomes.XFailed: UC harness not yet wired"
+      },
+      "call": {
+        "duration": 0.0,
+        "outcome": "skipped",
+        "longrepr": null
+      },
+      "teardown": {
+        "duration": 0.0004,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": "tests/bdd/test_uc004.py::test_conflicting_tags[a2a]",
+      "lineno": 96,
+      "outcome": "xfailed",
+      "keywords": [
+        "bdd",
+        "test_conflicting_tags",
+        "a2a",
+        "T-UC-004-b-partition",
+        "T-UC-004-a-production",
+        "tests/bdd/test_uc004.py"
+      ],
+      "setup": {
+        "duration": 0.0015,
+        "outcome": "skipped",
+        "crash": {
+          "path": "tests/bdd/conftest.py",
+          "lineno": 540,
+          "message": "_pytest.outcomes.XFailed: xfail: tagged"
+        },
+        "longrepr": "tests/bdd/conftest.py:540: in pytest_bdd_before_scenario\n    _pytest.outcomes.XFailed: xfail: tagged"
+      },
+      "call": {
+        "duration": 0.0,
+        "outcome": "skipped",
+        "longrepr": null
+      },
+      "teardown": {
+        "duration": 0.0005,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": "tests/bdd/test_uc004.py::test_longrepr_populated[e2e_rest]",
+      "lineno": 108,
+      "outcome": "xpassed",
+      "keywords": [
+        "bdd",
+        "test_longrepr_populated",
+        "e2e_rest",
+        "tests/bdd/test_uc004.py"
+      ],
+      "setup": {
+        "duration": 0.001,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.03,
+        "outcome": "passed",
+        "longrepr": "E   AssertionError: boom\n other"
+      },
+      "teardown": {
+        "duration": 0.0006,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": "tests/bdd/test_uc004.py::test_longrepr_failed[mcp]",
+      "lineno": 120,
+      "outcome": "failed",
+      "keywords": [
+        "bdd",
+        "test_longrepr_failed",
+        "mcp",
+        "tests/bdd/test_uc004.py"
+      ],
+      "setup": {
+        "duration": 0.001,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.018,
+        "outcome": "failed",
+        "crash": {
+          "path": "tests/bdd/steps/uc004/then_steps.py",
+          "lineno": 88,
+          "message": "ValueError: nope"
+        },
+        "longrepr": "tests/bdd/steps/uc004/then_steps.py:88: in then_fail\n    raise ValueError('nope')\nE   ValueError: nope"
+      },
+      "teardown": {
+        "duration": 0.0005,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": "tests/bdd/test_uc004.py::test_longrepr_empty[a2a]",
+      "lineno": 132,
+      "outcome": "xpassed",
+      "keywords": [
+        "bdd",
+        "test_longrepr_empty",
+        "a2a",
+        "tests/bdd/test_uc004.py"
+      ],
+      "setup": {
+        "duration": 0.0009,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.011,
+        "outcome": "passed",
+        "longrepr": null
+      },
+      "teardown": {
+        "duration": 0.0004,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": "tests/bdd/test_uc004.py::test_xfail_simple[a2a]",
+      "lineno": 144,
+      "outcome": "xfailed",
+      "keywords": [
+        "bdd",
+        "test_xfail_simple",
+        "a2a",
+        "tests/bdd/test_uc004.py"
+      ],
+      "setup": {
+        "duration": 0.0013,
+        "outcome": "skipped",
+        "crash": {
+          "path": "tests/bdd/conftest.py",
+          "lineno": 560,
+          "message": "_pytest.outcomes.XFailed: pending feature"
+        },
+        "longrepr": ""
+      },
+      "call": {
+        "duration": 0.0,
+        "outcome": "skipped",
+        "longrepr": ""
+      },
+      "teardown": {
+        "duration": 0.0003,
+        "outcome": "passed"
+      }
+    }
+  ]
+}

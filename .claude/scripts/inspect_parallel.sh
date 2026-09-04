@@ -14,23 +14,33 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-INSPECTOR="/Users/konst/.claude/plugins/cache/agentic-toolkit/qa-bdd/0.2.0/skills/inspect-steps/scripts/inspect_bdd_steps.py"
+# Prefer repo-local inspector; allow override for plugin/vendored copies.
+INSPECTOR="${INSPECT_BDD_STEPS:-$SCRIPT_DIR/inspect_bdd_steps.py}"
 FEATURES_DIR="$PROJECT_ROOT/tests/bdd/features"
 STEPS_DIR="$PROJECT_ROOT/tests/bdd/steps"
+
+if [ ! -f "$INSPECTOR" ]; then
+    echo "ERROR: inspector not found: $INSPECTOR" >&2
+    echo "Set INSPECT_BDD_STEPS to an alternate inspect_bdd_steps.py path." >&2
+    exit 1
+fi
 
 # Parse args
 OUTPUT_DIR="${1:-.claude/reports/inspect-parallel-$(date +%d%m%y_%H%M)}"
 mkdir -p "$OUTPUT_DIR"
 
-# Create patched inspector with timeout=600 and --then-only=False
-PATCHED="/tmp/inspect_bdd_parallel.py"
-sed 's/timeout=180/timeout=600/;s/"--then-only", action="store_true", default=True/"--then-only", action="store_true", default=False/' \
-    "$INSPECTOR" > "$PATCHED"
+# Temp workspace for slice dirs (mktemp — concurrent worktrees must not collide).
+WORK_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/inspect-parallel.XXXXXX")"
+cleanup() {
+    rm -rf "$WORK_ROOT"
+}
+trap cleanup EXIT
 
 echo "=== Parallel BDD Step Inspection ==="
 echo "Inspector: $INSPECTOR"
 echo "Features:  $FEATURES_DIR"
 echo "Output:    $OUTPUT_DIR"
+echo "Work root: $WORK_ROOT"
 echo ""
 
 # Define slices: name → list of step files
@@ -47,8 +57,7 @@ SLICES[generic]="$STEPS_DIR/domain/admin_accounts.py $STEPS_DIR/domain/uc002_nfr
 # Prepare temp dirs and launch
 PIDS=()
 for name in "${!SLICES[@]}"; do
-    slice_dir="/tmp/inspect-slice-$name"
-    rm -rf "$slice_dir"
+    slice_dir="$WORK_ROOT/inspect-slice-$name"
     mkdir -p "$slice_dir"
 
     # Copy files into slice dir
@@ -59,11 +68,13 @@ for name in "${!SLICES[@]}"; do
     file_count=$(ls "$slice_dir"/*.py 2>/dev/null | wc -l | tr -d ' ')
     echo "Launching $name ($file_count files)..."
 
-    python3 "$PATCHED" \
+    # Use --timeout=600 (no sed patch) so concurrent runs share one inspector.
+    python3 "$INSPECTOR" \
         --steps-dir "$slice_dir" \
         --features-dir "$FEATURES_DIR" \
         --output "$OUTPUT_DIR/$name.md" \
         --pass1-only \
+        --timeout 600 \
         > "$OUTPUT_DIR/$name.log" 2>&1 &
     PIDS+=("$!:$name")
 done

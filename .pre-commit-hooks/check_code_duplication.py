@@ -24,7 +24,7 @@ from pathlib import Path
 from count_ratchet import json_baseline_io, parse_ratchet_args, resolve_ratchet_paths, run_count_ratchet
 
 BASELINE_FILE = ".duplication-baseline"
-SCOPES = ("src", "tests", "scripts")
+SCOPES = ("src", "tests", "scripts", ".claude/scripts")
 
 
 def count_duplications(directory: str) -> int:
@@ -64,6 +64,7 @@ def main() -> int:
         "src": count_duplications("src/"),
         "tests": count_duplications("tests/"),
         "scripts": count_duplications("scripts/"),
+        ".claude/scripts": count_duplications(".claude/scripts/"),
     }
 
     return run_count_ratchet(

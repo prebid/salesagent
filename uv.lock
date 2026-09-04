@@ -246,7 +246,7 @@ provides-extras = ["ui-tests"]
 dev = [
     { name = "asgi-lifespan", specifier = ">=2.1.0" },
     { name = "black", specifier = ">=26.3.1" },
-    { name = "datamodel-code-generator", specifier = ">=0.26.0" },
+    { name = "datamodel-code-generator", specifier = ">=0.64.0" },
     { name = "factory-boy", specifier = ">=3.3.0" },
     { name = "jsonref", specifier = ">=1.1.0" },
     { name = "mypy", specifier = ">=1.18.2" },

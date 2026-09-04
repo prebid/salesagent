@@ -171,8 +171,8 @@ repos:
         name: mypy
         entry: uv run mypy
         language: system
-        args: [--config-file=mypy.ini, src/]
-        files: '^src/'
+        args: [--config-file=mypy.ini, src/, .claude/scripts/, scripts/graduate_pending.py]
+        files: '^(src/|\.claude/scripts/)'
         pass_filenames: false
         require_serial: true
         stages: [pre-push]

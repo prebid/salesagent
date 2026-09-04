@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Graduate @pending BDD tests that genuinely pass on all transports.
+"""Graduate @pending BDD tests that genuinely pass on present transports.
 
 Reads pytest JSON report, identifies xpassed tests, and determines which
-@pending tags can be safely graduated (all valid rows pass on all 4 transports).
+@pending tags can be safely graduated using the shared ``grade_base`` seam
+(same present-transport rule as ``audit_xfails`` / ``bdd_full_audit``).
 
 Usage:
     # Generate report first:
@@ -17,114 +18,112 @@ Usage:
 
 from __future__ import annotations
 
-import json
+import argparse
 import sys
 from collections import defaultdict
+from pathlib import Path
+from typing import TypedDict
 
-TRANSPORTS = {"impl", "a2a", "mcp", "rest"}
+_SCRIPTS_DIR = Path(__file__).resolve().parent.parent / ".claude" / "scripts"
+if str(_SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(_SCRIPTS_DIR))
 
-
-def _parse_transport_and_row(param_part: str) -> tuple[str, str]:
-    """Extract transport and row key from pytest param string."""
-    parts = param_part.split("-", 1)
-    transport = parts[0] if parts[0] in TRANSPORTS else "unknown"
-    row = parts[1] if len(parts) > 1 else ""
-    return transport, row
-
-
-def _extract_tags(test: dict) -> set[str]:
-    """Extract marker/tag names from a test result."""
-    tags = set()
-    for marker in test.get("markers", []):
-        name = marker if isinstance(marker, str) else marker.get("name", "")
-        tags.add(name)
-    # Also extract from keywords
-    for kw in test.get("keywords", []):
-        if kw.startswith("T-UC-"):
-            tags.add(kw)
-    return tags
+from bdd_audit_common import (  # noqa: E402
+    E2E_LEDGER_PATH,
+    LoadedArtifact,
+    cli_load_or_exit,
+    extract_scenario_base,
+    grade_base,
+    load_bdd_artifact,
+    load_e2e_rest_known_failure_bases,
+    short_base,
+)
 
 
-def analyze(report_path: str) -> dict:
-    """Analyze JSON report and return graduation candidates."""
-    with open(report_path) as f:
-        data = json.load(f)
+class GraduationAnalysis(TypedDict):
+    """Fixed seven-key payload from ``analyze`` (mypy-checked field names)."""
 
-    # Collect per-scenario, per-row, per-transport outcomes
-    # Key: (scenario_name, row_key) -> {transport: outcome}
-    results: dict[tuple[str, str], dict[str, str]] = defaultdict(dict)
-    test_tags: dict[str, set[str]] = {}  # scenario_name -> tags
+    graduate_all: list[tuple[str, str]]
+    graduate_confirm: list[tuple[str, str]]
+    graduate_partial: list[tuple[str, str, dict[str, str]]]
+    tag_candidates: dict[str, list[tuple[str, str]]]
+    tag_blockers: dict[str, list[tuple[str, str, dict[str, str]]]]
+    test_tags: dict[str, set[str]]
+    force_confirm: bool
 
-    for test in data["tests"]:
+
+def analyze(
+    report_path: str, *, ledger_path: Path | None = None, loaded: LoadedArtifact | None = None
+) -> GraduationAnalysis:
+    """Analyze JSON report and return graduation candidates via shared grade_base."""
+    artifact = loaded if loaded is not None else load_bdd_artifact(Path(report_path))
+    tests = artifact.tests
+    nodeid_outcomes = artifact.nodeid_outcomes
+    force_confirm = artifact.force_confirm
+    ledger = load_e2e_rest_known_failure_bases(ledger_path or E2E_LEDGER_PATH)
+
+    # Collect tags per scenario base
+    test_tags: dict[str, set[str]] = {}
+    xpassed_bases: set[str] = set()
+    for test in tests:
         nodeid = test["nodeid"]
-        outcome = test["outcome"]
-
-        if "[" not in nodeid:
-            continue
-
-        scenario_name = nodeid.split("[")[0].split("::")[-1]
-        param_part = nodeid.split("[")[-1].rstrip("]")
-        transport, row = _parse_transport_and_row(param_part)
-
-        if transport == "unknown":
-            continue
-
-        results[(scenario_name, row)][transport] = outcome
-
-        # Collect tags from keywords
+        base = extract_scenario_base(nodeid)
+        if test["outcome"] == "xpassed":
+            xpassed_bases.add(base)
         for kw in test.get("keywords", []):
-            if kw.startswith("T-UC-") or kw == "pending":
-                if scenario_name not in test_tags:
-                    test_tags[scenario_name] = set()
-                test_tags[scenario_name].add(kw)
+            if isinstance(kw, str) and (kw.startswith("T-UC-") or kw == "pending"):
+                test_tags.setdefault(base, set()).add(kw)
 
-    # Categorize
-    graduate_all_transports = []  # (scenario, row) where all 4 xpass
-    graduate_partial = []  # (scenario, row, transports) where some xpass
-    xfailed_all = []  # all 4 xfail — no action needed
+    graduate_all: list[tuple[str, str]] = []
+    graduate_confirm: list[tuple[str, str]] = []
+    graduate_partial: list[tuple[str, str, dict[str, str]]] = []
 
-    for (scenario, row), transport_outcomes in sorted(results.items()):
-        xpass_transports = {t for t, o in transport_outcomes.items() if o == "xpassed"}
-        xfail_transports = {t for t, o in transport_outcomes.items() if o == "xfailed"}
-        pass_transports = {t for t, o in transport_outcomes.items() if o == "passed"}
-        fail_transports = {t for t, o in transport_outcomes.items() if o == "failed"}
-
-        if not xpass_transports:
-            continue
-
-        if xpass_transports == TRANSPORTS or (xpass_transports | pass_transports) == TRANSPORTS:
-            graduate_all_transports.append((scenario, row))
-        else:
-            graduate_partial.append((scenario, row, transport_outcomes))
+    for base in sorted(xpassed_bases):
+        grade = grade_base(
+            base,
+            nodeid_outcomes,
+            force_confirm=force_confirm,
+            ledger_member=base in ledger,
+        )
+        scenario = short_base(base)
+        if grade.bucket == "confirm":
+            graduate_confirm.append((scenario, base))
+        elif grade.bucket == "graduate":
+            graduate_all.append((scenario, base))
+        elif grade.bucket == "partial":
+            graduate_partial.append((scenario, base, grade.outcomes))
 
     # Group by tag for tag-level graduation
     tag_candidates: dict[str, list[tuple[str, str]]] = defaultdict(list)
-    tag_blockers: dict[str, list[tuple[str, str, dict]]] = defaultdict(list)
+    tag_blockers: dict[str, list[tuple[str, str, dict[str, str]]]] = defaultdict(list)
 
-    for scenario, row in graduate_all_transports:
-        tags = test_tags.get(scenario, set())
+    for scenario, base in graduate_all:
+        tags = test_tags.get(base, set())
         pending_tags = {t for t in tags if t.startswith("T-UC-")}
         for tag in pending_tags:
-            tag_candidates[tag].append((scenario, row))
+            tag_candidates[tag].append((scenario, base))
 
-    for scenario, row, outcomes in graduate_partial:
-        tags = test_tags.get(scenario, set())
+    for scenario, base, outcomes in graduate_partial:
+        tags = test_tags.get(base, set())
         pending_tags = {t for t in tags if t.startswith("T-UC-")}
         for tag in pending_tags:
-            tag_blockers[tag].append((scenario, row, outcomes))
+            tag_blockers[tag].append((scenario, base, outcomes))
 
     return {
-        "graduate_all": graduate_all_transports,
+        "graduate_all": graduate_all,
+        "graduate_confirm": graduate_confirm,
         "graduate_partial": graduate_partial,
         "tag_candidates": dict(tag_candidates),
         "tag_blockers": dict(tag_blockers),
         "test_tags": test_tags,
+        "force_confirm": force_confirm,
     }
 
 
-def print_report(analysis: dict) -> None:
+def print_report(analysis: GraduationAnalysis) -> None:
     """Print human-readable graduation report."""
     grad_all = analysis["graduate_all"]
+    grad_confirm = analysis["graduate_confirm"]
     grad_partial = analysis["graduate_partial"]
     tag_candidates = analysis["tag_candidates"]
     tag_blockers = analysis["tag_blockers"]
@@ -132,8 +131,9 @@ def print_report(analysis: dict) -> None:
     print(f"{'=' * 70}")
     print("BDD @pending Graduation Report")
     print(f"{'=' * 70}")
-    print(f"\nAll-transport xpass (ready to graduate): {len(grad_all)}")
-    print(f"Partial xpass (mixed outcomes):           {len(grad_partial)}")
+    print(f"\nAll-present-transport xpass (ready to graduate): {len(grad_all)}")
+    print(f"Needs confirmation (single-/e2e incomplete):     {len(grad_confirm)}")
+    print(f"Partial xpass (mixed outcomes):                  {len(grad_partial)}")
 
     # Tag-level analysis
     print(f"\n{'─' * 70}")
@@ -151,17 +151,17 @@ def print_report(analysis: dict) -> None:
 
         if blockers:
             unsafe_tags.append(tag)
-            print(f"\n  {tag}: UNSAFE ({len(candidates)}/{total} rows pass all transports)")
-            for _sc, row, outcomes in blockers[:3]:
+            print(f"\n  {tag}: UNSAFE ({len(candidates)}/{total} rows pass all present transports)")
+            for _sc, _base, outcomes in blockers[:3]:
                 outcomes_str = " ".join(f"{t}={o}" for t, o in sorted(outcomes.items()))
-                print(f"    BLOCKER: {row[:60]} → {outcomes_str}")
+                print(f"    BLOCKER: {_sc[:60]} → {outcomes_str}")
             if len(blockers) > 3:
                 print(f"    ... and {len(blockers) - 3} more blockers")
         else:
             safe_tags.append(tag)
-            print(f"\n  {tag}: SAFE ({len(candidates)} rows, all pass all transports)")
-            for _sc, row in candidates[:5]:
-                print(f"    OK: {row[:70]}")
+            print(f"\n  {tag}: SAFE ({len(candidates)} rows, all pass all present transports)")
+            for _sc, _base in candidates[:5]:
+                print(f"    OK: {_sc[:70]}")
             if len(candidates) > 5:
                 print(f"    ... and {len(candidates) - 5} more")
 
@@ -178,31 +178,35 @@ def print_report(analysis: dict) -> None:
         b = len(tag_blockers.get(tag, []))
         print(f"    {tag} ({c} pass, {b} blocked)")
 
-    # Individual rows that pass all transports but belong to unsafe tags
+    # Individual rows that pass all present transports but belong to unsafe tags
     orphan_rows = []
-    for sc, row in grad_all:
-        tags = analysis["test_tags"].get(sc, set())
+    for sc, base in grad_all:
+        tags = analysis["test_tags"].get(base, set())
         pending_tags = {t for t in tags if t.startswith("T-UC-")}
         if any(t in unsafe_tags for t in pending_tags):
-            orphan_rows.append((sc, row, pending_tags))
+            orphan_rows.append((sc, base, pending_tags))
 
     if orphan_rows:
-        print(f"\n  Rows passing all transports in UNSAFE tags: {len(orphan_rows)}")
+        print(f"\n  Rows passing all present transports in UNSAFE tags: {len(orphan_rows)}")
         print("  (These need row-level graduation, not tag-level)")
 
 
-def main():
-    if len(sys.argv) < 2:
-        print("Usage: uv run python scripts/graduate_pending.py <json-report> [--apply]")
-        sys.exit(1)
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Graduate @pending BDD tests that pass")
+    parser.add_argument("report_path", help="Path to pytest JSON report")
+    parser.add_argument("--apply", action="store_true", help="Print graduation apply hints")
+    parser.add_argument(
+        "--e2e-ledger",
+        default=str(E2E_LEDGER_PATH),
+        help="Path to e2e_rest_known_failures.txt",
+    )
+    args = parser.parse_args()
 
-    report_path = sys.argv[1]
-    apply = "--apply" in sys.argv
-
-    analysis = analyze(report_path)
+    loaded = cli_load_or_exit(Path(args.report_path))
+    analysis = analyze(args.report_path, ledger_path=Path(args.e2e_ledger), loaded=loaded)
     print_report(analysis)
 
-    if apply:
+    if args.apply:
         print(f"\n{'=' * 70}")
         print("APPLYING GRADUATIONS")
         print(f"{'=' * 70}")
