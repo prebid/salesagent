@@ -136,7 +136,12 @@ async function approveStep() {
         });
 
         if (response.ok) {
-            alert('Workflow step approved successfully!');
+            const payload = await response.json().catch(() => ({}));
+            if (payload.held) {
+                alert(payload.message || 'Media buy approved; waiting on creatives.');
+            } else {
+                alert('Workflow step approved successfully!');
+            }
             window.location.href = '{{ script_name }}/tenant/{{ tenant_id }}';
         } else {
             const error = await response.text();

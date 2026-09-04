@@ -128,7 +128,11 @@ class MediaBuyReadinessService:
                 )
                 creatives = list(session.scalars(creatives_stmt).all())
 
-            creatives_approved = sum(1 for c in creatives if c.status == "approved")
+            # Same ready vocabulary as the shared #1696 finalize gate
+            # (FINALIZE_READY_CREATIVE_STATUSES = approved + legacy active).
+            from src.core.schemas.creative import FINALIZE_READY_CREATIVE_STATUSES
+
+            creatives_approved = sum(1 for c in creatives if c.status in FINALIZE_READY_CREATIVE_STATUSES)
             creatives_pending = sum(1 for c in creatives if c.status == "pending_review")
             creatives_rejected = sum(1 for c in creatives if c.status == "rejected")
 
@@ -296,8 +300,17 @@ class MediaBuyReadinessService:
         # Check for blocking issues
         has_blockers = len(blocking_issues) > 0
 
-        # Live: in flight, all creatives approved, no blockers
-        if now >= start_time and now <= end_time and not has_blockers and creatives_approved == creatives_total:
+        # Live: in flight, all creatives approved, no blockers.
+        # creatives_total > 0 is required: packages>0 with zero creatives already
+        # sets has_blockers ("No creatives uploaded"), but draft (packages_total==0)
+        # has an empty blocker list and 0==0 would otherwise falsely report live.
+        if (
+            now >= start_time
+            and now <= end_time
+            and not has_blockers
+            and creatives_approved == creatives_total
+            and creatives_total > 0
+        ):
             return "live"
 
         # Scheduled: ready but before start date

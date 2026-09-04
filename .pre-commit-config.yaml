@@ -39,6 +39,7 @@ repos:
         language: system
         types: [python]
         pass_filenames: true
+        stages: [pre-commit]
 
       # Layer 2 — pre-push stage (medium cost; CI is authoritative for heavy checks)
       - id: check-docs-links

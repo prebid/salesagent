@@ -204,3 +204,22 @@ def seed_pending_buy(*, starts_in_days: int, status: str = "pending_approval") -
         object_mappings=[{"object_type": "media_buy", "object_id": media_buy_id, "action": "approve"}],
     )
     return SeededBuy(tenant, principal, media_buy, context.context_id, step.step_id)
+
+
+def attach_approved_creative(seeded: SeededBuy, *, package_id: str = "pkg_ready") -> Any:
+    """Attach one approved, uploadable creative so #1696 ready-arm / sole writer can run.
+
+    ``seed_pending_buy`` omits assignments; admin finalize holds on zero assignments
+    (#1696). Ready-path / adapter-failure tests that must reach
+    ``execute_approved_media_buy`` call this after seeding.
+    """
+    from tests.factories import CreativeAssignmentFactory, CreativeFactory
+
+    creative = uploadable_creative(
+        CreativeFactory,
+        tenant=seeded.tenant,
+        principal=seeded.principal,
+        status="approved",
+    )
+    CreativeAssignmentFactory(creative=creative, media_buy=seeded.media_buy, package_id=package_id)
+    return creative

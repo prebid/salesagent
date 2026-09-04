@@ -326,29 +326,9 @@ class TestCreateMediaBuyManualApproval:
 
         Covers: UC-002-ALT-MANUAL-APPROVAL-REQUIRED-08
         Integration equivalent of unit xfail test_execute_approved_calls_adapter.
-
-        THE PERSISTED VALUE CHANGED, and it no longer matches the obligation's literal
-        wording. This test asserted ``status == "active"`` — the unconditional ACTIVE
-        that ``execute_approved_media_buy`` used to write, which was the defect 26.
-        The post-adapter write is now ``resolve_flight_window_status(...)``, and a buy
-        created through ``create_media_buy`` CANNOT have an open window at approval
-        time: ``media_buy_create.py:2377`` rejects a start_time in the past, so a buy
-        approved straight after creation is always pre-window and always persists
-        ``scheduled``.
-
-        The obligation (``docs/test-obligations/UC-002-create-media-buy.md:569``) is
-        stated in WIRE vocabulary: "the buyer observes the media buy as ``pending_start``
-        or ``active``". It used to enumerate the PERSISTED values ``pending_activation``
-        or ``active``, which said nothing about what the buyer saw — pre-window,
-        ``scheduled``, ``pending_activation`` and ``active`` all resolve to
-        ``pending_start``, so that clause was satisfied by whichever value the column
-        happened to hold, including the unconditional ``active`` this child deletes.
-
-        Hence the two assertions, in that order. The second carries the obligation, at
-        the layer the obligation is about. The first pins the column, so a later change
-        cannot quietly move the persisted value while the canonical one stays put.
+        Verifies that execute_approved_media_buy persists flight-window status
+        (UC-002:437 / #1696). Default create request starts in +1d → pending_start.
         """
-        from src.core.tools._media_buy_status import resolve_canonical_status
         from src.core.tools.media_buy_create import _create_media_buy_impl
 
         identity = _make_identity(
@@ -379,14 +359,9 @@ class TestCreateMediaBuyManualApproval:
         with get_db_session() as session:
             mb = session.scalars(select(MediaBuy).where(MediaBuy.media_buy_id == media_buy_id)).first()
             assert mb is not None
-            assert mb.status == "scheduled", (
-                f"a buy approved before its flight window opens persists 'scheduled', got {mb.status!r}"
+            assert mb.status == "pending_start", (
+                f"Status should be 'pending_start' for future-start after approval, got {mb.status}"
             )
-            # The obligation is about what the BUYER is told. This is the assertion that
-            # carries it: the canonical status is the same one 'pending_activation'
-            # projects to, so the wording gap above is a vocabulary difference and not a
-            # behavior change.
-            assert resolve_canonical_status(mb, datetime.now(UTC).date()) == "pending_start"
 
 
 class TestCreateMediaBuyAdapterAtomicity:

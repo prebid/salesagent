@@ -96,7 +96,7 @@ def resolve_flight_window_status(
     if now > end:
         return PersistedMediaBuyStatus.COMPLETED
     if now < start:
-        return PersistedMediaBuyStatus.SCHEDULED
+        return PersistedMediaBuyStatus.PENDING_START
     if not creatives_approved:
         return PersistedMediaBuyStatus.PENDING_CREATIVES
     return PersistedMediaBuyStatus.ACTIVE

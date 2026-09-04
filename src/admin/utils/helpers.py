@@ -597,6 +597,29 @@ def echo_context(request_data: dict) -> ContextObject | None:
     return None
 
 
+def session_operator_email() -> str:
+    """Authenticated operator email from Flask session (approve provenance source).
+
+    Shared by operations / workflows / creatives approve routes for the session
+    key and empty-session fallback (``\"system\"``). Production auth writers set
+    ``session[\"user\"]`` to a bare email string; tests often set a dict with an
+    ``email`` key — both shapes are accepted. Falsy values (``None``, ``\"\"``,
+    empty dict without email) fall back to ``\"system\"``.
+
+    Does not claim uniqueness of the sentinel across all admin surfaces —
+    ``audit_decorator`` / ``tenants`` still use their own fallbacks (follow-up).
+    Distinct from creative-row ``approved_by`` body fields, which name a
+    different actor.
+    """
+    user_info = session.get("user")
+    if isinstance(user_info, dict):
+        email = user_info.get("email")
+        return email if email else "system"
+    if isinstance(user_info, str) and user_info:
+        return user_info
+    return "system"
+
+
 def approve_media_buy_through_writer(media_buy_id: str, tenant_id: str, *, approved_by: str) -> ApprovalResult:
     """Run an approval through the single post-adapter writer and report it to the user.
 
@@ -609,6 +632,10 @@ def approve_media_buy_through_writer(media_buy_id: str, tenant_id: str, *, appro
     Returns the ``ApprovalResult`` so the caller can branch on ``outcome``: it is told
     what happened rather than re-reading the row to find out, which is what stops a route
     holding a media buy across the adapter call.
+
+    Prefer ``finalize_media_buy_approval`` (#1696) for admin approve routes that must
+    apply the shared creative-hold predicate before the writer; this helper remains for
+    callers that only need the writer + flash seam.
     """
     from datetime import UTC, datetime
 

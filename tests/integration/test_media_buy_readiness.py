@@ -237,10 +237,14 @@ class TestMediaBuyReadinessService:
             session.execute(delete(MediaBuy).where(MediaBuy.media_buy_id == media_buy_id))
             session.commit()
 
-    def test_live_state(self, test_tenant, test_principal):
-        """Media buy during flight with approved creatives should be 'live'."""
-        media_buy_id = "mb_live"
-        creative_id = "cr_live"
+    @pytest.mark.parametrize("creative_status", ["approved", "active"])
+    def test_live_state(self, test_tenant, test_principal, creative_status):
+        """Media buy during flight with finalize-ready creatives should be 'live'.
+
+        ``active`` is legacy storage but still counts via FINALIZE_READY (Chris C5).
+        """
+        media_buy_id = f"mb_live_{creative_status}"
+        creative_id = f"cr_live_{creative_status}"
         now = datetime.now(UTC)
 
         with get_db_session() as session:
@@ -262,7 +266,6 @@ class TestMediaBuyReadinessService:
             session.add(media_buy)
             session.flush()  # Ensure media buy exists before creating creative assignment
 
-            # Create approved creative
             creative = Creative(
                 creative_id=creative_id,
                 tenant_id=test_tenant,
@@ -270,7 +273,7 @@ class TestMediaBuyReadinessService:
                 name="Live Creative",
                 agent_url="https://test-agent.example.com",
                 format="display_300x250",
-                status="approved",
+                status=creative_status,
                 data={},
             )
             session.add(creative)
@@ -287,10 +290,11 @@ class TestMediaBuyReadinessService:
             session.add(assignment)
             session.commit()
 
-        # Check readiness
         readiness = MediaBuyReadinessService.get_readiness_state(media_buy_id, test_tenant)
         assert readiness["state"] == "live"
         assert readiness["is_ready_to_activate"]
+        assert readiness["creatives_approved"] == 1
+        assert readiness["creatives_total"] == 1
 
         # Cleanup
         with get_db_session() as session:

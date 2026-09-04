@@ -12,12 +12,11 @@ from adcp.types import Package
 from flask import Blueprint, request
 from sqlalchemy import select
 
-from src.admin.utils import approve_media_buy_through_writer, echo_context, require_auth, require_tenant_access
+from src.admin.utils import echo_context, require_auth, require_tenant_access, session_operator_email
 from src.core.database.models import PersistedMediaBuyStatus, PushNotificationConfig
 from src.core.database.repositories.media_buy import MediaBuyRepository
 from src.core.exceptions import AdCPMediaBuyRejectedError
 from src.core.schemas import CreateMediaBuyError, CreateMediaBuySuccess
-from src.core.tools.media_buy_create import ApprovalOutcome
 from src.core.webhooks.delivery import WebhookTaskContext
 from src.services.protocol_webhook_service import get_protocol_webhook_service
 
@@ -306,12 +305,12 @@ def _media_buy_webhook_task(
     task_type/tenant_id/principal_id/media_buy_id for delivery logging and the
     audit trail, and a dict lets a caller omit one silently — which is how the
     admin sync_creatives sender came to write no delivery-log row at all
-    (salesagent-pldmk.39). Shared by the approve and reject branches
+    (#1567). Shared by the approve and reject branches
     (PR #1567 round-2 cleanup).
 
     task_type carries step_data["tool_name"] VERBATIM. notify() coerces its own
     copy for the SDK payload, so the untrusted DB label never reaches the wire and
-    the original still keys the guards (salesagent-yi3s, salesagent-yk7o).
+    the original still keys the guards (#1567).
     """
     return WebhookTaskContext(
         task_id=step_data["step_id"],
@@ -371,10 +370,7 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
             }
 
             # Get user info for audit
-            from flask import session as flask_session
-
-            user_info = flask_session.get("user", {})
-            user_email = user_info.get("email", "system") if isinstance(user_info, dict) else str(user_info)
+            user_email = session_operator_email()
 
             approve_repo = MediaBuyRepository(db_session, tenant_id)
             media_buy = approve_repo.get_by_id(media_buy_id)
@@ -413,16 +409,30 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                 db_session.commit()
 
                 if media_buy and media_buy.status == "pending_approval":
-                    approval = approve_media_buy_through_writer(media_buy_id, tenant_id, approved_by=user_email)
+                    # Shared finalize orchestrator (#1696): evaluate → hold | ready
+                    # → commit → execute → rollback. Transport only below.
+                    from src.admin.services.media_buy_creative_readiness import (
+                        flash_creative_finalize_hold,
+                        flash_media_buy_adapter_failure,
+                    )
+                    from src.services.media_buy_creative_readiness import (
+                        finalize_media_buy_approval,
+                    )
 
-                    if approval.outcome is ApprovalOutcome.HELD_PENDING_CREATIVES or not approval.ok:
+                    outcome = finalize_media_buy_approval(db_session, tenant_id, media_buy, approved_by=user_email)
+                    if outcome.kind == "held":
+                        flash_creative_finalize_hold(outcome.hold_message)
+                        return redirect(
+                            url_for("operations.media_buy_detail", tenant_id=tenant_id, media_buy_id=media_buy_id)
+                        )
+                    if outcome.kind == "adapter_failed":
+                        flash_media_buy_adapter_failure(outcome.error_msg)
                         return redirect(
                             url_for("operations.media_buy_detail", tenant_id=tenant_id, media_buy_id=media_buy_id)
                         )
 
-                    logger.info(f"[APPROVAL] Adapter creation succeeded for {media_buy_id}")
+                    webhook_media_buy_status = outcome.webhook_media_buy_status
 
-                    # Send webhook notification to buyer
                     webhook_config = None
                     if media_buy_data and media_buy_data["push_notification_url"]:
                         stmt_webhook = (
@@ -445,19 +455,20 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                         # the creative approval webhook in blueprints/creatives.py).
                         approve_context = echo_context(request_data)
 
-                        # Both columns come off the ApprovalResult, not a re-read. The
-                        # writer reports what it wrote; a route that re-reads the row after
-                        # the call is the shape that made a detached read possible here.
+                        # confirmed_at / revision come off FinalizeOutcome (from the
+                        # writer's ApprovalResult); media_buy_status is the canonical
+                        # domain field so the webhook matches get_media_buys.
                         create_media_buy_approved_result = CreateMediaBuySuccess.sync_success(
                             media_buy_id=media_buy_id,
                             packages=[Package(package_id=x.package_id) for x in all_packages],
-                            confirmed_at=approval.confirmed_at,
-                            revision=approval.revision,
+                            confirmed_at=outcome.confirmed_at,
+                            revision=outcome.revision,
                             context=approve_context,
+                            media_buy_status=webhook_media_buy_status,
                         )
                         webhook_task = _media_buy_webhook_task(step_data, tenant_id, media_buy_id, media_buy_data)
                         # The dialect fork moved into notify(); this site passes the protocol it
-                        # already read from the workflow step (salesagent-pldmk.39).
+                        # already read from the workflow step (#1567).
                         protocol = step_data["request_data"].get("protocol", "mcp")
 
                         try:
@@ -537,7 +548,7 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                     )
                     webhook_task = _media_buy_webhook_task(step_data, tenant_id, media_buy_id, media_buy_data)
                     # The dialect fork moved into notify(); this site passes the protocol it
-                    # already read from the workflow step (salesagent-pldmk.39).
+                    # already read from the workflow step (#1567).
                     protocol = step_data["request_data"].get("protocol", "mcp")
 
                     try:

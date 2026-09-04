@@ -7,7 +7,7 @@ Requires PostgreSQL (integration_db fixture).
 import uuid
 from datetime import UTC, datetime
 from typing import NamedTuple
-from unittest.mock import patch
+from unittest.mock import call, patch
 
 import pytest
 from sqlalchemy import delete, select
@@ -15,6 +15,7 @@ from sqlalchemy import delete, select
 from src.admin.app import create_app
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Creative, Principal, Tenant
+from src.core.tools.media_buy_create import ApprovalOutcome, ApprovalResult
 from tests.helpers.media_buy_approval import (
     ADAPTER_BOUNDARY,
     adapter_success,
@@ -345,6 +346,10 @@ class TestCreativeApprovalRetroactivePush:
         with (
             patch(_SIDE_EFFECTS_PATCH),
             patch(_PUSH_PATCH, return_value=(True, None)) as mock_push,
+            patch(
+                "src.core.tools.media_buy_create.execute_approved_media_buy",
+                return_value=ApprovalResult(outcome=ApprovalOutcome.EXECUTED),
+            ),
         ):
             response = client.post(
                 f"/tenant/{test_tenant}/creatives/review/{creative_id}/approve",
@@ -354,6 +359,106 @@ class TestCreativeApprovalRetroactivePush:
 
         assert response.status_code == 200
         mock_push.assert_not_called()
+
+    def test_approve_creative_finalize_stamps_session_operator_on_media_buy(self, client, factory_session):
+        """Finalize arm stamps MediaBuy.approved_by from session operator (#1718 KM Aug3).
+
+        ``execute_approved_media_buy`` is the sole post-adapter writer — do not mock
+        it when asserting a persisted stamp. Patch only the ad-server boundary.
+        """
+        from src.core.database.repositories import MediaBuyRepository
+
+        seeded = _seed_buy_held_on_one_creative(starts_in_days=-1)
+        login_as(client, tenant_id=seeded.tenant_id, email="test@example.com")
+
+        with (
+            patch(_SIDE_EFFECTS_PATCH),
+            patch(ADAPTER_BOUNDARY, side_effect=adapter_success),
+        ):
+            response = client.post(
+                f"/tenant/{seeded.tenant_id}/creatives/review/{seeded.creative.creative_id}/approve",
+                content_type="application/json",
+                # Body field is creative-row provenance — must NOT win over session.
+                json={"approved_by": "creative-reviewer@example.com"},
+            )
+
+        assert response.status_code == 200, response.data
+        factory_session.expire_all()
+        buy = MediaBuyRepository(factory_session, seeded.tenant_id).get_by_id(seeded.media_buy_id)
+        assert buy is not None
+        assert buy.approved_by == "test@example.com"
+
+    def test_approve_creative_adapter_failure_stays_recoverable(self, client, test_tenant, factory_session):
+        """Execute-first failure keeps the buy pending and the batch response successful."""
+        from src.core.database.repositories.uow import MediaBuyUoW
+
+        _auth_session(client, test_tenant)
+        creative_id = _create_creative_for_retro_push(factory_session, test_tenant, status="pending_review")
+        media_buy_id, package_id = _create_active_media_buy(factory_session, test_tenant, status="pending_creatives")
+        _create_assignment(factory_session, test_tenant, creative_id, media_buy_id, package_id)
+
+        with (
+            patch(_SIDE_EFFECTS_PATCH),
+            patch(_PUSH_PATCH, return_value=(True, None)),
+            patch(
+                "src.core.tools.media_buy_create.execute_approved_media_buy",
+                return_value=ApprovalResult.failed("adapter boom"),
+            ),
+        ):
+            response = client.post(
+                f"/tenant/{test_tenant}/creatives/review/{creative_id}/approve",
+                content_type="application/json",
+                json={},
+            )
+
+        assert response.status_code == 200
+        body = response.get_json()
+        assert body["success"] is True
+        assert body["status"] == "approved"
+        assert body["warnings"] == [f"Adapter creation for buy {media_buy_id} failed — see server logs for details"]
+        with MediaBuyUoW(test_tenant) as uow:
+            assert uow.media_buys is not None
+            buy = uow.media_buys.get_by_id(media_buy_id)
+            assert buy is not None
+            assert buy.status == "pending_creatives"
+
+    def test_approve_creative_routes_each_unblocked_buy_through_orchestrator(
+        self, client, test_tenant, factory_session
+    ):
+        """The batch loop delegates each ready buy without hand-sequencing finalize."""
+        _auth_session(client, test_tenant)
+        creative_id = _create_creative_for_retro_push(factory_session, test_tenant, status="pending_review")
+        buy_1, package_1 = _create_active_media_buy(
+            factory_session,
+            test_tenant,
+            status="pending_creatives",
+        )
+        buy_2, package_2 = _create_active_media_buy(
+            factory_session,
+            test_tenant,
+            status="pending_creatives",
+        )
+        _create_assignment(factory_session, test_tenant, creative_id, buy_1, package_1)
+        _create_assignment(factory_session, test_tenant, creative_id, buy_2, package_2)
+
+        with (
+            patch(_SIDE_EFFECTS_PATCH),
+            patch(_PUSH_PATCH, return_value=(True, None)),
+            patch(
+                "src.admin.blueprints.creatives.finalize_media_buy_after_creative_approval",
+            ) as mock_finalize,
+        ):
+            response = client.post(
+                f"/tenant/{test_tenant}/creatives/review/{creative_id}/approve",
+                content_type="application/json",
+                json={},
+            )
+
+        assert response.status_code == 200
+        assert mock_finalize.call_args_list == [
+            call(buy_1, test_tenant, approved_by="test@example.com"),
+            call(buy_2, test_tenant, approved_by="test@example.com"),
+        ]
 
     def test_push_failure_returns_200_with_warnings(self, client, test_tenant, factory_session):
         """Push failure is non-fatal: response is 200 with a warnings field."""
@@ -401,6 +506,30 @@ class TestCreativeApprovalRetroactivePush:
         _auth_session(client, test_tenant)
         creative_id = _create_creative_for_retro_push(factory_session, test_tenant, status="pending_review")
         media_buy_id, package_id = _create_active_media_buy(factory_session, test_tenant, status="scheduled")
+        _create_assignment(factory_session, test_tenant, creative_id, media_buy_id, package_id)
+
+        with (
+            patch(_SIDE_EFFECTS_PATCH),
+            patch(_PUSH_PATCH, return_value=(True, None)) as mock_push,
+        ):
+            response = client.post(
+                f"/tenant/{test_tenant}/creatives/review/{creative_id}/approve",
+                content_type="application/json",
+                json={},
+            )
+
+        assert response.status_code == 200
+        mock_push.assert_called_once_with(
+            creative_id=creative_id,
+            media_buy_id=media_buy_id,
+            tenant_id=test_tenant,
+        )
+
+    def test_pending_start_buy_triggers_retroactive_push(self, client, test_tenant, factory_session):
+        """Buys in 'pending_start' (AdCP pre-flight) also get the retroactive push."""
+        _auth_session(client, test_tenant)
+        creative_id = _create_creative_for_retro_push(factory_session, test_tenant, status="pending_review")
+        media_buy_id, package_id = _create_active_media_buy(factory_session, test_tenant, status="pending_start")
         _create_assignment(factory_session, test_tenant, creative_id, media_buy_id, package_id)
 
         with (
@@ -520,7 +649,7 @@ class TestCreativeApprovalUnblocksMediaBuy:
 
         factory_session.expire_all()
         after = MediaBuyState.of(repo.get_by_id(media_buy_id))
-        assert after.approved_by == "system"
+        assert after.approved_by == "test@example.com"
         # The seeded flight window opened yesterday, so the shared rule picks "active".
         # confirms=True: this move crosses INTO commitment, so it must mint the stamp.
         assert_status_move_carried_bookkeeping(

@@ -342,6 +342,109 @@ async def test_pending_activation_stays_pending_with_unapproved_creatives(integr
 
 @pytest.mark.requires_db
 @pytest.mark.asyncio
+async def test_pending_start_transitions_to_active_with_approved_creatives(integration_db):
+    """AdCP ``pending_start`` must promote to ``active`` once the flight window opens."""
+    tenant_id = _create_test_tenant("tenant_pstart_active")
+    principal_id = _create_test_principal(tenant_id)
+
+    past_start = datetime.now(UTC) - timedelta(hours=1)
+    future_end = datetime.now(UTC) + timedelta(days=7)
+
+    media_buy_id = _create_media_buy(
+        tenant_id=tenant_id,
+        principal_id=principal_id,
+        media_buy_id="mb_pstart_to_active",
+        status="pending_start",
+        start_time=past_start,
+        end_time=future_end,
+    )
+
+    creative_id = _create_creative(
+        tenant_id=tenant_id,
+        principal_id=principal_id,
+        creative_id="creative_pstart_approved",
+        status="approved",
+    )
+    _create_creative_assignment(tenant_id, media_buy_id, creative_id)
+
+    assert read_media_buy_state(tenant_id, media_buy_id).status == "pending_start"
+
+    scheduler = MediaBuyStatusScheduler()
+    await scheduler._update_statuses()
+
+    assert read_media_buy_state(tenant_id, media_buy_id).status == "active"
+
+
+@pytest.mark.requires_db
+@pytest.mark.asyncio
+async def test_pending_start_stays_with_unapproved_creatives(integration_db):
+    """``pending_start`` must not activate while assigned creatives are not finalize-ready."""
+    tenant_id = _create_test_tenant("tenant_pstart_unapproved")
+    principal_id = _create_test_principal(tenant_id)
+
+    past_start = datetime.now(UTC) - timedelta(hours=1)
+    future_end = datetime.now(UTC) + timedelta(days=7)
+
+    media_buy_id = _create_media_buy(
+        tenant_id=tenant_id,
+        principal_id=principal_id,
+        media_buy_id="mb_pstart_unapproved",
+        status="pending_start",
+        start_time=past_start,
+        end_time=future_end,
+    )
+
+    creative_id = _create_creative(
+        tenant_id=tenant_id,
+        principal_id=principal_id,
+        creative_id="creative_pstart_pending",
+        status="pending_approval",
+    )
+    _create_creative_assignment(tenant_id, media_buy_id, creative_id)
+
+    assert read_media_buy_state(tenant_id, media_buy_id).status == "pending_start"
+
+    scheduler = MediaBuyStatusScheduler()
+    await scheduler._update_statuses()
+
+    assert read_media_buy_state(tenant_id, media_buy_id).status == "pending_start"
+
+
+@pytest.mark.requires_db
+@pytest.mark.asyncio
+async def test_pending_start_activates_with_legacy_active_creative(integration_db):
+    """Legacy creative ``active`` counts as finalize-ready for the scheduler allowlist."""
+    tenant_id = _create_test_tenant("tenant_pstart_legacy_active")
+    principal_id = _create_test_principal(tenant_id)
+
+    past_start = datetime.now(UTC) - timedelta(hours=1)
+    future_end = datetime.now(UTC) + timedelta(days=7)
+
+    media_buy_id = _create_media_buy(
+        tenant_id=tenant_id,
+        principal_id=principal_id,
+        media_buy_id="mb_pstart_legacy_active",
+        status="pending_start",
+        start_time=past_start,
+        end_time=future_end,
+    )
+
+    creative_id = _create_creative(
+        tenant_id=tenant_id,
+        principal_id=principal_id,
+        creative_id="creative_pstart_legacy",
+        status="active",
+    )
+    _create_creative_assignment(tenant_id, media_buy_id, creative_id)
+
+    scheduler = MediaBuyStatusScheduler()
+    await scheduler._update_statuses()
+
+    assert read_media_buy_state(tenant_id, media_buy_id).status == "active"
+
+
+@pytest.mark.requires_db
+@pytest.mark.asyncio
 async def test_pending_activation_activates_without_creatives(integration_db):
     """Media buy in 'pending_activation' with no creatives should transition to 'active'."""
     tenant_id = _create_test_tenant("tenant_pending_no_creatives")

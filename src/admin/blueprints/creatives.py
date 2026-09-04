@@ -38,10 +38,11 @@ def discover_creative_formats_from_url(url):
 
 from flask import Blueprint, jsonify, redirect, render_template, request, url_for
 
-from src.admin.utils import echo_context, require_tenant_access
+from src.admin.utils import echo_context, require_tenant_access, session_operator_email
 from src.admin.utils.audit_decorator import log_admin_action
 from src.core.database.repositories.uow import AdminCreativeUoW
-from src.core.tools.media_buy_create import execute_approved_media_buy, push_creative_to_existing_buy
+from src.core.tools.media_buy_create import push_creative_to_existing_buy
+from src.services.media_buy_creative_readiness import finalize_media_buy_after_creative_approval
 
 # Note: CreativeFormat table was dropped in migration f2addf453200
 # All format-related routes have been removed
@@ -49,7 +50,9 @@ from src.core.tools.media_buy_create import execute_approved_media_buy, push_cre
 logger = logging.getLogger(__name__)
 
 # Buy statuses where the order is live in the ad server (retroactive creative push, #1038)
-_LIVE_BUY_STATUSES: frozenset[str] = frozenset({"active", "scheduled", "paused"})
+# Include pending_start (pre-flight after approve) so retroactive push still
+# matches buys this PR parks before flight; keep legacy "scheduled" rows.
+_LIVE_BUY_STATUSES: frozenset[str] = frozenset({"active", "pending_start", "scheduled", "paused"})
 
 # Create Blueprint
 creatives_bp = Blueprint("creatives", __name__)
@@ -86,42 +89,19 @@ async def _deliver_sync_creatives_webhook(
     step_request_data: dict,
     tenant_id: str,
     principal_id: str | None,
-    # `Any`, not `str | None`: this is the ORM row's attribute, read before the
-    # UoW closed, and the repository hands it back untyped. Narrowing it here
-    # would invent a type the extraction did not have and trip the
-    # check-untyped-defs ratchet (#1611) on a pure code move.
+    # `Any`, not `str | None`: ORM attribute read before UoW closed (#1611).
     step_context_id: Any,
 ) -> bool:
     """Build the protocol-shaped payload and push it to the buyer.
 
-    This is the second half of :func:`_call_webhook_for_creative_status`, split out
-    so that function stays under the ADR-009 complexity ratchet (#1610). The split
-    is on the boundary the original code already documented: everything here runs
-    AFTER the UoW closes, which is why it takes the step's attributes as plain
-    values rather than the ORM row (a detached row would raise on attribute access).
-
-    Returns:
-        True if the buyer's endpoint took the notification, False if the send failed.
+    Second half of :func:`_call_webhook_for_creative_status`, split for ADR-009
+    complexity ratchet (#1610). Runs after the UoW closes with plain values.
     """
     service = get_protocol_webhook_service()
     try:
-        # Determine protocol type from workflow step request_data
-        protocol = step_request_data.get("protocol", "mcp")  # Default to MCP for backward compatibility
-
-        # Create appropriate webhook payload based on protocol
-        # Convert result to dict for webhook payload functions
+        protocol = step_request_data.get("protocol", "mcp")
         result_dict = complete_result.model_dump(mode="json")
 
-        # The dialect fork used to live here, and the metadata was a hand-built
-        # dict carrying task_type alone. Both are now notify()'s job: it selects
-        # the builder from `protocol` once, and it takes a typed context whose
-        # fields have to be named.
-        #
-        # tenant_id and principal_id are the two that used to go missing. Both were
-        # in scope all along -- the caller raises without tenant_id, and the
-        # creative row carries principal_id -- but neither reached the dict, so
-        # records_delivery_log was False and every admin-originated delivery wrote
-        # no webhook_delivery_log row and said nothing about it (salesagent-pldmk.39).
         await service.notify(
             push_notification_config,
             task=WebhookTaskContext(
@@ -277,7 +257,7 @@ async def _call_webhook_for_creative_status(
             # Read INSIDE the UoW, like every other attribute here: the row is
             # detached once the session closes. This is the identifier that never
             # reached the delivery, which is why admin-originated sends wrote no
-            # webhook_delivery_log row (salesagent-pldmk.39).
+            # webhook_delivery_log row (#1567).
             step_principal_id = next((c.principal_id for c in all_creatives if c.principal_id), None)
 
         # --- Session closed here; webhook delivery is outside the transaction ---
@@ -527,6 +507,25 @@ def _send_post_commit_side_effects(
         )
 
 
+def _append_adapter_finalize_warnings(
+    media_buy_actions: list[dict[str, Any]],
+    *,
+    tenant_id: str,
+    approved_by: str,
+    push_warnings: list[str],
+) -> None:
+    """Finalize unblocked buys and surface adapter failures as response warnings."""
+    for action in media_buy_actions:
+        outcome = finalize_media_buy_after_creative_approval(
+            action["media_buy_id"],
+            tenant_id,
+            approved_by=approved_by,
+        )
+        if outcome.kind == "adapter_failed":
+            buy_id = action["media_buy_id"]
+            push_warnings.append(f"Adapter creation for buy {buy_id} failed — see server logs for details")
+
+
 @creatives_bp.route("/review/<creative_id>/approve", methods=["POST"])
 @log_admin_action("approve_creative")
 @require_tenant_access()
@@ -534,7 +533,11 @@ def approve_creative(tenant_id, creative_id, **kwargs):
     """Approve a creative."""
     try:
         data = request.get_json() or {}
+        # Creative-level reviewer may still come from the request body.
         approved_by = data.get("approved_by", "admin")
+        # MediaBuy.approved_by is operator provenance — same session source as
+        # operations / workflows (not the creative-approver request field).
+        user_email = session_operator_email()
 
         # Collect data needed for post-commit side effects
         webhook_data: dict[str, Any] = {}
@@ -620,21 +623,21 @@ def approve_creative(tenant_id, creative_id, **kwargs):
                 logger.info(f"[CREATIVE APPROVAL] Media buy {media_buy_id} status: {media_buy.status}")
 
                 if media_buy.status in {"pending_creatives", "draft"}:
-                    # The same gate the writer applies, asked once. Open-coding it here
-                    # meant the route evaluated it, decided to call execute, and the
-                    # callee then evaluated it again in the same request.
-                    unapproved_creatives = uow.assignments.unapproved_creative_ids(media_buy_id)
-
-                    logger.info(
-                        f"[CREATIVE APPROVAL] Media buy {media_buy_id} has {len(unapproved_creatives)} unapproved creatives remaining"
+                    # Shared Hold / finalize predicate (#1696): empty assignments
+                    # are not ready (do not treat as "all approved").
+                    from src.services.media_buy_creative_readiness import (
+                        evaluate_creative_finalize_readiness,
+                        log_creative_finalize_hold,
                     )
 
-                    if not unapproved_creatives:
+                    readiness = evaluate_creative_finalize_readiness(
+                        uow.assignments, uow.creatives, media_buy_id=media_buy_id
+                    )
+
+                    if readiness.ready:
                         media_buy_actions.append({"media_buy_id": media_buy_id})
                     else:
-                        logger.info(
-                            f"[CREATIVE APPROVAL] Media buy {media_buy_id} still waiting for {len(unapproved_creatives)} creatives: {unapproved_creatives}"
-                        )
+                        log_creative_finalize_hold(media_buy_id, readiness, context_tag="[CREATIVE APPROVAL]")
 
             # UoW auto-commits here
 
@@ -649,30 +652,12 @@ def approve_creative(tenant_id, creative_id, **kwargs):
         )
 
         # Execute adapter creation for unblocked media buys
-        for action in media_buy_actions:
-            logger.info(
-                f"[CREATIVE APPROVAL] All creatives approved for media buy {action['media_buy_id']}, executing adapter creation"
-            )
-
-            approval = execute_approved_media_buy(
-                action["media_buy_id"],
-                tenant_id,
-                approved_by="system",
-                approved_at=datetime.now(UTC),
-            )
-
-            if approval.ok:
-                # No post-execute read or write here. The callee resolved the flight
-                # window and committed it in the same write that bumped the revision;
-                # this route only reports what it was told.
-                logger.info(
-                    f"[CREATIVE APPROVAL] Media buy {action['media_buy_id']} created in adapter -> {approval.status}"
-                )
-            else:
-                logger.error(
-                    f"[CREATIVE APPROVAL] Adapter creation failed for {action['media_buy_id']}: {approval.error_msg}"
-                )
-
+        _append_adapter_finalize_warnings(
+            media_buy_actions,
+            tenant_id=tenant_id,
+            approved_by=user_email,
+            push_warnings=push_warnings,
+        )
         # Retroactive push for already-live buys (#1038):
         # Buys in pending_creatives/draft were handled above. For buys that are
         # live in the ad server, push this newly-approved creative to the line item.

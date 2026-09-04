@@ -177,12 +177,15 @@ class MediaBuyStatusScheduler:
         return None
 
     def _are_creatives_approved(self, media_buy: MediaBuy, session) -> bool:
-        """Check if all creatives for a media buy are approved.
+        """Check if all creatives for a media buy are finalize-ready.
 
-        Returns:
-            True if no creatives assigned OR all creatives are approved.
+        Uses the shared ``FINALIZE_READY_CREATIVE_STATUSES`` allowlist
+        (``approved`` + legacy ``active``) so the scheduler promoter matches
+        the approve / readiness gates. Empty assignment lists still activate
+        (scheduler-only; admin approve Hold parks zero-assignment buys).
         """
-        # Get creative assignments for this media buy
+        from src.core.schemas.creative import FINALIZE_READY_CREATIVE_STATUSES
+
         stmt = select(CreativeAssignment).filter_by(tenant_id=media_buy.tenant_id, media_buy_id=media_buy.media_buy_id)
         assignments = session.scalars(stmt).all()
 
@@ -190,19 +193,16 @@ class MediaBuyStatusScheduler:
             # No creatives assigned - can activate (some campaigns run without creatives initially)
             return True
 
-        # Get all creative IDs
         creative_ids = list({a.creative_id for a in assignments})
 
-        # Check creative statuses
         creative_stmt = select(Creative).where(
             Creative.tenant_id == media_buy.tenant_id,
             Creative.creative_id.in_(creative_ids),
         )
         creatives = session.scalars(creative_stmt).all()
 
-        # All creatives must be approved
         for creative in creatives:
-            if creative.status != "approved":
+            if creative.status not in FINALIZE_READY_CREATIVE_STATUSES:
                 return False
 
         return True

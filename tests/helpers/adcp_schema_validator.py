@@ -86,6 +86,13 @@ class AdCPSchemaValidator:
     """Validator for AdCP protocol JSON schemas, pinned to the installed SDK.
 
     All schemas load from the SDK package on disk; no network access.
+
+    ``get_schema`` / ``get_schema_index`` / ``validate_*`` stay ``async`` even
+    though resolution is synchronous disk I/O: the public API is consumed via
+    ``async with`` + ``await`` across unit/integration/e2e call sites, and the
+    retained coroutine surface avoids a cross-tier await-removal churn. Only
+    ``__aenter__`` / ``__aexit__`` are required for the context-manager
+    protocol; the other async defs exist for call-site compatibility.
     """
 
     def __init__(self) -> None:

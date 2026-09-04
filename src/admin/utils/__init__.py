@@ -17,6 +17,7 @@ from src.admin.utils.helpers import (
     parse_json_config,
     require_auth,
     require_tenant_access,
+    session_operator_email,
     translate_custom_targeting,
     validate_gam_network_response,
     validate_gam_user_response,
@@ -41,6 +42,8 @@ __all__ = [
     "translate_custom_targeting",
     # Webhook helpers
     "echo_context",
+    # Session helpers
+    "session_operator_email",
     # Query helpers
     "LimitedResult",
     "execute_limited",

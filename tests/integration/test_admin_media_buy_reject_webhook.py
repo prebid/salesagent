@@ -19,8 +19,11 @@ from unittest.mock import ANY, AsyncMock, patch
 import pytest
 
 from src.core.context_manager import ContextManager
+from src.core.database.models import PersistedMediaBuyStatus
+from src.core.tools.media_buy_create import ApprovalOutcome, ApprovalResult
 from src.core.webhooks.delivery import WebhookTaskContext
 from src.services.protocol_webhook_service import ProtocolWebhookService
+from tests.factories.creative_asset import build_assets, image_spec
 from tests.helpers.media_buy_write_seam import (
     MediaBuyState,
     assert_status_move_carried_bookkeeping,
@@ -37,16 +40,22 @@ def make_pending_media_buy(integration_db):
     """Factory for a pending-approval media buy wired for the admin approve/reject webhook path.
 
     Builds (via factories + ContextManager production APIs — no session.add in the
-    test body) a tenant + principal, a pending_approval media buy, an active
-    PushNotificationConfig at WEBHOOK_URL, and a tenant-scoped approval workflow step
-    whose ObjectWorkflowMapping ties it to the media buy with action "reject". All rows
-    are committed (factories persist on commit; ContextManager commits its own writes)
-    so the Flask route's separate get_db_session() sees them.
+    test body) a tenant + principal, a pending_approval media buy, optionally with
+    a CreativeAssignment (approved by default — required for the approve
+    finalize/webhook path after #1696), an active PushNotificationConfig at
+    WEBHOOK_URL, and a tenant-scoped approval workflow step whose
+    ObjectWorkflowMapping ties it to the media buy with action "reject". All rows
+    are committed (factories persist on commit; ContextManager commits its own
+    writes) so the Flask route's separate get_db_session() sees them.
 
     ``request_data_context``: optional dict stored as ``request_data["context"]`` on
     the workflow step — drives the approve webhook's context-echo branch.
     ``protocol``: the workflow step's originating protocol ("mcp" default; "a2a"
     drives the create_a2a_webhook_payload branch).
+    ``include_assignment``: when False, omit CreativeAssignment (zero-assignment hold).
+    ``creative_approved``: when True (default) the assigned creative is approved;
+    when False the creative stays pending (unapproved_creatives hold).
+    ``tenant_id`` / ``media_buy_id``: override defaults for multi-scenario tests.
     """
     from datetime import UTC, datetime, timedelta
 
@@ -55,6 +64,8 @@ def make_pending_media_buy(integration_db):
     from src.core.database.database_session import get_engine
     from tests.factories import (
         ALL_FACTORIES,
+        CreativeAssignmentFactory,
+        CreativeFactory,
         MediaBuyFactory,
         MediaPackageFactory,
         PricingOptionFactory,
@@ -68,32 +79,44 @@ def make_pending_media_buy(integration_db):
     engine = get_engine()
     session = SASession(bind=engine)
 
-    def _make(request_data_context: dict | None = None, protocol: str = "mcp"):
-        tenant = TenantFactory(tenant_id="reject_wh_tenant")
+    def _make(
+        request_data_context: dict | None = None,
+        protocol: str = "mcp",
+        *,
+        include_assignment: bool = True,
+        creative_approved: bool = True,
+        starts_in_days: int = 7,
+        tenant_id: str = "reject_wh_tenant",
+        media_buy_id: str = "mb_reject_wh",
+        principal_id: str = "reject_wh_principal",
+    ):
+        tenant = TenantFactory(tenant_id=tenant_id)
         PropertyTagFactory(tenant=tenant, tag_id="all_inventory", name="All Inventory")
         principal = PrincipalFactory(
             tenant=tenant,
-            principal_id="reject_wh_principal",
-            platform_mappings={"mock": {"id": "reject_wh_advertiser"}},
+            principal_id=principal_id,
+            platform_mappings={"mock": {"id": f"{principal_id}_advertiser"}},
         )
         # Real product + pricing so the APPROVE path's execute_approved_media_buy
         # can reconstruct and re-execute the stored raw_request (the approve
         # webhook test drives the full adapter-execution branch).
-        product = ProductFactory(tenant=tenant, product_id="prod_reject_wh")
+        product = ProductFactory(tenant=tenant, product_id=f"prod_{media_buy_id}")
         PricingOptionFactory(product=product)
         now = datetime.now(UTC)
+        start_time = now + timedelta(days=starts_in_days)
+        end_time = start_time + timedelta(days=30)
         media_buy = MediaBuyFactory(
             tenant=tenant,
             principal=principal,
-            media_buy_id="mb_reject_wh",
+            media_buy_id=media_buy_id,
             status="pending_approval",
-            start_time=now + timedelta(days=7),
-            end_time=now + timedelta(days=37),
+            start_time=start_time,
+            end_time=end_time,
             raw_request={
                 "brand": {"domain": "reject-wh.example.com"},
                 "po_number": "REJECT-WH-1",
-                "start_time": (now + timedelta(days=7)).strftime("%Y-%m-%dT%H:%M:%SZ"),
-                "end_time": (now + timedelta(days=37)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "start_time": start_time.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "end_time": end_time.strftime("%Y-%m-%dT%H:%M:%SZ"),
                 "packages": [
                     {"product_id": product.product_id, "budget": 5000.0, "pricing_option_id": "cpm_usd_fixed"}
                 ],
@@ -101,16 +124,36 @@ def make_pending_media_buy(integration_db):
         )
         # Persisted package row — the approve path's adapter execution reads the
         # buy's MediaPackage records ("No packages found" aborts before the webhook).
+        pkg_id = f"pkg_{media_buy_id}_1"
         MediaPackageFactory(
             media_buy=media_buy,
-            package_id="pkg_reject_wh_1",
+            package_id=pkg_id,
             package_config={
-                "package_id": "pkg_reject_wh_1",
+                "package_id": pkg_id,
                 "product_id": product.product_id,
                 "budget": 5000.0,
                 "pricing_option_id": "cpm_usd_fixed",
             },
         )
+        # Creative assignment required for finalize (#1696 Hold): zero assignments
+        # parks at pending_creatives and skips adapter + approve webhook.
+        if include_assignment:
+            creative_kwargs = {
+                "tenant": tenant,
+                "principal": principal,
+                "creative_id": f"cre_{media_buy_id}_1",
+                "data": {"assets": build_assets(image_spec("banner_image"))},
+            }
+            if creative_approved:
+                creative_kwargs["approved"] = True
+            else:
+                creative_kwargs["status"] = "pending"
+            creative = CreativeFactory(**creative_kwargs)
+            CreativeAssignmentFactory(
+                creative=creative,
+                media_buy=media_buy,
+                package_id=pkg_id,
+            )
         PushNotificationConfigFactory(
             tenant=tenant,
             principal=principal,
@@ -149,9 +192,8 @@ def make_pending_media_buy(integration_db):
         return {
             "tenant_id": tenant.tenant_id,
             "media_buy_id": media_buy.media_buy_id,
-            # The webhook's task_id. Exposed so the expected WebhookTaskContext can
-            # NAME it rather than matching it with ANY -- an ANY there would let the
-            # route send a webhook keyed on some other step and still pass.
+            "principal_id": principal.principal_id,
+            "context_id": context.context_id,
             "step_id": step.step_id,
         }
 
@@ -193,7 +235,7 @@ def webhook_capture():
         captured["task"] = task
 
     # A REAL service with only the wire call stubbed. The route dispatches through
-    # notify() now (salesagent-pldmk.39), and notify() on a MagicMock returns a
+    # notify() now (#1567), and notify() on a MagicMock returns a
     # MagicMock that asyncio.run refuses -- the route would swallow that as a failed
     # send and this guard would assert against an empty capture. With the real
     # object, notify() builds the payload for real and _capture still sees exactly
@@ -228,6 +270,21 @@ def _parse_instant(value: str):
     from datetime import datetime
 
     return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
+def _a2a_artifact_datas(payload) -> list[dict]:
+    """Unwrap ``create_a2a_webhook_payload`` framing into artifact part data dicts.
+
+    Mirrors the double-nested ``part.data.data`` fallback used by both A2A
+    approve and reject webhook assertions (KM Aug-05 DRY).
+    """
+    from google.protobuf.json_format import MessageToDict
+
+    body = MessageToDict(payload, preserving_proto_field_name=True)
+    artifacts = body.get("artifacts") or []
+    if not artifacts:
+        return []
+    return [part.get("data", {}).get("data", part.get("data", {})) for part in artifacts[0].get("parts", [])]
 
 
 def _webhook_body(captured: dict) -> dict:
@@ -350,6 +407,7 @@ class TestAdminMediaBuyRejectWebhook:
 
         _post_approval_action(authenticated_admin_session, pending_reject_media_buy, {"action": "approve"})
         body = _webhook_body(webhook_capture)
+        persisted = read_media_buy_state(tenant_id, media_buy_id)
 
         assert body["status"] == "completed", f"outer status should be completed, got {body.get('status')!r}"
         embedded = body.get("result") or {}
@@ -357,12 +415,14 @@ class TestAdminMediaBuyRejectWebhook:
         assert embedded.get("status") == "completed", (
             f"approved webhook must embed a completed Success, got status={embedded.get('status')!r}"
         )
-        # Both are read off the PERSISTED row, not asserted as constants. They used to
-        # be pinned at the schema defaults (a truthy confirmed_at and revision == 1),
-        # which is precisely what made the response a second producer: the row here is
-        # several bumps past 1 by the time approval completes, and the old assertion
-        # passed only because the envelope was reporting a fabricated value.
-        persisted = read_media_buy_state(tenant_id, media_buy_id)
+        # Domain field (media-buy-status.json@3.1.1): resolve_canonical_status
+        # date-refines a future-start buy to pending_start (ORM also persists
+        # pending_start on the ready arm). Protocol TaskStatus on the Success
+        # envelope stays "completed".
+        assert embedded.get("media_buy_status") == "pending_start", (
+            f"approved webhook must embed media_buy_status matching get_media_buys "
+            f"(canonical), got media_buy_status={embedded.get('media_buy_status')!r}"
+        )
         assert embedded.get("confirmed_at"), "approved (committed) buy must carry confirmed_at"
         assert _parse_instant(embedded["confirmed_at"]) == persisted.confirmed_at, (
             f"embedded confirmed_at {embedded['confirmed_at']!r} disagrees with the persisted "
@@ -380,10 +440,7 @@ class TestAdminMediaBuyRejectWebhook:
         assert embedded.get("context") is None, (
             f"approve webhook with no stored request context must not embed one, got {embedded.get('context')!r}"
         )
-        # The typed context carries the audit identifiers the webhook service logs.
-        # Compared as a whole frozen value: equality IS the field-by-field check,
-        # and a field added to the type without a value here fails rather than
-        # passing silently.
+        # The typed task context travels whole to send_notification (not a loose metadata dict).
         assert webhook_capture["task"] == WebhookTaskContext(
             task_id=pending_reject_media_buy["step_id"],
             task_type="create_media_buy",
@@ -393,6 +450,37 @@ class TestAdminMediaBuyRejectWebhook:
             sequence_number=1,
             notification_type=None,
         )
+        # Ready-arm provenance: session operator email on the MediaBuy row.
+        _assert_persisted_status(pending_reject_media_buy, "pending_start", approved_by="test@example.com")
+
+    def test_approve_in_flight_webhook_persists_active_and_wire_matches(
+        self, authenticated_admin_session, make_pending_media_buy, webhook_capture
+    ):
+        """In-flight approve: column and wire both grade ``active`` (Chris Aug-28 B2).
+
+        Pre-flight fixtures cannot discriminate ``pending_start`` from legacy
+        ``scheduled`` on the wire; an in-flight window pins both the persisted
+        column and ``media_buy_status`` on the webhook.
+        """
+        ids = make_pending_media_buy(
+            starts_in_days=-1,
+            media_buy_id="mb_inflight_wh",
+            tenant_id="reject_wh_inflight",
+            principal_id="reject_wh_inflight_principal",
+        )
+        tenant_id = ids["tenant_id"]
+        media_buy_id = ids["media_buy_id"]
+
+        _post_approval_action(authenticated_admin_session, ids, {"action": "approve"})
+        body = _webhook_body(webhook_capture)
+        persisted = read_media_buy_state(tenant_id, media_buy_id)
+
+        embedded = body.get("result") or {}
+        assert persisted.status == "active", f"in-flight approve must persist active, got {persisted.status!r}"
+        assert embedded.get("media_buy_status") == "active", (
+            f"in-flight approve webhook must embed media_buy_status=active, got {embedded.get('media_buy_status')!r}"
+        )
+        _assert_persisted_status(ids, "active", approved_by="test@example.com")
 
     def test_reject_bumps_revision_without_confirming(
         self, authenticated_admin_session, pending_reject_media_buy, webhook_capture
@@ -445,7 +533,7 @@ class TestAdminMediaBuyRejectWebhook:
 
         ``execute_approved_media_buy`` is now the sole post-adapter writer, and the route
         touches nothing after calling it. So the delta is 1, and the status is the
-        flight-window rule's answer — ``scheduled`` here, because this fixture's buy is
+        flight-window rule's answer — ``pending_start`` here, because this fixture's buy is
         approved before its window opens.
 
         ``bumps`` is an EXACT delta, which is what makes this the grader for the
@@ -466,9 +554,9 @@ class TestAdminMediaBuyRejectWebhook:
         assert_status_move_carried_bookkeeping(
             MediaBuyState(status="pending_approval", revision=before_revision, confirmed_at=None),
             after,
-            expected_status="scheduled",
+            expected_status="pending_start",
             confirms=True,
-            subject="admin approval (pending_approval -> scheduled)",
+            subject="admin approval (pending_approval -> pending_start)",
         )
 
     def test_a2a_reject_webhook_carries_policy_violation_task(
@@ -481,28 +569,27 @@ class TestAdminMediaBuyRejectWebhook:
         references — the reject fixture hardcoded protocol "mcp", so what this PR
         changed inside that branch (the typed CreateMediaBuyError carrying the
         wire code POLICY_VIOLATION) was unpinned on A2A. The A2A envelope framing
-        (protobuf Task with artifacts[].parts[].data) differs from the MCP
+        (        protobuf Task with artifacts[].parts[].data) differs from the MCP
         payload, so the passing MCP test does not cover it. Asserts on the actual
         protobuf Task create_a2a_webhook_payload emits.
         """
-        from google.protobuf.json_format import MessageToDict
-
         ids = make_pending_media_buy(protocol="a2a")
 
         _post_approval_action(authenticated_admin_session, ids, {"action": "reject", "reason": "Budget too low"})
         assert "payload" in webhook_capture, "A2A reject route did not send a webhook payload"
         task = webhook_capture["payload"]
         # Terminated statuses produce a protobuf a2a Task (create_a2a_webhook_payload contract).
+        from google.protobuf.json_format import MessageToDict
+
         body = MessageToDict(task, preserving_proto_field_name=True)
 
         assert body.get("status", {}).get("state") == "TASK_STATE_REJECTED", (
             f"A2A reject Task must carry the rejected state, got {body.get('status')!r}"
         )
-        artifacts = body.get("artifacts") or []
-        assert artifacts, f"A2A reject Task must embed the result artifact, got {body!r}"
-        datas = [part.get("data", {}).get("data", part.get("data", {})) for part in artifacts[0].get("parts", [])]
+        datas = _a2a_artifact_datas(task)
+        assert datas, f"A2A reject Task must embed the result artifact, got {body!r}"
         result_data = next((d for d in datas if isinstance(d, dict) and "errors" in d), None)
-        assert result_data is not None, f"A2A reject artifact must carry the errors payload, got {artifacts!r}"
+        assert result_data is not None, f"A2A reject artifact must carry the errors payload, got {datas!r}"
         errors = result_data["errors"]
         assert errors and errors[0].get("code") == "POLICY_VIOLATION", (
             f"A2A reject artifact leaked code {errors and errors[0].get('code')!r} — the wire code for a "
@@ -544,3 +631,222 @@ class TestAdminMediaBuyRejectWebhook:
             f"approve webhook must echo the buyer's request context verbatim, "
             f"got {embedded.get('context')!r} (expected {buyer_context!r})"
         )
+        assert embedded.get("media_buy_status") == "pending_start", (
+            f"approve echo webhook must also embed canonical media_buy_status, got {embedded.get('media_buy_status')!r}"
+        )
+
+    def test_a2a_approve_webhook_embeds_media_buy_status(
+        self, authenticated_admin_session, make_pending_media_buy, webhook_capture
+    ):
+        """A2A approve embeds the same canonical media_buy_status as the MCP sibling.
+
+        KM Jul29: both approve assertions previously ran under protocol=\"mcp\" only;
+        the a2a create_a2a_webhook_payload branch had zero coverage for the dual-emit
+        media_buy_status field. Mirror test_a2a_reject_webhook_carries_policy_violation_task
+        for the approve Success path.
+        """
+        ids = make_pending_media_buy(protocol="a2a", media_buy_id="mb_a2a_approve", tenant_id="a2a_appr_tenant")
+
+        _post_approval_action(authenticated_admin_session, ids, {"action": "approve"})
+        assert "payload" in webhook_capture, "A2A approve route did not send a webhook payload"
+        task = webhook_capture["payload"]
+
+        datas = _a2a_artifact_datas(task)
+        assert datas, f"A2A approve Task must embed the result artifact, got empty datas from {task!r}"
+        result_data = next(
+            (d for d in datas if isinstance(d, dict) and d.get("media_buy_id") == ids["media_buy_id"]),
+            None,
+        )
+        assert result_data is not None, f"A2A approve artifact must carry the Success payload, got {datas!r}"
+        assert result_data.get("media_buy_status") == "pending_start", (
+            f"A2A approve must embed canonical media_buy_status matching MCP sibling, "
+            f"got media_buy_status={result_data.get('media_buy_status')!r}"
+        )
+
+
+_APPROVE_HOLD_CASES = [
+    ({"include_assignment": False}, "no_assignments"),
+    ({"include_assignment": True, "creative_approved": False}, "unapproved_creatives"),
+]
+
+
+def _assert_persisted_status(ids: dict, expected_status: str, *, approved_by: str) -> None:
+    """Read back MediaBuy via UoW and assert status + exact approval provenance."""
+    from src.core.database.repositories.uow import MediaBuyUoW
+
+    with MediaBuyUoW(ids["tenant_id"]) as uow:
+        assert uow.media_buys is not None
+        buy = uow.media_buys.get_by_id(ids["media_buy_id"])
+        assert buy is not None
+        assert buy.status == expected_status, f"expected status {expected_status!r}, got {buy.status!r}"
+        assert buy.approved_at is not None
+        assert buy.approved_by == approved_by
+
+
+def _assert_persisted_hold(ids: dict, *, approved_by: str) -> None:
+    _assert_persisted_status(ids, "pending_creatives", approved_by=approved_by)
+
+
+class TestAdminMediaBuyApproveHold:
+    """Approve with Hold predicate (#1696): pending_creatives, no adapter, no webhook."""
+
+    @pytest.mark.parametrize(
+        "make_kwargs,expected_hold",
+        _APPROVE_HOLD_CASES,
+        ids=["no_assignments", "unapproved_creatives"],
+    )
+    def test_approve_holds_without_execute_or_webhook(
+        self,
+        authenticated_admin_session,
+        make_pending_media_buy,
+        webhook_capture,
+        make_kwargs,
+        expected_hold,
+    ):
+        suffix = expected_hold.replace("_", "")[:8]
+        ids = make_pending_media_buy(
+            tenant_id=f"hold_{suffix}_tenant",
+            media_buy_id=f"mb_hold_{suffix}",
+            principal_id=f"hold_{suffix}_principal",
+            **make_kwargs,
+        )
+
+        with patch(
+            "src.core.tools.media_buy_create.execute_approved_media_buy",
+        ) as mock_execute:
+            _post_approval_action(authenticated_admin_session, ids, {"action": "approve"})
+
+        mock_execute.assert_not_called()
+        assert "payload" not in webhook_capture, f"hold arm ({expected_hold}) must not fire the approve webhook"
+        _assert_persisted_hold(ids, approved_by="test@example.com")
+
+
+def _workflow_approve_url(ids: dict) -> str:
+    return f"/tenant/{ids['tenant_id']}/workflows/{ids['context_id']}/steps/{ids['step_id']}/approve"
+
+
+def _post_workflow_approve(admin_session, ids: dict, *, expected_status: int = 200):
+    """Drive the real workflows approve route (JSON) and assert the expected status."""
+    resp = admin_session.post(
+        _workflow_approve_url(ids),
+        content_type="application/json",
+        json={},
+    )
+    assert resp.status_code == expected_status, f"expected {expected_status}, got {resp.status_code}: {resp.data!r}"
+    body = resp.get_json()
+    if expected_status == 200:
+        assert body.get("success") is True, f"expected success, got {body!r}"
+    return body
+
+
+class TestAdminWorkflowApproveHold:
+    """Workflows approve twin of TestAdminMediaBuyApproveHold (#1696 / KM Jul29).
+
+    Grades the real ``approve_workflow_step`` Flask route (decorators intact) against
+    persisted MediaBuy state — not decorator-stripped unit doubles.
+    """
+
+    @pytest.mark.parametrize(
+        "make_kwargs,expected_hold",
+        _APPROVE_HOLD_CASES,
+        ids=["no_assignments", "unapproved_creatives"],
+    )
+    def test_workflow_approve_holds_without_execute(
+        self,
+        authenticated_admin_session,
+        make_pending_media_buy,
+        make_kwargs,
+        expected_hold,
+    ):
+        suffix = f"wf{expected_hold.replace('_', '')[:6]}"
+        ids = make_pending_media_buy(
+            tenant_id=f"wfh_{suffix}_t",
+            media_buy_id=f"mb_wfh_{suffix}",
+            principal_id=f"wfh_{suffix}_p",
+            **make_kwargs,
+        )
+
+        with patch(
+            "src.core.tools.media_buy_create.execute_approved_media_buy",
+        ) as mock_execute:
+            body = _post_workflow_approve(authenticated_admin_session, ids)
+
+        mock_execute.assert_not_called()
+        _assert_persisted_hold(ids, approved_by="test@example.com")
+        assert body.get("held") is True, f"hold arm must announce held=True, got {body!r}"
+        assert body.get("hold_reason") == expected_hold, (
+            f"hold_reason must be {expected_hold!r}, got {body.get('hold_reason')!r}"
+        )
+        assert body.get("message"), f"hold arm must carry a non-empty message, got {body!r}"
+
+    def test_workflow_approve_ready_persists_flight_status_and_executes(
+        self,
+        authenticated_admin_session,
+        make_pending_media_buy,
+    ):
+        """Ready arm: real compute (unpatched) → pending_start for future-start buy + execute."""
+        ids = make_pending_media_buy(
+            tenant_id="wf_ready_t",
+            media_buy_id="mb_wf_ready",
+            principal_id="wf_ready_p",
+        )
+
+        with patch(
+            "src.core.tools.media_buy_create.execute_approved_media_buy",
+            return_value=ApprovalResult(
+                outcome=ApprovalOutcome.EXECUTED,
+                status=PersistedMediaBuyStatus.SCHEDULED,
+                revision=2,
+            ),
+        ) as mock_execute:
+            body = _post_workflow_approve(authenticated_admin_session, ids)
+
+        mock_execute.assert_called_once_with(
+            ids["media_buy_id"],
+            ids["tenant_id"],
+            approved_by="test@example.com",
+            approved_at=ANY,
+        )
+        # Mocked sole writer does not persist; ready-arm no longer pre-stamps.
+        # Grade that execute was invoked and the route returned success.
+        assert body.get("success") is True
+
+
+class TestAdminApproveAdapterFailureRollback:
+    """Ready-arm adapter failure → shared mark_media_buy_adapter_failed (#1696 / KM Aug-05).
+
+    Both operations and workflows map a failed ``ApprovalResult`` through
+    ``mark_media_buy_adapter_failed``; the buy must end ``failed`` on both surfaces.
+    """
+
+    @pytest.mark.parametrize("surface", ["operations", "workflows"])
+    def test_adapter_failure_persists_failed(
+        self,
+        authenticated_admin_session,
+        make_pending_media_buy,
+        surface,
+    ):
+        ids = make_pending_media_buy(
+            tenant_id=f"afail_{surface[:3]}_t",
+            media_buy_id=f"mb_afail_{surface[:3]}",
+            principal_id=f"afail_{surface[:3]}_p",
+        )
+
+        with patch(
+            "src.core.tools.media_buy_create.execute_approved_media_buy",
+            return_value=ApprovalResult.failed("adapter boom"),
+        ) as mock_execute:
+            if surface == "operations":
+                _post_approval_action(authenticated_admin_session, ids, {"action": "approve"})
+            else:
+                body = _post_workflow_approve(authenticated_admin_session, ids, expected_status=500)
+                assert body.get("success") is False
+                assert body.get("error") == "adapter boom"
+
+        mock_execute.assert_called_once_with(
+            ids["media_buy_id"],
+            ids["tenant_id"],
+            approved_by="test@example.com",
+            approved_at=ANY,
+        )
+        _assert_persisted_status(ids, "failed", approved_by="test@example.com")

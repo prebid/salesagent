@@ -3,17 +3,16 @@
 import json
 import logging
 
-from flask import Blueprint, flash, jsonify, redirect, render_template, request, session, url_for
+from flask import Blueprint, flash, jsonify, redirect, render_template, request, url_for
 from sqlalchemy import select
 
-from src.admin.utils import approve_media_buy_through_writer, require_tenant_access
+from src.admin.utils import require_tenant_access, session_operator_email
 from src.admin.utils.audit_decorator import log_admin_action
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Context
 from src.core.database.models import Principal as ModelPrincipal
 from src.core.database.repositories import MediaBuyRepository
 from src.core.database.repositories.workflow import WorkflowRepository
-from src.core.tools.media_buy_create import ApprovalOutcome
 
 logger = logging.getLogger(__name__)
 
@@ -150,7 +149,7 @@ def review_workflow_step(tenant_id, workflow_id, step_id):
 
 
 @workflows_bp.route("/<tenant_id>/workflows/<workflow_id>/steps/<step_id>/approve", methods=["POST"])
-@require_tenant_access()
+@require_tenant_access(api_mode=True)
 @log_admin_action("approve_workflow_step")
 def approve_workflow_step(tenant_id, workflow_id, step_id):
     """Approve a workflow step."""
@@ -159,8 +158,7 @@ def approve_workflow_step(tenant_id, workflow_id, step_id):
             # Get and update the workflow step via repository (tenant-scoped)
             workflow_repo = WorkflowRepository(db, tenant_id)
 
-            user_info = session.get("user", {})
-            user_email = user_info.get("email", "system") if isinstance(user_info, dict) else str(user_info)
+            user_email = session_operator_email()
 
             step = workflow_repo.update_status(
                 step_id,
@@ -197,15 +195,31 @@ def approve_workflow_step(tenant_id, workflow_id, step_id):
                 )
 
                 if media_buy and media_buy.status == "pending_approval":
-                    approval = approve_media_buy_through_writer(media_buy_id, tenant_id, approved_by=user_email)
+                    # Shared finalize orchestrator (#1696) — same sequence as
+                    # operations; this route is the jsonify transport tail.
+                    from src.admin.services.media_buy_creative_readiness import (
+                        flash_creative_finalize_hold,
+                        flash_media_buy_adapter_failure,
+                    )
+                    from src.services.media_buy_creative_readiness import (
+                        finalize_media_buy_approval,
+                    )
 
-                    if approval.outcome is ApprovalOutcome.HELD_PENDING_CREATIVES:
-                        return jsonify({"success": True}), 200
+                    outcome = finalize_media_buy_approval(db, tenant_id, media_buy, approved_by=user_email)
+                    if outcome.kind == "held":
+                        flash_creative_finalize_hold(outcome.hold_message)
+                        return jsonify(
+                            {
+                                "success": True,
+                                "held": True,
+                                "hold_reason": outcome.hold_reason,
+                                "message": outcome.hold_message,
+                            }
+                        ), 200
+                    if outcome.kind == "adapter_failed":
+                        flash_media_buy_adapter_failure(outcome.error_msg)
+                        return jsonify({"success": False, "error": outcome.error_msg}), 500
 
-                    if not approval.ok:
-                        return jsonify({"success": False, "error": approval.error_msg}), 500
-
-                    logger.info(f"[APPROVAL] Media buy {media_buy_id} successfully created in adapter")
                     flash("Workflow step approved and media buy created successfully", "success")
                 else:
                     logger.warning(
@@ -223,7 +237,7 @@ def approve_workflow_step(tenant_id, workflow_id, step_id):
 
 
 @workflows_bp.route("/<tenant_id>/workflows/<workflow_id>/steps/<step_id>/reject", methods=["POST"])
-@require_tenant_access()
+@require_tenant_access(api_mode=True)
 @log_admin_action("reject_workflow_step")
 def reject_workflow_step(tenant_id, workflow_id, step_id):
     """Reject a workflow step with a reason."""
@@ -235,8 +249,7 @@ def reject_workflow_step(tenant_id, workflow_id, step_id):
             # Get and update the workflow step via repository (tenant-scoped)
             workflow_repo = WorkflowRepository(db, tenant_id)
 
-            user_info = session.get("user", {})
-            user_email = user_info.get("email", "system") if isinstance(user_info, dict) else str(user_info)
+            user_email = session_operator_email()
 
             step = workflow_repo.update_status(
                 step_id,

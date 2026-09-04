@@ -135,6 +135,14 @@ class CreativeStatusEnum(Enum):
     pending_review = "pending_review"
 
 
+# Finalize / adapter-create gate for assigned creatives.
+# ``active`` is legacy-only: it appears in none of creative-status.json@3.1.1,
+# SDK CreativeStatus, or CreativeStatusEnum, and no src/ writer emits it — kept
+# so historical rows still pass the gate. Spec-correct holds for
+# suspended/archived/rejected come from *not* being in this allowlist.
+FINALIZE_READY_CREATIVE_STATUSES: frozenset[str] = frozenset({"approved", "active"})
+
+
 # --- Creative Lifecycle ---
 class Creative(LibraryCreative):
     """Individual creative asset - extends listing Creative with internal workflow fields.

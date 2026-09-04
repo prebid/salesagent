@@ -59,6 +59,7 @@ from src.core.exceptions import (
 )
 from src.core.helpers import enum_value
 from src.core.idempotency_canonical import canonical_payload_hash, canonical_request_hash
+from src.core.schemas.creative import FINALIZE_READY_CREATIVE_STATUSES
 
 
 class PackageAssignmentDict(TypedDict):
@@ -342,7 +343,7 @@ def _get_format_spec_sync(agent_url: str, format_id: str, *, provenance: UrlProv
     the seam's counterparty-aware path (VALIDATION_ERROR/correctable) instead of
     the operator path (CONFIGURATION_ERROR/terminal), UNLESS the url happens to
     also be a real tenant-registered operator agent, which stays terminal
-    regardless (salesagent-ypgd).
+    regardless (#1802).
     """
     from src.core.format_resolver import fetch_format_spec
 
@@ -433,7 +434,7 @@ def _validate_creatives_before_adapter_call(
         # broadstreet://<tenant_id>): those formats are served by the adapter
         # in-process, so no dialled agent could ever resolve them, and the
         # unconditional fetch below would reject a format the seller itself
-        # advertised (salesagent-ypgd). CounterpartyUrl marks BUYER provenance for
+        # advertised (#1802). CounterpartyUrl marks BUYER provenance for
         # a genuinely-dialled url — see _get_format_spec_sync's docstring. No
         # field: create-media-buy-request.json defines no creative:{id} path, so
         # there is no canonical request-document locator to name (a fabricated
@@ -719,7 +720,7 @@ def _build_adapter_asset_from_creative(
     #
     # Skip BOTH the fetch and the fallback for an adapter-provided pseudo-URL
     # (e.g. broadstreet://<tenant_id>) — served in-process, so no dialled agent
-    # could ever resolve it (salesagent-ypgd). Extraction below already falls
+    # could ever resolve it (#1802). Extraction below already falls
     # back to the creative's raw data fields when format_spec stays None.
     from src.core.format_resolver import is_dialled_agent_url
 
@@ -741,8 +742,7 @@ def _build_adapter_asset_from_creative(
                 product_id=None,
                 # Same buyer-supplied URL as the first fetch above — omitting
                 # provenance here would silently reclassify it as operator
-                # configuration and route it off the egress seam (salesagent-6gpt.1
-                # diff-review finding).
+                # configuration and route it off the egress seam (#1802).
                 provenance=CounterpartyUrl(field=None),
             )
         except AdCPFormatNotFoundError as e:
@@ -1497,7 +1497,7 @@ def push_creative_to_existing_buy(
             creative = uow.creatives.admin_get_by_id(creative_id)
             if not creative:
                 return False, f"Creative {creative_id} not found"
-            if creative.status not in {"approved", "active"}:
+            if creative.status not in FINALIZE_READY_CREATIVE_STATUSES:
                 return False, f"Creative {creative_id} is not approved (status={creative.status})"
 
             if (creative.data or {}).get("platform_creative_id"):
@@ -2400,7 +2400,7 @@ async def _create_media_buy_impl(
                     principal_id=principal_id,
                     # Recorded so a later delivery knows which dialect to speak.
                     # The scheduler fires long after this request and has no
-                    # identity of its own (salesagent-pldmk.39).
+                    # identity of its own (#1567).
                     protocol=identity.protocol if identity else None,
                 )
                 logger.info(
