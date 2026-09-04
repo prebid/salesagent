@@ -37,6 +37,7 @@ from tests.unit.test_run_all_tests_contract import _REPO_ROOT, _RUNNER
 
 _CREATIVE_AGENT_STACK = _REPO_ROOT / "scripts" / "creative-agent-stack.sh"
 _CHECK_TRUNCATED = _REPO_ROOT / "scripts" / "check_truncated_reports.py"
+_REPORT_PROFILE = _REPO_ROOT / "scripts" / "ci" / "report_worker_profile.py"
 
 _DOCKER_STUB = """#!/usr/bin/env bash
 # Records every invocation of this fake `docker` (argv, space-joined) to
@@ -78,6 +79,12 @@ def _run_with_stubbed_docker(tmp_path: Path) -> tuple[subprocess.CompletedProces
     # The runner shells out to this after collecting reports (main, PR #2091):
     # a truncated suite must not be mistakable for a green one.
     shutil.copy2(_CHECK_TRUNCATED, workdir / "scripts" / "check_truncated_reports.py")
+
+    # Same reason: the runner shells out to the profile reporter at the end, and
+    # `python3` on a path that does not exist exits nonzero, which the runner
+    # reads as a failed run.
+    (workdir / "scripts" / "ci").mkdir(parents=True, exist_ok=True)
+    shutil.copy2(_REPORT_PROFILE, workdir / "scripts" / "ci" / "report_worker_profile.py")
 
     stub_bin = tmp_path / "stub_bin"
     stub_bin.mkdir()

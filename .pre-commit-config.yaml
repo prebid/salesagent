@@ -39,6 +39,15 @@ repos:
         language: system
         types: [python]
         pass_filenames: true
+        # Commit stage only. Without this the hook inherits
+        # default_install_hook_types and runs at pre-push too, where the file
+        # list is the whole pushed range rather than what you just wrote. A
+        # push that carries a merge then presents every file the other branch
+        # touched, and the hook asks you to fix citations you did not author:
+        # 272 of them across 110 files at the time this line was added. The
+        # rule is about what an author cites, so it belongs where authoring
+        # happens.
+        stages: [pre-commit]
 
       # Layer 2 — pre-push stage (medium cost; CI is authoritative for heavy checks)
       - id: check-docs-links

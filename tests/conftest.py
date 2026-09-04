@@ -4,6 +4,10 @@ Global pytest configuration and fixtures for all tests.
 This file provides fixtures available to all test modules.
 """
 
+# First import in this file: tests/_worker_profile stamps its module-import time
+# as t0, and everything heavy (the app, the harness, the factories) is imported
+# after this point, so that stamp is early enough to bound the startup cost it
+# measures. Inert unless PYTEST_WORKER_PROFILE names a directory.
 import functools
 import json
 import multiprocessing
@@ -20,6 +24,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from tests import _worker_profile
 from tests._xdist_report_safety import sanitize_serialized_report
 
 # ---------------------------------------------------------------------------
@@ -803,6 +808,35 @@ def benchmark(request):
 # ============================================================================
 # Pytest Hooks
 # ============================================================================
+
+
+# ---------------------------------------------------------------------------
+# Per-worker timing profile (opt-in) — see tests/_worker_profile.py
+# ---------------------------------------------------------------------------
+# Declared here rather than as a `-p` plugin because addopts cannot load
+# `tests._worker_profile`: the rootdir is not on sys.path when plugins are
+# registered ("No module named 'tests'"). A rootdir conftest always loads, needs
+# no PYTHONPATH, and forwards to the box through one environment variable.
+
+
+def pytest_collection(session):
+    _worker_profile.on_collection_start()
+
+
+def pytest_collection_finish(session):
+    _worker_profile.on_collection_finish(len(session.items))
+
+
+def pytest_runtestloop(session):
+    _worker_profile.on_loop_start()
+
+
+def pytest_runtest_logreport(report):
+    _worker_profile.record_test_duration(report)
+
+
+def pytest_sessionfinish(session, exitstatus):
+    _worker_profile.on_session_finish()
 
 
 # ---------------------------------------------------------------------------
