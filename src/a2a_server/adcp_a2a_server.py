@@ -166,14 +166,14 @@ def _accept_a2a_push_config(url: str, scheme: str | None, credentials: str | Non
     tool path on either precondition.
 
     Why both surfaces must come through here rather than call the constructor
-    directly: ``on_message_send``'s body runs inside a ``try`` whose handlers are
-    ``except A2AError: raise`` / ``except Exception`` -> ``_internal_error_for``.
-    ``AdCPValidationError`` is not an ``A2AError``, so a raw constructor call
-    there would surface a buyer's correctable credential refusal as
-    ``INTERNAL_ERROR``. The translation below preserves the raised
-    ``AdCPValidationError`` verbatim (see
-    :func:`_invalid_params_from_ssrf_error`'s isinstance branch), which is what
-    keeps a credential refusal naming the credentials field instead of being
+    directly: a push-config refusal is a protocol-level precondition failure and
+    must surface as a JSON-RPC ``InvalidParamsError``. ``AdCPValidationError`` is
+    not an ``A2AError``, so a raw constructor call inside ``on_message_send``'s
+    ``try`` would fall to its typed-error branch and be returned as a task-level
+    ``VALIDATION_ERROR`` failed Task instead. The translation below re-raises the
+    refusal as ``InvalidParamsError`` (see
+    :func:`_invalid_params_from_ssrf_error`'s isinstance branch), keeping it on
+    the transport layer and naming the credentials field instead of being
     re-labelled as a URL problem.
     """
     try:
@@ -220,24 +220,35 @@ DISCOVERY_SKILLS = frozenset(
 )
 
 
+# Terminal A2A task states. `_send_protocol_webhook` notifies on the INITIAL synchronous
+# response only; an inline terminal response must not emit a webhook (pinned AdCP 3.1.1
+# webhooks.mdx:160 — the buyer already has the result).
+_TERMINAL_TASK_STATES = frozenset(
+    {
+        TaskState.TASK_STATE_COMPLETED,
+        TaskState.TASK_STATE_FAILED,
+        TaskState.TASK_STATE_CANCELED,
+        TaskState.TASK_STATE_REJECTED,
+    }
+)
+
+
 def _internal_error_for(operation: str, exc: Exception) -> InternalError:
-    """Canonical InternalError shape for non-skill A2A boundary failures.
+    """Canonical InternalError shape for non-Task A2A boundary failures.
 
-    Skill handlers raise typed ``AdCPError`` (or untyped exceptions that the
-    dispatcher normalizes), and ``_handle_explicit_skill`` → ``on_message_send``
-    surface those as a two-layer envelope on a failed Task's DataPart. Non-skill
-    paths (``on_message_send`` fallthrough, NL handlers) historically picked their
-    own prefixes (``"Message processing failed: "``, ``"Error in ..."``)
-    for semantically identical untyped failures — divergence on the buyer-
-    facing wire message for the same condition.
+    Skill handlers raise typed ``AdCPError`` for expected application failures,
+    and ``on_message_send`` surfaces those as a two-layer envelope on a failed
+    Task's DataPart. Untyped crashes instead become a separately sanitized
+    JSON-RPC ``InternalError`` at the outer boundary, per AdCP 3.1.1
+    ``docs/building/operating/transport-errors.mdx`` "Layer Separation".
 
-    Use this helper at every non-skill ``InternalError(...)`` raise site that
-    is NOT a deliberate protocol-level convention (see push-notif handlers
-    below). The canonical prefix is ``"{operation} failed: {exc}"`` so
-    storyboard runners can parse the failure uniformly.
+    Use this helper only at ``InternalError(...)`` raise sites that have no
+    async Task to attach an envelope artifact to. The canonical prefix is
+    ``"{operation} failed: {exc}"`` so storyboard runners can parse the
+    failure uniformly.
 
     The four ``on_*_task_push_notification_config`` JSON-RPC protocol methods use
-    this helper too — they have no async Task to carry a DataPart, so the two-layer
+    this helper — they have no async Task to carry a DataPart, so the two-layer
     envelope rides in the error's ``data`` field (``error.data["errors"][0]["code"]``
     / ``error.data["adcp_error"]``). ``InternalError`` stays an ``A2AError`` so the
     SDK's ``JsonRpcDispatcher`` serializes it as a structured JSON-RPC error; raising
@@ -267,9 +278,9 @@ class AdCPRequestHandler(RequestHandler):
         """Build a spec-compliant two-layer envelope for any exception.
 
         Single source of truth for "wrap-arbitrary-exception → wire envelope"
-        used by both the per-skill dispatcher (``_build_failed_skill_result``)
-        and the top-level ``on_message_send`` error handler. Delegates to
-        ``normalize_to_adcp_error`` for the type→AdCPError mapping
+        used by the per-skill dispatcher (``_build_failed_skill_result``) and
+        by ``on_message_send`` for typed application failures. Delegates to
+        ``normalize_to_adcp_error`` for the per-skill type→AdCPError mapping
         (``ValueError → AdCPValidationError``, ``PermissionError →
         AdCPAuthorizationError``, arbitrary ``Exception →
         AdCPError(INTERNAL_ERROR)``) so the wire output stays in
@@ -296,6 +307,24 @@ class AdCPRequestHandler(RequestHandler):
             "error_envelope": AdCPRequestHandler._build_error_envelope(exc),
             "success": False,
         }
+
+    @staticmethod
+    def _error_artifact_parts(envelope: dict[str, Any]) -> list[Part]:
+        """Parts for a failed-Task artifact: recommended TextPart + required DataPart.
+
+        Pinned AdCP 3.1.1 a2a-response-format.mdx "Required Structure": the adcp_error
+        DataPart is required and a human/LLM-readable TextPart is recommended. Single
+        source of shape shared by the top-level ``on_message_send`` failure path and the
+        per-skill dispatcher, so both failed-Task artifacts read identically. The text is
+        the envelope's own error message (``errors[0].message``), never re-derived.
+        """
+        errors = envelope.get("errors") or []
+        text = errors[0].get("message") if errors else None
+        parts: list[Part] = []
+        if text:
+            parts.append(Part(text=text))
+        parts.append(Part(data=_dict_to_value(envelope)))
+        return parts
 
     def _get_auth_token(self, context: ServerCallContext | None = None) -> str | None:
         """Extract Bearer token from ServerCallContext.
@@ -441,15 +470,23 @@ class AdCPRequestHandler(RequestHandler):
         result: dict[str, Any] | None = None,
         error: str | None = None,
     ):
-        """Send protocol-level push notification if configured.
+        """Send a protocol-level push notification for a non-terminal status, if configured.
 
-        Per AdCP A2A spec (https://docs.adcontextprotocol.org/docs/protocols/a2a-guide#push-notifications-a2a-specific):
-        - Final states (completed, failed, canceled): Send full Task object with artifacts
-        - Intermediate states (working, input-required, submitted): Send TaskStatusUpdateEvent
-
-        ``notify`` selects the payload type from the status: Task for final states,
-        TaskStatusUpdateEvent for intermediate ones.
+        This sender delivers only on the INITIAL synchronous response, which today is
+        always non-terminal here (``submitted``): an inline terminal response is guarded
+        out below (pinned AdCP 3.1.1 webhooks.mdx:160 — the buyer already has the result).
+        The terminal completion of a ``submitted`` operation is delivered later by an async
+        worker, which does not exist yet and would need its own entry point (see the guard).
+        For the non-terminal states that reach ``notify``, it sends a TaskStatusUpdateEvent.
         """
+        # This sender notifies on the INITIAL synchronous response only. Per pinned AdCP
+        # 3.1.1 webhooks.mdx:160, an inline terminal response MUST NOT emit a webhook — the
+        # buyer already has the result. No async completion-delivery path exists today; if
+        # one is added it MUST use a distinct entry point, because this guard would
+        # otherwise suppress its legitimate terminal completion webhook.
+        if task.status.state in _TERMINAL_TASK_STATES:
+            return
+
         try:
             # Check if task has push notification config stored
             webhook_config = self._task_push_configs.get(task.id)
@@ -507,9 +544,9 @@ class AdCPRequestHandler(RequestHandler):
                 notification_type=None,
             )
 
-            # notify() picks the payload type: Task for final states,
-            # TaskStatusUpdateEvent for intermediate ones. protocol is "a2a"
-            # unconditionally -- this IS the A2A server.
+            # notify() picks the payload type by status; terminal states are guarded out
+            # above, so in practice this delivers a TaskStatusUpdateEvent for the
+            # non-terminal (submitted) case. protocol is "a2a" -- this IS the A2A server.
             sent = await push_notification_service.notify(
                 push_notification_config,
                 task=webhook_task,
@@ -768,15 +805,17 @@ class AdCPRequestHandler(RequestHandler):
                     # a reference to the dict about to go on the wire, and one of
                     # them mutated it in place (the list_creatives format_id
                     # bare-string defect). Nothing rebuilds an outbound payload.
-                    text_message = None
-                    if res["success"] and isinstance(artifact_data, dict):
-                        text_message = artifact_data.get("message")
-
-                    # Build parts list per A2A spec: optional text Part + required data Part
-                    parts = []
-                    if text_message:
-                        parts.append(Part(text=text_message))
-                    parts.append(Part(data=_dict_to_value(artifact_data)))
+                    # Build parts per A2A spec: recommended text Part + required data Part.
+                    # A failed skill goes through the shared error-artifact builder so its
+                    # DataPart+TextPart shape matches the top-level on_message_send failure.
+                    if not res["success"]:
+                        parts = self._error_artifact_parts(artifact_data)
+                    else:
+                        text_message = artifact_data.get("message") if isinstance(artifact_data, dict) else None
+                        parts = []
+                        if text_message:
+                            parts.append(Part(text=text_message))
+                        parts.append(Part(data=_dict_to_value(artifact_data)))
 
                     task.artifacts.append(
                         Artifact(
@@ -791,15 +830,11 @@ class AdCPRequestHandler(RequestHandler):
                 successful_skills = [res["skill"] for res in results if res["success"]]
 
                 if failed_skills and not successful_skills:
-                    # All skills failed - mark task as failed
+                    # All skills failed - mark task as failed and return it inline.
+                    # No webhook: an inline terminal response is gated out centrally in
+                    # _send_protocol_webhook (webhooks.mdx:160), so a call here would be a
+                    # guaranteed no-op — the buyer already has the failed Task.
                     task.status.CopyFrom(TaskStatus(state=TaskState.TASK_STATE_FAILED))
-
-                    # Send protocol-level webhook notification for failure
-                    error_messages = [
-                        res["error_envelope"]["errors"][0]["message"] for res in results if not res["success"]
-                    ]
-                    await self._send_protocol_webhook(task, status="failed", error="; ".join(error_messages))
-
                     return task
                 elif successful_skills:
                     # Log successful skill invocations with rich context
@@ -925,9 +960,10 @@ class AdCPRequestHandler(RequestHandler):
                 # ``_create_media_buy`` is an NL stub that always raises
                 # ``AdCPCapabilityNotSupportedError`` — the explicit-skill
                 # path is the spec contract for media buy creation. The
-                # outer error handler at on_message_send catches the raise
-                # and attaches a spec-compliant two-layer envelope to the
-                # failed Task artifact.
+                # outer error handler at on_message_send catches the raise,
+                # attaches a spec-compliant two-layer envelope to the failed
+                # Task artifact, and returns that failed Task (never a
+                # JSON-RPC error).
                 await self._create_media_buy(combined_text, identity)
             else:
                 # General help response
@@ -999,11 +1035,16 @@ class AdCPRequestHandler(RequestHandler):
             # Mark task with appropriate status
             task.status.CopyFrom(TaskStatus(state=task_state))
 
-            # Send protocol-level webhook notification if configured
+            # Delivery is gated centrally in _send_protocol_webhook (inline terminal → skip).
             await self._send_protocol_webhook(task, status=task_status_str)
 
         except A2AError:
-            # Re-raise A2AError as-is (will be caught by JSON-RPC handler)
+            # Transport fault: the request could not be routed to a skill, so the
+            # buyer receives a JSON-RPC error and no Task exists to query. Drop the
+            # Task and push registration stashed before the try so neither orphans
+            # (a2a-response-format.mdx@3.1.1 "no artifact produced" row).
+            self.tasks.pop(task_id, None)
+            self._task_push_configs.pop(task_id, None)
             raise
         except Exception as e:
             # Use identity resolved at transport boundary (if available).
@@ -1022,25 +1063,28 @@ class AdCPRequestHandler(RequestHandler):
                 principal_id=err_principal_id,
             )
 
-            # Send protocol-level webhook notification for failure if configured
+            # A Task exists and structured error data is in hand, so per pinned AdCP
+            # 3.1.1 a2a-response-format.mdx "Where the Error Lives: Decision Rule" the
+            # failure is RETURNED as a failed Task carrying the adcp_error DataPart —
+            # the same path MCP (tool_error_logging), REST, and the A2A explicit-skill
+            # loop already take. ``_build_error_envelope`` routes an untyped crash
+            # through ``normalize_to_adcp_error`` to base AdCPError (wire
+            # SERVICE_UNAVAILABLE) and passes a typed AdCPError's own wire code. JSON-RPC
+            # is reserved for failures where no Task was produced (the A2AError branch).
             task.status.CopyFrom(TaskStatus(state=TaskState.TASK_STATE_FAILED))
-            # Attach error to task artifacts as a spec-compliant two-layer
-            # envelope (same shape as failed-skill DataParts) so storyboard
-            # runners can ``JSON.parse`` the artifact uniformly regardless of
-            # which failure path produced it.
             del task.artifacts[:]
             task.artifacts.append(
                 Artifact(
                     artifact_id="error_1",
                     name="processing_error",
-                    parts=[Part(data=_dict_to_value(self._build_error_envelope(e)))],
+                    parts=self._error_artifact_parts(self._build_error_envelope(e)),
                 )
             )
 
-            await self._send_protocol_webhook(task, status="failed")
-
-            # Raise A2A error instead of creating failed task
-            raise _internal_error_for("message processing", e)
+            # No webhook: an inline terminal failed Task is gated out centrally in
+            # _send_protocol_webhook. The accepted push config is dropped — a terminal
+            # task returned synchronously has no future consumer for it.
+            self._task_push_configs.pop(task_id, None)
 
         self.tasks[task_id] = task
         return task

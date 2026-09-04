@@ -19,14 +19,9 @@ import pytest
 from starlette.testclient import TestClient
 
 from src.app import app
-from tests.factories.principal import PrincipalFactory
+from tests.a2a_helpers import make_mock_a2a_identity
 
-_MOCK_IDENTITY = PrincipalFactory.make_identity(
-    principal_id="test-principal",
-    tenant_id="test-tenant",
-    tenant={"tenant_id": "test-tenant"},
-    protocol="a2a",
-)
+_MOCK_IDENTITY = make_mock_a2a_identity()
 
 # ---------------------------------------------------------------------------
 # All 13 A2A skills from the dispatch map (adcp_a2a_server.py:1416-1438)
@@ -219,13 +214,68 @@ class TestA2AJsonRpcProtocol:
         response = client.post("/a2a", json=payload, headers=auth_headers)
         body = response.json()
         assert "error" in body, "Unknown method should return JSON-RPC error"
+        assert body["error"]["code"] == -32601, (
+            f"unknown JSON-RPC method must map to the standard method-not-found code -32601: {body['error']}"
+        )
 
-    def test_unknown_skill_returns_error(self, client, auth_headers):
-        """Unknown skill name should return error (not crash)."""
+    @patch("src.core.resolved_identity.resolve_identity", return_value=_MOCK_IDENTITY)
+    def test_unknown_skill_returns_error(self, mock_resolve, client, auth_headers):
+        """Unknown skill name returns a JSON-RPC error naming the skill (not crash).
+
+        Grounding note: an unknown skill supplied as ``message/send`` *data* is
+        NOT one of the transport faults the AdCP Layer-Separation table
+        enumerates (connection-refused, malformed request, internal crash), so
+        this test does not claim spec Layer-Separation grounding for it. It pins
+        only the observable contract — an unrouted skill surfaces as a JSON-RPC
+        error whose message names the skill, rather than crashing. Identity is
+        mocked so the request reaches skill dispatch; pre-fix this test passed
+        for the wrong reason (the unmocked DB crashed identity resolution first,
+        and the old outer handler converted that crash to a JSON-RPC
+        InternalError).
+        """
         payload = _build_jsonrpc("nonexistent_skill", {})
         response = client.post("/a2a", json=payload, headers=auth_headers)
         body = response.json()
         assert "error" in body, "Unknown skill should return JSON-RPC error"
+        # Pin the buyer-visible code, not just the message: an unrouted skill surfaces as
+        # method-not-found (-32601). Reclassifying the raise to InternalError would keep
+        # the message but move the code to -32603, which a buyer branches on.
+        assert body["error"]["code"] == -32601, (
+            f"unrouted skill should surface as method-not-found (-32601): {body['error']}"
+        )
+        assert "nonexistent_skill" in body["error"].get("message", ""), (
+            f"error should name the unknown skill: {body['error']}"
+        )
+
+    @patch(
+        "src.a2a_server.adcp_a2a_server.AdCPRequestHandler._resolve_a2a_identity",
+        side_effect=RuntimeError("database host secret-canary exploded"),
+    )
+    def test_untyped_boundary_crash_returns_failed_task_envelope_on_wire(self, mock_resolve, client, auth_headers):
+        """An untyped crash reaches the real A2A wire as a failed-Task envelope.
+
+        Pinned AdCP 3.1.1 a2a-response-format.mdx "Where the Error Lives: Decision
+        Rule": a system error where a Task exists is returned as ``status: failed``
+        with the adcp_error DataPart (wire SERVICE_UNAVAILABLE), NOT a JSON-RPC
+        -32603 — matching the MCP/REST/explicit-skill paths. (Scrubbing the untyped
+        message off the wire is a shared-seam concern tracked separately.)
+        """
+        payload = _build_jsonrpc("get_products", {"brief": "test"}, request_id="crash-test-42")
+
+        response = client.post("/a2a", json=payload, headers=auth_headers)
+
+        assert response.status_code == 200
+        assert response.json().get("id") == "crash-test-42"
+        result = _extract_jsonrpc_result(response)
+        task = result.get("task", result)
+        assert task["status"]["state"] in ("TASK_STATE_FAILED", "failed"), (
+            f"untyped crash must surface as a failed Task, got status: {task.get('status')}"
+        )
+        envelope = _extract_artifact_data(result)
+        code = envelope.get("adcp_error", {}).get("code") or (envelope.get("errors", [{}])[0].get("code"))
+        assert code == "SERVICE_UNAVAILABLE", (
+            f"untyped crash must carry a SERVICE_UNAVAILABLE envelope, got: {envelope}"
+        )
 
     def test_response_echoes_request_id(self, client, auth_headers):
         """JSON-RPC response must echo the request id."""
