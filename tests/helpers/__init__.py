@@ -2,6 +2,13 @@
 
 from __future__ import annotations
 
+# Canonical get_products request carrying the AdCP version-envelope fields
+# (adcp_version/adcp_major_version) that official SDK clients inject on every
+# request. Shared so the envelope-tolerance tests can't drift a hand-copied
+# payload from one another. Plain stdlib data — safe at module scope here
+# (see the lazy-export note below on why heavier objects are not).
+REQUEST_WITH_ENVELOPE_FIELDS = {"adcp_version": "3.1", "adcp_major_version": 3, "brief": "ads"}
+
 
 def assert_resolve_auth_dep_passes_token(auth_token: str = "pre-extracted-token") -> None:
     """Assert _resolve_auth_dep passes auth_ctx.auth_token to resolve_identity().

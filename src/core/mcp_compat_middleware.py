@@ -17,7 +17,12 @@ from mcp.types import CallToolRequestParams
 from pydantic import ValidationError
 
 from src.core.exceptions import normalize_to_adcp_error
-from src.core.request_compat import deep_strip_to_schema, normalize_request_params, strip_unknown_params
+from src.core.request_compat import (
+    deep_strip_to_schema,
+    normalize_request_params,
+    strip_envelope_version_fields,
+    strip_unknown_params,
+)
 from src.core.tool_error_logging import _translate_to_tool_error, record_boundary_error
 
 logger = logging.getLogger(__name__)
@@ -26,7 +31,11 @@ logger = logging.getLogger(__name__)
 class RequestCompatMiddleware(Middleware):
     """Normalize, strip, and provide forward-compatible fallback for MCP tools.
 
-    Three-stage pipeline:
+    Four-stage pipeline:
+    0. Strip the AdCP version-envelope fields (adcp_version, adcp_major_version)
+       unconditionally in every environment. Official SDK clients inject these on
+       every request; FastMCP's TypeAdapter (additionalProperties: false) would
+       otherwise reject them before the handler runs.
     1. Translate deprecated field names via normalize_request_params()
     2. Strip fields not in the tool's JSON Schema via strip_unknown_params()
     3. If TypeAdapter rejects the arguments, always translate and record the
@@ -49,8 +58,13 @@ class RequestCompatMiddleware(Middleware):
             return await call_next(context)
 
         tool_name = context.message.name
-        normalized = dict(arguments)
-        modified = False
+        # Step 0: Strip AdCP version-envelope fields (all environments) via the helper.
+        # The declared values (incl. adcp_major_version) are intentionally dropped for
+        # request tolerance — this does NOT negotiate cross-major support. Emitting
+        # VERSION_UNSUPPORTED for a mismatched major is deferred to #2181; if that work
+        # needs the declared version it can read the raw payload from mcp_auth_middleware's
+        # "raw_wire_payload" state stash rather than reconstructing it here.
+        normalized, modified = strip_envelope_version_fields(tool_name, arguments)
 
         # Step 1: Translate deprecated fields
         compat_result = normalize_request_params(tool_name, normalized)

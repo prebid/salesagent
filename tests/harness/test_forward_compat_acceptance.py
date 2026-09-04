@@ -24,7 +24,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from src.core.request_compat import normalize_request_params
+from src.core.request_compat import ENVELOPE_VERSION_FIELDS, normalize_request_params
 from tests.helpers import assert_envelope_shape
 
 # ---------------------------------------------------------------------------
@@ -41,11 +41,12 @@ CURRENT_SPEC_GET_PRODUCTS = {
 FUTURE_TOP_LEVEL_FIELD = {
     "brief": "video ads",
     "brand": {"domain": "acme.com"},
-    # Envelope field the seller now DELIBERATELY accepts (GH #1512). It stays in
-    # this payload so production-tolerance keeps covering it — but it can no
+    # Envelope fields the seller now DELIBERATELY accepts (GH #1512). They stay in
+    # this payload so production-tolerance keeps covering them — but they can no
     # longer carry the dev-rejects case, because a field we accept on purpose is
-    # not an unknown one.
-    "adcp_major_version": 5,
+    # not an unknown one. Keyed off ENVELOPE_VERSION_FIELDS so this payload can't
+    # drift from the MCP strip set's single source of truth.
+    **dict.fromkeys(ENVELOPE_VERSION_FIELDS, 5),
     # The genuinely-undefined field. This is what the dev-rejects assertion is
     # actually about: a name no pinned schema declares, which must be refused in
     # development and stripped in production.
@@ -210,11 +211,6 @@ class TestMcpForwardCompat:
             not in {
                 "brief",
                 "brand",
-                "adcp_version",
-                # Accepted on purpose since GH #1512, alongside adcp_version. Its
-                # absence here is what made this guard flag a field the seller
-                # had deliberately started accepting.
-                "adcp_major_version",
                 "filters",
                 "property_list",
                 "push_notification_config",
@@ -222,6 +218,7 @@ class TestMcpForwardCompat:
                 "account",
                 "ctx",
             }
+            | ENVELOPE_VERSION_FIELDS
             for k in payload
         )
         if not has_top_level_unknown:

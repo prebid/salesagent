@@ -4,6 +4,7 @@ Tests that the middleware calls normalize_request_params and replaces
 the context message when translations are applied.
 """
 
+import logging
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
@@ -12,7 +13,7 @@ from src.core.exceptions import AdCPValidationError
 from src.core.mcp_compat_middleware import RequestCompatMiddleware
 from src.core.request_compat import NormalizationResult
 from src.core.tool_error_logging import AdCPToolError
-from tests.helpers import assert_envelope_shape, assert_no_raw_validation_leak
+from tests.helpers import REQUEST_WITH_ENVELOPE_FIELDS, assert_envelope_shape, assert_no_raw_validation_leak
 
 
 @pytest.fixture()
@@ -107,6 +108,100 @@ class TestMiddlewareReplacesContext:
             assert captured_ctx is not None
             assert captured_ctx is not ctx
             assert captured_ctx.message.arguments == {"brand": {"domain": "acme.com"}}
+
+
+class TestMiddlewareStripsEnvelopeVersionFields:
+    """AdCP version-envelope fields are stripped unconditionally (all environments)."""
+
+    @pytest.mark.asyncio
+    async def test_envelope_version_fields_removed_in_dev(self, middleware):
+        """adcp_version/adcp_major_version are absent from the forwarded arguments in
+        dev mode, while a genuinely-unknown field is preserved (loud in dev).
+
+        The field-absence assertions run before the ``is not ctx`` identity check so a
+        Step-0 regression reddens on the contract (fields leaked through), not on the
+        copy-identity detail.
+        """
+        ctx = _make_context(
+            "get_products",
+            {**REQUEST_WITH_ENVELOPE_FIELDS, "bogus_field": "keep-me"},
+        )
+        captured_ctx = None
+
+        async def capturing_call_next(context):
+            nonlocal captured_ctx
+            captured_ctx = context
+
+        with patch("src.core.config.is_production", return_value=False):
+            await middleware.on_call_tool(ctx, capturing_call_next)
+
+        assert captured_ctx is not None
+        forwarded = captured_ctx.message.arguments
+        assert "adcp_version" not in forwarded
+        assert "adcp_major_version" not in forwarded
+        # Genuinely-unknown field is NOT removed by this step — dev must still fail loudly.
+        assert forwarded["bogus_field"] == "keep-me"
+        assert forwarded["brief"] == "ads"
+        assert captured_ctx is not ctx
+
+    @pytest.mark.asyncio
+    async def test_envelope_version_fields_removed_in_production(self, middleware):
+        """The Step-0 strip is unconditional — it runs before Step 1 in production too.
+
+        Spies on normalize_request_params (Step 1): it must receive the envelope-free
+        dict. Spying on Step 1 rather than asserting the final forwarded arguments
+        isolates Step 0's work — in production Step 2's own strip_unknown_params would
+        also remove these schema-unknown fields, so the final arguments can't tell
+        whether Step 0 or Step 2 stripped them. Step 1 runs before Step 2, so reverting
+        Step 0 lets the envelope fields reach Step 1 and reddens this test in
+        production as well as dev.
+        """
+        ctx = _make_context("get_products", REQUEST_WITH_ENVELOPE_FIELDS)
+        call_next = AsyncMock()
+
+        with (
+            patch("src.core.config.is_production", return_value=True),
+            patch("src.core.mcp_compat_middleware.normalize_request_params") as mock_norm,
+        ):
+            mock_norm.return_value = NormalizationResult(params={"brief": "ads"}, translations_applied=[])
+            await middleware.on_call_tool(ctx, call_next)
+
+        mock_norm.assert_called_once_with("get_products", {"brief": "ads"})
+
+    @pytest.mark.asyncio
+    async def test_envelope_strip_is_logged_at_debug(self, middleware, caplog):
+        """The Step-0 strip emits a debug log naming the stripped fields (non-silent).
+
+        Asserts the record via ``caplog`` at the ``src.core.request_compat`` logger
+        rather than a call-count on the whole module logger: the module emits other
+        debug lines (brand-manifest parsing, schema-candidate matching), so an
+        ``assert_called_once`` on the logger is fragile to unrelated emits. We pin the
+        one record that names ``get_products`` and BOTH stripped envelope fields.
+        """
+        ctx = _make_context("get_products", REQUEST_WITH_ENVELOPE_FIELDS)
+
+        async def capturing_call_next(context):
+            return None
+
+        with (
+            patch("src.core.config.is_production", return_value=False),
+            caplog.at_level(logging.DEBUG, logger="src.core.request_compat"),
+        ):
+            await middleware.on_call_tool(ctx, capturing_call_next)
+
+        strip_records = [
+            r
+            for r in caplog.records
+            if r.name == "src.core.request_compat"
+            and r.levelno == logging.DEBUG
+            and "get_products" in r.getMessage()
+            and "adcp_version" in r.getMessage()
+            and "adcp_major_version" in r.getMessage()
+        ]
+        assert len(strip_records) == 1, (
+            "expected exactly one DEBUG strip record naming get_products and both envelope "
+            f"fields; got: {[r.getMessage() for r in caplog.records]}"
+        )
 
 
 class TestMiddlewarePassthrough:

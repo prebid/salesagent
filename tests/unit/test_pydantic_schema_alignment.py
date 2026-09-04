@@ -26,6 +26,7 @@ import pytest
 from pydantic import BaseModel, ValidationError
 
 from src.core.exceptions import AdCPInvalidRequestError
+from src.core.request_compat import ENVELOPE_VERSION_FIELDS
 from src.core.schemas import (
     CreateMediaBuyRequest,
     CreateMediaBuySuccess,
@@ -83,7 +84,7 @@ SCHEMA_TO_MODEL_MAP = {
 # get-products schema drift — tracked in #1308. The live AdCP schema carries
 # the `adcp_major_version` envelope plus `if_catalog_version`/`if_pricing_version`;
 # the pinned adcp library does not model them yet. Coverage:
-#   - adcp_major_version → excluded via _VERSION_FIELDS
+#   - adcp_major_version → excluded via ENVELOPE_VERSION_FIELDS
 #   - if_catalog_version, if_pricing_version → excluded via KNOWN_SCHEMA_LIBRARY_MISMATCHES
 # Tests now pass; remove the prior strict-xfail wrapper.
 SCHEMA_TO_MODEL_PARAMS_WITH_GET_PRODUCTS_DRIFT_XFAIL = [
@@ -92,7 +93,6 @@ SCHEMA_TO_MODEL_PARAMS_WITH_GET_PRODUCTS_DRIFT_XFAIL = [
 
 # Version metadata fields present in AdCP JSON schemas that models don't declare explicitly.
 # These have defaults or are managed by the library base class — exclude from all comparisons.
-_VERSION_FIELDS: frozenset[str] = frozenset({"adcp_version", "adcp_major_version"})
 
 # Fields the SDK's current schema tree defines but the local model does not yet
 # model. These are spec-vs-library mismatches, not bugs in our code.
@@ -121,6 +121,24 @@ def load_json_schema(schema_ref: str) -> dict[str, Any]:
     never a silent skip.
     """
     return pinned_schema.load_canonicalized(pinned_schema.normalize_ref(schema_ref))
+
+
+def test_envelope_version_fields_match_pinned_schema():
+    """Oracle: the MCP Step-0 strip set (ENVELOPE_VERSION_FIELDS) must equal the
+    ``properties`` of the pinned ``core/version-envelope.json``.
+
+    Closes this PR's own regression class: an upstream-added version-envelope field
+    would otherwise be silently stripped-and-rejected by the MCP middleware with no
+    failing test. The version directory is derived from the installed adcp pin via
+    ``load_json_schema`` — never a hardcoded ``3.1`` literal. Fails on set-inequality
+    in EITHER direction: a stray member added to the strip set, or a schema member
+    the strip set no longer covers.
+    """
+    schema_props = set(load_json_schema("core/version-envelope.json").get("properties", {}))
+    assert set(ENVELOPE_VERSION_FIELDS) == schema_props, (
+        "ENVELOPE_VERSION_FIELDS is out of sync with pinned core/version-envelope.json. "
+        f"Strip set: {sorted(ENVELOPE_VERSION_FIELDS)}; schema properties: {sorted(schema_props)}"
+    )
 
 
 class _CannotSynthesize(AssertionError):
@@ -439,7 +457,7 @@ def extract_all_fields(schema: dict[str, Any]) -> dict[str, Any]:
     return {
         field_name: field_spec
         for field_name, field_spec in properties.items()
-        if field_name not in _VERSION_FIELDS
+        if field_name not in ENVELOPE_VERSION_FIELDS
         # Note: We include $ref fields now - generate_example_value will handle them
     }
 
@@ -607,7 +625,7 @@ class TestPydanticSchemaAlignment:
         required_in_schema = set(extract_required_fields(schema))
 
         # Skip adcp_version as it often has defaults
-        required_in_schema -= _VERSION_FIELDS
+        required_in_schema -= ENVELOPE_VERSION_FIELDS
 
         if not required_in_schema:
             # No required fields in schema - nothing to test, which is fine
@@ -790,7 +808,7 @@ class TestFieldNameConsistency:
         # But missing schema fields is a problem
         if missing_in_model:
             # Some fields might be intentionally skipped (like adcp_version with defaults)
-            critical_missing = missing_in_model - _VERSION_FIELDS
+            critical_missing = missing_in_model - ENVELOPE_VERSION_FIELDS
 
             # Filter out known spec-vs-library mismatches
             known = KNOWN_SCHEMA_LIBRARY_MISMATCHES.get(schema_ref, set())
@@ -1152,7 +1170,7 @@ def _synthesize_sample(arm: dict[str, Any], schema_ref: str, model: type | None 
     """
     sample: dict[str, Any] = {}
     props = arm.get("properties", {})
-    for fname in set(arm.get("required", [])) - _VERSION_FIELDS:
+    for fname in set(arm.get("required", [])) - ENVELOPE_VERSION_FIELDS:
         spec = props.get(fname, {})
         narrowed = _model_literal_value(model, fname)
         if narrowed is not None:
@@ -1192,7 +1210,7 @@ def _build_alignments_from_pinned(registry: list[_RegistryRow]) -> list[Response
         # field silently dropped (PR #1941 review). Demanding every OPTIONAL
         # forward-compat property be declared would over-reach — response models
         # intentionally carry optional fields via extra='allow'.
-        declared = frozenset(arm.get("required", [])) - _VERSION_FIELDS
+        declared = frozenset(arm.get("required", [])) - ENVELOPE_VERSION_FIELDS
         if row.declared_fields_override is not None:
             # ADDITIVE, which is what the field has always claimed to be ("also pin
             # specific optional fields production emits"). It used to REPLACE, and the
@@ -1548,7 +1566,7 @@ class TestSampleSynthesisFailsLoud:
         for row in _RESPONSE_MODEL_REGISTRY:
             arm = _success_shape(load_json_schema(row.schema_ref))
             props = arm.get("properties", {})
-            for fname in sorted(set(arm.get("required", [])) - _VERSION_FIELDS):
+            for fname in sorted(set(arm.get("required", [])) - ENVELOPE_VERSION_FIELDS):
                 if props.get(fname, {}).get("type") != "array":
                     continue
                 assert "minItems" not in props[fname], (
@@ -1655,7 +1673,7 @@ class TestResponseModelAlignment:
           a real gap.
         """
         item = _resolve_response_item_schema(alignment)
-        required = set(item.get("required", [])) - _VERSION_FIELDS
+        required = set(item.get("required", [])) - ENVELOPE_VERSION_FIELDS
         if not required:
             pytest.skip(f"{alignment.model.__name__}: pinned schema marks no required fields")
         assert alignment.sample, (

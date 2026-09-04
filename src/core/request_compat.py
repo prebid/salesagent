@@ -16,6 +16,31 @@ from src.core.schema_helpers import brand_shorthand_to_domain, is_url_shorthand
 logger = logging.getLogger(__name__)
 V25_SIGNALS: frozenset[str] = frozenset({"brand_manifest", "promoted_offerings", "campaign_ref"})
 
+# AdCP version-envelope fields (spec 3.1.1 core/version-envelope.json, allOf-composed
+# into every request schema). Official SDK clients inject these on every request; the
+# server MUST accept them. Stripped unconditionally on MCP (all environments) so they
+# never reach FastMCP's TypeAdapter (additionalProperties: false).
+ENVELOPE_VERSION_FIELDS: frozenset[str] = frozenset({"adcp_version", "adcp_major_version"})
+
+
+def strip_envelope_version_fields(tool_name: str, params: dict[str, Any]) -> tuple[dict[str, Any], bool]:
+    """Strip the AdCP version-envelope fields unconditionally, in all environments.
+
+    Removes ``adcp_version`` / ``adcp_major_version`` (spec 3.1.1
+    core/version-envelope.json, allOf-composed into every request schema) so they
+    never reach FastMCP's TypeAdapter (additionalProperties: false). Official SDK
+    clients inject these on every request; the server MUST accept them.
+
+    Returns a ``(cleaned dict, modified)`` tuple where ``modified`` is True iff any
+    envelope field was present. Emits a debug log naming the stripped fields.
+    """
+    stripped = ENVELOPE_VERSION_FIELDS & params.keys()
+    if stripped:
+        logger.debug("Stripped AdCP version-envelope fields from %s: %s", tool_name, ", ".join(sorted(stripped)))
+    cleaned = {k: v for k, v in params.items() if k not in ENVELOPE_VERSION_FIELDS}
+    return cleaned, bool(stripped)
+
+
 # Tools where brand_manifest → brand translation applies.
 _BRAND_TOOLS: frozenset[str] = frozenset({"get_products", "create_media_buy"})
 
