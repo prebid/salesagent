@@ -22,6 +22,23 @@ import pytest
 from tests.unit._architecture_helpers import assert_violations_match_allowlist
 
 
+def _is_adcp_module(module: str) -> bool:
+    """True iff ``module`` is the ``adcp`` package or one of its submodules.
+
+    The single answer to "is this the adcp library?" for this file — used both on
+    AST ``ImportFrom.module`` strings and on runtime ``__module__`` values, so the
+    two membership sites cannot drift apart.
+
+    Exact package match, not a bare ``startswith("adcp")`` prefix: that prefix also
+    matches an unrelated top-level package whose name merely begins with those four
+    letters (``adcpx``, ``adcp_local``), which would let a non-library base decide
+    membership. No such module is imported today — this is a tightening that can
+    only ever reject a false member, never miss a real one, since the library is
+    ``adcp`` and its submodules are ``adcp.*``.
+    """
+    return module == "adcp" or module.startswith("adcp.")
+
+
 def _get_schemas_source_files() -> list["Path"]:
     """Get all Python source files in the schemas package.
 
@@ -57,7 +74,7 @@ def _get_library_type_mapping() -> dict[str, type]:
 
         # Find all "from adcp... import X as LibraryX" statements
         for node in ast.walk(tree):
-            if isinstance(node, ast.ImportFrom) and node.module and node.module.startswith("adcp"):
+            if isinstance(node, ast.ImportFrom) and node.module and _is_adcp_module(node.module):
                 for alias in node.names:
                     if alias.asname and alias.asname.startswith("Library"):
                         # e.g. "from adcp.types import Product as LibraryProduct"
@@ -124,7 +141,7 @@ def _get_redefinition_targets() -> list[tuple[str, type, type]]:
             # ``AdCPUpdateMediaBuySuccess`` and was invisible for exactly that
             # reason, which is also how the probe that justified deleting this
             # guard came to aim outside the guard's own scan set.
-            if not getattr(base, "__module__", "").startswith("adcp"):
+            if not _is_adcp_module(getattr(base, "__module__", "") or ""):
                 continue
             if not hasattr(base, "model_fields"):
                 continue
@@ -320,6 +337,85 @@ _ADMISSIBILITY_CASES = [
 def test_admissibility_predicate_grades_each_axis(parent, child, admissible) -> None:
     """Every axis _is_admissible claims to check is exercised in both directions."""
     assert _is_admissible(child, parent) is admissible
+
+
+# Classes whose name is NOT their library parent's alias-minus-"Library", so the
+# name-derived mapping never names them. They are reachable only because
+# _get_redefinition_targets decides membership by walking the MRO. Each carries live
+# redeclarations, so if the collector regressed to alias-keying they would stop being
+# graded — and their KNOWN_OVERRIDES rows would read as STALE rather than as
+# unreachable, which is the failure mode that makes the regression look like a fix.
+_MRO_ONLY_TARGETS = [
+    "AdCPPackageUpdate",
+    "CreateMediaBuySuccess",
+    "SyncAccountsResponse",
+    "SyncCreativesResponse",
+    "UpdateMediaBuySuccess",
+]
+
+
+class TestMembershipKeying:
+    """The collector's own oracle.
+
+    ``_get_redefinition_targets`` is what decides WHICH classes get graded, so a
+    regression in it produces silence, not a failure — the one defect shape an
+    allowlist cannot record. These tests are the mechanism that goes red for it.
+    """
+
+    @pytest.mark.arch_guard
+    @pytest.mark.parametrize("local_name", _MRO_ONLY_TARGETS)
+    def test_collector_reaches_classes_the_alias_mapping_cannot_name(self, local_name: str) -> None:
+        """MRO keying is load-bearing: these classes are graded ONLY because of it.
+
+        Asserts both halves, because either alone is passable by accident: the class
+        IS collected, and the name-derived mapping does NOT name it. Re-keying the
+        collector to the alias mapping turns the first assertion red.
+        """
+        assert local_name not in _get_library_type_mapping(), (
+            f"{local_name} is now reachable by NAME, so it no longer demonstrates that "
+            f"membership is MRO-keyed — move it off this list and pick another class "
+            f"whose name differs from its library parent's."
+        )
+        collected = {name for name, _, _ in _get_redefinition_targets()}
+        assert local_name in collected, (
+            f"{local_name} is no longer collected by _get_redefinition_targets. Its adcp "
+            f"parent is imported under a non-'Library' alias, so a collector keyed on the "
+            f"import spelling cannot see it: its redeclarations go ungraded and its "
+            f"KNOWN_OVERRIDES rows misreport as stale. Membership must be decided by "
+            f"walking the MRO and testing __module__."
+        )
+
+    @pytest.mark.arch_guard
+    def test_every_collected_base_is_an_adcp_type(self) -> None:
+        """The base a class is graded against is a real adcp type, never a local one."""
+        offenders = [
+            f"{name} -> {base.__module__}.{base.__name__}"
+            for name, _, base in _get_redefinition_targets()
+            if not _is_adcp_module(base.__module__) or base.__name__ in _UNIVERSAL_BASES
+        ]
+        assert not offenders, "Collected bases that are not a narrowable adcp type:\n" + "\n".join(
+            f"  - {o}" for o in offenders
+        )
+
+    @pytest.mark.arch_guard
+    @pytest.mark.parametrize(
+        ("module", "expected"),
+        [
+            ("adcp", True),
+            ("adcp.types", True),
+            ("adcp.types.generated_poc.core.targeting", True),
+            # Lookalike top-level packages: a bare startswith("adcp") admits these.
+            ("adcpx", False),
+            ("adcp_local", False),
+            ("adcpclient.types", False),
+            # Unrelated, and the empty string a missing __module__ falls back to.
+            ("src.core.schemas._base", False),
+            ("", False),
+        ],
+    )
+    def test_adcp_module_predicate_matches_the_package_not_the_prefix(self, module: str, expected: bool) -> None:
+        """Membership is an exact package match, so a lookalike name cannot decide it."""
+        assert _is_adcp_module(module) is expected
 
 
 class TestSchemaInheritance:
