@@ -1597,8 +1597,10 @@ class AdCPRequestHandler(RequestHandler):
 
         try:
             handler = skill_handlers[skill_name]
-            # Handlers return raw Pydantic models (or raise typed AdCPError on validation failure)
-            if skill_name == "create_media_buy":
+            # Handlers return raw Pydantic models (or raise typed AdCPError on validation failure).
+            # create/update both take the payload AS SENT so revision presence and the
+            # idempotency-hash input read off the buyer's literal bytes, not a re-derivation.
+            if skill_name in ("create_media_buy", "update_media_buy"):
                 result = await handler(parameters, identity, raw_wire_payload=raw_wire_payload)
             else:
                 result = await handler(parameters, identity)
@@ -2050,12 +2052,11 @@ class AdCPRequestHandler(RequestHandler):
 
         return response
 
-    async def _handle_update_media_buy_skill(self, parameters: dict, identity: ResolvedIdentity) -> dict:
+    async def _handle_update_media_buy_skill(
+        self, parameters: dict, identity: ResolvedIdentity, raw_wire_payload: dict | None = None
+    ) -> dict:
         """Handle explicit update_media_buy skill invocation (CRITICAL for campaign management)."""
         # Identity already resolved at transport boundary (on_message_send)
-
-        # Parse parameters into typed request model (validation at A2A boundary)
-        from src.core.schemas import UpdateMediaBuyRequest
 
         # Pre-process: support legacy 'updates.packages' → 'packages'
         params = {**parameters}
@@ -2072,29 +2073,30 @@ class AdCPRequestHandler(RequestHandler):
                 suggestion="Provide the media_buy_id of the media buy to update",
             )
 
-        # Validate top-level fields via typed model (packages validated by _raw
-        # which handles legacy formats with extra fields like 'status')
-        with adcp_validation_boundary():
-            req = UpdateMediaBuyRequest(
-                media_buy_id=params.get("media_buy_id"),
-                paused=params.get("paused"),
-                start_time=params.get("start_time"),
-                end_time=params.get("end_time"),
-                context=params.get("context"),
-            )
-
-        # Call core function with validated fields + raw nested structures and identity
+        # Route through the shared builder like create does: forward EVERY field and the
+        # raw wire payload, so request construction, the revision value contract (incl. the
+        # explicit-null rejection), and idempotency_key independence all happen in one
+        # place -- not a per-transport hand-list that silently drops fields (#1885). The
+        # payload AS SENT is the presence source for `revision` and the idempotency input.
         response = core_update_media_buy_tool(
-            media_buy_id=req.media_buy_id or "",
-            paused=req.paused,
+            media_buy_id=params.get("media_buy_id") or "",
+            paused=params.get("paused"),
+            flight_start_date=params.get("flight_start_date"),
+            flight_end_date=params.get("flight_end_date"),
+            budget=params.get("budget"),
+            currency=params.get("currency"),
             start_time=params.get("start_time"),
             end_time=params.get("end_time"),
-            budget=params.get("budget"),
+            pacing=params.get("pacing"),
+            daily_budget=params.get("daily_budget"),
             packages=params.get("packages"),
             push_notification_config=params.get("push_notification_config"),
             context=params.get("context"),
             reporting_webhook=params.get("reporting_webhook"),
+            ext=params.get("ext"),
+            idempotency_key=params.get("idempotency_key"),
             identity=identity,
+            raw_wire_payload=raw_wire_payload if raw_wire_payload is not None else params,
         )
 
         return response

@@ -152,6 +152,12 @@ class Transport(StrEnum):
     E2E_A2A = "e2e_a2a"  # Real A2A via httpx → nginx → server (placeholder)
 
 
+# The three REAL wire transports. IMPL is excluded: it has no wire, and a boundary
+# gate is precisely what IMPL does not run. Shared so a test that grades a wire contract
+# names the same set once, rather than re-spelling ``[MCP, REST, A2A]`` per module.
+WIRE_TRANSPORTS: list[Transport] = [Transport.MCP, Transport.REST, Transport.A2A]
+
+
 # Maps Transport → ResolvedIdentity.protocol value
 TRANSPORT_PROTOCOL: dict[Transport, str] = {
     Transport.IMPL: "mcp",  # _impl doesn't inspect protocol; keep default

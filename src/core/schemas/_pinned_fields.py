@@ -197,3 +197,26 @@ def revision_minimum() -> int:
     """
     schema = json.loads((_schema_root() / "media-buy" / "get-media-buys-response.json").read_text())
     return schema["properties"]["media_buys"]["items"]["properties"]["revision"]["minimum"]
+
+
+@cache
+def update_media_buy_revision_schema() -> dict[str, Any]:
+    """The published fragment the pin puts on ``update_media_buy``'s ``revision`` token.
+
+    One value feeds every place that must state the same buyer-facing bound: the
+    ``RawRevision`` published schema, the MCP wrapper annotation, the ``Field(ge=...)``
+    runtime gate, and the rejection message. A bound written a second time is a bound
+    that can drift from the pin (see ``_base.py`` on redeclared bounds).
+
+    Subscripted, never ``.get()``: a pin that drops a key fails loudly here rather than
+    substituting a silent bound.
+    """
+    schema = json.loads((_schema_root() / "media-buy" / "update-media-buy-request.json").read_text())
+    rev = schema["properties"]["revision"]
+    return {"type": rev["type"], "minimum": rev["minimum"]}
+
+
+@cache
+def update_media_buy_revision_minimum() -> int:
+    """The lower bound the pin puts on ``update_media_buy``'s ``revision`` token."""
+    return update_media_buy_revision_schema()["minimum"]

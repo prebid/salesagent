@@ -66,13 +66,15 @@ from src.core.tools.media_buy_delivery import _get_media_buy_delivery_impl
 
 
 def _stub_media_buy_reads(repo, row):
-    """Point BOTH row accessors at *row*.
+    """Point the row accessors AND the revision advance at *row*.
 
     The update tool reads the row back through ``get_by_id_or_raise`` (the
-    repository's typed not-found accessor). A stub that wires only ``get_by_id``
-    leaves the other returning a bare ``MagicMock``, whose ``.status`` is not a real
-    status — which now fails loudly at the vocabulary boundary instead of being
-    silently interpreted. One helper so the two never drift apart again.
+    repository's typed not-found accessor) and through ``advance_revision`` (the
+    single atomic revision advance, which returns the row it advanced). A stub that
+    wires only ``get_by_id`` leaves the others returning a bare ``MagicMock``, whose
+    ``.status`` is not a real status — which now fails loudly at the vocabulary
+    boundary instead of being silently interpreted. One helper so they never drift
+    apart again.
     """
     repo.get_by_id.return_value = row
     if row is None:
@@ -88,6 +90,7 @@ def _stub_media_buy_reads(repo, row):
         )
     else:
         repo.get_by_id_or_raise.return_value = row
+        repo.advance_revision.return_value = row
 
 
 def _future(days: int = 7) -> str:

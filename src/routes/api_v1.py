@@ -30,7 +30,7 @@ from src.core.schema_helpers import (
     to_push_notification_config,
     to_reporting_webhook,
 )
-from src.core.schemas import SalesAgentBaseModel
+from src.core.schemas import RawRevision, SalesAgentBaseModel
 from src.core.tools import accounts as accounts_module
 from src.core.tools import capabilities as capabilities_module
 from src.core.tools import creative_formats as creative_formats_module
@@ -126,10 +126,14 @@ class UpdateMediaBuyBody(SalesAgentBaseModel):
     # INVALID_REQUEST. A buyer that read the token off a create/update response and
     # handed it back, exactly as the spec instructs, was rejected for doing so.
     #
-    # The seller does not yet ACT on it — the stale-token CONFLICT check is a separate,
-    # still-xfailed gap (BR-RULE-215 partitions). Accepting it is transport parity, not
-    # a claim that concurrency is enforced.
-    revision: int | None = None
+    # Declared so extra="forbid" accepts a spec-legal `revision` and so OpenAPI publishes
+    # the pinned integer>=1 contract (RawRevision's published fragment). Typed RawRevision
+    # (Any) rather than ``int | None`` so the wire value is not coerced here — the value
+    # actually used is read from the raw wire payload and run through the one shared gate
+    # in UpdateMediaBuyRequest, the same as MCP and A2A. A narrower annotation would coerce
+    # "7"→7 (or reject "abc" with a non-AdCP 422) before that gate, which is one rule on
+    # paper and three behaviours on the wire.
+    revision: RawRevision = None
     adcp_version: str = "1.0.0"
 
 
@@ -359,7 +363,12 @@ async def create_media_buy(
 
 
 @router.put("/media-buys/{media_buy_id}")
-async def update_media_buy(media_buy_id: str, body: UpdateMediaBuyBody, identity: ResolvedIdentity = require_auth):
+async def update_media_buy(
+    media_buy_id: str,
+    body: UpdateMediaBuyBody,
+    identity: ResolvedIdentity = require_auth,
+    raw_wire_payload: dict[str, Any] = raw_json_body,
+):
     """Update an existing media buy (auth required)."""
     # Same context string as _build_update_request's boundary, so a malformed
     # object rejects with an identical message prefix wherever it validates.
@@ -367,6 +376,10 @@ async def update_media_buy(media_buy_id: str, body: UpdateMediaBuyBody, identity
         push_notification_config = to_push_notification_config(body.push_notification_config)
         context = to_context_object(body.context)
         reporting_webhook = to_reporting_webhook(body.reporting_webhook)
+    # `revision` presence and value come from the payload AS SENT (threaded below), so the
+    # shared value contract runs once inside UpdateMediaBuyRequest -- the same seam as MCP
+    # and A2A. The raw payload is the only place that still tells an omitted `revision`
+    # from an explicitly-supplied null (both read as None on the parsed model).
     response = media_buy_update_module.update_media_buy_raw(
         media_buy_id=media_buy_id,
         paused=body.paused,
@@ -386,8 +399,8 @@ async def update_media_buy(media_buy_id: str, body: UpdateMediaBuyBody, identity
         reporting_webhook=reporting_webhook,
         ext=body.ext,
         idempotency_key=body.idempotency_key,
-        revision=body.revision,
         identity=identity,
+        raw_wire_payload=raw_wire_payload,
     )
     return response.model_dump(mode="json")
 

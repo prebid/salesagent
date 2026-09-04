@@ -48,6 +48,7 @@ from src.core.exceptions import (
     AdCPCreativeRejectedError,
     AdCPGoneError,
     AdCPInvalidRequestError,
+    AdCPRevisionConflictError,
     AdCPValidationError,
 )
 from src.core.tool_context import ToolContext
@@ -81,6 +82,7 @@ from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import (
     AffectedPackage,
     Budget,
+    RawRevision,
     UpdateMediaBuyError,
     UpdateMediaBuyRequest,
     UpdateMediaBuyResult,
@@ -439,6 +441,86 @@ def _update_media_buy_impl(
             # Verify principal owns this media buy
             _verify_principal(media_buy_id_to_use, identity, uow.media_buys, context=req.context)
 
+            # AdCP optimistic concurrency (pinned update-media-buy-request.json): when
+            # ``revision`` is provided, sellers MUST reject a mismatch with CONFLICT and
+            # MUST enforce that comparison atomically with the write.
+            #
+            # The correctness guarantee is ``MediaBuyRepository.advance_revision``, a
+            # single conditional UPDATE (``... WHERE revision = :expected``) that is the
+            # comparison AND the advance in one atomic statement -- no held lock, so it
+            # does not wait on #1644 and no nested ``get_db_session()`` can drop anything.
+            # A request advances the parent revision by exactly one: every mutating branch
+            # calls ``_claim_revision_once`` BEFORE its first side effect (the adapter call,
+            # a session write, or the independently-committing creative sync), so a token
+            # that went stale after the compare-only early check turns into CONFLICT before
+            # anything is applied. A no-op (context/ext/package-id-only) request reaches no
+            # mutating branch and so advances by zero, tokened or not; the field writes pass
+            # ``advance=False`` so the one claim is the only advance.
+            testing_ctx = identity.testing_context if identity.testing_context else AdCPTestContext()
+
+            #: One-shot latch for the request's single revision claim. See
+            #: ``_claim_revision_once``.
+            _revision_claimed = False
+
+            def _claim_revision_once() -> None:
+                """Advance the buyer's revision token atomically, exactly once per request.
+
+                The one ordering point for optimistic concurrency on the write paths. Every
+                mutating branch calls this BEFORE its first side effect, so a token that went
+                stale after ``_reject_stale_revision``'s compare-only early check becomes a
+                CONFLICT before anything is applied -- "reject with CONFLICT" means nothing
+                was written to the ad server or the creative store.
+
+                Idempotent: a request that touches several branches (packages + top-level
+                budget + dates) advances the parent revision by exactly one; the latch makes
+                the later calls no-ops. ``advance_revision`` is the atomic
+                ``UPDATE ... WHERE revision = :expected``; a mismatch raises
+                ``AdCPRevisionConflictError``, which unwinds the UoW (rolling back any
+                same-session writes this branch already made). The adapter and
+                ``_sync_creatives_impl`` are ordered AFTER the claim precisely because their
+                effects are NOT inside this transaction to roll back. A tokenless request
+                (``req.revision is None``) advances unconditionally, so a mutating request
+                moves the token by one either way.
+                """
+                nonlocal _revision_claimed
+                if _revision_claimed:
+                    return
+                assert uow.media_buys is not None
+                uow.media_buys.advance_revision(
+                    media_buy_id_to_use, expected_revision=req.revision, context=req.context
+                )
+                _revision_claimed = True
+
+            def _reject_stale_revision() -> None:
+                """Fail-fast compare-only check: reject a stale token before any work.
+
+                A plain read and compare -- no advance, no lock. It exists for the cases
+                the atomic advance cannot cover on its own: a dry run and a manual-approval
+                submission apply no write (so there is nothing to be atomic WITH), and a
+                stale token must outrank the terminal-state gate so the buyer is told to
+                re-read rather than that the buy is gone. It also rejects an
+                already-stale token before the adapter is touched, so a doomed pause never
+                reaches the ad server. The authoritative guarantee against a lost update
+                is still ``advance_revision``; this only shortens the path to a CONFLICT
+                the atomic advance would reach anyway.
+                """
+                if req.revision is None:
+                    return
+                assert uow.media_buys is not None
+                current = uow.media_buys.get_by_id_or_raise(media_buy_id_to_use, context=req.context)
+                if current.revision != req.revision:
+                    raise AdCPRevisionConflictError.mismatch(
+                        media_buy_id=media_buy_id_to_use,
+                        expected=req.revision,
+                        current=current.revision,
+                        context=req.context,
+                    )
+
+            # Runs before the terminal-state gate (so CONFLICT outranks INVALID_STATE on
+            # a stale token) and before the dry-run early return (so a simulated update
+            # that would be rejected reports the rejection).
+            _reject_stale_revision()
+
             # State-machine precondition: terminal states reject all mutations,
             # and non-terminal states only accept actions in their valid set.
             # ``AdCPGoneError`` carries the spec-mandated ``INVALID_STATE`` code
@@ -469,9 +551,6 @@ def _update_media_buy_impl(
                         field="media_buy_id",
                         suggestion=(f"Valid actions for status '{_current_status}': {sorted(_allowed) or '[]'}."),
                     )
-
-            # Extract testing context early (needed for dry_run check)
-            testing_ctx = identity.testing_context if identity.testing_context else AdCPTestContext()
 
             # Create or get persistent context and workflow step
             # (ctx_manager + step were hoisted before the try block so the
@@ -643,6 +722,14 @@ def _update_media_buy_impl(
 
                 # Create ObjectWorkflowMapping so the admin approval flow can
                 # find this update and execute it after human approval.
+                #
+                # Submission defers the update, so a good token is NOT spent: the update
+                # is not applied and UpdateMediaBuySubmitted has no successor revision to
+                # report. A stale token was already rejected by _reject_stale_revision at
+                # the top (compare-only, no advance) — the correct behaviour here, since
+                # there is no write to advance atomically WITH. The token is re-compared
+                # when the approved update is actually applied, tracked as a follow-up:
+                # no deferred-update executor exists in the tree today.
                 mapping = ObjectWorkflowMapping(
                     step_id=step.step_id,
                     object_type="media_buy",
@@ -741,6 +828,11 @@ def _update_media_buy_impl(
             if req.paused is not None:
                 # adcp 2.12.0+: paused=True means pause, paused=False means resume
                 action = "pause_media_buy" if req.paused else "resume_media_buy"
+                # Claim the revision atomically BEFORE the adapter touches the ad server, so
+                # a token that went stale since the early check is rejected with CONFLICT
+                # while the ad server is still untouched (a failed adapter then raises and
+                # the UoW rolls the claim back — no real adapter returns an error variant).
+                _claim_revision_once()
                 result = adapter.update_media_buy(
                     media_buy_id=req.media_buy_id,
                     action=action,
@@ -765,13 +857,11 @@ def _update_media_buy_impl(
                     media_buy_id = getattr(result, "media_buy_id", req.media_buy_id or "")
                     affected_pkgs = getattr(result, "affected_packages", [])
 
-                    # Derive post-action status from the DB (date-refined for parity
-                    # with get_media_buys — see _adcp_status_and_actions) so
-                    # valid_actions reflects what the buyer can actually do next.
-                    # Fall back to the current state-machine target only if the DB
-                    # row is missing (e.g., adapter deleted it under us) — no row
-                    # means no dates to refine.
-                    _post_action_mb = uow.media_buys.get_by_id_or_raise(media_buy_id, context=req.context)
+                    # The revision was already claimed atomically before the adapter call,
+                    # so this is just the post-action read (date-refined for parity with
+                    # get_media_buys via _adcp_status_and_actions). Read through the UoW
+                    # session, which already reflects the flushed claim.
+                    _post_action_mb = uow.media_buys.get_by_id_or_raise(media_buy_id_to_use, context=req.context)
                     _post_action_revision = _post_action_mb.revision
                     _post_action_mbs, _post_action_actions = _adcp_status_and_actions(_post_action_mb)
                     success_response = UpdateMediaBuySuccess(
@@ -806,6 +896,9 @@ def _update_media_buy_impl(
                     if pkg_update.paused is not None:
                         # adcp 2.12.0+: paused=True means pause, paused=False means resume
                         action = "pause_package" if pkg_update.paused else "resume_package"
+                        # Atomic claim BEFORE the adapter touches the ad server (see the
+                        # campaign-pause branch): a stale token is CONFLICT before any effect.
+                        _claim_revision_once()
                         result = adapter.update_media_buy(
                             media_buy_id=req.media_buy_id,
                             action=action,
@@ -874,6 +967,9 @@ def _update_media_buy_impl(
                             req.media_buy_id, pkg_update.package_id, context=req.context
                         )
 
+                        # Atomic claim BEFORE the adapter touches the ad server: a stale
+                        # token is CONFLICT before any effect (see the campaign-pause branch).
+                        _claim_revision_once()
                         result = adapter.update_media_buy(
                             media_buy_id=req.media_buy_id,
                             action="update_package_budget",
@@ -958,6 +1054,10 @@ def _update_media_buy_impl(
                         added_ids = requested_ids - existing_creative_ids
                         removed_ids = existing_creative_ids - requested_ids
 
+                        # Atomic claim BEFORE these same-session assignment writes: a stale
+                        # token raises CONFLICT and unwinds the UoW before anything is written.
+                        _claim_revision_once()
+
                         # Remove old assignments
                         for assignment in existing_assignments:
                             if assignment.creative_id in removed_ids:
@@ -986,7 +1086,11 @@ def _update_media_buy_impl(
                             and media_buy_obj.status == "draft"
                             and media_buy_obj.approved_at is not None
                         ):
-                            uow.media_buys.update_status(actual_media_buy_id, PersistedMediaBuyStatus.PENDING_CREATIVES)
+                            # advance=False: this request's single revision advance is
+                            # owned by the backstop below (one advance per request).
+                            uow.media_buys.update_status(
+                                actual_media_buy_id, PersistedMediaBuyStatus.PENDING_CREATIVES, advance=False
+                            )
                             logger.info(
                                 f"[UPDATE] Media buy {actual_media_buy_id} transitioned from draft to pending_creatives "
                                 f"(creative_ids: {pkg_update.creative_ids})"
@@ -1020,6 +1124,12 @@ def _update_media_buy_impl(
                                 field=package_field_path("package_id"),
                                 context=req.context,
                             )
+
+                        # Atomic claim BEFORE the creative sync. _sync_creatives_impl runs
+                        # through its own independently-committing CreativeUoW, so its writes
+                        # are NOT inside this transaction to roll back — the claim MUST precede
+                        # it, or a stale token would leave committed creatives behind a CONFLICT.
+                        _claim_revision_once()
 
                         # Sync creatives (upload/update)
                         sync_response = _sync_creatives_impl(
@@ -1153,6 +1263,10 @@ def _update_media_buy_impl(
                         updated_assignments = []
                         new_assignments_created = []
 
+                        # Atomic claim BEFORE these same-session assignment writes: a stale
+                        # token raises CONFLICT and unwinds the UoW before anything is written.
+                        _claim_revision_once()
+
                         # BR-RULE-024 INV-2: creative_assignments replaces ALL existing
                         # assignments for this package. Delete existing assignments not
                         # in the new list, matching the creative_ids handler pattern.
@@ -1222,7 +1336,10 @@ def _update_media_buy_impl(
                             and media_buy_obj.status == "draft"
                             and media_buy_obj.approved_at is not None
                         ):
-                            uow.media_buys.update_status(actual_media_buy_id, PersistedMediaBuyStatus.PENDING_CREATIVES)
+                            # advance=False: the backstop owns this request's one advance.
+                            uow.media_buys.update_status(
+                                actual_media_buy_id, PersistedMediaBuyStatus.PENDING_CREATIVES, advance=False
+                            )
                             logger.info(
                                 f"[UPDATE] Media buy {actual_media_buy_id} transitioned from draft to pending_creatives "
                                 f"(creative_assignments processed: {updated_assignments})"
@@ -1260,6 +1377,10 @@ def _update_media_buy_impl(
 
                         # property_targeting_allowed validation runs earlier (before dry_run gate);
                         # by this point the request is known-valid against that rule.
+
+                        # Atomic claim BEFORE this same-session config write: a stale token
+                        # raises CONFLICT and unwinds the UoW before anything is written.
+                        _claim_revision_once()
 
                         # Store Targeting model directly — engine's pydantic_core.to_json serializer handles it
                         media_package.package_config["targeting_overlay"] = pkg_update.targeting_overlay
@@ -1320,7 +1441,12 @@ def _update_media_buy_impl(
 
                 # Persist top-level budget update to database via repository
                 if req.budget:
-                    uow.media_buys.update_fields(req.media_buy_id, budget=total_budget, currency=budget_currency)
+                    # Atomic claim BEFORE the repository write. advance=False on the write:
+                    # the request's single advance is _claim_revision_once, not this update.
+                    _claim_revision_once()
+                    uow.media_buys.update_fields(
+                        req.media_buy_id, budget=total_budget, currency=budget_currency, advance=False
+                    )
                     logger.warning(
                         f"Updated MediaBuy {req.media_buy_id} budget to {total_budget} {budget_currency} in database ONLY"
                     )
@@ -1402,15 +1528,23 @@ def _update_media_buy_impl(
                             context=req.context,
                         )
 
-                    uow.media_buys.update_fields(req.media_buy_id, **update_values)
+                    # Atomic claim BEFORE the repository write. advance=False on the write:
+                    # the request's single advance is _claim_revision_once, not this update.
+                    _claim_revision_once()
+                    uow.media_buys.update_fields(req.media_buy_id, advance=False, **update_values)
                     logger.warning(
                         f"Updated MediaBuy {req.media_buy_id} dates in database ONLY: "
                         f"start_time={update_values.get('start_time')}, end_time={update_values.get('end_time')}"
                     )
                     logger.warning("GAM sync NOT implemented - GAM still has old dates")
 
-            # Create ObjectWorkflowMapping to link media buy update to workflow step
-            # This enables webhook delivery when the update completes
+            # No backstop advance: every mutating branch above already claimed the revision
+            # once, atomically, BEFORE its side effect via ``_claim_revision_once``. A no-op
+            # (context/ext/package-id-only) request reaches no mutating branch and so never
+            # claims — it advances by zero, tokened or not.
+
+            # Create ObjectWorkflowMapping to link media buy update to workflow step.
+            # This enables webhook delivery when the update completes.
             mapping = ObjectWorkflowMapping(
                 step_id=step.step_id,
                 object_type="media_buy",
@@ -1482,11 +1616,19 @@ def _build_update_request(
     ext: Any = None,
     idempotency_key: Annotated[str | None, Field(description="Idempotency key for retry safety")] = None,
     revision: Annotated[int | None, Field(description="Expected current revision (optimistic concurrency)")] = None,
+    raw_wire_payload: dict[str, Any] | None = None,
 ) -> UpdateMediaBuyRequest:
     """Build UpdateMediaBuyRequest from flat parameters.
 
     Handles deprecated field mapping and budget object construction.
     Used by both MCP wrapper and A2A raw function.
+
+    ``raw_wire_payload`` is the request dict AS SENT on the wire. When present, it is the
+    authority on the optimistic-concurrency ``revision``: it alone can still tell an
+    omitted key from an explicitly-supplied ``null`` (both read as None on the typed
+    param), and it carries the un-coerced value so the one shared gate in
+    ``UpdateMediaBuyRequest`` decides what a ``revision`` may be. The typed ``revision``
+    kwarg is the fallback for direct (non-wire) callers.
     """
     # Handle deprecated field names
     effective_start = start_time or flight_start_date
@@ -1537,7 +1679,13 @@ def _build_update_request(
         request_params["ext"] = ext
     if idempotency_key is not None:
         request_params["idempotency_key"] = idempotency_key
-    if revision is not None:
+    # revision presence comes from the raw wire payload when available, so an explicit
+    # wire null (key present, value None) survives to the model's gate as a rejection
+    # rather than being read as "no token supplied". Direct callers fall back to the
+    # typed kwarg, where None unambiguously means omitted.
+    if raw_wire_payload is not None and "revision" in raw_wire_payload:
+        request_params["revision"] = raw_wire_payload["revision"]
+    elif revision is not None:
         request_params["revision"] = revision
 
     with adcp_validation_boundary(context="update_media_buy request"):
@@ -1582,7 +1730,12 @@ async def update_media_buy(
     reporting_webhook: ReportingWebhook | None = None,  # AdCP ReportingWebhook
     ext: dict[str, Any] | None = None,  # AdCP ExtensionObject for custom fields
     idempotency_key: Annotated[str | None, Field(description="Idempotency key for retry safety")] = None,
-    revision: Annotated[int | None, Field(description="Expected current revision (optimistic concurrency)")] = None,
+    # RawRevision: an ``Any`` runtime carrier whose PUBLISHED fragment is read from the
+    # pin (one value feeds MCP, REST and the runtime gate), so the wire value survives
+    # to the shared gate and revision=0 is rejected there, same as REST/A2A. The value
+    # actually used comes from the raw wire payload (below), which preserves the
+    # explicit-null-vs-omitted distinction FastMCP coercion would erase.
+    revision: RawRevision = None,
     ctx: Context | ToolContext | None = None,
 ):
     """Update a media buy with campaign-level and/or package-level changes.
@@ -1617,6 +1770,13 @@ async def update_media_buy(
     Returns:
         ToolResult with UpdateMediaBuyResponse data
     """
+    # Read identity, context_id, and the raw wire payload pre-stashed by the MCP
+    # middleware. The payload AS SENT is the presence source for `revision` (FastMCP has
+    # already coerced the `revision` param, erasing the explicit-null-vs-omitted
+    # distinction), so it is threaded into the shared builder like create_media_buy does.
+    identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None
+    _ctx_id = (await ctx.get_state("context_id")) if isinstance(ctx, Context) else None
+    raw_wire_payload = (await ctx.get_state("raw_wire_payload")) if isinstance(ctx, Context) else None
     # Construct spec-compliant request at the boundary — no model_dump needed
     # FastMCP already coerced JSON inputs to typed Pydantic models
     req = _build_update_request(
@@ -1637,10 +1797,8 @@ async def update_media_buy(
         ext=ext,
         idempotency_key=idempotency_key,
         revision=revision,
+        raw_wire_payload=raw_wire_payload,
     )
-    # Read identity and context_id pre-resolved by MCPAuthMiddleware
-    identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None
-    _ctx_id = (await ctx.get_state("context_id")) if isinstance(ctx, Context) else None
     response = _update_media_buy_impl(req=req, identity=identity, context_id=_ctx_id)
     return mcp_result(response)
 
@@ -1669,6 +1827,7 @@ def update_media_buy_raw(
     revision: int | None = None,  # AdCP expected-current optimistic-concurrency token
     ctx: Context | ToolContext | None = None,
     identity: ResolvedIdentity | None = None,
+    raw_wire_payload: dict[str, Any] | None = None,
 ):
     """Update an existing media buy (raw function for A2A server use).
 
@@ -1695,8 +1854,8 @@ def update_media_buy_raw(
         idempotency_key: Idempotency key for retry safety (optional, per AdCP spec)
         revision: Buyer's expected-current revision, per the pinned
             update-media-buy-request.json. Accepted on every transport so a buyer can
-            hand back the token it read; the stale-token CONFLICT check itself is a
-            separate, still-ungraded gap.
+            hand back the token it read; a supplied token is enforced by an atomic
+            compare-and-set that rejects a stale value with CONFLICT.
         ctx: Context for authentication (deprecated, use identity)
         identity: Pre-resolved identity (if available)
 
@@ -1721,6 +1880,7 @@ def update_media_buy_raw(
         ext=ext,
         idempotency_key=idempotency_key,
         revision=revision,
+        raw_wire_payload=raw_wire_payload,
     )
     if identity is None:
         identity = resolve_identity_from_context(ctx, require_valid_token=True)

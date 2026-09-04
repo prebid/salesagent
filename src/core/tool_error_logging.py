@@ -18,6 +18,7 @@ from fastmcp.server import Context as FastMCPContext
 from src.core.exceptions import (
     ERROR_CODE_MAPPING,
     AdCPError,
+    AdCPInvariantViolationError,
     RecoveryHint,
     build_two_layer_error_envelope,
     normalize_to_adcp_error,
@@ -218,6 +219,12 @@ def record_boundary_error(
             error_message,
             operation,
         )
+        # AdCPInvariantViolationError carries an internal diagnostic kept off the
+        # wire (the buyer sees only the fixed message). Emit it here — the one
+        # place an invariant breach is actually being handled — with the
+        # traceback, so on-call can see the internal state that broke.
+        if isinstance(error, AdCPInvariantViolationError):
+            logger.error("AdCP invariant violated: %s", error.diagnostic, exc_info=True)
     else:
         logger.error(
             "%s boundary untyped %s: %s (operation=%s)",

@@ -3,6 +3,7 @@ from typing import Any
 
 from fastmcp import FastMCP
 from fastmcp.server.context import Context
+from fastmcp.tools import FunctionTool
 from rich.console import Console
 from sqlalchemy import select
 
@@ -336,6 +337,31 @@ from src.core.tools.task_management import complete_task, get_task, list_tasks
 _sdk_tool_defs = {td["name"]: td for td in ADCP_TOOL_DEFINITIONS}
 
 
+def _schema_admits_null(prop: dict[str, Any]) -> bool:
+    """Whether a JSON-Schema property admits ``null`` as a value."""
+    declared = prop.get("type")
+    types: list[Any] = declared if isinstance(declared, list) else [declared]
+    if "null" in types:
+        return True
+    return any("null" in (arm.get("type") or []) for key in ("anyOf", "oneOf") for arm in (prop.get(key) or []))
+
+
+def _strip_invalid_null_defaults(parameters: dict[str, Any]) -> None:
+    """Remove a published ``default: null`` from any parameter that cannot be null.
+
+    FastMCP injects ``default: null`` for every optional parameter. That is a legal
+    value when the parameter's type admits null (``anyOf[..., null]``) but a
+    schema-INVALID advertisement when it does not -- a bounded integer, a typed array --
+    where a generated client that sends the published default is rejected by the server
+    (the ``revision`` optimistic-concurrency token, #2173). Enforced at the single
+    registration seam with no per-tool knowledge: a published default that its own
+    property schema forbids is stripped.
+    """
+    for prop in (parameters.get("properties") or {}).values():
+        if isinstance(prop, dict) and prop.get("default", ...) is None and not _schema_admits_null(prop):
+            del prop["default"]
+
+
 def _register_tool(fn: Any) -> None:
     """Register an MCP tool with SDK description and annotations when available."""
     tool_name = fn.__name__
@@ -345,7 +371,12 @@ def _register_tool(fn: Any) -> None:
         kwargs["description"] = sdk_def["description"]
         if sdk_def.get("annotations"):
             kwargs["annotations"] = ToolAnnotations(**sdk_def["annotations"])
-    mcp.tool(**kwargs)(with_error_logging(fn))
+    # Build the tool, strip any schema-invalid published default (FastMCP's decorator
+    # returns the function, not the tool, so the schema is adjusted before registration),
+    # then register it.
+    tool = FunctionTool.from_function(with_error_logging(fn), name=tool_name, **kwargs)
+    _strip_invalid_null_defaults(tool.parameters)
+    mcp.add_tool(tool)
 
 
 _register_tool(list_accounts)

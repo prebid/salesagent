@@ -7,6 +7,7 @@ Tests write operations against real PostgreSQL to verify:
 
 """
 
+import threading
 from datetime import UTC, datetime
 from decimal import Decimal
 
@@ -15,6 +16,7 @@ import pytest
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Principal, Tenant
 from src.core.database.repositories import MediaBuyRepository, MediaBuyUoW
+from src.core.exceptions import AdCPMediaBuyNotFoundError, AdCPRevisionConflictError
 from tests.integration.conftest import cleanup_tenant, make_media_buy, make_package
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
@@ -576,3 +578,137 @@ class TestCreatePackagesBulk:
         with pytest.raises(ValueError, match="not found"):
             with MediaBuyUoW(tenant_a) as uow:
                 uow.media_buys.create_packages_bulk("mb_bulk_iso", packages)
+
+
+# ---------------------------------------------------------------------------
+# MediaBuy.advance_revision — atomic optimistic concurrency
+# ---------------------------------------------------------------------------
+
+
+class TestAdvanceRevision:
+    """Repository.advance_revision() enforces the buyer's expected revision atomically.
+
+    The pinned update-media-buy-request.json requires a mismatched `revision` to be
+    rejected with CONFLICT, and requires the comparison to be enforced atomically
+    with the write. advance_revision emits one conditional UPDATE
+    (``... WHERE revision = :expected``), so the comparison and the advance are the
+    same statement and need no held lock.
+    """
+
+    def test_matching_revision_advances_and_returns_a_real_int(self, tenant_a, principal_a):
+        with MediaBuyUoW(tenant_a) as uow:
+            uow.media_buys.create(make_media_buy(tenant_a, principal_a, "mb_adv_ok"))
+
+        with MediaBuyUoW(tenant_a) as uow:
+            result = uow.media_buys.advance_revision("mb_adv_ok", expected_revision=1)
+            # The advanced value is reported straight back to the buyer, so it must
+            # be a resolved int, not a SQL expression.
+            assert result.revision == 2
+            assert type(result.revision) is int
+
+        with MediaBuyUoW(tenant_a) as uow:
+            assert uow.media_buys.get_by_id("mb_adv_ok").revision == 2
+
+    def test_untokened_advance_is_unconditional(self, tenant_a, principal_a):
+        """expected_revision=None advances by exactly one, whatever the current value."""
+        with MediaBuyUoW(tenant_a) as uow:
+            uow.media_buys.create(make_media_buy(tenant_a, principal_a, "mb_adv_untok"))
+        with MediaBuyUoW(tenant_a) as uow:
+            uow.media_buys.update_fields("mb_adv_untok", order_name="moved on")  # -> revision 2
+
+        with MediaBuyUoW(tenant_a) as uow:
+            result = uow.media_buys.advance_revision("mb_adv_untok", expected_revision=None)
+            assert result.revision == 3
+
+    def test_stale_revision_raises_conflict_carrying_both_versions(self, tenant_a, principal_a):
+        with MediaBuyUoW(tenant_a) as uow:
+            uow.media_buys.create(make_media_buy(tenant_a, principal_a, "mb_adv_stale"))
+        # Move the revision on, so the buyer's token 1 is now stale.
+        with MediaBuyUoW(tenant_a) as uow:
+            uow.media_buys.update_fields("mb_adv_stale", order_name="moved on")
+
+        with pytest.raises(AdCPRevisionConflictError) as exc_info:
+            with MediaBuyUoW(tenant_a) as uow:
+                uow.media_buys.advance_revision("mb_adv_stale", expected_revision=1)
+
+        exc = exc_info.value
+        assert exc.wire_error_code == "CONFLICT"
+        assert exc.details == {
+            "resource_id": "mb_adv_stale",
+            "expected_version": 1,
+            "current_version": 2,
+        }
+
+    def test_conflict_leaves_the_revision_untouched(self, tenant_a, principal_a):
+        """A rejected advance must not have spent the token it rejected."""
+        with MediaBuyUoW(tenant_a) as uow:
+            uow.media_buys.create(make_media_buy(tenant_a, principal_a, "mb_adv_norev"))
+        with MediaBuyUoW(tenant_a) as uow:
+            uow.media_buys.update_fields("mb_adv_norev", order_name="moved on")
+
+        with pytest.raises(AdCPRevisionConflictError):
+            with MediaBuyUoW(tenant_a) as uow:
+                uow.media_buys.advance_revision("mb_adv_norev", expected_revision=1)
+
+        with MediaBuyUoW(tenant_a) as uow:
+            assert uow.media_buys.get_by_id("mb_adv_norev").revision == 2
+
+    def test_vanished_row_answers_media_buy_not_found(self, tenant_a):
+        """No row for (tenant, id) is the buyer's MEDIA_BUY_NOT_FOUND, not an internal error."""
+        with pytest.raises(AdCPMediaBuyNotFoundError):
+            with MediaBuyUoW(tenant_a) as uow:
+                uow.media_buys.advance_revision("mb_adv_never_existed", expected_revision=1)
+
+    def test_other_tenant_cannot_advance(self, tenant_a, tenant_b, principal_a):
+        """The conditional UPDATE carries the same tenant filter as every other query."""
+        with MediaBuyUoW(tenant_a) as uow:
+            uow.media_buys.create(make_media_buy(tenant_a, principal_a, "mb_adv_iso"))
+
+        with pytest.raises(AdCPMediaBuyNotFoundError):
+            with MediaBuyUoW(tenant_b) as uow:
+                uow.media_buys.advance_revision("mb_adv_iso", expected_revision=1)
+
+    def test_racing_updates_with_the_same_token_produce_one_win_and_one_conflict(self, tenant_a, principal_a):
+        """The comparison is enforced ATOMICALLY with the write.
+
+        Two genuinely concurrent transactions, each on its own connection (MediaBuyUoW
+        opens its own session), both holding revision 1. A threading.Barrier releases
+        them together so both are inside their transaction before either advances.
+        Exactly one may win: the loser's conditional UPDATE matches no row once the
+        winner has committed revision 2, so it re-reads and raises CONFLICT. Removing
+        the ``WHERE revision = :expected`` guard lets both win — the lost update the
+        spec's "atomically" clause forbids.
+        """
+        with MediaBuyUoW(tenant_a) as uow:
+            uow.media_buys.create(make_media_buy(tenant_a, principal_a, "mb_adv_race"))
+
+        start = threading.Barrier(2)
+        outcomes: list[str] = []
+        lock = threading.Lock()
+
+        def attempt() -> None:
+            try:
+                with MediaBuyUoW(tenant_a) as uow:
+                    # Open the transaction, THEN meet at the barrier, so both
+                    # transactions are live before either issues the conditional write.
+                    uow.media_buys.get_by_id("mb_adv_race")
+                    start.wait(timeout=30)
+                    uow.media_buys.advance_revision("mb_adv_race", expected_revision=1)
+                outcome = "won"
+            except AdCPRevisionConflictError:
+                outcome = "conflict"
+            with lock:
+                outcomes.append(outcome)
+
+        threads = [threading.Thread(target=attempt) for _ in range(2)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=60)
+        assert not any(thread.is_alive() for thread in threads), "a racing transaction never finished"
+
+        assert sorted(outcomes) == ["conflict", "won"], outcomes
+
+        # The winner's advance landed exactly once: the loser neither wrote nor re-advanced.
+        with MediaBuyUoW(tenant_a) as uow:
+            assert uow.media_buys.get_by_id("mb_adv_race").revision == 2

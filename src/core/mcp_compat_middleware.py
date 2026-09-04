@@ -9,7 +9,7 @@ Runs after MCPAuthMiddleware.
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, NoReturn
 
 from fastmcp.server.middleware import Middleware, MiddlewareContext
 from fastmcp.tools.tool import ToolResult
@@ -118,28 +118,38 @@ class RequestCompatMiddleware(Middleware):
                                 raise
                             exc = retry_exc
 
-            # Normalize once for the audit record, then pass the raw exception to
-            # _translate_to_tool_error so the emitted AdCPToolError keeps it as
-            # __cause__. The translator intentionally normalizes it a second time.
-            typed = normalize_to_adcp_error(exc)
-            tenant_id = None
-            principal_id = None
-            if context.fastmcp_context is not None:
-                try:
-                    identity = await context.fastmcp_context.get_state("identity")
-                    if identity is not None:
-                        tenant_id = identity.tenant_id
-                        principal_id = identity.principal_id
-                except Exception:
-                    logger.debug("Could not read MCP identity for validation error logging", exc_info=True)
-            record_boundary_error(
-                "mcp",
-                tool_name,
-                typed,
-                tenant_id=tenant_id,
-                principal_id=principal_id,
-            )
-            _translate_to_tool_error(exc)
+            await self._emit_as_tool_error(context, tool_name, exc)
+
+    async def _emit_as_tool_error(self, context: MiddlewareContext, tool_name: str, exc: Exception) -> NoReturn:
+        """Record *exc* and re-raise it as the AdCP two-layer MCP error envelope.
+
+        Every rejection this middleware makes has to leave through here. The tool's
+        own ``with_error_logging`` boundary is INSIDE ``call_next``, so anything
+        raised by the middleware itself would otherwise escape untranslated and
+        reach the buyer without an envelope at all.
+        """
+        # Normalize once for the audit record, then pass the raw exception to
+        # _translate_to_tool_error so the emitted AdCPToolError keeps it as
+        # __cause__. The translator intentionally normalizes it a second time.
+        typed = normalize_to_adcp_error(exc)
+        tenant_id = None
+        principal_id = None
+        if context.fastmcp_context is not None:
+            try:
+                identity = await context.fastmcp_context.get_state("identity")
+                if identity is not None:
+                    tenant_id = identity.tenant_id
+                    principal_id = identity.principal_id
+            except Exception:
+                logger.debug("Could not read MCP identity for validation error logging", exc_info=True)
+        record_boundary_error(
+            "mcp",
+            tool_name,
+            typed,
+            tenant_id=tenant_id,
+            principal_id=principal_id,
+        )
+        _translate_to_tool_error(exc)
 
     @staticmethod
     def _should_retry(exc: Exception) -> bool:

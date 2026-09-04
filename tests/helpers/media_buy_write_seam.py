@@ -79,6 +79,24 @@ def read_media_buy_state(tenant_id: str, media_buy_id: str, *, session: Any = No
         return MediaBuyState.of(uow.media_buys.get_by_id(media_buy_id))
 
 
+def assert_revision_advanced(
+    before: MediaBuyState, after: MediaBuyState, *, bumps: int = 1, subject: str = "the media buy"
+) -> None:
+    """Assert a mutation advanced ``revision`` by EXACTLY ``bumps``, nothing else read.
+
+    The revision-only entry point for callers that mutate a buy without moving its
+    status (a budget write, a pause). ``bumps`` is an EXACT delta, not a floor: "revision
+    increased" would pass a double-write that bumped twice, which skips a value on the
+    buyer's token and reports a conflict against a revision that never crossed the wire.
+    Same owner, same session discipline as :func:`assert_status_move_carried_bookkeeping`;
+    read both states through :func:`read_media_buy_state`.
+    """
+    assert after.revision == (before.revision or 0) + bumps, (
+        f"{subject} advanced revision {before.revision} -> {after.revision}; a mutation must "
+        f"advance it by exactly {bumps}"
+    )
+
+
 def assert_status_move_carried_bookkeeping(
     before: MediaBuyState,
     after: MediaBuyState,

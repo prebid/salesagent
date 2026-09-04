@@ -26,7 +26,7 @@ from collections.abc import Callable, Generator
 from contextlib import AbstractContextManager, contextmanager, nullcontext
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, NamedTuple
+from typing import TYPE_CHECKING
 
 import pytest
 
@@ -514,99 +514,6 @@ _MCP_SELECTIVE_XFAIL: list[tuple[str, set[str], str, bool]] = []
 # `type` filter for ALL transports (not a REST body issue).
 
 
-#: Causes a typed xfail reason may declare. A reason whose ``cause=`` is not here is a
-#: typo or an invention, and either way the row it exempts would be silently mis-routed.
-#:
-#: ENUMERATED FROM THE TREE, not chosen. The first version of this set was written from
-#: imagination -- "spec-gap", "harness-gap", "upstream-defect" -- none of which exists
-#: here, while the real "harness-limitation" was missing, so every typed reason in the
-#: suite failed to parse. An AST scan of the strings that actually BEGIN with "cause="
-#: gives the population; extend these sets from that scan, never from a guess.
-_XFAIL_CAUSES = frozenset({"transport-drops-parameter", "production-gap", "harness-limitation"})
-
-#: Scopes a typed xfail reason may declare.
-_XFAIL_SCOPES = frozenset({"per-transport", "transport-independent"})
-
-#: The DECLARATION: a run of ``key=value`` tokens at the HEAD of the reason, ending at
-#: the first word that is not one. Anchored with ``\A`` so prose later in the string is
-#: not part of the declaration -- which is the entire point of parsing instead of
-#: substring-matching.
-_XFAIL_DECLARATION_RE = re.compile(r"\A(?:\s*(?:cause|scope|ref)=\S+)+")
-_XFAIL_TOKEN_RE = re.compile(r"(?P<key>cause|scope|ref)=(?P<value>\S+)")
-
-
-class XfailReasonError(AssertionError):
-    """A typed xfail reason declares a token this suite does not recognise."""
-
-
-class XfailReason(NamedTuple):
-    """The parsed form of a ``cause=... scope=... ref=...`` xfail reason."""
-
-    cause: str
-    scope: str
-    ref: str
-
-
-def parse_xfail_reason(reason: str) -> XfailReason | None:
-    """Parse a typed xfail reason, or return None if it is free text.
-
-    Why a parse and not a tighter substring match. The predicate this replaces asked
-    ``"scope=per-transport" in reason``, and that is satisfied by any text CONTAINING the
-    phrase -- including a sentence *describing* the token. Measured: retyping the
-    declaration at :687 while leaving the prose at :706 ("scope=per-transport because each
-    transport enforces ... independently") changed the collected set by ZERO rows. The
-    declaration was decorative and the English sentence was load-bearing, by accident.
-    A substring predicate cannot tell a declaration from a description of one; only
-    position can, so ONLY the leading run of ``key=value`` tokens is read — the
-    declaration ends at the first word that is not one, and everything after it is prose
-    the parser never consults.
-
-    Free text returns None rather than raising: 62 reasons in this tree are prose, three
-    of them carrying unrelated ``k=`` pairs, and sweeping them is not this change's job.
-    Only a reason that ANNOUNCES itself typed -- by OPENING with a run of ``key=value``
-    tokens, in any order -- is held to the vocabulary. A reason that merely mentions one
-    later is prose.
-
-    The residue, stated rather than papered over: a typo in ``cause=`` ITSELF -- or in the
-    leading token's key, which is the same thing -- degrades the reason into free text and
-    returns None. So this DETECTS an unknown value; it does not make one unrepresentable.
-    Leading whitespace is tolerated (``lstrip``) so that a reason indented in a source
-    literal is still recognised as typed rather than silently becoming prose.
-    """
-    # Recognition is the leading TOKEN RUN, not the literal "cause=". Gating on that
-    # keyword made a complete, in-vocabulary declaration whose tokens were written in a
-    # different ORDER — `scope=... cause=... ref=...` — classify as free text and route
-    # nothing, silently: exactly the drop this function exists to prevent, reachable by
-    # word order rather than by a typo. All three live reasons happen to lead with
-    # `cause=`, so it was latent, in the same way the first-occurrence bug was.
-    # Only the leading declaration is parsed. Scanning the whole string was the first
-    # version of this function and it carried the defect it was written to remove:
-    #   'cause=production-gap — unlike scope=per-transport rows this one is global.
-    #    scope=transport-independent ref=#1607'
-    # parsed to scope='per-transport', because finditer took the first match ANYWHERE and
-    # the first one was inside an English sentence. A reason DECLARING
-    # transport-independent would have been routed per-transport by its own prose. The
-    # live reason at conftest.py:781 contains 'This is NOT scope=per-transport' and
-    # parsed correctly only because its declaration happened to come first — one word
-    # order away from wrong.
-    declaration = _XFAIL_DECLARATION_RE.match(reason.lstrip())
-    if declaration is None:
-        return None
-    found: dict[str, str] = {}
-    for match in _XFAIL_TOKEN_RE.finditer(declaration.group(0)):
-        found.setdefault(match.group("key"), match.group("value").rstrip(",;."))
-    missing = {"cause", "scope", "ref"} - found.keys()
-    if missing:
-        raise XfailReasonError(f"typed xfail reason is missing {sorted(missing)}: {reason!r}")
-    if found["cause"] not in _XFAIL_CAUSES:
-        raise XfailReasonError(f"unknown xfail cause={found['cause']!r} in {reason!r}; known: {sorted(_XFAIL_CAUSES)}")
-    if found["scope"] not in _XFAIL_SCOPES:
-        raise XfailReasonError(f"unknown xfail scope={found['scope']!r} in {reason!r}; known: {sorted(_XFAIL_SCOPES)}")
-    if not found["ref"].startswith("#"):
-        raise XfailReasonError(f"xfail ref={found['ref']!r} must be an issue reference like '#1607': {reason!r}")
-    return XfailReason(cause=found["cause"], scope=found["scope"], ref=found["ref"])
-
-
 def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
     """Apply xfail markers to scenarios with unimplemented production features."""
     for item in items:
@@ -823,80 +730,41 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # a row that changes its expected outcome stops matching instead of silently
         # keeping someone else's exemption.
         #
-        # Two rows expect CONFLICT and are the coverage half of #1607. Verified failure:
-        # `_assert_error_outcome` raises `AssertionError: Expected an error for outcome:
-        # error "CONFLICT" with suggestion` — an assertion about a response that came
-        # back 200 OK, NOT a StepDefinitionNotFoundError. Production accepts the stale
-        # and ahead tokens on a2a, mcp and rest and returns success; enforcement is what
-        # #1607 owns. strict=True so implementing it XPASSes and the graduation workflow
-        # catches the row rather than letting it sit green-by-omission.
+        # Graduated (#1607, mcp + rest, 8 rows — 2 CONFLICT rows in each of the two
+        # outlines, on 2 transports): update_media_buy now compares the buyer's token
+        # under a row lock and raises AdCPRevisionConflictError, so a stale or ahead
+        # token gets the CONFLICT the spec mandates instead of a 200. That is exactly
+        # what the removed reason predicted would flip these rows, and strict=True is
+        # what surfaced them: all 8 reported XPASS(strict) before the arm came out and
+        # plain PASS after.
         #
-        # One row expects INVALID_REQUEST for revision 0 and fails for a DIFFERENT
-        # reason, which is why it is not filed under #1607: production DOES reject it,
-        # but `UpdateMediaBuyRequest.revision` carries `ge=1`, so pydantic raises during
-        # request construction inside the step — before any transport dispatch. The row
-        # cannot grade the seller's response because the request never reaches the
-        # seller. That is a harness limitation, not a production gap, and calling it one
-        # is the exact mislabelling this task exists to stop.
-        if marker_names & {"T-UC-003-boundary-revision", "T-UC-003-partition-revision"}:
-            # pytest-bdd nests a Scenario Outline's Examples row under the single
-            # `_pytest_bdd_example` param rather than exposing each column, so reading
-            # `params["outcome"]` returns None and every row falls through unrouted.
-            _row = (getattr(item, "callspec", None) and item.callspec.params.get("_pytest_bdd_example")) or {}
-            _row_outcome = str(_row.get("outcome") or "")
-            if "CONFLICT" in _row_outcome and is_a2a:
-                # a2a fails EARLIER than the others and for a different reason, so it
-                # does not carry #1607's label. Measured: a probe in _update_media_buy_impl
-                # reads `req.revision=None` on a2a and `6` on mcp/rest, because
-                # _handle_update_media_buy_skill rebuilds the request from five hand-listed
-                # fields and forwards another hand-listed subset — `revision` is in neither.
-                # Implementing CONFLICT would NOT xpass this row; the token never arrives.
-                item.add_marker(
-                    pytest.mark.xfail(
-                        reason=(
-                            "cause=transport-drops-parameter scope=per-transport ref=#1885 — the "
-                            "a2a skill handler discards `revision` before it reaches the tool, so "
-                            "this row cannot grade CONFLICT enforcement on a2a at all. NOT #1607: "
-                            "enforcing the check would leave this row red. #1885 is the remedy — "
-                            "route the handler through media_buy_update._build_update_request, which "
-                            "already forwards every field — so closing it makes this row gradeable. "
-                            "#1259 owns the separate question of why no guard sees the drop."
-                        ),
-                        strict=True,
-                    )
-                )
-            elif "CONFLICT" in _row_outcome:
-                item.add_marker(
-                    pytest.mark.xfail(
-                        reason=(
-                            "cause=production-gap scope=per-transport ref=#1607 — update_media_buy "
-                            "accepts a stale or ahead revision and returns success; the spec MUST "
-                            "reject it with CONFLICT. Steps execute, the token arrives (probed: "
-                            "req.revision=6 on mcp and rest), and the failure is the missing "
-                            "rejection. scope=per-transport because each transport enforces (or "
-                            "fails to enforce) independently, so each must xpass on its own when "
-                            "#1607 lands."
-                        ),
-                        strict=True,
-                    )
-                )
-            elif "INVALID_REQUEST" in _row_outcome:
-                item.add_marker(
-                    pytest.mark.xfail(
-                        reason=(
-                            "cause=harness-limitation scope=transport-independent ref=#1607 — "
-                            "revision 0 is rejected by UpdateMediaBuyRequest's ge=1 during request "
-                            "construction in the step, so the request never reaches the seller and "
-                            "this row cannot grade the seller's INVALID_REQUEST response. Not a "
-                            "production gap. REMEDY: build the raw payload instead of the typed "
-                            "model, so the seller sees the request. Note the scenario only means "
-                            "anything against a NON-conforming client — a conforming one is stopped "
-                            "by its own SDK before the wire, which is why the request-construction "
-                            "path has to be bypassed deliberately rather than fixed."
-                        ),
-                        strict=True,
-                    )
-                )
+        # Graduated (#1885, a2a, 4 rows — the same 4 CONFLICT rows on a2a): its reason
+        # said implementing CONFLICT ALONE would leave these red, because
+        # _handle_update_media_buy_skill rebuilt the request from a hand-list and
+        # `revision` was in none of them, so the token never reached the tool. That drop
+        # is fixed for the update_media_buy leg: the A2A handler now routes EVERY field
+        # (plus the raw wire payload) through update_media_buy_raw / _build_update_request
+        # (adcp_a2a_server.py), the same seam as create, so `revision` — and the
+        # formerly-dropped idempotency_key/currency/pacing/flight dates/ext — reach the
+        # tool. This addresses the update_media_buy leg of #1885 (that issue is broader
+        # and stays open); it graduates these #1607 CONFLICT rows on a2a.
+        #
+        # Graduated ([order R3]): the schema-violation revision rows (partition below_min
+        # "0" and wrong_type "7", boundary "revision 0 (below minimum 1)") now PASS on
+        # every transport, and are graded ON THE WIRE: the UC-003 When step dispatches the
+        # revision rows as RAW flat kwargs (ctx["dispatch_update_raw"]), so a value the
+        # pinned schema forbids is refused by the one shared gate inside
+        # UpdateMediaBuyRequest (`_normalize_revision` -> `_validate_revision`, ge from the
+        # pin) as a VALIDATION_ERROR wire envelope — the same code and class as a malformed
+        # idempotency_key on this model — instead of by a model built in the test process.
+        # Reverting `_normalize_revision` reddens the wrong_type row (the numeric string
+        # would coerce through); below_min carries a redundant library `Ge(ge=1)` backstop,
+        # so it is doubly guarded but still wire-graded.
+        #
+        # The wrong_type "7" row is NO LONGER dormant: `given_request_revision_quoted`
+        # (uc003_update_media_buy.py) is its step definition, so it dispatches and grades
+        # on the wire rather than being absorbed by the StepDefinitionNotFoundError
+        # auto-xfail.
 
         # FIXME: UC-003 extension/error scenarios — production uses
         # different error codes than spec, or doesn't validate at all. These are
@@ -3052,17 +2920,6 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
     # xfail still proves out and an xpass is still caught when production catches
     # up) and deselect the redundant ones.
     #
-    # That rationale holds only when the failure IS transport-independent. It is
-    # not always: an obligation each transport enforces separately fails three
-    # times for three reasons, and each has to xpass on its own when production
-    # catches up — deselecting two of them would grade a cross-transport MUST on
-    # one transport and call it covered.
-    #
-    # So the exemption is keyed on the xfail reason declaring `scope=per-transport`,
-    # not on a list of node ids. A node list is an allowlist under another name and
-    # rots the moment someone adds a row; a declared property is inherited by every
-    # future row that carries it. See the cause taxonomy the UC-003 revision rows
-    # use above (`cause=... scope=... ref=...`).
     # IMPL was dropped from the BDD default parametrization (#1417), so
     # a2a is now the canonical transport that always runs; mcp/rest are the
     # redundant transports deselected when the scenario carries a strict xfail.
@@ -3073,11 +2930,6 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
     if not os.environ.get("BDD_ALL_TRANSPORTS"):
         deselected: list[pytest.Item] = []
         remaining: list[pytest.Item] = []
-        # Collected rather than raised in-loop: an exception escaping
-        # pytest_collection_modifyitems surfaces as INTERNALERROR, which reports the
-        # hook rather than the malformed reason and truncates the run. Gathering them
-        # and failing once at the end names every offender.
-        reason_errors: list[str] = []
         for item in items:
             nodeid = item.nodeid
             is_redundant_transport = "[mcp]" in nodeid or "[mcp-" in nodeid or "[rest]" in nodeid or "[rest-" in nodeid
@@ -3086,28 +2938,10 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 continue
             # Check if this item has a strict xfail marker
             strict_xfails = [m for m in item.iter_markers() if m.name == "xfail" and m.kwargs.get("strict", False)]
-            # Consult the PARSE, not the string. A substring match here was satisfied by
-            # prose quoting the token, so the declaration it appeared to read was
-            # decorative.
-            per_transport = False
-            for marker in strict_xfails:
-                try:
-                    parsed = parse_xfail_reason(str(marker.kwargs.get("reason", "")))
-                except XfailReasonError as exc:
-                    reason_errors.append(f"{item.nodeid}: {exc}")
-                    parsed = None
-                if parsed is not None and parsed.scope == "per-transport":
-                    per_transport = True
-            if strict_xfails and not per_transport:
+            if strict_xfails:
                 deselected.append(item)
             else:
                 remaining.append(item)
-
-        if reason_errors:
-            raise pytest.UsageError(
-                "malformed typed xfail reason(s) — a row whose reason does not parse would be "
-                "routed by accident:\n  " + "\n  ".join(reason_errors)
-            )
 
         if deselected:
             items[:] = remaining

@@ -801,6 +801,17 @@ def when_send_update_request(ctx: dict) -> None:
         for pkg in packages:
             if isinstance(pkg, dict) and "package_id" in pkg:
                 pkg["package_id"] = _resolve_package_id(ctx, pkg["package_id"])
+    # Raw-payload dispatch: hand the flat kwargs to the transport UNCONVERTED, so a value
+    # the pinned schema forbids (revision "7", revision 0) is refused ON THE WIRE by the
+    # one shared gate inside UpdateMediaBuyRequest -- not by a model built in the test
+    # process, which would never reach a wire to be graded. Set by the revision Givens.
+    if ctx.get("dispatch_update_raw"):
+        if ctx.get("has_auth") is False:
+            dispatch_request(ctx, identity=None, **update_kwargs)
+        else:
+            dispatch_request(ctx, **update_kwargs)
+        _promote_update_errors(ctx)
+        return
     try:
         req = UpdateMediaBuyRequest(**update_kwargs)
     except ValidationError as e:
@@ -2376,6 +2387,9 @@ def given_request_revision_absent(ctx: dict) -> None:
     a token, not with a null one.
     """
     _ensure_update_defaults(ctx)
+    # Dispatch raw (below), so the LWW success is graded on the same wire path as its
+    # sibling rows in the same outline, not a test-process model build.
+    ctx["dispatch_update_raw"] = True
 
 
 @given(parsers.parse("the request revision is set to {revision:d}"))
@@ -2383,6 +2397,26 @@ def given_request_revision(ctx: dict, revision: int) -> None:
     """Send *revision* as the buyer''s expected-current token on the update request."""
     kwargs = _ensure_update_defaults(ctx)
     kwargs["revision"] = revision
+    # Dispatch this scenario's request as RAW wire parameters (below), so a value the
+    # pinned schema forbids is refused ON THE WIRE rather than by an
+    # UpdateMediaBuyRequest built in the test process (which would grade the harness).
+    ctx["dispatch_update_raw"] = True
+
+
+@given(parsers.parse('the request revision is set to "{value}"'))
+def given_request_revision_quoted(ctx: dict, value: str) -> None:
+    """Send a QUOTED revision value verbatim (e.g. the string "7").
+
+    Exact text rather than the ``{revision:d}`` parser above: an Examples literal that
+    is quoted is a WRONG-TYPE probe (a JSON string where the schema wants an integer),
+    and an int parser cannot match it -- without this step the row failed on
+    StepDefinitionNotFoundError and the non-strict auto-xfail absorbed it, so a row
+    grading a wire-refusable violation read as dormant. Sent raw (below) so the string
+    reaches the wire uncoerced and the boundary refuses it.
+    """
+    kwargs = _ensure_update_defaults(ctx)
+    kwargs["revision"] = value
+    ctx["dispatch_update_raw"] = True
 
 
 @then(parsers.parse("the response should contain a revision with value {expected:d}"))

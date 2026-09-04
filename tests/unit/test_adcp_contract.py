@@ -7,6 +7,7 @@ These tests verify that:
 4. AdCP protocol requirements are met
 """
 
+import logging
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from enum import Enum
@@ -19,6 +20,11 @@ from src.core.database.models import (
     Principal as PrincipalModel,
 )  # Need both for contract test
 from src.core.database.models import Product as ProductModel
+from src.core.exceptions import (
+    AdCPInvariantViolationError,
+    AdCPRevisionConflictError,
+    AdCPValidationError,
+)
 from src.core.schemas import (
     Budget,
     CreateMediaBuyRequest,
@@ -50,6 +56,7 @@ from src.core.schemas import (
     SyncCreativesResponse,
     Targeting,
     TaskStatus,
+    UpdateMediaBuyRequest,
 )
 from src.core.schemas import (
     Principal as PrincipalSchema,
@@ -58,6 +65,7 @@ from src.core.schemas import (
     Product as ProductSchema,
 )
 from tests.factories.creative_asset import build_assets, image_spec, url_spec, video_spec
+from tests.helpers.pinned_schema import validate_against_pinned_schema
 
 
 class TestSchemaMatchesLibrary:
@@ -3568,6 +3576,212 @@ class TestProductV36FieldContract:
         # Internal fields must still be excluded
         assert "implementation_config" not in product_data
         assert "countries" not in product_data
+
+
+class TestRevisionValueContract:
+    """The `revision` optimistic-concurrency token's value contract.
+
+    The pinned update-media-buy-request.json types `revision` as
+    {"type": "integer", "minimum": 1}. Draft-07 `integer` admits any number with a
+    zero fractional part, so the whole-number float form is schema-VALID -- A2A
+    carries JSON numbers as doubles, and rejecting 2.0 would reject a conformant
+    buyer. Everything else in the table below is a schema violation.
+    """
+
+    @pytest.mark.parametrize(
+        ("wire_value", "expected"),
+        [
+            (1, 1),
+            (7, 7),
+            # Whole-number float: schema-valid under draft-07 `integer`, normalized to int.
+            (2.0, 2),
+            (7.0, 7),
+        ],
+    )
+    def test_accepts_and_normalizes_to_int(self, wire_value, expected):
+        req = UpdateMediaBuyRequest(media_buy_id="mb_1", paused=True, revision=wire_value)
+        assert req.revision == expected
+        # Normalization is the point: a float must not survive into the impl, where it
+        # would be compared against an integer column.
+        assert type(req.revision) is int
+
+    @pytest.mark.parametrize(
+        "wire_value",
+        [
+            "7",  # numeric string: a lax int coercion would read this as 7
+            "1",
+            True,  # bool: Python would read this as 1
+            False,
+            1.5,  # fractional
+            0,  # below "minimum": 1
+            -1,
+            0.0,
+            float("inf"),  # non-finite: int(inf) would raise a raw OverflowError
+            float("-inf"),
+            float("nan"),
+            [1],
+            {"revision": 1},
+        ],
+    )
+    def test_rejects_schema_violations_with_buyer_facing_error(self, wire_value):
+        with pytest.raises(AdCPValidationError) as exc_info:
+            UpdateMediaBuyRequest(media_buy_id="mb_1", paused=True, revision=wire_value)
+        assert exc_info.value.field == "revision"
+
+    def test_absent_revision_is_accepted_as_no_token(self):
+        assert UpdateMediaBuyRequest(media_buy_id="mb_1", paused=True).revision is None
+
+    def test_ge_constraint_is_inherited_not_redeclared(self):
+        """The library's Ge(ge=1) must still be on the field.
+
+        Redeclaring `revision` locally as a bare `int | None` silently drops the
+        inherited constraint -- that has happened on this codebase before.
+        """
+        metadata = UpdateMediaBuyRequest.model_fields["revision"].metadata
+        assert any(getattr(m, "ge", None) == 1 for m in metadata), metadata
+
+    def test_explicit_null_revision_is_rejected_at_the_model(self):
+        """An explicit `null` is a schema violation, not "no token supplied".
+
+        Presence is answered inside the model, from the input dict: a caller threads the
+        payload AS SENT, so an explicit null (key present, value None) reaches the one
+        shared gate and is rejected -- while an omitted key is accepted
+        (test_absent_revision_is_accepted_as_no_token). Reading an explicit null as
+        "absent" would hand the buyer a 200 on an update whose concurrency check never ran.
+        """
+        with pytest.raises(AdCPValidationError) as exc_info:
+            UpdateMediaBuyRequest(media_buy_id="mb_1", paused=True, revision=None)
+        assert exc_info.value.field == "revision"
+
+    def test_the_one_rule_applies_at_the_model(self):
+        """One rule decides a revision value: a whole-number float is accepted and
+        normalized to int; the numeric string "7" is refused."""
+        assert UpdateMediaBuyRequest(media_buy_id="mb_1", paused=True, revision=2.0).revision == 2
+        with pytest.raises(AdCPValidationError):
+            UpdateMediaBuyRequest(media_buy_id="mb_1", paused=True, revision="7")
+
+
+class TestRevisionConflictErrorShape:
+    """The CONFLICT a stale `revision` token must produce.
+
+    `details` is graded against the pinned error-details/conflict.json, read
+    through tests.helpers.pinned_schema so the spec version moves with the SDK pin
+    rather than being frozen as a literal here.
+    """
+
+    def test_mismatch_details_are_schema_valid_and_carry_both_versions(self):
+        exc = AdCPRevisionConflictError.mismatch(media_buy_id="mb_1", expected=3, current=5)
+        validate_against_pinned_schema("conflict.json", exc.details)
+        assert exc.details == {
+            "resource_id": "mb_1",
+            "expected_version": 3,
+            "current_version": 5,
+        }
+
+    def test_conflict_carries_the_spec_mandated_wire_identity(self):
+        exc = AdCPRevisionConflictError.mismatch(media_buy_id="mb_1", expected=3, current=5)
+        assert exc.wire_error_code == "CONFLICT"
+        assert exc.status_code == 409
+        assert exc.recovery == "transient"
+        assert exc.suggestion
+
+    def test_invariant_violation_is_transient_service_unavailable_with_a_generic_message(self):
+        """INTERNAL_ERROR is absent from the pinned enum; SERVICE_UNAVAILABLE is transient.
+
+        The diagnostic must stay out of the buyer-facing message -- it names internal
+        state the buyer neither supplied nor can act on.
+        """
+        diagnostic = "row mb_1 vanished between SELECT FOR UPDATE and mutate"
+        exc = AdCPInvariantViolationError(diagnostic)
+        assert exc.wire_error_code == "SERVICE_UNAVAILABLE"
+        assert exc.status_code == 503
+        assert exc.recovery == "transient"
+        assert diagnostic not in exc.message
+        assert "mb_1" not in exc.message
+
+    def test_invariant_violation_does_not_log_from_its_constructor(self, caplog):
+        """Constructing the exception has no logging side effect.
+
+        The diagnostic is carried as a non-wire attribute and emitted only when the
+        exception reaches a transport boundary (record_boundary_error), not from the
+        constructor -- so building the exception is free of side effects.
+        """
+        with caplog.at_level(logging.ERROR):
+            exc = AdCPInvariantViolationError("row mb_1 vanished between SELECT FOR UPDATE and mutate")
+        assert "row mb_1 vanished" not in caplog.text
+        assert exc.diagnostic == "row mb_1 vanished between SELECT FOR UPDATE and mutate"
+
+    def test_invariant_diagnostic_is_emitted_at_the_boundary(self, caplog):
+        """record_boundary_error owns the diagnostic emission, with a traceback."""
+        from src.core.tool_error_logging import record_boundary_error
+
+        exc = AdCPInvariantViolationError("row mb_1 vanished between SELECT FOR UPDATE and mutate")
+        with caplog.at_level(logging.ERROR):
+            record_boundary_error("mcp", "update_media_buy", exc)
+        assert "row mb_1 vanished between SELECT FOR UPDATE and mutate" in caplog.text
+
+
+class TestRevisionPublishedSchema:
+    """#2173 (#6): the ``revision`` optimistic-concurrency token must publish the SAME
+    buyer-facing contract on BOTH generated interfaces -- so a generated client is never
+    handed a schema the server rejects. One value feeds both: ``RawRevision``'s published
+    fragment is read from the pin (``update_media_buy_revision_schema``), so the bound
+    cannot drift, and neither interface may publish a ``default`` (FastMCP injects
+    ``default: null`` for optional params, which is schema-INVALID against an integer>=1
+    fragment -- a client that sends the published default would be rejected).
+    """
+
+    @staticmethod
+    def _rest_revision_fragment() -> dict:
+        from fastapi import FastAPI
+
+        from src.routes.api_v1 import router
+
+        app = FastAPI()
+        app.include_router(router)
+        return app.openapi()["components"]["schemas"]["RawRevision"]
+
+    @staticmethod
+    def _mcp_revision_fragment() -> dict:
+        import asyncio
+
+        from src.core.main import mcp
+
+        tool = asyncio.run(mcp.get_tool("update_media_buy"))
+        wire = tool.to_mcp_tool().inputSchema
+        prop = wire["properties"]["revision"]
+        # RawRevision is a named type, so the wire references it as a $def; resolve it.
+        if "$ref" in prop:
+            return wire["$defs"][prop["$ref"].rsplit("/", 1)[-1]]
+        return prop
+
+    def test_rest_publishes_revision_as_the_pinned_integer_bound(self):
+        from src.core.schemas._pinned_fields import update_media_buy_revision_minimum
+
+        schema = self._rest_revision_fragment()
+        assert schema.get("type") == "integer", schema
+        assert schema.get("minimum") == update_media_buy_revision_minimum(), schema
+
+    def test_mcp_publishes_revision_as_the_pinned_integer_bound(self):
+        from src.core.schemas._pinned_fields import update_media_buy_revision_minimum
+
+        schema = self._mcp_revision_fragment()
+        assert schema.get("type") == "integer", schema
+        assert schema.get("minimum") == update_media_buy_revision_minimum(), schema
+
+    def test_mcp_and_rest_publish_equal_fragments_with_no_default(self):
+        """The two interfaces publish the same fragment, and neither advertises a
+        ``default`` the fragment itself rejects.
+
+        ``1 == 1.0`` in Python, so dict equality tolerates the int/float rendering
+        difference while still catching a genuine divergence (a lost ``minimum``, a
+        re-introduced ``default``).
+        """
+        mcp_frag = self._mcp_revision_fragment()
+        rest_frag = self._rest_revision_fragment()
+        assert "default" not in mcp_frag, mcp_frag
+        assert "default" not in rest_frag, rest_frag
+        assert mcp_frag == rest_frag, (mcp_frag, rest_frag)
 
 
 if __name__ == "__main__":

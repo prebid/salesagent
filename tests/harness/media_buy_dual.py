@@ -90,6 +90,33 @@ class MediaBuyDualEnv(MediaBuyCreateEnv):
 
         self.mock["update_context_mgr"].return_value = self._build_mock_context_manager(tool_name="update_media_buy")
 
+    def seed_existing_media_buy(self, media_buy_id: str, *, status: str = "active", revision: int | None = None) -> Any:
+        """Persist an existing media buy for the update path, and route to it.
+
+        The one public way to seed the row every update-path wire test needs: it creates
+        the tenant/principal/product, mints the buy owned by that principal, commits the
+        factory data so the row is visible to the separate unit of work the update flow
+        opens, and sets the routing id the flat-kwargs wire legs read (the REST leg builds
+        its PUT URL from it). ``revision`` is a repository-managed seam the factory assigns
+        the way the repository does, so a test can start from a row production reaches.
+        Returns the persisted media buy.
+        """
+        from tests.factories import MediaBuyFactory
+
+        tenant, principal, _product, _pricing = self.setup_media_buy_data()
+        factory_kwargs: dict[str, Any] = {
+            "tenant": tenant,
+            "principal": principal,
+            "media_buy_id": media_buy_id,
+            "status": status,
+        }
+        if revision is not None:
+            factory_kwargs["revision"] = revision
+        media_buy = MediaBuyFactory(**factory_kwargs)
+        self._commit_factory_data()
+        self._seeded_media_buy_id = media_buy_id
+        return media_buy
+
     # -- Update dispatch methods -----------------------------------------------
 
     def call_impl(self, **kwargs: Any) -> Any:

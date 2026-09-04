@@ -158,8 +158,18 @@ class MediaBuyUpdateEnv(BaseTestEnv):
                 )
             return package
 
+        def _advance_revision(media_buy_id: str, *, expected_revision: Any = None, context: Any = None) -> Any:
+            # The single revision advance the update flow takes. In production it emits
+            # a conditional UPDATE and re-reads the row. Return the stable default row
+            # (a real "active" status, not a bare MagicMock) WITHOUT calling get_by_id,
+            # so it never consumes a finite get_by_id side_effect list a test set up for
+            # the precondition/currency/date/final reads. Only the pause branch reads this
+            # return; the budget/date backstop discards it.
+            return _default_mb
+
         _mb_repo.get_by_id_or_raise.side_effect = _get_by_id_or_raise
         _mb_repo.get_package_or_raise.side_effect = _get_package_or_raise
+        _mb_repo.advance_revision.side_effect = _advance_revision
 
         # creatives repo: by default every referenced creative "exists" with an
         # approved status and no format restriction (uow.products.get_by_id

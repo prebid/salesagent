@@ -14,9 +14,9 @@ from __future__ import annotations
 import datetime
 from collections.abc import Collection
 from decimal import Decimal
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session, joinedload
 
 from src.core.database.models import (
@@ -24,9 +24,15 @@ from src.core.database.models import (
     MediaPackage,
     PersistedMediaBuyStatus,
 )
+from src.core.exceptions import (
+    AdCPMediaBuyNotFoundError,
+    AdCPPackageNotFoundError,
+    AdCPRevisionConflictError,
+)
 
 if TYPE_CHECKING:
     from adcp.types import ContextObject
+    from sqlalchemy import CursorResult
 
 
 class MediaBuyRepository:
@@ -43,8 +49,8 @@ class MediaBuyRepository:
         tenant_id: Tenant scope for all queries.
     """
 
-    # "revision" and "confirmed_at" are repository-managed — "revision" is bumped on
-    # every successful mutation (see _bump_revision) and "confirmed_at" is stamped
+    # "revision" and "confirmed_at" are repository-managed — "revision" advances once
+    # per successful mutation (see _bump_revision) and "confirmed_at" is stamped
     # write-once the first time the buy reaches a committed status (see
     # _stamp_confirmation_if_needed). Callers may never write either directly:
     # letting update_fields set confirmed_at would walk straight through the
@@ -88,8 +94,6 @@ class MediaBuyRepository:
         """
         media_buy = self.get_by_id(media_buy_id)
         if media_buy is None:
-            from src.core.exceptions import AdCPMediaBuyNotFoundError
-
             raise AdCPMediaBuyNotFoundError(
                 f"Media buy '{media_buy_id}' not found",
                 suggestion="Verify the media_buy_id is correct and belongs to your account.",
@@ -212,8 +216,6 @@ class MediaBuyRepository:
         """
         package = self.get_package(media_buy_id, package_id)
         if package is None:
-            from src.core.exceptions import AdCPPackageNotFoundError
-
             raise AdCPPackageNotFoundError(
                 f"Package '{package_id}' not found for media buy '{media_buy_id}'",
                 suggestion="Verify the package_id exists in this media buy; list the media buy's packages to find valid ids.",
@@ -456,9 +458,8 @@ class MediaBuyRepository:
         self._session.flush()
         return media_buy
 
-    @staticmethod
-    def _bump_revision(media_buy: MediaBuy) -> None:
-        """Increment the persisted monotonic revision counter by 1.
+    def _bump_revision(self, media_buy: MediaBuy) -> None:
+        """Advance the persisted monotonic revision counter by one.
 
         Assigning a SQL expression rather than doing a Python read-modify-write is
         deliberate: it emits ``UPDATE ... SET revision = revision + 1``, so the
@@ -472,17 +473,22 @@ class MediaBuyRepository:
         expression object rather than an int.
 
         That does NOT announce itself. Measured across ten read shapes, only two raise
-        — ``int(x)`` and ``bool(x)``. Arithmetic and comparison, the two an earlier
-        version of this docstring named as the raising cases, silently build a further
-        SQL expression: ``x + 1`` and ``x > 2`` both succeed and return an object, not a
-        number.
+        — ``int(x)`` and ``bool(x)``. Arithmetic and comparison silently build a
+        further SQL expression: ``x + 1`` and ``x > 2`` both succeed and return an
+        object, not a number.
 
         The ground that actually holds the invariant is the call sites, not the type.
-        Four of the five direct callers flush on the very next line, and the fifth is
-        ``_bump_parent_revision``, whose own two callers both flush on their next line.
-        So no exercised path reads the attribute while it holds an expression. There is
-        no guard here because the window is closed by construction rather than detected
-        — but if a future caller stops flushing, nothing will raise.
+        Every direct caller flushes on the very next line (or, for
+        ``_bump_parent_revision``, its own two callers do), so no exercised path reads
+        the attribute while it holds an expression. There is no guard here because the
+        window is closed by construction rather than detected — but if a future caller
+        stops flushing, nothing will raise.
+
+        This is the UNCONDITIONAL advance used by every writer that owns its own
+        advance (create, approval, status transitions, package writes). The buyer's
+        optimistic-concurrency token is enforced separately by ``advance_revision``,
+        which advances atomically only when the current revision matches the buyer's
+        expected value.
         """
         media_buy.revision = MediaBuy.revision + 1
 
@@ -544,6 +550,7 @@ class MediaBuyRepository:
         seller_committed: bool = False,
         approved_at: datetime.datetime | None = None,
         approved_by: str | None = None,
+        advance: bool = True,
     ) -> MediaBuy | None:
         """Update the status of a media buy within this tenant.
 
@@ -556,6 +563,11 @@ class MediaBuyRepository:
         ``active`` for a state nobody defined, with no commitment instant to go with
         it, which the pinned response schema forbids. A closed vocabulary is enforced
         where values enter, not interpreted where they are read.
+
+        ``advance`` (default True) bumps the buyer's revision token. The update flow
+        passes ``advance=False`` because it owns exactly one advance per request
+        through ``advance_revision``; every other caller (create, approval,
+        scheduler) leaves the default so a standalone status change moves the token.
         """
         normalized = PersistedMediaBuyStatus.parse(status, media_buy_id=media_buy_id)
         media_buy = self.get_by_id(media_buy_id)
@@ -572,11 +584,82 @@ class MediaBuyRepository:
         # expression, and reading any attribute after that can trigger a refresh
         # mid-mutation. The stamp reads status and confirmed_at, so it goes first.
         self._stamp_confirmation_if_needed(media_buy, seller_committed=seller_committed)
-        self._bump_revision(media_buy)
+        if advance:
+            self._bump_revision(media_buy)
         self._session.flush()
         return media_buy
 
-    def update_fields(self, media_buy_id: str, *, seller_committed: bool = False, **kwargs: Any) -> MediaBuy | None:
+    def advance_revision(
+        self,
+        media_buy_id: str,
+        *,
+        expected_revision: int | None = None,
+        context: ContextObject | dict[str, Any] | None = None,
+    ) -> MediaBuy:
+        """Advance the buyer's revision token atomically, optionally under an expected value.
+
+        This is the single point that enforces the pinned update-media-buy-request.json
+        optimistic-concurrency contract: when the buyer supplies ``revision``, the seller
+        MUST reject the update with ``CONFLICT`` on a mismatch, and MUST enforce that
+        comparison ATOMICALLY with the write.
+
+        One conditional statement supplies both halves without a held lock::
+
+            UPDATE media_buys SET revision = revision + 1
+            WHERE tenant_id = :t AND media_buy_id = :id
+              AND (:expected IS NULL OR revision = :expected)
+
+        The database serializes concurrent writers on the row: two requests both holding
+        revision N race to ``WHERE revision = N``; exactly one commits (rowcount 1), the
+        other re-evaluates against the committed row and matches nothing (rowcount 0).
+        No ``get_db_session()`` block between the read and the write can drop a lock,
+        because there is no lock to drop — the atomicity is in the single statement,
+        which is why this needs neither the two-phase split nor #1644's repair.
+
+        ``expected_revision is None`` (buyer sent no token) advances unconditionally, so
+        a mutating request advances the parent revision by exactly one either way.
+
+        rowcount 0 means the write did not land. Re-read to say why:
+          * the row is gone → ``AdCPMediaBuyNotFoundError`` (the buyer's answer for
+            "no row for (tenant, id)", via ``get_by_id_or_raise``);
+          * the row is present but its revision differs → ``AdCPRevisionConflictError``
+            naming both versions.
+
+        Returns the row carrying the advanced (real int) revision.
+        """
+        stmt = (
+            update(MediaBuy)
+            .where(
+                MediaBuy.tenant_id == self._tenant_id,
+                MediaBuy.media_buy_id == media_buy_id,
+            )
+            .values(revision=MediaBuy.revision + 1)
+            # Re-fetch matched rows so the ORM identity map reflects the new revision;
+            # callers read the advanced value straight back to the buyer.
+            .execution_options(synchronize_session="fetch")
+        )
+        if expected_revision is not None:
+            stmt = stmt.where(MediaBuy.revision == expected_revision)
+
+        result = cast("CursorResult[Any]", self._session.execute(stmt))
+        if result.rowcount == 0:
+            # No row matched. get_by_id_or_raise answers "gone" with MEDIA_BUY_NOT_FOUND;
+            # if it returns, the row exists and only its revision failed the WHERE — which
+            # is unreachable without a token, since a tokenless advance is unconditional.
+            media_buy = self.get_by_id_or_raise(media_buy_id, context=context)
+            assert expected_revision is not None
+            raise AdCPRevisionConflictError.mismatch(
+                media_buy_id=media_buy_id,
+                expected=expected_revision,
+                current=media_buy.revision,
+                context=context,
+            )
+        self._session.flush()
+        return self.get_by_id_or_raise(media_buy_id, context=context)
+
+    def update_fields(
+        self, media_buy_id: str, *, seller_committed: bool = False, advance: bool = True, **kwargs: Any
+    ) -> MediaBuy | None:
         """Update arbitrary fields on a media buy within this tenant.
 
         Only updates fields that are valid MediaBuy column attributes.
@@ -584,6 +667,10 @@ class MediaBuyRepository:
         Raises ValueError if any kwarg is not a valid MediaBuy attribute or
         if the caller attempts to update an immutable field (tenant_id,
         media_buy_id, created_at, revision, confirmed_at).
+
+        ``advance`` (default True) bumps the buyer's revision token. The update flow
+        passes ``advance=False`` because it owns exactly one advance per request
+        through ``advance_revision``.
         """
         blocked = self._MEDIA_BUY_IMMUTABLE_FIELDS & kwargs.keys()
         if blocked:
@@ -603,7 +690,8 @@ class MediaBuyRepository:
         # Same ordering rule as update_status: stamp (which reads attributes) before
         # the bump (which replaces one with a SQL expression).
         self._stamp_confirmation_if_needed(media_buy, seller_committed=seller_committed)
-        self._bump_revision(media_buy)
+        if advance:
+            self._bump_revision(media_buy)
         self._session.flush()
         return media_buy
 

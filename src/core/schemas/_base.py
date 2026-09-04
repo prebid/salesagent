@@ -12,7 +12,7 @@ from decimal import Decimal
 # --- V2.3 Pydantic Models (Bearer Auth, Restored & Complete) ---
 # --- MCP Status System (AdCP PR #77) ---
 from enum import StrEnum
-from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypeAlias
+from typing import TYPE_CHECKING, Annotated, Any, ClassVar, Literal, TypeAlias
 
 from src.core.enum_helpers import enum_value
 
@@ -97,6 +97,7 @@ from adcp.types.generated_poc.media_buy.get_media_buys_response import (
 
 from src.core.config import get_pydantic_extra_mode
 from src.core.exceptions import AdCPInvalidRequestError, AdCPNotFoundError, AdCPValidationError
+from src.core.schemas._pinned_fields import update_media_buy_revision_minimum, update_media_buy_revision_schema
 
 # For backward compatibility, alias AdCPPackage as LibraryPackage
 LibraryPackage: TypeAlias = AdCPPackage  # noqa: UP040 — runtime re-export used as base class
@@ -136,12 +137,18 @@ from adcp.types.generated_poc.core.collection_list_ref import (
     CollectionListReference,  # noqa: F401 — re-exported via src.core.schemas; used by callers and TargetingOverlay.collection_list type
 )
 from pydantic import (
+    AfterValidator,
     AnyUrl,
     AwareDatetime,
     BaseModel,
     ConfigDict,
     Field,
     RootModel,
+    StrictFloat,
+    StrictInt,
+    TypeAdapter,
+    ValidationError,
+    WithJsonSchema,
     model_serializer,
     model_validator,
 )
@@ -2304,6 +2311,100 @@ def validate_idempotency_key_shape(key: str | None) -> None:
         )
 
 
+# --- AdCP `revision` optimistic-concurrency token: the value contract ---
+#
+# The pinned update-media-buy-request.json types `revision` as a bounded integer; the
+# bound is read once from the pin (``update_media_buy_revision_schema``) and fed to every
+# site below, so it cannot drift. Draft-07 `integer` admits ANY number with a zero
+# fractional part, so a whole-number float is schema-VALID and must be accepted -- A2A
+# delivers JSON numbers as doubles, so rejecting the float form would reject a conformant
+# buyer.
+#
+# Everything below exists so that one rule decides what a revision value may be, and
+# every transport therefore rejects the same inputs with the same envelope.
+
+#: Annotation for a ``revision`` value that has NOT yet passed ``RevisionValidator``.
+#:
+#: Deliberately ``Any``. Any narrower annotation lets the transport's own validation
+#: coerce the wire value before this shared gate runs, and the transports coerce
+#: differently -- FastMCP turns the string "7" into 7 against an ``int | None``
+#: annotation, while a plain dict boundary hands "7" through untouched. The result
+#: would be one rule on paper and three behaviours on the wire. Carry the wire value
+#: under this alias; the one shared gate is ``UpdateMediaBuyRequest._normalize_revision``,
+#: which reads the value AS SENT (threaded via ``raw_wire_payload``) so presence and the
+#: value contract are decided in a single place on every transport.
+#:
+#: ``WithJsonSchema`` is schema-only: it publishes the buyer-facing contract on generated
+#: interfaces without adding a validator, so the ``Any`` runtime carrier -- and the
+#: string/null distinction it preserves -- is unchanged. A revision of 0 still reaches the
+#: shared gate and is rejected there. The published fragment is read from the pin
+#: (``update_media_buy_revision_schema``) so a single value feeds every interface and the
+#: bound cannot drift from the pinned schema.
+type RawRevision = Annotated[Any, WithJsonSchema(update_media_buy_revision_schema())]
+
+
+def _normalize_whole_number(value: int | float) -> int:
+    """Normalize an accepted revision to ``int``, rejecting a fractional value.
+
+    ``int(value)`` is safe here ONLY because the float arm carries
+    ``allow_inf_nan=False``: without it, ``int(float("inf"))`` raises a raw
+    ``OverflowError`` straight out of the validator, which escapes as a crash
+    rather than as a buyer-facing error envelope.
+    """
+    as_int = int(value)
+    if as_int != value:
+        raise ValueError("revision must be a whole number")
+    return as_int
+
+
+#: The single rule for what a ``revision`` value may be.
+#:
+#: ``StrictInt`` refuses the numeric string "7" and the bool ``True`` (which Python
+#: would otherwise happily read as 1); the ``StrictFloat`` arm admits the schema-valid
+#: whole-number float; ``allow_inf_nan=False`` refuses the non-finite floats; ``ge`` is
+#: read from the pin (``update_media_buy_revision_minimum``) so it cannot drift from the
+#: schema's ``minimum``; and the after-validator collapses the accepted value to a real
+#: ``int`` so nothing downstream has to care which arm matched.
+RevisionValidator: TypeAdapter[int] = TypeAdapter(
+    Annotated[
+        StrictInt | Annotated[StrictFloat, Field(allow_inf_nan=False)],
+        Field(ge=update_media_buy_revision_minimum()),
+        AfterValidator(_normalize_whole_number),
+    ]
+)
+
+
+def _validate_revision(value: RawRevision, context: Any = None) -> int:
+    """Run ``RevisionValidator``, translating a rejection into a buyer-facing error.
+
+    ``context`` is the buyer-supplied context from the raw payload, threaded through so a
+    malformed revision echoes it on the two-layer error envelope -- an async buyer needs
+    its own context back to correlate the rejection with the request it sent, exactly as
+    the revision-CONFLICT path already does.
+    """
+    try:
+        return RevisionValidator.validate_python(value)
+    except ValidationError as exc:
+        # VALIDATION_ERROR (not INVALID_REQUEST): a field value the pinned request
+        # schema does not admit is a schema-validation failure, the same class as a
+        # malformed idempotency_key on this model (``_check_idempotency_key`` ->
+        # ``validate_idempotency_key_shape``). One model answers one violation class
+        # with one code. The 3.1.1 conformance storyboard does not grade revision
+        # (only narrative + a sample body in dist/compliance/3.1.1), so the choice is
+        # anchored to the value/range taxonomy in dist/schemas/3.1.1/media-buy/
+        # update-media-buy-request.json, not to a graded step.
+        raise AdCPValidationError(
+            f"revision must be an integer of at least {update_media_buy_revision_minimum()}.",
+            field="revision",
+            suggestion=(
+                "Send the revision value exactly as it appeared in the media buy's most "
+                "recent create/update response or in get_media_buys, or omit revision "
+                "entirely to skip the optimistic-concurrency check."
+            ),
+            context=context,
+        ) from exc
+
+
 class UpdateMediaBuyRequest(LibraryUpdateMediaBuyRequest):
     """Update media buy request extending library type.
 
@@ -2388,6 +2489,32 @@ class UpdateMediaBuyRequest(LibraryUpdateMediaBuyRequest):
             if isinstance(end_time, str):
                 values["end_time"] = datetime.fromisoformat(end_time)
 
+        return values
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_revision(cls, values: Any) -> Any:
+        """Apply the shared ``revision`` value contract, explicit-null included.
+
+        This has to run in ``mode="before"``: the inherited ``revision: int | None``
+        field is what would otherwise read the string "7" as 7 and ``True`` as 1. By
+        the time an ``mode="after"`` validator sees the value, the coercion has
+        already happened and the violation is invisible.
+
+        Presence is answered here, from the input dict. A caller threads the payload AS
+        SENT (``_build_update_request``'s ``raw_wire_payload``), so ``"revision" in
+        values`` distinguishes an omitted key from an explicitly-supplied ``null``. The
+        pinned request schema gives ``revision`` no null arm, so an explicit null reaches
+        the shared gate and is rejected there -- reading it as "no token supplied" would
+        hand the buyer a 200 on an update whose concurrency check never ran. An omitted
+        key is left untouched (optional, last-write-wins).
+        """
+        if not isinstance(values, dict) or "revision" not in values:
+            return values
+        values = copy_before_mutating(values)
+        # Pass the buyer's context (raw payload form) so a malformed revision echoes it on
+        # the error envelope, the same correlation the CONFLICT path gives an async buyer.
+        values["revision"] = _validate_revision(values["revision"], context=values.get("context"))
         return values
 
     @model_validator(mode="after")

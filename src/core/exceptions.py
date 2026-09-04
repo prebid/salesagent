@@ -1121,6 +1121,84 @@ class AdCPIdempotencyExpiredError(AdCPConflictError):
     _default_error_code: ClassVar[str] = "IDEMPOTENCY_EXPIRED"
 
 
+class AdCPRevisionConflictError(AdCPConflictError):
+    """The buyer's expected ``revision`` did not match the media buy's (409, CONFLICT).
+
+    The pinned update-media-buy-request.json states that when ``revision`` is
+    provided, sellers MUST reject the update with ``CONFLICT`` if the media buy's
+    current revision does not match, and MUST enforce that comparison atomically
+    with the write. This is the error that MUST names.
+
+    Code and recovery are inherited, not restated: ``CONFLICT`` is classified
+    ``transient`` by the pinned ``error-code.json`` enumMetadata, and that is the
+    right reading here -- the buyer re-reads the media buy and retries, with no
+    human in the loop.
+
+    ``details`` follows the pinned ``error-details/conflict.json`` shape
+    (``resource_id`` / ``expected_version`` / ``current_version``). Use the two
+    named constructors rather than building ``details`` at a raise site, so every
+    conflict reaches the buyer in one shape.
+    """
+
+    _default_suggestion: ClassVar[str] = (
+        "Re-read the media buy (get_media_buys) and retry the update with the revision it reports."
+    )
+
+    @classmethod
+    def mismatch(
+        cls,
+        *,
+        media_buy_id: str,
+        expected: int,
+        current: int,
+        context: ContextObject | dict[str, Any] | None = None,
+    ) -> AdCPRevisionConflictError:
+        """The row was read and its revision is not the one the buyer expected."""
+        return cls(
+            f"Media buy {media_buy_id} has been modified: the update expected revision "
+            f"{expected} but its current revision is {current}.",
+            details={
+                "resource_id": media_buy_id,
+                "expected_version": expected,
+                "current_version": current,
+            },
+            context=context,
+        )
+
+
+#: The only thing a buyer is told when a seller-side invariant breaks. The diagnostic
+#: goes to the log, never onto the wire: it names internal state the buyer neither
+#: supplied nor can act on.
+_INVARIANT_VIOLATION_MESSAGE = "The request could not be completed due to an internal error."
+
+
+class AdCPInvariantViolationError(AdCPServiceUnavailableError):
+    """A "this cannot happen" breach of a seller-side invariant (503, SERVICE_UNAVAILABLE).
+
+    Raised where the code has already established a fact and then finds it untrue --
+    e.g. a row read under lock moments ago has vanished. The alternative at such a
+    site is a bare ``RuntimeError``, which reaches the boundary as an untyped
+    exception and is flattened into a generic envelope with no recovery hint.
+
+    Wire code and recovery are inherited from ``AdCPServiceUnavailableError``:
+    ``SERVICE_UNAVAILABLE`` is classified ``transient`` by the pinned
+    ``error-code.json`` enumMetadata, and a conformance oracle grades that match.
+    ``INTERNAL_ERROR`` is deliberately not used -- it is absent from the pinned enum
+    and would only be remapped to ``SERVICE_UNAVAILABLE`` anyway.
+
+    The diagnostic names internal state and is carried as a non-wire attribute
+    (``diagnostic``): it stays out of ``to_dict``/``details`` (the buyer-facing
+    message is fixed) and is emitted by ``record_boundary_error`` when the
+    exception reaches a transport boundary — never from ``__init__``, so
+    constructing the exception has no logging side effect.
+    """
+
+    def __init__(self, diagnostic: str, **kwargs: Any) -> None:
+        super().__init__(_INVARIANT_VIOLATION_MESSAGE, **kwargs)
+        #: Internal diagnostic, kept off the wire. ``record_boundary_error`` logs it.
+        self.diagnostic = diagnostic
+
+
 class AdCPCreativeRejectedError(AdCPError):
     """Creative failed policy or technical validation (422, CREATIVE_REJECTED)."""
 

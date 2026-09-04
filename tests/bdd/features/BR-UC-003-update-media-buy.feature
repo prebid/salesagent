@@ -2139,8 +2139,8 @@ Feature: BR-UC-003 Update Media Buy
       | partition      | value | outcome                            |
       | stale_revision | 5     | error "CONFLICT" with suggestion   |
       | ahead_revision | 99    | error "CONFLICT" with suggestion   |
-      | below_min      | 0     | error "INVALID_REQUEST" with suggestion |
-      | wrong_type     | "7"   | error "INVALID_REQUEST" with suggestion |
+      | below_min      | 0     | error "VALIDATION_ERROR" with suggestion |
+      | wrong_type     | "7"   | error "VALIDATION_ERROR" with suggestion |
 
   @T-UC-003-boundary-revision @boundary @revision @schema-v3.1
   Scenario Outline: Revision optimistic-concurrency boundary validation - <boundary_point>
@@ -2158,7 +2158,7 @@ Feature: BR-UC-003 Update Media Buy
       | boundary_point                  | current | value          | outcome                            |
       | revision absent (LWW)           | 7       | <not provided> | success                            |
       | revision 1, buy at 1 (min match)| 1       | 1              | success                            |
-      | revision 0 (below minimum 1)    | 7       | 0              | error "INVALID_REQUEST" with suggestion |
+      | revision 0 (below minimum 1)    | 7       | 0              | error "VALIDATION_ERROR" with suggestion |
       | revision below current (stale)  | 7       | 6              | error "CONFLICT" with suggestion   |
       | revision above current (ahead)  | 7       | 8              | error "CONFLICT" with suggestion   |
 
