@@ -12,10 +12,21 @@ long-running multi-tenant process:
   attacker-influenceable).
 - **``policy_triggered``** is validated against :data:`POLICY_TRIGGERED_ALLOWLIST`
   via :func:`sanitize_policy_triggered`; unknown values collapse to ``"other"``.
+- **``scheduler``** (isolation-error metering) is validated against
+  :data:`SCHEDULER_ALLOWLIST` via :func:`sanitize_scheduler`.
 
 Call sites must record AI-review metrics through :func:`record_ai_review` and
-:func:`record_ai_review_error` so the bounding logic lives in exactly one place.
+:func:`record_ai_review_error` so the bounding logic lives in exactly one
+place. :func:`record_scheduler_isolation_error` is the ``scheduler=``
+equivalent, but takes an already-bounded ``error_type: str`` rather than a raw
+exception: the services layer (schedulers) owns classification of its own
+exception population (e.g. ``SQLAlchemyError`` -> ``"db_error"``) and this
+module does not import ``sqlalchemy``/``requests`` to interpret exceptions it
+does not own — one classifier cannot serve two subsystems with disjoint
+exception populations without changing behavior for one of them.
 """
+
+from collections.abc import Container
 
 from prometheus_client import REGISTRY, Counter, Gauge, Histogram, generate_latest
 
@@ -29,8 +40,14 @@ from src.core.exceptions import (
 # Bounded label vocabularies
 # ---------------------------------------------------------------------------
 
-#: Fixed enum for the ``error_type`` label. Keep <= 5 values.
+#: Fixed enum for the AI-review ``error_type`` label. Keep <= 5 values.
 ERROR_TYPE_VALUES = ("validation", "timeout", "model_error", "other")
+
+#: Fixed enum for the scheduler-isolation ``error_type`` label. Classification
+#: happens at the services layer (see e.g.
+#: ``media_buy_status_scheduler._classify_scheduler_error``); this module only
+#: bounds the already-classified string.
+SCHEDULER_ERROR_TYPE_VALUES = ("db_error", "other")
 
 #: Closed set of ``policy_triggered`` values emitted by the AI review flow.
 #: Anything outside this set (e.g. an AI-generated free-form reason) collapses
@@ -47,12 +64,23 @@ POLICY_TRIGGERED_ALLOWLIST = frozenset(
     }
 )
 
+#: Closed set of ``scheduler`` label values for isolation-error metering.
+#: Unknown values collapse to ``"other"`` the same way as ``policy_triggered``.
+SCHEDULER_ALLOWLIST = frozenset(
+    {
+        "media_buy_status",
+        "other",
+    }
+)
+
 
 def categorize_error(error: BaseException) -> str:
     """Collapse an arbitrary exception into a bounded ``error_type`` enum.
 
     The mapping is intentionally coarse — its only job is to keep Prometheus
     series count constant regardless of how many exception classes exist.
+    Owned by the AI-review flow only; other subsystems classify their own
+    exception population at their own layer (see module docstring).
     """
     # Timeouts first: a TimeoutError may also subclass OSError, and project
     # AdCP errors that mean "service unavailable" are timeout-ish operationally.
@@ -66,11 +94,26 @@ def categorize_error(error: BaseException) -> str:
     return "other"
 
 
-def sanitize_policy_triggered(value: str | None) -> str:
-    """Return ``value`` if it is in the allowlist, else ``"other"``."""
-    if value in POLICY_TRIGGERED_ALLOWLIST:
+def _sanitize_or_other(value: str | None, allowed: Container[str]) -> str:
+    """Return ``value`` when it is a member of ``allowed``, else ``"other"``."""
+    if value is not None and value in allowed:
         return value
     return "other"
+
+
+def sanitize_policy_triggered(value: str | None) -> str:
+    """Return ``value`` if it is in the allowlist, else ``"other"``."""
+    return _sanitize_or_other(value, POLICY_TRIGGERED_ALLOWLIST)
+
+
+def sanitize_scheduler(value: str | None) -> str:
+    """Return ``value`` if it is in the scheduler allowlist, else ``"other"``."""
+    return _sanitize_or_other(value, SCHEDULER_ALLOWLIST)
+
+
+def sanitize_scheduler_error_type(value: str | None) -> str:
+    """Return ``value`` if it is in :data:`SCHEDULER_ERROR_TYPE_VALUES`, else ``"other"``."""
+    return _sanitize_or_other(value, SCHEDULER_ERROR_TYPE_VALUES)
 
 
 # ---------------------------------------------------------------------------
@@ -141,6 +184,15 @@ webhook_queue_size = Gauge(
     ["tenant_id"],
 )
 
+# ---------------------------------------------------------------------------
+# Scheduler isolation-error metrics (media_buy_status + future adopters)
+# ---------------------------------------------------------------------------
+scheduler_isolation_errors = Counter(
+    "scheduler_isolation_errors_total",
+    "Per-item scheduler isolation errors by bounded scheduler and error type",
+    ["scheduler", "tenant_id", "error_type"],
+)
+
 
 # ---------------------------------------------------------------------------
 # Recording helpers — single source of truth for label bounding
@@ -157,6 +209,20 @@ def record_ai_review(tenant_id: str, decision: str, policy_triggered: str | None
 def record_ai_review_error(tenant_id: str, error: BaseException) -> None:
     """Increment :data:`ai_review_errors` with a bounded ``error_type``."""
     ai_review_errors.labels(tenant_id=tenant_id, error_type=categorize_error(error)).inc()
+
+
+def record_scheduler_isolation_error(scheduler: str, tenant_id: str, error_type: str) -> None:
+    """Increment :data:`scheduler_isolation_errors` with bounded labels.
+
+    ``error_type`` must already be bounded by the caller (see module
+    docstring) — this recorder only sanitizes against
+    :data:`SCHEDULER_ERROR_TYPE_VALUES`, it does not classify a raw exception.
+    """
+    scheduler_isolation_errors.labels(
+        scheduler=sanitize_scheduler(scheduler),
+        tenant_id=tenant_id,
+        error_type=sanitize_scheduler_error_type(error_type),
+    ).inc()
 
 
 def get_metrics_text() -> str:

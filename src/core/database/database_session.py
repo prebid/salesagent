@@ -14,7 +14,7 @@ from urllib.parse import urlparse
 
 import pydantic_core
 from sqlalchemy import create_engine, event, select
-from sqlalchemy.exc import DisconnectionError, OperationalError, SQLAlchemyError
+from sqlalchemy.exc import DisconnectionError, InterfaceError, OperationalError, SQLAlchemyError
 from sqlalchemy.orm import Session, scoped_session, sessionmaker
 
 from src.core.database.db_config import DatabaseConfig, int_env
@@ -30,6 +30,34 @@ _scoped_session = None
 _last_health_check: float = 0.0
 _health_check_interval = 60  # Check health every 60 seconds
 _is_healthy = True
+
+#: Exception *classes* that :func:`get_db_session` treats as circuit-breaker
+#: keys (arms ``_is_healthy = False``). This is the breaker's class set — not
+#: the per-item isolation escape predicate (:func:`is_connection_dead`).
+#:
+#: Schedulers isolate per-item failures via ``is_connection_dead``, which keys
+#: on connection *state* (``connection_invalidated`` / ``DisconnectionError``),
+#: not on membership in this tuple. A plain ``OperationalError`` (e.g. statement
+#: timeout) is deliberately isolated and must NOT be re-raised by callers.
+#:
+#: :func:`get_db_session` also arms the breaker when ``is_connection_dead`` is
+#: true on any ``SQLAlchemyError`` (narrow escape⇒arm for scheduler re-raises).
+#: Broader inventory / session-layer cleanup remains #2162.
+CONNECTION_ERROR_TYPES: tuple[type[BaseException], ...] = (
+    OperationalError,
+    DisconnectionError,
+    InterfaceError,
+)
+
+
+def is_connection_dead(exc: BaseException) -> bool:
+    """Return True when ``exc`` indicates a dead/unusable DB connection.
+
+    Owned next to :data:`CONNECTION_ERROR_TYPES`. Schedulers call this in ``except``
+    to decide re-raise vs isolate; :func:`get_db_session` arms the breaker when
+    this is true on escaped ``SQLAlchemyError`` subclasses outside the class tuple.
+    """
+    return bool(getattr(exc, "connection_invalidated", False)) or isinstance(exc, DisconnectionError)
 
 
 def _pydantic_json_serializer(obj: Any) -> str:
@@ -226,7 +254,7 @@ def get_db_session() -> Generator[Session, None, None]:
     session = scoped()
     try:
         yield session
-    except (OperationalError, DisconnectionError) as e:
+    except CONNECTION_ERROR_TYPES as e:
         logger.error(f"Database connection error: {e}")
         session.rollback()
         # Remove session from registry to force reconnection
@@ -238,6 +266,10 @@ def get_db_session() -> Generator[Session, None, None]:
     except SQLAlchemyError as e:
         logger.error(f"Database error: {e}")
         session.rollback()
+        if is_connection_dead(e):
+            scoped.remove()
+            _is_healthy = False
+            _last_health_check = time.time()
         raise
     finally:
         session.close()
@@ -248,10 +280,16 @@ def execute_with_retry(func, max_retries: int = 3, retry_on: tuple = (Operationa
     """
     Execute a database operation with retry logic for connection issues.
 
+    Default ``retry_on`` stays the historical retry vocabulary
+    (``OperationalError``, ``DisconnectionError``) — not
+    :data:`CONNECTION_ERROR_TYPES` — so breaker arm-set edits (e.g. adding
+    ``InterfaceError``) do not silently change auth/principal lookup retry
+    behavior via :func:`execute_with_retry`.
+
     Args:
         func: Function that takes a session as its first argument
         max_retries: Maximum number of retry attempts
-        retry_on: Tuple of exception types to retry on (defaults to connection errors)
+        retry_on: Tuple of exception types to retry on (defaults to retryable DB errors)
 
     Returns:
         The result of the function
