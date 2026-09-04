@@ -663,8 +663,17 @@ async def _get_products_impl(
             from src.services.ai.factory import get_factory
 
             factory = get_factory()
-            if factory.is_ai_enabled():
-                model = factory.create_model()
+            # Pass the tenant's own AI configuration. Without it the factory falls
+            # back to an empty TenantAIConfig and sees only the platform-level key
+            # from the environment, so a tenant that configured its key in the Admin
+            # UI got no ranking at all — and the miss is logged at debug level, so it
+            # fails silently. Mirrors the fallback in src/core/utils/naming.py.
+            tenant_ai_config = tenant.get("ai_config")
+            if not tenant_ai_config and tenant.get("gemini_api_key"):
+                tenant_ai_config = {"provider": "gemini", "api_key": tenant.get("gemini_api_key")}
+
+            if factory.is_ai_enabled(tenant_ai_config):
+                model = factory.create_model(tenant_ai_config=tenant_ai_config)
                 agent = create_ranking_agent(model)
 
                 # Convert products to dicts for ranking

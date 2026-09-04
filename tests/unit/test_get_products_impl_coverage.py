@@ -512,6 +512,72 @@ class TestAIRankingDisabled:
         assert result.products[1].product_id == "prod-b"
 
 
+class TestAIRankingUsesTenantConfig:
+    """The ranking path must consult the tenant's own AI configuration.
+
+    Intent: a tenant that configures its API key in the Admin UI (stored in
+    tenants.ai_config) gets AI ranking. Calling the factory without that config
+    makes it fall back to the platform-level environment key, so such a tenant
+    silently got no ranking — the miss is only logged at debug level.
+    """
+
+    @pytest.mark.asyncio
+    async def test_tenant_ai_config_is_passed_to_factory(self):
+        """The tenant's ai_config reaches both is_ai_enabled and create_model."""
+        ai_config = {"provider": "google", "model": "gemini-flash-lite-latest", "api_key": "tenant-key"}
+        tenant = _make_tenant()
+        tenant["product_ranking_prompt"] = "rank by relevance"
+        tenant["ai_config"] = ai_config
+        identity = _make_identity(principal_id="user-1", tenant_id="test-tenant", tenant=tenant)
+        req = _make_request()
+
+        mock_factory = MagicMock()
+        # Keep AI off so the test stops at the factory calls it is asserting on,
+        # rather than needing a working agent.
+        mock_factory.is_ai_enabled.return_value = False
+
+        mock_uow = _mock_uow_with_products([create_test_product(product_id="prod-a")])
+        patches = _standard_patches(mock_uow)
+
+        with contextlib.ExitStack() as stack:
+            for p in patches:
+                stack.enter_context(p)
+            stack.enter_context(patch("src.services.ai.factory.get_factory", return_value=mock_factory))
+
+            from src.core.tools.products import _get_products_impl
+
+            await _get_products_impl(req, identity)
+
+        mock_factory.is_ai_enabled.assert_called_once_with(ai_config)
+
+    @pytest.mark.asyncio
+    async def test_legacy_gemini_api_key_is_used_when_ai_config_absent(self):
+        """A tenant still on the legacy gemini_api_key field keeps working."""
+        tenant = _make_tenant()
+        tenant["product_ranking_prompt"] = "rank by relevance"
+        tenant["ai_config"] = None
+        tenant["gemini_api_key"] = "legacy-key"
+        identity = _make_identity(principal_id="user-1", tenant_id="test-tenant", tenant=tenant)
+        req = _make_request()
+
+        mock_factory = MagicMock()
+        mock_factory.is_ai_enabled.return_value = False
+
+        mock_uow = _mock_uow_with_products([create_test_product(product_id="prod-a")])
+        patches = _standard_patches(mock_uow)
+
+        with contextlib.ExitStack() as stack:
+            for p in patches:
+                stack.enter_context(p)
+            stack.enter_context(patch("src.services.ai.factory.get_factory", return_value=mock_factory))
+
+            from src.core.tools.products import _get_products_impl
+
+            await _get_products_impl(req, identity)
+
+        mock_factory.is_ai_enabled.assert_called_once_with({"provider": "gemini", "api_key": "legacy-key"})
+
+
 class TestAdapterPricingAnnotation:
     """Adapter annotation fail-open on expected errors.
 
