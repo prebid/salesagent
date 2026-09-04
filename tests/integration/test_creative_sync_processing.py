@@ -12,6 +12,7 @@ from __future__ import annotations
 from unittest.mock import MagicMock, patch
 
 import pytest
+from adcp.types import BrandReference
 from sqlalchemy import select
 
 from src.core.database.database_session import get_db_session
@@ -286,13 +287,18 @@ class TestGenerativeUpdateUserAssets:
 
 
 class TestGenerativeUpdatePromotedOfferings:
-    """Promoted offerings extracted and passed to build_creative.
+    """Promoted offerings reach build_creative — in ``assets``, on the update path.
 
     BDD: UC-006-GENERATIVE-CREATIVE-BUILD-07 (promoted_offerings on update)
+
+    The pre-3.1 call plucked this one slot into its own ``promoted_offerings``
+    argument; ``build-creative-request.json @ 3.1.1`` has no such property, so it
+    travels with the other assets on the manifest (#2143). What matters is that
+    the buyer's offering context is not dropped.
     """
 
     def test_update_promoted_offerings_passed(self, integration_db):
-        """Update with promoted_offerings asset → passed to build_creative."""
+        """Update with a promoted_offerings asset → forwarded in the assets map."""
         with CreativeSyncEnv() as env:
             env.setup_default_data()
             fmt = env.setup_generative_build()
@@ -323,22 +329,32 @@ class TestGenerativeUpdatePromotedOfferings:
 
             assert result.creatives[0].action == "updated"
             call_args = env.mock["registry"].return_value.build_creative.call_args
-            assert call_args[1]["promoted_offerings"] is not None
+            assert call_args.kwargs["assets"].keys() == {"message", "promoted_offerings"}
 
 
-class TestGenerativeUpdateGeminiKeyMissing:
-    """Generative update without GEMINI_API_KEY returns failure.
+class TestGenerativeUpdateNoBuildConfig:
+    """Generative update proceeds without GEMINI_API_KEY (Change 3).
 
-    BDD: UC-006-EXT-I-01 (update path)
+    Change 3 removed the gemini_api_key dependency from build_creative.
+    The generative path now uses ADCPMultiAgentClient, so the absence of
+    gemini_api_key must NOT cause a failure — the build_creative mock
+    controls the outcome instead.
     """
 
-    def test_update_generative_no_gemini_key_fails(self, integration_db):
-        """Update generative creative without GEMINI_API_KEY → action=failed."""
+    def test_update_generative_succeeds_without_gemini_key(self, integration_db):
+        """Update generative creative without GEMINI_API_KEY → succeeds (Change 3).
+
+        Before Change 3, missing gemini_api_key caused action=failed.
+        After Change 3, the key is not checked — ADCPMultiAgentClient is used.
+        """
         with CreativeSyncEnv() as env:
             env.setup_default_data()
             fmt = env.setup_generative_build()
 
-            # Create with gemini key
+            # Ensure gemini_api_key is absent (simulates pre-Change-3 failure condition)
+            env.mock["config"].return_value.gemini_api_key = None
+
+            # Create first
             env.call_impl(
                 creatives=[
                     _creative(
@@ -349,9 +365,10 @@ class TestGenerativeUpdateGeminiKeyMissing:
                 ]
             )
 
-            # Remove gemini key for update
-            env.mock["config"].return_value.gemini_api_key = None
+            # Reset mock to track update call
+            env.mock["registry"].return_value.build_creative.reset_mock()
 
+            # Update — must succeed even without gemini_api_key
             result = env.call_impl(
                 creatives=[
                     _creative(
@@ -363,8 +380,12 @@ class TestGenerativeUpdateGeminiKeyMissing:
             )
 
             creative_result = result.creatives[0]
-            assert creative_result.action == "failed"
-            assert any("GEMINI_API_KEY" in e for e in _error_messages(creative_result.errors))
+            assert creative_result.action == "updated", (
+                "Change 3: generative update must succeed without GEMINI_API_KEY — "
+                "ADCPMultiAgentClient is used instead of the Gemini SDK directly"
+            )
+            # build_creative must have been called via ADCPMultiAgentClient
+            assert env.mock["registry"].return_value.build_creative.called
 
 
 # ── Approval Mode UPDATE Tests (covers lines 97-139) ──────────────────────
@@ -801,3 +822,67 @@ class TestCreateServerGeneratedId:
             assert generated_id is not None
             assert len(generated_id) > 0
             assert generated_id != ""
+
+
+class TestBrandPersistence:
+    """media_buy_brand is stored in creative data["brand"] (Change 5).
+
+    Verifies that brand information from the media buy request is propagated
+    through _sync_creatives_impl's keyword-only ``media_buy_brand`` (orchestration-only:
+    not on the buyer-facing wire contract, so no wrapper forwards it) and persisted in
+    the creative's data field so adapters can read brand.domain for routing decisions.
+
+    media_buy_brand is typed as BrandReference end-to-end; serialization to
+    dict happens only at the DB boundary inside _build_creative_data().
+
+    The four behaviours are one flow — sync, optionally sync again, read the
+    stored brand — over three scalars, so they are a table rather than four
+    copies of that flow. ``CreativeAsset`` has no ``brand`` field in the SDK
+    schema, so the priority axis is between successive ``media_buy_brand`` values
+    across syncs, never between a media-buy brand and a creative-level one.
+    """
+
+    @pytest.mark.parametrize(
+        "create_brand,update_brand,expected_domain",
+        [
+            # A single sync stores the brand it was given.
+            pytest.param("acme.com", None, "acme.com", id="create"),
+            # _build_creative_data only writes brand when media_buy_brand is given,
+            # and the update path carries the stored value forward, so a later
+            # brand-less sync must not erase it.
+            pytest.param("original.com", None, "original.com", id="preserved"),
+            # The media-buy brand is the buyer-level one and always takes precedence.
+            pytest.param("original.com", "mediabuy.com", "mediabuy.com", id="overwritten"),
+            # A creative first synced without a brand gets one on update.
+            pytest.param(None, "mediabuy.com", "mediabuy.com", id="set-on-update"),
+        ],
+    )
+    def test_brand_is_persisted_across_syncs(self, integration_db, create_brand, update_brand, expected_domain):
+        creative_id = "c_brand_matrix"
+
+        with CreativeSyncEnv() as env:
+            env.setup_default_data()
+            fmt = env.setup_generative_build()
+
+            def _sync_brand(brand: str | None, message: str):
+                return env.call_internal_impl(
+                    creatives=[
+                        _creative(
+                            creative_id=creative_id,
+                            format_id=fmt,
+                            assets=build_assets(text_spec("message", content=message)),
+                        )
+                    ],
+                    **({"media_buy_brand": BrandReference(domain=brand)} if brand else {}),
+                )
+
+            created = _sync_brand(create_brand, "Initial")
+            assert created.creatives[0].action == "created"
+
+            # "preserved" is the second sync WITHOUT a brand: the same call shape,
+            # so it runs whenever this case does not set an update brand.
+            updated = _sync_brand(update_brand, "Updated")
+            assert updated.creatives[0].action == "updated"
+
+            db = env.get_one(DBCreative, creative_id=creative_id)
+            assert db.data.get("brand") == {"domain": expected_domain}

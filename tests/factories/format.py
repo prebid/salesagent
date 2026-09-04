@@ -203,6 +203,53 @@ def pick_reference_formats(predicate: Callable[[Format], bool], min_count: int =
 # ── Factories ────────────────────────────────────────────────────────
 
 
+def make_static_format(
+    format_id: str = "display_300x250_image",
+    *,
+    agent_url: str = AGENT_URL,
+    name: str = "Medium Rectangle",
+    **fields: object,
+) -> Format:
+    """A real, NON-generative ``Format`` — the fixture creative-sync tests need.
+
+    Production decides which creative-agent call to make by reading
+    ``format_obj.output_format_ids`` (truthy → generative ``build_creative``;
+    falsy → static ``preview_creative``). A ``Mock`` standing in for a format
+    auto-creates that attribute as a truthy ``Mock``, so a static-format test
+    silently exercises the generative path — and every test using such a fixture
+    then needs an explicit ``output_format_ids = None`` null-out to route
+    correctly, which is a mock default deciding which production branch runs.
+
+    A real ``Format`` cannot conjure a truthy ``output_format_ids``: it defaults
+    to ``None``, and an attribute the model does not define is an
+    ``AttributeError`` rather than a branch selector.
+    """
+    return Format(format_id=FormatId(agent_url=agent_url, id=format_id), name=name, **fields)
+
+
+def make_generative_format(
+    format_id: str = "display_300x250_generative",
+    *,
+    agent_url: str = AGENT_URL,
+    name: str = "Generative Display",
+    output_format_ids: list[str] | None = None,
+    **fields: object,
+) -> Format:
+    """A real GENERATIVE ``Format`` — non-empty ``output_format_ids``.
+
+    Counterpart to :func:`make_static_format`: the ``output_format_ids`` are
+    real ``FormatId`` federation references (the shape production reads), so a
+    test cannot pass against a list of bare strings the model would reject.
+    """
+    outputs = output_format_ids or ["display_300x250"]
+    return Format(
+        format_id=FormatId(agent_url=agent_url, id=format_id),
+        name=name,
+        output_format_ids=[FormatId(agent_url=agent_url, id=out) for out in outputs],
+        **fields,
+    )
+
+
 class FormatIdFactory(factory.Factory):
     """Factory for FormatId Pydantic model."""
 

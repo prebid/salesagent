@@ -280,20 +280,24 @@ Feature: BR-UC-006 Sync Creative Assets
     And the error should include a "suggestion" field
     And the suggestion should contain "media_url"
     # POST-F2, POST-F3
-    # --- ext-i: CREATIVE_GEMINI_KEY_MISSING ---
+    # --- ext-i: generative build delegates to the creative agent ---
+    # Reconciled against AdCP 3.1.1 (PR #1482): generation is the creative agent's
+    # job, reached over AdCP via build_creative — no seller-side generation key is
+    # part of the contract. The previous form of this scenario demanded a
+    # CREATIVE_GEMINI_KEY_MISSING failure, a code absent from
+    # enums/error-code.json @ 3.1.1, for a seller-side gate the production path no
+    # longer has. It now grades the actual obligation: the sync succeeds and the
+    # build is delegated, so no non-spec failure code can be reintroduced.
 
-  @T-UC-006-ext-i @extension @ext-i @error
-  Scenario: Gemini key missing — generative creative without config
+  @T-UC-006-ext-i @extension @ext-i @generative-no-seller-key
+  Scenario: Generative creative builds without a seller-side generation key
     Given the Buyer is authenticated with a valid principal_id
     And a creative with a generative format (output_format_ids present)
     And the Seller Agent does not have GEMINI_API_KEY configured
     When the Buyer Agent syncs the creative
-    Then the creative should have action "failed"
-    And the error code should be "CREATIVE_GEMINI_KEY_MISSING"
-    And the error message should contain "GEMINI_API_KEY"
-    And the error should include a "suggestion" field
-    And the suggestion should contain "seller"
-    # POST-F2, POST-F3
+    Then the creative should have action "created"
+    And the creative should be processed as generative
+    # POST-S1, POST-S2
     # --- ext-j: PACKAGE_NOT_FOUND (strict) ---
 
   @T-UC-006-ext-j @extension @ext-j @error
@@ -828,7 +832,7 @@ Feature: BR-UC-006 Sync Creative Assets
       | static_creative                 | no output_format_ids               | any assets                             | standard processing          |
       | generative_with_prompt          | output_format_ids present          | message asset with prompt text         | generative build with prompt |
       | generative_create_name_fallback | output_format_ids present (create) | no prompt assets or inputs             | generative build with name   |
-      | generative_no_gemini_key        | output_format_ids present          | message asset but no GEMINI_API_KEY    | CREATIVE_GEMINI_KEY_MISSING  |
+      | generative_no_gemini_key        | output_format_ids present          | message asset but no GEMINI_API_KEY    | generative build with prompt |
 
   @T-UC-006-partition-assignment-pkg @partition @assignment-package
   Scenario Outline: Assignment package validation — <partition>

@@ -1,16 +1,11 @@
-"""Creative format parsing and asset conversion helpers.
-
-SDK 5.7 type:ignore tracking (adcontextprotocol/adcp-client-python#913):
-- [attr-defined] on lines ~694, ~696, ~816, ~826, ~884, ~896:
-  AssetSpec (ImageFormatAsset) is a RootModel proxy; .asset_type and .asset_id
-  exist at runtime but mypy cannot see through __getattr__. Fixable when the SDK
-  ships typed accessors or a shared unwrapper helper.
-"""
+"""Creative format parsing and asset conversion helpers."""
 
 import logging
-from typing import TYPE_CHECKING, Any, TypedDict
+import re
+from typing import TYPE_CHECKING, Any, TypedDict, cast
 
 from adcp import FormatId as LibraryFormatId
+from adcp.types import BrandReference
 from pydantic import BaseModel
 
 if TYPE_CHECKING:
@@ -19,6 +14,7 @@ if TYPE_CHECKING:
     from src.core.schemas import Creative, FormatId, PackageRequest, Product
     from src.core.testing_context import TestingContext
 
+from src.core.exceptions import AdCPValidationError
 from src.core.schemas import Creative
 
 logger = logging.getLogger(__name__)
@@ -163,6 +159,9 @@ def _normalize_format_value(format_value: Any) -> str:
     return format_id
 
 
+_ASSET_SLOT_KEY_PATTERN = re.compile(r"^[a-z0-9_]+$")
+
+
 def _validate_creative_assets(assets: Any) -> dict[str, dict[str, Any]] | None:
     """Validate that creative assets are in AdCP v2.1+ dictionary format.
 
@@ -176,7 +175,14 @@ def _validate_creative_assets(assets: Any) -> dict[str, dict[str, Any]] | None:
         Dictionary of assets keyed by asset_id, or None if no assets provided
 
     Raises:
-        ValueError: If assets are not in the correct dict format, or if asset structure is invalid
+        AdCPValidationError: If assets are not in the correct dict format, or if
+            asset structure is invalid. Typed rather than a bare ``ValueError``
+            because every rejection here is BUYER input the buyer can fix:
+            ``VALIDATION_ERROR`` is classified ``correctable`` in
+            ``enums/error-code.json @ 3.1.1``, whereas an untyped exception
+            escaping into a creative-agent ``try`` is reported as the blanket
+            "agent unreachable … retry recommended" / ``transient`` — telling the
+            buyer to retry an error only they can fix.
 
     Example:
         # Correct format (AdCP v2.1+)
@@ -190,7 +196,7 @@ def _validate_creative_assets(assets: Any) -> dict[str, dict[str, Any]] | None:
 
     # Must be a dict
     if not isinstance(assets, dict):
-        raise ValueError(
+        raise AdCPValidationError(
             f"Invalid assets format: expected dict keyed by asset_id (AdCP v2.1+), got {type(assets).__name__}. "
             f"Assets must be a dictionary like: {{'main_image': {{'asset_type': 'image', 'url': '...'}}}}"
         )
@@ -199,15 +205,25 @@ def _validate_creative_assets(assets: Any) -> dict[str, dict[str, Any]] | None:
     for asset_id, asset_data in assets.items():
         # Asset ID must be a non-empty string
         if not isinstance(asset_id, str):
-            raise ValueError(
+            raise AdCPValidationError(
                 f"Asset key must be a string (asset_id from format), got {type(asset_id).__name__}: {asset_id!r}"
             )
         if not asset_id.strip():
-            raise ValueError("Asset key (asset_id) cannot be empty or whitespace-only")
+            raise AdCPValidationError("Asset key (asset_id) cannot be empty or whitespace-only")
+
+        # Per AdCP creative-manifests spec, asset slot keys (asset_id) must match
+        # ^[a-z0-9_]+$ (lowercase alphanumeric + underscore). Pre-validate here so a
+        # bad key fails with a clear, actionable message instead of surfacing later
+        # as an opaque error deep inside CreativeManifest.model_validate().
+        if not _ASSET_SLOT_KEY_PATTERN.match(asset_id):
+            raise AdCPValidationError(
+                f"Asset key '{asset_id}' is invalid: asset_id must match ^[a-z0-9_]+$ "
+                "(lowercase letters, digits, and underscores only) per the AdCP creative-manifests spec"
+            )
 
         # Asset data must be a dict or Pydantic model (typed Asset from CreativeAsset)
         if not isinstance(asset_data, dict) and not isinstance(asset_data, BaseModel):
-            raise ValueError(
+            raise AdCPValidationError(
                 f"Asset '{asset_id}' data must be a dict or model, got {type(asset_data).__name__}. "
                 f"Expected format: {{'asset_type': '...', 'url': '...', ...}}"
             )
@@ -509,6 +525,7 @@ def process_and_upload_package_creatives(
     packages: list["PackageRequest"],
     context: "ResolvedIdentity | None" = None,
     testing_ctx: "TestingContext | None" = None,
+    media_buy_brand: "BrandReference | None" = None,
 ) -> tuple[list["PackageRequest"], dict[str, list[str]]]:
     """Upload creatives from package.creatives arrays and return updated packages.
 
@@ -525,6 +542,10 @@ def process_and_upload_package_creatives(
         packages: List of Package objects to process
         context: FastMCP context (for principal_id extraction)
         testing_ctx: Optional testing context for dry_run mode
+        media_buy_brand: Optional BrandReference from the media buy request.
+            Forwarded to ``_sync_creatives_impl`` as its keyword-only,
+            orchestration-only input (it is not on the buyer-facing sync contract)
+            so adapters can read ``brand.domain`` from stored creative data.
 
     Returns:
         Tuple of (updated_packages, uploaded_ids_by_product):
@@ -560,8 +581,11 @@ def process_and_upload_package_creatives(
         logger.info(f"Processing {len(pkg.creatives)} creatives for package with product_id {product_id}")
 
         try:
-            # Step 1: Upload creatives to database via sync_creatives
-            # Phase 1a: Pass models directly (impl handles both models and dicts)
+            # Step 1: Upload creatives to database via sync_creatives.
+            # Pass BrandReference typed model directly — the sync impl accepts
+            # BrandReference | None and serializes once at the DB boundary.
+            # media_buy_brand is keyword-only on the impl: orchestration-only, so no
+            # wire wrapper forwards it and it is absent from the buyer contract.
             sync_response = _sync_creatives_impl(
                 creatives=pkg.creatives,
                 # AdCP 2.5: Full upsert semantics (no patch parameter)
@@ -570,6 +594,7 @@ def process_and_upload_package_creatives(
                 validation_mode="strict",
                 push_notification_config=None,
                 identity=context,  # ResolvedIdentity for principal_id extraction
+                media_buy_brand=media_buy_brand,
             )
 
             # A failed sync result means the creative was REJECTED (e.g. missing
@@ -716,7 +741,7 @@ def extract_media_url_and_dimensions(
         - Uses adcp.utils.get_individual_assets() for backward compatibility with assets_required
     """
     # Lazy import to avoid circular dependencies
-    from adcp.types import ImageFormatAsset as Assets
+    from adcp.types.generated_poc.core.format import BaseIndividualAsset
     from adcp.utils import get_individual_assets, has_assets
 
     url = None
@@ -727,11 +752,11 @@ def extract_media_url_and_dimensions(
     if creative_data.get("assets") and format_spec and has_assets(format_spec):
         for asset_spec in get_individual_assets(format_spec):
             # Type guard: get_individual_assets only returns individual Assets, not repeatable groups
-            if not isinstance(asset_spec, Assets):
+            if not isinstance(asset_spec, BaseIndividualAsset):
                 continue
-            asset_type = str(asset_spec.asset_type).lower()  # type: ignore[attr-defined]
+            asset_type = str(getattr(asset_spec, "asset_type", "")).lower()
             if asset_type in MEDIA_ASSET_TYPES:
-                asset_id = asset_spec.asset_id  # type: ignore[attr-defined]
+                asset_id = asset_spec.asset_id
                 if asset_id in creative_data["assets"]:
                     asset_obj = creative_data["assets"][asset_id]
                     if isinstance(asset_obj, dict):
@@ -821,6 +846,51 @@ def extract_media_url_and_dimensions(
     return url, width, height
 
 
+def _find_url_asset_by_url_type(creative_data: dict[str, Any], format_spec: Any | None, url_type: str) -> str | None:
+    """Find the URL of the creative's ``url`` asset declared as *url_type* by the format.
+
+    The Priority-1 format-spec scan shared by :func:`extract_click_url`
+    (``clickthrough``) and :func:`extract_impression_tracker_url`
+    (``tracker_pixel``): walk the format's individual assets, keep the ``url``
+    assets, and match ``requirements.url_type`` — which is a dict on a raw format
+    payload and an attribute on a parsed model, hence the two-shape read.
+
+    One home for the scan, so a change to the format-asset model (the
+    ``BaseIndividualAsset`` migration, the ``getattr(asset_spec, "asset_type")``
+    read) is made once instead of being applied identically to each caller.
+
+    Returns the asset's ``url``, or ``None`` when the format declares no such
+    slot or the creative did not fill it.
+    """
+    # Lazy import to avoid circular dependencies
+    from adcp.types.generated_poc.core.format import BaseIndividualAsset
+    from adcp.utils import get_individual_assets, has_assets
+
+    assets = creative_data.get("assets")
+    if not assets or not format_spec or not has_assets(format_spec):
+        return None
+
+    for asset_spec in get_individual_assets(format_spec):
+        if not isinstance(asset_spec, BaseIndividualAsset):
+            continue
+        if str(getattr(asset_spec, "asset_type", "")).lower() != "url":
+            continue
+        requirements = getattr(asset_spec, "requirements", None)
+        if not requirements:
+            continue
+        if isinstance(requirements, dict):
+            req_url_type = requirements.get("url_type")
+        else:
+            req_url_type = getattr(requirements, "url_type", None)
+        if req_url_type != url_type:
+            continue
+        asset_obj = assets.get(asset_spec.asset_id)
+        if isinstance(asset_obj, dict) and asset_obj.get("url"):
+            logger.debug(f"Extracted {url_type} URL from format spec asset '{asset_spec.asset_id}'")
+            return cast(str, asset_obj["url"])
+    return None
+
+
 def extract_click_url(
     creative_data: dict[str, Any],
     format_spec: Any | None,
@@ -840,34 +910,8 @@ def extract_click_url(
     Returns:
         Click-through URL string (optionally with macros substituted), or None if not found.
     """
-    # Lazy import to avoid circular dependencies
-    from adcp.types import ImageFormatAsset as Assets
-    from adcp.utils import get_individual_assets, has_assets
-
-    click_url = None
-
     # Priority 1: Use format spec to find clickthrough URL (url_type == 'clickthrough')
-    if creative_data.get("assets") and format_spec and has_assets(format_spec):
-        for asset_spec in get_individual_assets(format_spec):
-            if not isinstance(asset_spec, Assets):
-                continue
-            asset_type = str(asset_spec.asset_type).lower()  # type: ignore[attr-defined]
-            if asset_type == "url":
-                requirements = getattr(asset_spec, "requirements", None)
-                if requirements:
-                    req_url_type = None
-                    if isinstance(requirements, dict):
-                        req_url_type = requirements.get("url_type")
-                    elif hasattr(requirements, "url_type"):
-                        req_url_type = requirements.url_type
-                    if req_url_type == "clickthrough":
-                        asset_id = asset_spec.asset_id  # type: ignore[attr-defined]
-                        if asset_id in creative_data["assets"]:
-                            asset_obj = creative_data["assets"][asset_id]
-                            if isinstance(asset_obj, dict) and asset_obj.get("url"):
-                                click_url = asset_obj["url"]
-                                logger.debug(f"Extracted click URL from format spec asset '{asset_id}'")
-                                break
+    click_url = _find_url_asset_by_url_type(creative_data, format_spec, "clickthrough")
 
     # Priority 2: Fallback to known clickthrough asset_id names
     if not click_url and creative_data.get("assets"):
@@ -907,37 +951,9 @@ def extract_impression_tracker_url(creative_data: dict[str, Any], format_spec: A
     Returns:
         Impression tracker URL string or None if not found.
     """
-    # Lazy import to avoid circular dependencies
-    from adcp.types import ImageFormatAsset as Assets
-    from adcp.utils import get_individual_assets, has_assets
-
-    tracker_url = None
-
     # Priority 1: Use format spec to find impression tracker
     # Match url assets where requirements.url_type == 'tracker_pixel'
-    if creative_data.get("assets") and format_spec and has_assets(format_spec):
-        for asset_spec in get_individual_assets(format_spec):
-            if not isinstance(asset_spec, Assets):
-                continue
-            asset_type = str(asset_spec.asset_type).lower()  # type: ignore[attr-defined]
-            if asset_type == "url":
-                # Check if this is a tracker_pixel by looking at requirements.url_type
-                requirements = getattr(asset_spec, "requirements", None)
-                if requirements:
-                    req_url_type = None
-                    if isinstance(requirements, dict):
-                        req_url_type = requirements.get("url_type")
-                    elif hasattr(requirements, "url_type"):
-                        req_url_type = requirements.url_type
-                    # Only match tracker_pixel type
-                    if req_url_type == "tracker_pixel":
-                        asset_id = asset_spec.asset_id  # type: ignore[attr-defined]
-                        if asset_id in creative_data["assets"]:
-                            asset_obj = creative_data["assets"][asset_id]
-                            if isinstance(asset_obj, dict) and asset_obj.get("url"):
-                                tracker_url = asset_obj["url"]
-                                logger.debug(f"Extracted impression tracker from format spec asset '{asset_id}'")
-                                break
+    tracker_url = _find_url_asset_by_url_type(creative_data, format_spec, "tracker_pixel")
 
     # Priority 2: Look for assets with tracker_pixel url_type
     if not tracker_url and creative_data.get("assets"):

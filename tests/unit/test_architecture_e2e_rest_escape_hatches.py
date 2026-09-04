@@ -440,6 +440,22 @@ EXPECTED_UNSUPPORTED_DECLARATIONS: frozenset[tuple[str, str, str]] = frozenset(
             "live stack always serves the agent catalog; an empty catalog cannot be realized over e2e",
         ),
         ("tests/harness/creative_formats.py", "_validate_registry_formats", "<dynamic>"),
+        # Graduated (PR #1482 review round): setup_generative_build no longer
+        # declares itself unrealizable. It defaults to a generative format the
+        # PINNED reference agent serves (present in the reference fixture), and
+        # build_creative gained the ADCP_TESTING branch its sibling registry
+        # methods already had — so the live stack resolves the format AND answers
+        # the build, and the scenario is graded on e2e_rest like every other.
+        # What remains declared, at _realize_generative_build, is the narrower
+        # gap: a scenario-specific canned build_result cannot be injected into a
+        # live server that derives its own.
+        (
+            "tests/harness/creative_sync.py",
+            "_realize_generative_build",
+            "a scenario-specific build_result cannot be injected over e2e: the live server serves the "
+            "build result its own ADCP_TESTING branch derives. Assert on that result instead of pinning one.",
+        ),
+        ("tests/harness/creative_sync.py", "_realize_generative_build", "<dynamic>"),
     }
 )
 

@@ -17,6 +17,7 @@ from src.core.database.database_session import get_db_session
 from src.core.database.models import Creative as DBCreative
 from src.core.schemas import SyncCreativesResponse
 from tests.factories.creative_asset import build_assets, image_spec, text_spec
+from tests.factories.format import make_static_format
 from tests.harness import CreativeSyncEnv
 from tests.helpers.creative_test_helpers import creative_payload
 
@@ -64,12 +65,25 @@ class TestGenerativeCreatives:
             assert registry.build_creative.called
             assert not registry.preview_creative.called
 
-            # Verify build_creative args
+            # The EXACT keyword set the business layer sends. Pinned as a whole,
+            # not field by field, because the failure mode this PR fixed was a
+            # parameter that existed, was computed and passed, and was silently
+            # ignored by the callee (promoted_offerings / context_id — #2143): a
+            # per-field assertion cannot see an argument nobody reads, and a
+            # future re-addition of one must go through this line.
+            # gemini_api_key is gone with Change 3 (ADCPMultiAgentClient needs no key);
+            # creative_manifest is gone because the registry renders the wire
+            # objects itself from format_id + assets.
             call_args = registry.build_creative.call_args
-            assert call_args[1]["agent_url"] == DEFAULT_AGENT_URL
-            assert "display_300x250_generative" in str(call_args[1]["format_id"])
-            assert call_args[1]["message"] == "Create a banner ad for eco-friendly products"
-            assert call_args[1]["gemini_api_key"] == "test-gemini-key"
+            assert call_args.args == ()
+            assert set(call_args.kwargs) == {"format_id", "message", "brand", "assets"}, (
+                f"build_creative's arguments are the domain values only, got {sorted(call_args.kwargs)}"
+            )
+            agent_format = call_args.kwargs["format_id"]
+            assert agent_format.id == "display_300x250_generative"
+            assert str(agent_format.agent_url).rstrip("/") == DEFAULT_AGENT_URL
+            assert call_args.kwargs["message"] == "Create a banner ad for eco-friendly products"
+            assert call_args.kwargs["assets"].keys() == {"message"}
 
         # Verify result
         assert isinstance(result, SyncCreativesResponse)
@@ -86,19 +100,13 @@ class TestGenerativeCreatives:
 
     def test_static_format_calls_preview_creative(self, integration_db):
         """Test that static formats (without output_format_ids) call preview_creative."""
-        from unittest.mock import MagicMock
-
-        from adcp.types import FormatId as LibraryFormatId
-
         with CreativeSyncEnv() as env:
             env.setup_default_data()
 
-            # Set up static format (no output_format_ids)
-            mock_format = MagicMock()
-            mock_format.format_id = LibraryFormatId(agent_url=DEFAULT_AGENT_URL, id="display_300x250")
-            mock_format.agent_url = DEFAULT_AGENT_URL
-            mock_format.output_format_ids = None
-            env.set_run_async_result([mock_format])
+            # A real static Format: production routes on output_format_ids, and a
+            # Mock auto-creates that attribute as truthy (see make_static_format).
+            static_format = make_static_format("display_300x250", agent_url=DEFAULT_AGENT_URL)
+            env.set_run_async_result([static_format])
 
             registry = env.mock["registry"].return_value
             registry.preview_creative = AsyncMock(
@@ -115,7 +123,7 @@ class TestGenerativeCreatives:
                     ]
                 }
             )
-            registry.get_format = AsyncMock(return_value=mock_format)
+            registry.get_format = AsyncMock(return_value=static_format)
 
             result = env.call_impl(
                 creatives=[
@@ -134,15 +142,35 @@ class TestGenerativeCreatives:
         assert registry.preview_creative.called
         assert not registry.build_creative.called
 
-    def test_missing_gemini_api_key_raises_error(self, integration_db):
-        """Test that missing GEMINI_API_KEY fails the creative with clear error."""
+        # preview_creative's twin of the build_creative call-args guard above: the
+        # static path sends the same domain values (identity + validated assets,
+        # plus the existing media url), never a pre-built manifest.
+        preview_call_args = registry.preview_creative.call_args
+        assert preview_call_args is not None, "preview_creative should have been called"
+        assert set(preview_call_args.kwargs) == {"format_id", "assets", "url"}, (
+            f"preview_creative's arguments are the domain values only, got {sorted(preview_call_args.kwargs)}"
+        )
+        agent_format = preview_call_args.kwargs["format_id"]
+        assert agent_format.id == "display_300x250"
+        assert str(agent_format.agent_url).rstrip("/") == DEFAULT_AGENT_URL
+        assert preview_call_args.kwargs["assets"].keys() == {"image"}
+        assert preview_call_args.kwargs["url"] == "https://example.com/banner.png"
+
+    def test_missing_gemini_api_key_does_not_fail(self, integration_db):
+        """Change 3: missing GEMINI_API_KEY no longer fails generative creatives.
+
+        Before Change 3, build_creative checked config.gemini_api_key and raised
+        AdCPConfigurationError when absent.  After Change 3, build_creative uses
+        ADCPMultiAgentClient directly — the key is never read, so its absence must
+        NOT cause a per-creative failure.
+        """
         with CreativeSyncEnv() as env:
             env.setup_default_data()
             fmt = env.setup_generative_build(
                 format_id="display_300x250_generative",
-                gemini_api_key=None,  # No API key
+                gemini_api_key=None,  # No API key — must not matter
             )
-            # Override to remove gemini key (setup_generative_build sets it)
+            # Explicitly remove the key to confirm it is not consulted
             env.mock["config"].return_value.gemini_api_key = None
 
             result = env.call_impl(
@@ -157,9 +185,8 @@ class TestGenerativeCreatives:
 
         assert isinstance(result, SyncCreativesResponse)
         assert len(result.creatives) == 1
-        assert result.creatives[0].action == "failed"
-        assert result.creatives[0].errors
-        assert any("GEMINI_API_KEY" in str(err) for err in result.creatives[0].errors)
+        # Change 3: build succeeds — ADCPMultiAgentClient does not need gemini_api_key
+        assert result.creatives[0].action == "created"
 
     def test_message_extraction_from_assets(self, integration_db):
         """Test that message is correctly extracted from various asset roles."""
@@ -203,8 +230,17 @@ class TestGenerativeCreatives:
             call_args = registry.build_creative.call_args
             assert call_args[1]["message"] == "Create a creative for: Eco-Friendly Products Banner"
 
-    def test_context_id_reuse_for_refinement(self, integration_db):
-        """Test that context_id is reused for iterative refinement."""
+    def test_refinement_update_rebuilds_and_keeps_the_agent_session_id(self, integration_db):
+        """A second sync with new instructions dials build_creative again.
+
+        The pre-3.1 call passed the stored ``context_id`` back as a refinement
+        session id. That argument is gone (#2143): the pinned request schema's
+        refinement handle is ``refine_from_build_variant_id``, sourced from a
+        response ``build_variant_id`` the reference agent does not emit, so
+        replaying a ``context_id`` as one would be an invented mapping. What must
+        still hold is that the refinement reaches the agent as a fresh build with
+        the new message, and that the agent's session id stays on the record.
+        """
         with CreativeSyncEnv() as env:
             env.setup_default_data()
             fmt = env.setup_generative_build(
@@ -229,10 +265,9 @@ class TestGenerativeCreatives:
                 ]
             )
 
-            # Update with refinement - context_id should be reused
-            registry = env.mock["registry"].return_value
-            registry.build_creative = AsyncMock(
-                return_value={
+            # Update with refinement instructions
+            env.set_build_creative_result(
+                {
                     "status": "draft",
                     "context_id": "ctx-original",
                     "creative_output": {
@@ -240,6 +275,7 @@ class TestGenerativeCreatives:
                     },
                 }
             )
+            registry = env.mock["registry"].return_value
 
             env.call_impl(
                 creatives=[
@@ -252,15 +288,24 @@ class TestGenerativeCreatives:
             )
 
             call_args = registry.build_creative.call_args
-            assert call_args[1]["context_id"] == "ctx-original"
-            assert call_args[1]["message"] == "Refined message"
+            assert call_args.kwargs["message"] == "Refined message"
+            assert "context_id" not in call_args.kwargs, (
+                "context_id has no home on build-creative-request.json @ 3.1.1 — see #2143"
+            )
 
-    def test_promoted_offerings_extraction(self, integration_db):
-        """Test that build_creative receives promoted_offerings=None when not in assets.
+            db_creative = env.get_one(DBCreative, creative_id="gen-creative-005")
+            assert db_creative is not None
+            assert db_creative.data.get("generative_context_id") == "ctx-original"
+            assert db_creative.data.get("url") == "https://example.com/generated-refined.html"
 
-        In adcp v3.6, PromotedOfferings is no longer a valid asset type
-        in the CreativeAsset.assets dict. This test verifies build_creative
-        is still called and receives promoted_offerings=None.
+    def test_buyer_input_assets_reach_the_agent(self, integration_db):
+        """Every buyer asset slot travels to the agent in ``assets``.
+
+        The pre-3.1 call plucked one slot (``promoted_offerings``) into its own
+        argument. That argument is gone — ``build-creative-request.json @ 3.1.1``
+        has no such property, and its ``creative_manifest`` is documented as
+        carrying "any required input assets" — so the slot must arrive with the
+        rest of the assets rather than being dropped (#2143).
         """
         with CreativeSyncEnv() as env:
             env.setup_default_data()
@@ -271,7 +316,10 @@ class TestGenerativeCreatives:
                     _creative(
                         creative_id="gen-creative-006",
                         format_id=fmt,
-                        assets=build_assets(text_spec("message", content="Test message")),
+                        assets=build_assets(
+                            text_spec("message", content="Test message"),
+                            text_spec("promoted_offerings", content="Eco-friendly running shoes"),
+                        ),
                     )
                 ]
             )
@@ -279,5 +327,9 @@ class TestGenerativeCreatives:
             registry = env.mock["registry"].return_value
             call_args = registry.build_creative.call_args
             assert call_args is not None, "build_creative should have been called"
-            po = call_args[1]["promoted_offerings"]
-            assert po is None
+            assets = call_args.kwargs["assets"]
+            assert assets.keys() == {"message", "promoted_offerings"}
+            # The slot arrives as the typed asset the buyer sent (an SDK AssetVariant),
+            # so read it the way the manifest renderer does — through the model.
+            offering = assets["promoted_offerings"]
+            assert offering.model_dump(mode="json", exclude_none=True)["content"] == "Eco-friendly running shoes"

@@ -5,6 +5,14 @@ wrappers must use model_dump(mode='json') so that Pydantic v2 AnyUrl fields and
 enum instances are converted to plain Python strings before reaching _impl and
 SQLAlchemy String columns.
 
+Also covers brand propagation (Change 5): to_brand_reference() must convert
+plain brand strings to AdCP BrandRef-shaped dicts (bare hostname, no scheme/path).
+
+The media_buy_brand propagation obligation (that _create_media_buy_impl forwards
+req.brand to process_and_upload_package_creatives) lives in the integration
+sibling, tests/integration/test_create_media_buy_behavioral.py, where the
+MediaBuyCreateEnv harness drives the real pipeline instead of hand-rolled mocks.
+
 Obligation IDs:
   UC-002-TRANSPORT-PNC-SERIALIZATION-01  (MCP wrapper)
   UC-002-TRANSPORT-PNC-SERIALIZATION-02  (A2A wrapper)
@@ -12,8 +20,12 @@ Obligation IDs:
 
 from __future__ import annotations
 
-import pytest
+from datetime import UTC, datetime, timedelta
 
+import pytest
+from adcp.types import BrandReference
+
+from src.core.schema_helpers import to_brand_reference
 from tests.helpers.create_media_buy_capture import capture_a2a_forwarded_pnc, capture_mcp_forwarded_pnc
 
 
@@ -159,3 +171,77 @@ class TestA2AWrapperPncJsonSerialization:
         scheme = accept_push_notification_config(forwarded).to_columns()["authentication_type"]
         assert type(scheme) is str, f"authentication_type must be a PLAIN str, got {type(scheme).__name__!r}"
         assert scheme == "Bearer", f"scheme value mismatch: {scheme!r}"
+
+
+class TestToBrandReference:
+    """``to_brand_reference`` is the ONE str/dict/model → BrandReference converter.
+
+    One home for the converter's contract, because there is one converter: the
+    creative-build path and ``create_media_buy``'s request builder both route
+    through it (``media_buy_create._build_create_media_buy_request`` no longer
+    constructs ``BrandReference(domain=brand)`` raw), so scheme-bearing/uppercase
+    shorthand is accepted identically on both.
+
+    ``brand-ref.json @ 3.1.1`` requires ``domain`` to be a bare hostname — no
+    scheme, no path, no query, no fragment — so the converter strips every URL
+    component and lowercases the host. It returns a TYPED ``BrandReference``, not
+    a loose dict: the brand stays typed end-to-end inside the application and is
+    serialized only at the DB/SDK boundary.
+    """
+
+    @pytest.mark.parametrize(
+        "raw,expected_domain",
+        [
+            pytest.param("example.com", "example.com", id="bare-domain"),
+            pytest.param("https://example.com", "example.com", id="https-scheme"),
+            pytest.param("http://example.com", "example.com", id="http-scheme"),
+            pytest.param("https://example.com/path/to/page", "example.com", id="path"),
+            pytest.param("https://example.com/path?q=1&foo=bar", "example.com", id="query"),
+            pytest.param("https://example.com/page#section", "example.com", id="fragment"),
+            pytest.param("https://example.com/path?q=1#anchor", "example.com", id="all-components"),
+            pytest.param("https://Example.COM/Path", "example.com", id="uppercase-host"),
+            pytest.param("https://ads.example.com/campaign", "ads.example.com", id="subdomain-preserved"),
+            pytest.param({"domain": "acme.com"}, "acme.com", id="dict-input"),
+            pytest.param(BrandReference(domain="acme.com"), "acme.com", id="model-input"),
+        ],
+    )
+    def test_normalizes_to_bare_lowercase_domain(self, raw, expected_domain):
+        result = to_brand_reference(raw)
+
+        assert isinstance(result, BrandReference), "the converter returns a typed BrandReference, not a dict"
+        assert result.domain == expected_domain
+
+    def test_invalid_dict_raises_typed_correctable_error(self):
+        """A malformed dict brand raises AdCPValidationError (correctable), not a raw
+        pydantic ValidationError crash.
+        """
+        from src.core.exceptions import AdCPValidationError
+
+        with pytest.raises(AdCPValidationError) as exc_info:
+            to_brand_reference({"domain": 12345})  # wrong type — not coercible to str
+
+        assert exc_info.value.recovery == "correctable"
+
+    def test_media_buy_create_raw_construction_uses_same_converter(self):
+        """media_buy_create._build_create_media_buy_request routes brand through
+        to_brand_reference(), matching the creative-build path's normalization —
+        pins the "one converter" invariant against regressing to a raw
+        BrandReference(domain=brand) construction.
+        """
+        from src.core.tools.media_buy_create import _build_create_media_buy_request
+
+        req = _build_create_media_buy_request(
+            brand="https://Example.COM/path",
+            packages=None,
+            start_time="asap",
+            end_time=(datetime.now(UTC) + timedelta(days=30)).isoformat(),
+            po_number=None,
+            reporting_webhook=None,
+            context=None,
+            ext=None,
+            account=None,
+            idempotency_key="test-idempotency-key-0001",
+            paused=None,
+        )
+        assert req.brand is not None
+        assert req.brand.domain == "example.com"

@@ -1,9 +1,13 @@
-"""Guard: MCP/A2A wrappers must pass all _impl function parameters.
+"""Guard: MCP/A2A wrappers must pass all buyer-facing _impl parameters.
 
-Every parameter of an _impl function must be passed through by both its MCP
-wrapper and A2A raw wrapper at call sites. Silently dropping parameters means
-the transport boundary is incomplete — callers can't access functionality
+Every buyer-facing parameter of an _impl function must be passed through by both
+its MCP wrapper and A2A raw wrapper at call sites. Silently dropping parameters
+means the transport boundary is incomplete — callers can't access functionality
 that _impl provides.
+
+"Buyer-facing" is read off the signature, not off a list kept here — see
+:func:`_get_impl_params`: boundary-resolved (``identity``) and keyword-only
+(orchestration-only) parameters are excluded.
 
 Scanning approach: Hybrid — introspection for signatures, file-level AST
 for call-site verification of which arguments are actually passed.
@@ -61,11 +65,29 @@ def _module_to_filepath(module_path: str) -> Path:
 
 
 def _get_impl_params(module_path: str, func_name: str) -> list[str]:
-    """Get parameter names for an _impl function (excluding boundary-resolved)."""
+    """The buyer-facing parameters of an _impl function.
+
+    Two exclusions, both structural rather than name-by-name:
+
+    - ``BOUNDARY_RESOLVED_PARAMS`` — resolved AT the boundary from the transport
+      (``identity``), so a wrapper produces it instead of forwarding it.
+    - KEYWORD-ONLY parameters — orchestration-only by convention: supplied by
+      in-process callers (e.g. ``_sync_creatives_impl(media_buy_brand=…)`` from
+      ``process_and_upload_package_creatives``), absent from the AdCP request
+      schema, and never advertised by a wrapper. The ``*`` in the signature IS
+      the declaration, which is why this guard needs no allowlist of names that
+      could only ever grow: adding one is visible in the signature diff, and a
+      buyer-facing parameter placed after the ``*`` by mistake is a review
+      question about the signature, not a silent entry in a set here.
+    """
     mod = importlib.import_module(module_path)
     func = getattr(mod, func_name)
     sig = inspect.signature(func)
-    return [name for name in sig.parameters if name not in BOUNDARY_RESOLVED_PARAMS]
+    return [
+        name
+        for name, param in sig.parameters.items()
+        if name not in BOUNDARY_RESOLVED_PARAMS and param.kind is not inspect.Parameter.KEYWORD_ONLY
+    ]
 
 
 def _find_wrapper_info(module_path: str, impl_name: str) -> dict:

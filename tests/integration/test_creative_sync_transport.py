@@ -23,9 +23,10 @@ from sqlalchemy import select
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Creative as DBCreative
-from src.core.exceptions import AdCPAuthenticationError, AdCPNotFoundError
+from src.core.exceptions import AdCPAuthenticationError, AdCPConfigurationError, AdCPNotFoundError
 from tests.factories.creative_asset import build_assets, image_spec, text_spec
 from tests.harness import CreativeSyncEnv, Transport, assert_envelope, make_identity
+from tests.helpers import assert_envelope_shape
 from tests.helpers.creative_test_helpers import assert_stored_creative_assets, creative_payload
 
 
@@ -699,6 +700,234 @@ class TestGenerativeBuildUserAssetPriority:
         assert_stored_creative_assets("c_gen_08", user_headline, tenant_id="test_tenant")
 
 
+def _generative_creative(creative_id: str, fmt: dict, message: str) -> dict:
+    """A generative creative payload: the format reference plus a build brief."""
+    return {
+        "creative_id": creative_id,
+        "name": "Generative Build Failure",
+        "format_id": fmt,
+        "assets": build_assets(text_spec("message", content=message)),
+    }
+
+
+def _wire_creative_advisory(result, transport, *, creative_id: str) -> dict | None:
+    """The SERIALIZED advisory error for *creative_id*, or None on IMPL.
+
+    Gates on the TRANSPORT, not on whether a wire happened to be captured: a
+    value-gated check degrades silently to typed-only grading the day a
+    dispatcher stops stashing the wire, which is exactly how the A2A cases here
+    were passing having asserted nothing about the serialized bytes. Only
+    ``Transport.IMPL`` has no wire by definition (tests/CLAUDE.md).
+    """
+    if transport is Transport.IMPL:
+        return None
+
+    assert result.wire_response is not None, f"{transport}: harness captured no wire response"
+    wire_results = [c for c in result.wire_response["creatives"] if c["creative_id"] == creative_id]
+    assert wire_results, f"{creative_id} missing from the serialized response"
+    errors = wire_results[0].get("errors")
+    assert errors, f"{creative_id}: serialized result carries no advisory error"
+    return errors[0]
+
+
+def _assert_creative_failed_with_recovery(
+    result, transport, *, creative_id: str, recovery: str, code: str | None = None
+) -> None:
+    """Grade a per-creative advisory failure, its wire code and its recovery hint.
+
+    A creative-agent failure is advisory (the envelope stays successful), so the
+    authority is ``SyncCreativeResult.errors[]`` — not an error envelope. Both
+    halves are graded: ``code`` and ``recovery`` must agree, since a code whose
+    pinned classification is ``transient`` (``SERVICE_UNAVAILABLE``) shipped next
+    to ``recovery="correctable"`` tells the buyer two different things.
+
+    The serialized bytes are graded on every transport that has them (see
+    :func:`_wire_creative_advisory`): a serialization drop of ``recovery`` would
+    sail past the typed check alone.
+    """
+    assert result.is_success, f"per-creative failure must be advisory, not an envelope error: {result.error}"
+    assert_envelope(result, transport)
+
+    typed = result.payload.creatives[0]
+    assert typed.creative_id == creative_id
+    assert typed.action == "failed"
+    assert typed.errors, "a failed creative must carry an advisory error"
+    assert typed.errors[0].recovery == recovery
+    if code is not None:
+        assert typed.errors[0].code == code
+
+    wire_advisory = _wire_creative_advisory(result, transport, creative_id=creative_id)
+    if wire_advisory is not None:
+        assert wire_advisory["recovery"] == recovery
+        if code is not None:
+            assert wire_advisory["code"] == code
+
+
+def _fail_build_with_typed_auth_error(env) -> None:
+    """Raise a typed auth error inside the dial — the ladder must keep ITS code.
+
+    This rung grades the generic property: whatever typed ``AdCPError`` comes out
+    of the dial reaches the buyer with its OWN code, and the recovery derived
+    from that code, rather than being flattened. ``AUTH_REQUIRED`` is
+    ``correctable`` in the pinned enum ("provide credentials when missing"), so
+    the message is a credentials-MISSING one — which is what that classification
+    actually describes.
+
+    ``enums/error-code.json @ 3.1.1`` deprecates ``AUTH_REQUIRED`` in favour of
+    ``AUTH_MISSING`` (correctable) and ``AUTH_INVALID`` (terminal — "do NOT
+    auto-retry rejected credentials"); splitting them is #1994. The
+    credentials-missing wording keeps this rung on the side of the split whose
+    classification is not in dispute. The REJECTED-credentials case is graded by
+    ``seam_rejection`` below, on the path production actually takes.
+    """
+    env.set_build_creative_error(AdCPAuthenticationError("Authentication failed: no agent credentials configured"))
+
+
+def _fail_build_with_seam_rejection(env) -> None:
+    """Fail the dial the way the guarded seam does when the agent rejects it (401).
+
+    ``build_creative`` reaches the agent through ``call_operator_mcp_tool``, whose
+    mapper classifies an OPERATOR-endpoint rejection as ``CONFIGURATION_ERROR`` /
+    terminal: the buyer did not choose that address and cannot rotate its
+    credentials, so telling them to retry — or to fix their own request — would
+    both be wrong. Routed through the production mapper so the case pins the
+    whole chain rather than a hand-picked error (see
+    ``CreativeSyncEnv.set_build_creative_seam_error``).
+    """
+    env.set_build_creative_seam_error(status=401)
+
+
+def _fail_build_with_configuration_error(env) -> None:
+    """Raise a server-side misconfiguration — terminal, the buyer must not retry."""
+    env.set_build_creative_error(AdCPConfigurationError("Creative agent is not configured for this tenant"))
+
+
+def _fail_build_with_unknown_error(env) -> None:
+    """Raise an untyped failure (agent unreachable) — the transient fallback."""
+    env.set_build_creative_error(ConnectionError("creative agent unreachable"))
+
+
+# (case id, failure configurator, wire code, the recovery the buyer must be told)
+_BUILD_FAILURE_RECOVERY_CASES = [
+    ("typed_auth", _fail_build_with_typed_auth_error, "AUTH_REQUIRED", "correctable"),
+    ("seam_rejection", _fail_build_with_seam_rejection, "CONFIGURATION_ERROR", "terminal"),
+    ("configuration", _fail_build_with_configuration_error, "CONFIGURATION_ERROR", "terminal"),
+    ("unknown", _fail_build_with_unknown_error, "SERVICE_UNAVAILABLE", "transient"),
+]
+
+# Which side of the upsert dialled the agent. Both delegate to
+# _failed_from_agent_error; grading only "create" left the update path free to
+# hardcode a recovery and stay green.
+_SYNC_SIDES = ["create", "update"]
+
+
+@pytest.mark.requires_db
+class TestGenerativeBuildFailureRecovery:
+    """A failed generative build reports the creative agent's code + recovery.
+
+    The buyer reads ``recovery`` to decide retry-vs-fix and ``code`` to know what
+    failed. Flattening every creative-agent failure to
+    ``SERVICE_UNAVAILABLE``/``transient`` loops the buyer on an unfixable error
+    (missing credentials, server misconfiguration), so the classification the
+    typed error carries must survive from ``registry.build_creative`` through
+    ``_failed_from_agent_error`` onto ``SyncCreativeResult.errors[]``.
+
+    Graded per transport because both fields are wire-visible: a serialization
+    drop on one transport is exactly the failure these tests exist to catch. And
+    graded on both sides of the upsert, because the create and update paths are
+    two separate call sites into the same ladder.
+    """
+
+    @pytest.mark.parametrize("transport", ALL_TRANSPORTS, ids=lambda t: t.value)
+    @pytest.mark.parametrize("side", _SYNC_SIDES)
+    @pytest.mark.parametrize(
+        "case,configure_failure,expected_code,expected_recovery",
+        _BUILD_FAILURE_RECOVERY_CASES,
+        ids=[case for case, _, _, _ in _BUILD_FAILURE_RECOVERY_CASES],
+    )
+    def test_failed_build_reports_its_own_recovery(
+        self, integration_db, transport, side, case, configure_failure, expected_code, expected_recovery
+    ):
+        """Each rung of the ladder reaches the buyer with its own code + recovery.
+
+        See the ``_fail_build_with_*`` configurators for why each case carries the
+        classification it does.
+        """
+        creative_id = f"c_gen_fail_{side}_{case}"
+
+        with CreativeSyncEnv() as env:
+            env.setup_default_data()
+            fmt = env.setup_generative_build()
+
+            if side == "update":
+                # First sync succeeds, so the failing sync below takes the
+                # _update_existing_creative path rather than the create path.
+                first = env.call_via(transport, creatives=[_generative_creative(creative_id, fmt, "Build me a banner")])
+                assert first.payload.creatives[0].action == "created"
+
+            configure_failure(env)
+
+            result = env.call_via(transport, creatives=[_generative_creative(creative_id, fmt, "Refine my banner")])
+
+        _assert_creative_failed_with_recovery(
+            result, transport, creative_id=creative_id, recovery=expected_recovery, code=expected_code
+        )
+
+
+@pytest.mark.requires_db
+class TestMalformedAssetsAreCorrectable:
+    """Assets the AdCP manifest cannot express reach the buyer as correctable.
+
+    The generative build renders the manifest from the buyer's assets
+    (``creative_agent_registry._render_creative_manifest``), and a rejection
+    there is buyer input — ``VALIDATION_ERROR`` / ``correctable`` per
+    ``enums/error-code.json @ 3.1.1``. This is graded at the SYNC boundary rather
+    than as a rung of the agent-failure ladder because it cannot reach that
+    ladder: ``CreativeAsset.assets`` and ``CreativeManifest.assets`` are the same
+    ``AssetVariant`` union, so an asset map the manifest would reject is rejected
+    one step earlier, when the sync boundary builds the ``CreativeAsset``.
+
+    What must not happen — on either path — is the buyer being told to retry:
+    ``SERVICE_UNAVAILABLE``/``transient`` for a payload that will be rejected
+    identically every time. The registry's own typed rejection is graded in
+    ``tests/unit/test_creative_agent_registry.py``.
+    """
+
+    @pytest.mark.parametrize("transport", ALL_TRANSPORTS, ids=lambda t: t.value)
+    def test_malformed_asset_is_not_reported_as_retryable(self, integration_db, transport):
+        creative_id = "c_malformed_asset"
+
+        with CreativeSyncEnv() as env:
+            env.setup_default_data()
+            fmt = env.setup_generative_build()
+
+            result = env.call_via(
+                transport,
+                creatives=[
+                    {
+                        "creative_id": creative_id,
+                        "name": "Malformed Asset Creative",
+                        "format_id": fmt,
+                        # An image asset with no width/height: rejected by the
+                        # AssetVariant union both models share.
+                        "assets": {"banner": {"asset_type": "image", "url": "https://example.com/banner.png"}},
+                    }
+                ],
+            )
+
+        if result.is_error:
+            # MCP/A2A reject at the transport boundary — the whole request fails.
+            assert_envelope_shape(result.wire_error_envelope, "VALIDATION_ERROR", recovery="correctable")
+        else:
+            _assert_creative_failed_with_recovery(
+                result,
+                transport,
+                creative_id=creative_id,
+                recovery="correctable",
+                code="VALIDATION_ERROR",
+            )
+
+
 # ---------------------------------------------------------------------------
 # Format Validation Tests
 # ---------------------------------------------------------------------------
@@ -1041,7 +1270,7 @@ class TestMissingFormatFails:
         On MCP: TypeAdapter rejects because CreativeAsset requires format_id.
         Both paths correctly reject the creative.
         """
-        from tests.harness.assertions import assert_rejected
+        from tests.harness.assertions import assert_rejected_missing_field
 
         with CreativeSyncEnv() as env:
             env.setup_default_data()
@@ -1059,10 +1288,11 @@ class TestMissingFormatFails:
             )
 
         if result.is_error:
-            # MCP: TypeAdapter rejected missing format_id — correct behavior
-            assert_rejected(result, field="format_id", reason="Field required")
+            # MCP (FastMCP TypeAdapter) and A2A (adcp_validation_boundary) both
+            # reject a missing format_id at the boundary, each in its own wording.
+            assert_rejected_missing_field(result, "format_id")
         else:
-            # impl/a2a/rest: _impl handled it, returned action=failed
+            # impl/rest: _impl handled it, returned action=failed
             assert_envelope(result, transport)
             creative_result = result.payload.creatives[0]
             assert creative_result.action == "failed"
@@ -1115,10 +1345,10 @@ class TestStaticPreviewFailed:
             )
 
         if result.is_error:
-            # MCP: TypeAdapter rejects missing assets field — correct schema rejection
-            from tests.harness.assertions import assert_rejected
+            # MCP and A2A both reject the missing assets field at the boundary.
+            from tests.harness.assertions import assert_rejected_missing_field
 
-            assert_rejected(result, field="assets", reason="Field required")
+            assert_rejected_missing_field(result, "assets")
         else:
             # impl/a2a/rest: _impl handles it, returns action=failed
             assert_envelope(result, transport)
@@ -1132,19 +1362,27 @@ class TestStaticPreviewFailed:
 
 @pytest.mark.requires_db
 class TestGeminiKeyMissing:
-    """Generative format without GEMINI_API_KEY → per-creative failure.
+    """Generative format without GEMINI_API_KEY → build succeeds (Change 3).
+
+    Change 3 removed the gemini_api_key dependency from build_creative.
+    The generative path now uses ADCPMultiAgentClient, so the absence of
+    gemini_api_key must NOT cause a per-creative failure across any transport.
 
     Covers: UC-006-EXT-I-01
     """
 
     @pytest.mark.parametrize("transport", ALL_TRANSPORTS, ids=lambda t: t.value)
-    def test_generative_no_gemini_key_fails(self, integration_db, transport):
-        """Generative format + no gemini_api_key → action=failed."""
+    def test_generative_no_gemini_key_succeeds(self, integration_db, transport):
+        """Generative format + no gemini_api_key → action=created (Change 3).
+
+        Before Change 3, missing gemini_api_key caused action=failed.
+        After Change 3, ADCPMultiAgentClient is used — the key is never read.
+        """
         with CreativeSyncEnv() as env:
             env.setup_default_data()
             fmt = env.setup_generative_build(gemini_api_key="")
 
-            # Override: remove the gemini key after setup
+            # Explicitly remove the key — must not affect the outcome
             env.mock["config"].return_value.gemini_api_key = None
 
             result = env.call_via(
@@ -1163,8 +1401,8 @@ class TestGeminiKeyMissing:
         assert result.is_success
         assert_envelope(result, transport)
         creative_result = result.payload.creatives[0]
-        assert creative_result.action == "failed"
-        assert any("gemini" in e.lower() for e in _error_messages(creative_result.errors))
+        # Change 3: build_creative uses ADCPMultiAgentClient — no gemini key needed
+        assert creative_result.action == "created"
 
 
 # ---------------------------------------------------------------------------

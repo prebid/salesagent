@@ -190,8 +190,13 @@ def _coerce_domain_or_raise(raw: str) -> str:
 def to_brand_reference(brand: dict[str, Any] | BrandReference | str | None) -> BrandReference | None:
     """Convert dict/string brand to BrandReference for adcp 3.6.0 compatibility.
 
-    String and dict ``domain`` values share one normalize-then-validate funnel so
-    ``"ACME.COM"`` / ``{"domain":"ACME.COM"}`` / URL-in-domain are equivalent.
+    The single converter for all str/dict/model → BrandReference paths in the
+    codebase (creative build, get_products, create_media_buy). String and dict
+    ``domain`` values share one normalize-then-validate funnel so ``"ACME.COM"``
+    / ``{"domain":"ACME.COM"}`` / URL-in-domain are equivalent, instead of a
+    direct ``BrandReference`` construction raising an unhandled
+    ``ValidationError`` on one path and normalizing on another.
+    ``brand-ref.json`` requires ``domain`` to be a bare lowercase hostname.
 
     Args:
         brand: Brand as dict, string domain shorthand, BrandReference, or None
@@ -201,7 +206,8 @@ def to_brand_reference(brand: dict[str, Any] | BrandReference | str | None) -> B
 
     Raises:
         AdCPValidationError: when an explicit brand cannot be coerced to a valid
-            ``BrandReference`` (tagged ``field="brand"``).
+            ``BrandReference`` (tagged ``field="brand"``) — a typed, correctable
+            error rather than a raw ``ValidationError`` crash.
     """
     if brand is None:
         return None

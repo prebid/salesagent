@@ -20,6 +20,7 @@ from pydantic import BaseModel
 
 from tests.factories import PrincipalFactory
 from tests.factories.creative_asset import build_assets, image_spec, make_creative_asset_minimal
+from tests.factories.format import make_static_format
 from tests.helpers.creative_test_helpers import (
     make_creative_dict as _make_creative_dict,
 )
@@ -48,18 +49,9 @@ def identity():
 
 
 @pytest.fixture
-def mock_format_spec():
-    spec = Mock()
-    spec.format_id = "display_300x250_image"
-    spec.agent_url = "https://creative.adcontextprotocol.org"
-    spec.name = "Medium Rectangle"
-    # STATED, not left to Mock's auto-attribute: a bare Mock answers every
-    # attribute with a truthy Mock, so an unset output_format_ids would make
-    # this fixture claim to be a GENERATIVE format. That went unnoticed while
-    # the catalog lookup compared FormatId models with `==` and never matched,
-    # so the agent-backed arm was skipped for every one of these tests.
-    spec.output_format_ids = None
-    return spec
+def static_format_spec():
+    """A real static ``Format`` — see ``make_static_format`` for why not a Mock."""
+    return make_static_format()
 
 
 def _make_creative_uow():
@@ -82,11 +74,11 @@ class TestSyncPushNotificationConfig:
     tests/integration/test_webhook_url_ingest_refusal.py.
     """
 
-    def test_push_notification_config_dict_form(self, identity, mock_format_spec):
+    def test_push_notification_config_dict_form(self, identity, static_format_spec):
         """Line 117-118: dict push_notification_config extracts URL."""
         from src.core.tools.creatives import _sync_creatives_impl
 
-        with _sync_patches()(mock_format_spec) as (mock_creative_repo, _):
+        with _sync_patches()(static_format_spec) as (mock_creative_repo, _):
             response = _sync_creatives_impl(
                 creatives=[_make_creative_dict()],
                 identity=identity,
@@ -94,7 +86,7 @@ class TestSyncPushNotificationConfig:
             )
         assert response.creatives[0].action == "created"
 
-    def test_push_notification_config_model_form(self, identity, mock_format_spec):
+    def test_push_notification_config_model_form(self, identity, static_format_spec):
         """Line 120-121: typed PushNotificationConfig with URL."""
         from adcp.types.generated_poc.core.push_notification_config import Authentication
         from adcp.types.generated_poc.enums.auth_scheme import AuthenticationScheme
@@ -105,7 +97,7 @@ class TestSyncPushNotificationConfig:
             url=f"{UNDIALLED_PUBLIC_HTTPS_ORIGIN}/hook",
             authentication=Authentication(credentials="a" * 32, schemes=[AuthenticationScheme.Bearer]),
         )
-        with _sync_patches()(mock_format_spec) as (mock_creative_repo, _):
+        with _sync_patches()(static_format_spec) as (mock_creative_repo, _):
             response = _sync_creatives_impl(
                 creatives=[_make_creative_dict()],
                 identity=identity,
@@ -117,7 +109,7 @@ class TestSyncPushNotificationConfig:
 class TestSyncBaseModelNormalization:
     """Line 171: CreativeAsset.model_validate from non-dict BaseModel."""
 
-    def test_base_model_subclass_normalization(self, identity, mock_format_spec):
+    def test_base_model_subclass_normalization(self, identity, static_format_spec):
         """Line 171: Pass a BaseModel (not CreativeAsset, not dict) as creative."""
         from src.core.tools.creatives import _sync_creatives_impl
 
@@ -129,7 +121,7 @@ class TestSyncBaseModelNormalization:
             assets: dict = build_assets(image_spec("banner_image", url="https://example.com/banner.png"))
             variants: list = []
 
-        with _sync_patches()(mock_format_spec) as (mock_creative_repo, _):
+        with _sync_patches()(static_format_spec) as (mock_creative_repo, _):
             response = _sync_creatives_impl(
                 creatives=[CustomCreative()],
                 identity=identity,
@@ -142,11 +134,11 @@ class TestSyncBaseModelNormalization:
 class TestSyncDryRunExistingCreative:
     """Lines 217-218: dry_run with existing creative shows 'would update'."""
 
-    def test_dry_run_existing_creative_shows_update(self, identity, mock_format_spec):
+    def test_dry_run_existing_creative_shows_update(self, identity, static_format_spec):
         """Lines 217-218: dry_run=True with existing creative increments updated_count."""
         from src.core.tools.creatives import _sync_creatives_impl
 
-        with _sync_patches()(mock_format_spec) as (mock_creative_repo, _):
+        with _sync_patches()(static_format_spec) as (mock_creative_repo, _):
             mock_existing = MagicMock()
             mock_existing.creative_id = "c1"
             mock_existing.status = "approved"
@@ -167,12 +159,12 @@ class TestSyncDryRunExistingCreative:
 class TestSyncUnchangedCount:
     """Line 285: update that returns action='unchanged'."""
 
-    def test_unchanged_update_counted(self, identity, mock_format_spec):
+    def test_unchanged_update_counted(self, identity, static_format_spec):
         """Line 285: unchanged_count incremented when update returns unchanged action."""
         from src.core.schemas import SyncCreativeResult
         from src.core.tools.creatives import _sync_creatives_impl
 
-        with _sync_patches()(mock_format_spec) as (mock_creative_repo, _):
+        with _sync_patches()(static_format_spec) as (mock_creative_repo, _):
             mock_existing = MagicMock()
             mock_existing.creative_id = "c1"
             mock_existing.status = "approved"
@@ -207,7 +199,7 @@ class TestSyncUnchangedCount:
 class TestSyncAiReviewReasonOnUpdate:
     """Line 301: AI review reason extraction during update."""
 
-    def test_ai_review_reason_extracted(self, mock_format_spec):
+    def test_ai_review_reason_extracted(self, static_format_spec):
         """Line 301: existing creative with ai_review data and ai-powered approval mode."""
         from src.core.schemas import SyncCreativeResult
         from src.core.tools.creatives import _sync_creatives_impl
@@ -219,7 +211,7 @@ class TestSyncAiReviewReasonOnUpdate:
             tenant=tenant,
         )
 
-        with _sync_patches()(mock_format_spec) as (mock_creative_repo, _):
+        with _sync_patches()(static_format_spec) as (mock_creative_repo, _):
             mock_existing = MagicMock()
             mock_existing.creative_id = "c1"
             mock_existing.status = "pending_review"
@@ -261,7 +253,7 @@ class TestSyncAiReviewReasonOnUpdate:
 class TestSyncProvenanceWarningOnUpdate:
     """Lines 306-309: provenance warning appended to update result."""
 
-    def test_provenance_warning_on_update(self, mock_format_spec):
+    def test_provenance_warning_on_update(self, static_format_spec):
         """Lines 306-309: provenance_warning appended when check returns warning."""
         from src.core.schemas import SyncCreativeResult
         from src.core.tools.creatives import _sync_creatives_impl
@@ -272,7 +264,7 @@ class TestSyncProvenanceWarningOnUpdate:
             tenant=TENANT,
         )
 
-        with _sync_patches()(mock_format_spec) as (mock_creative_repo, _):
+        with _sync_patches()(static_format_spec) as (mock_creative_repo, _):
             mock_existing = MagicMock()
             mock_existing.creative_id = "c1"
             mock_existing.status = "approved"
@@ -322,12 +314,12 @@ class TestSyncProvenanceWarningOnUpdate:
 class TestSyncMixedMessageSuffix:
     """Lines 472, 477: message suffix for mixed created+updated and unchanged counts."""
 
-    def test_mixed_created_and_updated_message(self, identity, mock_format_spec):
+    def test_mixed_created_and_updated_message(self, identity, static_format_spec):
         """Line 472: message includes both created and updated counts."""
         from src.core.schemas import SyncCreativeResult
         from src.core.tools.creatives import _sync_creatives_impl
 
-        with _sync_patches()(mock_format_spec) as (mock_creative_repo, _):
+        with _sync_patches()(static_format_spec) as (mock_creative_repo, _):
             mock_existing = MagicMock()
             mock_existing.creative_id = "c2"
             mock_existing.status = "approved"
@@ -597,7 +589,7 @@ class TestWorkflowStatusBranches:
 class TestValidationEdgeCases:
     """Lines 72, 75, 92, 98 in _validation.py."""
 
-    def test_tags_passthrough(self, mock_format_spec):
+    def test_tags_passthrough(self, static_format_spec):
         """Line 72: creative with non-empty tags."""
         from src.core.tools.creatives._validation import _validate_creative_input
 
@@ -611,7 +603,7 @@ class TestValidationEdgeCases:
         )
 
         async def mock_get_format(agent_url, format_id, **_kwargs):
-            return mock_format_spec
+            return static_format_spec
 
         async def mock_preview_creative(*_args, **_kwargs):
             return {"preview_url": "https://creative.example/preview/c1"}
@@ -723,7 +715,7 @@ class TestAssignmentsEdgeCases:
         # We test the outer behavior: empty format_ids allows all.
         pass  # Tested via integration tests; function is inner/nested
 
-    def test_empty_format_ids_allows_all(self, identity, mock_format_spec):
+    def test_empty_format_ids_allows_all(self, identity, static_format_spec):
         """Line 142: product with empty format_ids allows all formats."""
         # This line is reached when product has format_ids but the resolved set is empty.
         # We test via full sync to reach the assignment path.

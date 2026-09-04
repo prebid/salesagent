@@ -48,6 +48,7 @@ from src.core.exceptions import (
     AdCPServiceUnavailableError,
     build_two_layer_error_envelope,
 )
+from src.core.schemas import FormatId
 from src.core.signals_agent_registry import SignalsAgent, SignalsAgentRegistry
 from src.core.utils.mcp_client import MCPConnectionError
 from tests.helpers import assert_envelope_shape
@@ -346,17 +347,19 @@ class TestAPayloadThatIsNotAJSONObjectIsClassified:
         _assert_transient_by_code(excinfo.value)
 
 
+# Domain values, not wire objects: both methods take the federation identity plus
+# the buyer's assets and render the AdCP wire objects themselves (PR #1482), so a
+# caller cannot hand them a manifest — and ``build_creative`` takes no
+# ``gemini_api_key``, since generation is the creative agent's job and no
+# seller-side key is part of the 3.1.1 contract.
 _CREATIVE_AGENT_TOOLS: dict[str, Any] = {
     "preview_creative": lambda registry: registry.preview_creative(
-        agent_url="https://creative.operator.test",
-        format_id="display_300x250",
-        creative_manifest={"creative_id": "c123", "name": "Banner Ad", "assets": {}},
+        FormatId(agent_url="https://creative.operator.test", id="display_300x250"),
+        {},
     ),
     "build_creative": lambda registry: registry.build_creative(
-        agent_url="https://creative.operator.test",
-        format_id="display_300x250_generative",
+        format_id=FormatId(agent_url="https://creative.operator.test", id="display_300x250_generative"),
         message="a creative brief",
-        gemini_api_key="test-gemini-key",
     ),
 }
 
@@ -375,6 +378,18 @@ class TestPreviewAndBuildDoNotLeakAnUnclassifiedSeamFailure:
     its callers a raw ``AttributeError``/``JSONDecodeError``: it raises this
     application's own taxonomy, with the pair a buyer would be told.
     """
+
+    @pytest.fixture(autouse=True)
+    def _dials_the_agent(self, monkeypatch):
+        """Turn OFF testing mode so the methods actually reach the seam.
+
+        Under ``ADCP_TESTING=true`` — set for the whole session by
+        ``tests/conftest.py`` — ``build_creative`` serves a derived result and
+        dials nothing (the branch its sibling registry methods already had), so
+        the stubbed malformed payload below would never be seen and the case
+        would pass without exercising the classification it grades.
+        """
+        monkeypatch.setenv("ADCP_TESTING", "false")
 
     @pytest.mark.parametrize("tool", list(_CREATIVE_AGENT_TOOLS), ids=list(_CREATIVE_AGENT_TOOLS))
     async def test_a_non_object_payload_raises_a_classified_error(self, monkeypatch, tool):

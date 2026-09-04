@@ -25,6 +25,7 @@ import pytest
 from src.core import creative_agent_registry as creative_agent_registry_module
 from src.core.creative_agent_registry import CreativeAgent, CreativeAgentRegistry
 from src.core.exceptions import AdCPNotFoundError
+from src.core.schemas import FormatId
 
 # The live creative agent URL — reads env var so CI can point at a containerized agent
 CREATIVE_AGENT_URL = os.environ.get("CREATIVE_AGENT_URL", "https://creative.adcontextprotocol.org")
@@ -227,26 +228,23 @@ class TestPreviewCreativeIdentityForm:
     """Pinned-agent tolerance regression for the format_id federation identity .
 
     preview_creative sends format_id as the identity OBJECT {agent_url, id}.
-    Production is switching that dict to the canonical FormatId serialization
-    (model_dump(mode="json")), whose Pydantic AnyUrl emits the trailing-slash
-    form for path-less URLs. These tests pin that the pinned reference agent
-    accepts BOTH wire forms of the identity's agent_url — so the serialization
-    switch cannot regress preview against the authoritative gate agent.
+    Production now renders the identity ONCE, out of the serialized
+    ``CreativeManifest`` (Pydantic ``AnyUrl`` emits the trailing-slash form for
+    path-less URLs), so both the tool argument and the manifest carry the same
+    bytes. These tests pin that the pinned reference agent accepts the identity
+    whichever form the CALLER supplied — so canonicalization on our side cannot
+    regress preview against the authoritative gate agent.
     """
 
     @staticmethod
-    def _manifest() -> dict:
+    def _assets() -> dict:
+        """The buyer-side asset slot map; the registry renders the manifest from it."""
         return {
-            "creative_id": "ehdq-identity-form",
-            "name": "Identity Form Probe",
-            "format_id": "display_300x250",
-            "assets": {
-                "image": {
-                    "asset_type": "image",
-                    "url": "https://example.com/banner.png",
-                    "width": 300,
-                    "height": 250,
-                },
+            "image": {
+                "asset_type": "image",
+                "url": "https://example.com/banner.png",
+                "width": 300,
+                "height": 250,
             },
         }
 
@@ -262,7 +260,9 @@ class TestPreviewCreativeIdentityForm:
     @pytest.mark.asyncio
     async def test_preview_creative_identity_without_trailing_slash(self, registry):
         """preview succeeds with the no-slash identity form (current raw-dict bytes)."""
-        result = await registry.preview_creative(CREATIVE_AGENT_URL, "display_300x250", self._manifest())
+        result = await registry.preview_creative(
+            FormatId(agent_url=CREATIVE_AGENT_URL, id="display_300x250"), self._assets()
+        )
         self._assert_preview_succeeded(result)
 
     @pytest.mark.asyncio
@@ -273,7 +273,9 @@ class TestPreviewCreativeIdentityForm:
         path-less URLs; calling through the slash URL variant sends exactly that
         identity form on the wire, pinning the agent's tolerance of it.
         """
-        result = await registry.preview_creative(CREATIVE_AGENT_URL_WITH_SLASH, "display_300x250", self._manifest())
+        result = await registry.preview_creative(
+            FormatId(agent_url=CREATIVE_AGENT_URL_WITH_SLASH, id="display_300x250"), self._assets()
+        )
         self._assert_preview_succeeded(result)
 
 

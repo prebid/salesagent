@@ -7,7 +7,7 @@ scattering the same RootModel-unwrapping logic across multiple modules.
 import logging
 from typing import Any
 
-from adcp.types import CreativeAsset
+from adcp.types import BrandReference, CreativeAsset
 from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
@@ -19,17 +19,19 @@ logger = logging.getLogger(__name__)
 
 
 def _extract_attr_from_asset_value(asset: Any, *attr_names: str) -> str | None:
-    """Extract a named attribute from an SDK 5.7 asset value.
+    """Extract a named attribute from an SDK asset value, whatever shape it takes.
 
-    SDK 5.7 wraps asset slot values in an ``Assets`` RootModel containing a
-    ``list[AssetVariant]`` where each ``AssetVariant`` is itself a RootModel
-    proxying the concrete typed asset.
+    The adcp SDK (since 5.7; still the shape under the pinned 6.6.0 / AdCP 3.1.1
+    — see docs/adcp-spec-version.md) wraps asset slot values in an ``Assets``
+    RootModel containing a ``list[AssetVariant]`` where each ``AssetVariant`` is
+    itself a RootModel proxying the concrete typed asset.
 
     This helper walks three paths in priority order:
     1. **dict** -- legacy/test code that passes plain dicts.
     2. **RootModel** -- unwrap ``.root`` to get the variant list, then check
        the first variant's inner ``.root`` object and the variant itself.
-    3. **Plain object** -- pre-5.7 single-asset models.
+    3. **Plain object** -- unwrapped single-asset models (older SDK shape,
+       and anything test code hands in directly).
 
     Multiple *attr_names* are tried left-to-right (e.g. ``"content", "text"``);
     the first truthy value wins.
@@ -73,7 +75,7 @@ def _extract_url_from_asset_value(asset: Any) -> str | None:
 
 
 def _extract_text_from_asset_value(asset: Any) -> str | None:
-    """Extract text content from an SDK 5.7 asset value.
+    """Extract text content from an SDK asset value.
 
     Tries ``content`` first, then ``text`` (TextAsset uses ``content``,
     some legacy payloads use ``text``).
@@ -144,18 +146,25 @@ def _extract_url_from_assets(creative: CreativeAsset) -> str | None:
 
 
 def _build_creative_data(
-    creative: CreativeAsset, url: str | None, context: dict[str, Any] | BaseModel | None = None
+    creative: CreativeAsset,
+    url: str | None,
+    context: dict[str, Any] | BaseModel | None = None,
+    media_buy_brand: BrandReference | None = None,
 ) -> dict[str, Any]:
     """Build the data dict for a creative from a CreativeAsset model.
 
     Extracts standard fields (url, click_url, width, height, duration),
     optional fields (assets, snippet, snippet_type, template_variables),
-    and context if provided.
+    context if provided, and brand for adapter routing decisions.
 
     Args:
         creative: CreativeAsset model from the sync payload.
         url: Extracted URL (from _extract_url_from_assets).
         context: Optional application-level context per AdCP spec.
+        media_buy_brand: Optional typed BrandReference. Serialized once here
+            at the DB boundary with ``exclude_none=True`` so only populated
+            fields (e.g. ``{"domain": "acme.com"}``) are written to the
+            JSONType column, not the full model with all-None optional fields.
 
     Returns:
         Data dict for storing in the creative's data field.
@@ -188,4 +197,8 @@ def _build_creative_data(
             data["provenance"] = provenance.model_dump(mode="json")
         elif isinstance(provenance, dict):
             data["provenance"] = provenance
+    # Persist brand so adapters can read brand.domain from stored creative data.
+    # Serialize once here at the DB boundary — callers pass the typed model through.
+    if media_buy_brand is not None:
+        data["brand"] = media_buy_brand.model_dump(mode="json", exclude_none=True)
     return data

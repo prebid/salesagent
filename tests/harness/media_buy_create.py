@@ -247,6 +247,38 @@ class MediaBuyCreateEnv(EgressHatchMixin, IntegrationEnv):
             payload_hash=payload_hash,
         )
 
+    def stub_creative_upload(
+        self,
+        req: CreateMediaBuyRequest,
+        *,
+        uploaded_ids: dict[str, list[str]] | None = None,
+    ) -> MagicMock:
+        """Stub ``process_and_upload_package_creatives`` and return its mock.
+
+        Inline-creative upload reaches the creative-sync pipeline (and, in the
+        generative case, an external creative agent), which is out of scope for
+        tests that only grade WHAT ``_create_media_buy_impl`` forwards to the
+        upload step. Patched on demand rather than via ``EXTERNAL_PATCHES`` so
+        the many tests that exercise the real upload path keep doing so.
+
+        The stub returns ``(req.packages, uploaded_ids)`` — the packages
+        unchanged — so the pipeline continues past the upload and any later
+        failure still surfaces instead of being swallowed by the caller.
+
+        Registered with ``_guard``, the env's cleanup registry, so it is stopped
+        on ``__exit__`` by either release path — a patch left running would leak
+        into every later test in the worker (which the leak detector now fails
+        the test for, rather than letting it spread silently).
+        """
+        from unittest.mock import patch
+
+        patcher = patch("src.core.tools.media_buy_create.process_and_upload_package_creatives")
+        mock_upload = patcher.start()
+        self._guard("patch:upload_creatives", patcher.stop)
+        self.mock["upload_creatives"] = mock_upload
+        mock_upload.return_value = (req.packages, uploaded_ids or {})
+        return mock_upload
+
     def _configure_mocks(self) -> None:
         """Set up happy-path defaults for external mocks."""
         # Adapter: mock create_media_buy — returns response matching the request packages.

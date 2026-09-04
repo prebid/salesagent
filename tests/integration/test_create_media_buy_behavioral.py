@@ -59,6 +59,7 @@ from src.core.exceptions import (
     AdCPValidationError,
 )
 from src.core.resolved_identity import ResolvedIdentity
+from src.core.schema_helpers import to_brand_reference
 from src.core.schemas import (
     CreateMediaBuyError,
     CreateMediaBuyRequest,
@@ -136,6 +137,24 @@ def _make_request(**overrides) -> CreateMediaBuyRequest:
     }
     defaults.update(overrides)
     return CreateMediaBuyRequest(**defaults)
+
+
+# A package carrying an inline creative — the only shape that reaches
+# process_and_upload_package_creatives (packages without `creatives` skip it).
+_INLINE_CREATIVE_PACKAGE: dict[str, Any] = {
+    "product_id": "prod_1",
+    "budget": 5000.0,
+    "pricing_option_id": "cpm_usd_fixed",
+    "creatives": [
+        {
+            "creative_id": "inline_1",
+            "name": "Test Ad",
+            "format_id": {"agent_url": "https://creative.example.com/", "id": "display_300x250"},
+            "assets": {"banner_image": {"url": "https://example.com/ad.png"}},
+            "variants": [],
+        }
+    ],
+}
 
 
 # ===========================================================================
@@ -1287,38 +1306,54 @@ class TestInlineCreativeObligations:
 
         Covers: UC-002-ALT-WITH-INLINE-CREATIVES-01
         """
-        req = _make_request(
-            packages=[
-                {
-                    "product_id": "prod_1",
-                    "budget": 5000.0,
-                    "pricing_option_id": "cpm_usd_fixed",
-                    "creatives": [
-                        {
-                            "creative_id": "inline_1",
-                            "name": "Test Ad",
-                            "format_id": {"agent_url": "https://creative.example.com/", "id": "display_300x250"},
-                            "assets": {"banner_image": {"url": "https://example.com/ad.png"}},
-                            "variants": [],
-                        }
-                    ],
-                },
-            ]
-        )
+        req = _make_request(packages=[_INLINE_CREATIVE_PACKAGE])
 
         with _env(human_review_required=True) as env:
             tenant, _principal = env.setup_default_data()
             env.setup_product_chain(tenant)
             _require_manual_approval(env)
 
-            with patch("src.core.tools.media_buy_create.process_and_upload_package_creatives") as mock_upload:
-                mock_upload.return_value = (req.packages, {"pkg-1": ["new_creative_id"]})
-                try:
-                    env.call_impl(req=req)
-                except Exception:
-                    pass
+            mock_upload = env.stub_creative_upload(req, uploaded_ids={"pkg-1": ["new_creative_id"]})
+            env.call_impl(req=req)
 
-        mock_upload.assert_called_once_with(packages=ANY, context=ANY, testing_ctx=ANY)
+        mock_upload.assert_called_once_with(packages=ANY, context=ANY, testing_ctx=ANY, media_buy_brand=ANY)
+
+
+class TestMediaBuyBrandPropagation:
+    """``req.brand`` reaches the creative-upload step as ``media_buy_brand``.
+
+    ``_create_media_buy_impl`` forwards ``req.brand`` (the typed
+    ``BrandReference``, not a dict) to ``process_and_upload_package_creatives``,
+    which threads it into the internal creative sync so the stored creative data
+    carries ``brand.domain`` for adapters to read. Serialization happens at the DB
+    boundary, so the value crossing THIS boundary must still be the model.
+    """
+
+    @pytest.mark.parametrize(
+        "brand",
+        # A populated brand must arrive as the model itself, not a dict or a
+        # re-derived copy; an absent brand must arrive as None, not a placeholder.
+        [{"domain": "acme.com"}, None],
+        ids=["brand-set", "brand-absent"],
+    )
+    def test_brand_forwarded_verbatim(self, integration_db, brand):
+        """Whatever ``req.brand`` holds is what the upload step receives."""
+        req = _make_request(packages=[_INLINE_CREATIVE_PACKAGE])
+        # brand is optional on the wire; assign after construction so the None case
+        # models a request that omitted it rather than the fixture default.
+        req.brand = to_brand_reference(brand)
+
+        with _env(human_review_required=True) as env:
+            tenant, _principal = env.setup_default_data()
+            env.setup_product_chain(tenant)
+            _require_manual_approval(env)
+
+            mock_upload = env.stub_creative_upload(req)
+            env.call_impl(req=req)
+
+        expected_domain = brand["domain"] if brand else None
+        assert (req.brand.domain if req.brand else None) == expected_domain
+        mock_upload.assert_called_once_with(packages=ANY, context=ANY, testing_ctx=ANY, media_buy_brand=req.brand)
 
     @pytest.mark.asyncio
     async def test_inline_creative_format_validation(self, integration_db):

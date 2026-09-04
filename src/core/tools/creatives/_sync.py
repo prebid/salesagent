@@ -6,7 +6,7 @@ from collections.abc import Sequence
 from typing import Any
 
 from adcp import PushNotificationConfig
-from adcp.types import ContextObject, CreativeAction, CreativeAsset
+from adcp.types import BrandReference, ContextObject, CreativeAction, CreativeAsset
 from pydantic import BaseModel
 
 from src.core.auth import require_identity, require_principal_id, require_tenant
@@ -47,8 +47,29 @@ def _sync_creatives_impl(
     push_notification_config: PushNotificationConfig | None = None,
     context: ContextObject | dict | None = None,
     identity: ResolvedIdentity | None = None,
+    *,
+    media_buy_brand: BrandReference | None = None,
 ) -> SyncCreativesResponse:
     """Sync creative assets to centralized library (AdCP v2.5 spec compliant endpoint).
+
+    Shared business logic behind the MCP/A2A/REST ``sync_creatives`` wrappers.
+    Every POSITIONAL-OR-KEYWORD parameter here is buyer-facing and is forwarded by
+    all three wire wrappers — enforced by
+    ``test_architecture_boundary_completeness.py``. (That is the wrapper-to-impl
+    completeness contract, not a claim that the signature equals the pinned request
+    schema: ``creative/sync-creatives-request.json @ 3.1.1`` requires
+    ``idempotency_key``/``account``/``creatives``, and the ``idempotency_key`` gap
+    is pre-existing and tracked in #2144.)
+
+    Parameters after the ``*`` are KEYWORD-ONLY and orchestration-only: supplied by
+    in-process callers, absent from the wire contract, and never forwarded by a
+    wrapper. That is the whole marker — the guard reads the signature, so there is
+    no name registry to keep in step and no second entry point to keep in step
+    with this one. (A previous version split this function in two so the
+    orchestration-only input could stay off a "buyer-facing" signature; the split
+    bought nothing — FastMCP derives the advertised MCP tool schema from the
+    WRAPPER's signature, not from this one — and cost a third copy of the
+    nine-parameter forwarding block.)
 
     Primary creative management endpoint that handles:
     - Bulk creative upload/update with upsert semantics
@@ -69,6 +90,11 @@ def _sync_creatives_impl(
         push_notification_config: Push notification config for status updates (AdCP spec, optional)
         context: Application level context per adcp spec
         identity: ResolvedIdentity with principal/tenant info (transport-agnostic)
+        media_buy_brand: ORCHESTRATION-ONLY (keyword-only). Typed brand from the
+            ``create_media_buy`` request, threaded in by
+            ``process_and_upload_package_creatives`` so adapters can read
+            ``brand.domain`` from the stored creative data. ``SyncCreativesRequest``
+            has no ``brand`` field in the pinned spec and no transport caller sets it.
 
     Returns:
         SyncCreativesResponse with synced creatives and assignments
@@ -193,7 +219,12 @@ def _sync_creatives_impl(
                         error_msg = str(validation_error)
                     failed_creatives.append({"creative_id": creative_id, "error": error_msg})
                     failed_count += 1
-                    results.append(_failed_sync_result(creative_id, error_msg))
+                    # Buyer input the buyer can fix: VALIDATION_ERROR is classified
+                    # correctable in enums/error-code.json @ 3.1.1 (derived by
+                    # wire_advisory). The default SERVICE_UNAVAILABLE would tell the
+                    # buyer to retry with backoff a payload that will be rejected
+                    # identically every time.
+                    results.append(_failed_sync_result(creative_id, error_msg, code="VALIDATION_ERROR"))
                     continue  # Skip to next creative
 
                 # Check provenance requirement (EU AI Act Article 50)
@@ -253,6 +284,7 @@ def _sync_creatives_impl(
                             all_formats=all_formats,
                             registry=registry,
                             principal_id=principal_id,
+                            media_buy_brand=media_buy_brand,
                         )
 
                         # Handle failed updates
@@ -313,6 +345,7 @@ def _sync_creatives_impl(
                             all_formats=all_formats,
                             registry=registry,
                             principal_id=principal_id,
+                            media_buy_brand=media_buy_brand,
                         )
 
                         # Handle failed creates
@@ -372,15 +405,13 @@ def _sync_creatives_impl(
                 )
                 failed_count += 1
                 # Carry the typed error's OWN classification onto the per-item
-                # result. The default is SERVICE_UNAVAILABLE — now paired with the
-                # pin's `transient` rather than left empty — which for a
-                # correctable error reports the SELLER as unavailable for a
-                # problem in the buyer's own document, and drops the `field` that
-                # says which input to fix. That matters most for an egress
-                # refusal, whose message deliberately says nothing.
-                # The recovery is no longer forwarded: it derives from the code in
-                # wire_advisory, and the raise sites that used to hand-type a
-                # contradicting terminal no longer can.
+                # result. The default is SERVICE_UNAVAILABLE — paired with the pin's
+                # `transient` by wire_advisory — which for a correctable error
+                # reports the SELLER as unavailable for a problem in the buyer's own
+                # document, and drops the `field` that says which input to fix. That
+                # matters most for an egress refusal, whose message deliberately says
+                # nothing. The recovery is not forwarded: it derives from the code in
+                # wire_advisory, so the pair cannot contradict the pinned enum.
                 results.append(
                     _failed_sync_result(
                         creative_id,
@@ -389,6 +420,20 @@ def _sync_creatives_impl(
                         field=getattr(e, "field", None),
                     )
                 )
+            except ValidationError as e:
+                # A malformed creative payload (e.g. an asset the AdCP AssetVariant
+                # union cannot express) — the buyer's to fix, so VALIDATION_ERROR,
+                # whose pinned classification is `correctable`, never the
+                # retry-with-backoff SERVICE_UNAVAILABLE default. Raised where the
+                # boundary builds the CreativeAsset, which is outside the inner
+                # validation try above.
+                creative_id = _get_field(raw_creative, "creative_id", "unknown")
+                error_msg = format_validation_error(e, context=f"creative {creative_id}")
+                failed_creatives.append(
+                    {"creative_id": creative_id, "name": _get_field(raw_creative, "name"), "error": error_msg}
+                )
+                failed_count += 1
+                results.append(_failed_sync_result(creative_id, error_msg, code="VALIDATION_ERROR"))
             except Exception as e:
                 # Savepoint automatically rolls back this creative only
                 creative_id = _get_field(raw_creative, "creative_id", "unknown")
@@ -424,7 +469,12 @@ def _sync_creatives_impl(
 
         # CreativeUoW auto-commits on clean exit — no explicit commit needed
 
-    # Process assignments (spec-compliant: creative_id → package_ids mapping)
+    # Process assignments (spec-compliant: creative_id → package_ids mapping).
+    # Assignments for creatives that failed this sync are NOT filtered out here:
+    # _process_assignments owns that guard (it skips the FK-violating INSERT and
+    # records the skip in assignment_errors so the buyer learns the package was
+    # not assigned, per BR-RULE-033 INV-4). Pre-filtering here dropped those
+    # creatives before the guard ran, silently losing the errors (#1418).
     assignment_list = _process_assignments(
         assignments=assignments,
         results=results,

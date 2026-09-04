@@ -48,18 +48,100 @@ Available mocks via env.mock:
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
+from src.core.creative_agent_registry import GenerativeBuildResult
 from src.core.schemas import SyncCreativesResponse
+from tests.factories.format import make_generative_format
 from tests.harness._base import IntegrationEnv
+from tests.harness._realize import E2EUnsupportedSetup, realize_e2e
 from tests.harness.egress import EgressHatchMixin
 from tests.harness.transport import DeliverResult
 
-# Kwargs ``IntegrationEnv._run_a2a_handler`` consumes itself (identity mock, protocol-level
-# push config, request model) rather than forwarding as skill parameters — see
-# tests/harness/_base.py. They must reach it untouched.
-_A2A_RESERVED_KWARGS = frozenset({"identity", "a2a_push_notification_config", "req"})
+# Sink for the production error mapper's log calls in set_build_creative_sdk_error.
+_harness_logger = logging.getLogger(__name__)
+
+
+# A generative format the PINNED reference agent serves (present in
+# tests/fixtures/creative_formats/reference_formats.json with a non-empty
+# output_format_ids). Defaulting to a real catalog format is what makes the
+# generative setup realizable over e2e instead of an impl-only escape hatch:
+# under ADCP_TESTING the live server resolves formats from the same fixture.
+REFERENCE_GENERATIVE_FORMAT_ID = "display_300x250_generative"
+
+# What the in-process double returns from build_creative. Mirrors the shape the
+# real registry produces (status / context_id / creative_output).
+DEFAULT_GENERATIVE_BUILD_RESULT: dict[str, Any] = {
+    "status": "draft",
+    "context_id": "ctx-test-123",
+    "creative_output": {
+        "assets": {"headline": {"asset_type": "text", "content": "Generated headline"}},
+        "output_format": {"url": "https://generated.example.com/creative.html"},
+    },
+}
+
+
+def _realize_generative_build(
+    env: Any,
+    format_id: str = REFERENCE_GENERATIVE_FORMAT_ID,
+    agent_url: str | None = None,
+    build_result: dict[str, Any] | None = None,
+    gemini_api_key: str = "test-gemini-key",
+) -> dict[str, str]:
+    """E2E realization of setup_generative_build: validate against the live catalog.
+
+    Twin of ``CreativeFormatsEnv._validate_registry_formats``: the live stack
+    serves the reference catalog by construction (``ADCP_TESTING`` reads the same
+    fixture), and its registry serves a derived ``build_creative`` result under
+    the same flag — so there is no per-scenario server registry to write, only an
+    intent to validate.
+
+    - a generative format from the reference catalog -> returns THAT catalog
+      entry's identity: the server resolves formats against the reference agent,
+      so a scenario payload carrying the in-process default agent_url
+      (``creative.test.example.com``, which only the registry mock serves) would
+      not resolve there — the sync would quietly take the no-agent path and
+      succeed with no generative build, which is what this realization exists to
+      prevent.
+    - a format the catalog does not serve as generative -> unrealizable: name it
+      and point at the fixture-refresh path.
+    - an explicit ``agent_url`` -> unrealizable unless it IS the catalog's agent:
+      the live server has no other registry to read.
+    - a scenario-specific ``build_result`` -> unrealizable: the live server serves
+      the result IT derives, so a canned response cannot be injected.
+    """
+    from src.core.format_cache import load_reference_formats
+    from src.core.schemas import canonical_agent_url
+
+    if build_result is not None:
+        raise E2EUnsupportedSetup(
+            "a scenario-specific build_result cannot be injected over e2e: the live server serves the "
+            "build result its own ADCP_TESTING branch derives. Assert on that result instead of pinning one."
+        )
+
+    generative = {
+        fmt.format_id.id: canonical_agent_url(fmt.format_id.agent_url)
+        for fmt in load_reference_formats()
+        if getattr(fmt, "output_format_ids", None)
+    }
+    if format_id not in generative:
+        raise E2EUnsupportedSetup(
+            f"{format_id!r} is not a generative format in the reference catalog "
+            f"(generative formats: {sorted(generative)}). Register it with the creative agent "
+            "and refresh the fixture (`make creative-formats-refresh`)."
+        )
+
+    catalog_agent_url = generative[format_id]
+    if agent_url is not None and canonical_agent_url(agent_url) != catalog_agent_url:
+        raise E2EUnsupportedSetup(
+            f"the live server resolves {format_id!r} against {catalog_agent_url} (the reference catalog); "
+            f"a format served from {agent_url} exists only in the in-process registry mock."
+        )
+
+    env.mock["config"].return_value.gemini_api_key = gemini_api_key
+    return {"agent_url": catalog_agent_url, "id": format_id}
 
 
 class CreativeSyncEnv(EgressHatchMixin, IntegrationEnv):
@@ -92,7 +174,9 @@ class CreativeSyncEnv(EgressHatchMixin, IntegrationEnv):
         mock_registry.get_format = AsyncMock(return_value={"id": "display_300x250", "name": "Display 300x250"})
         # build_creative and preview_creative must be AsyncMock because
         # _processing.py uses the REAL run_async_in_sync_context (not patched there).
-        mock_registry.build_creative = AsyncMock(return_value={})
+        # build_creative's production return type is GenerativeBuildResult | None;
+        # None is the real registry's "agent returned no payload" value.
+        mock_registry.build_creative = AsyncMock(return_value=None)
         mock_registry.preview_creative = AsyncMock(return_value={})
         self.mock["registry"].return_value = mock_registry
 
@@ -110,9 +194,10 @@ class CreativeSyncEnv(EgressHatchMixin, IntegrationEnv):
         mock_config.gemini_api_key = None
         self.mock["config"].return_value = mock_config
 
+    @realize_e2e(_realize_generative_build)
     def setup_generative_build(
         self,
-        format_id: str = "display_gen",
+        format_id: str = REFERENCE_GENERATIVE_FORMAT_ID,
         agent_url: str | None = None,
         build_result: dict[str, Any] | None = None,
         gemini_api_key: str = "test-gemini-key",
@@ -120,48 +205,100 @@ class CreativeSyncEnv(EgressHatchMixin, IntegrationEnv):
         """Configure harness for generative creative testing.
 
         Sets up:
-        - A format mock with output_format_ids (makes it generative)
-        - build_creative AsyncMock with the given return value
+        - The reference catalog's generative format (real ``Format``, non-empty
+          ``output_format_ids`` — production routes on that attribute, and a
+          ``Mock`` would auto-create it as truthy)
+        - ``build_creative`` returning the typed ``GenerativeBuildResult`` the real
+          registry returns
         - gemini_api_key on the config mock
         - run_async to return the generative format list
 
         Returns a format_id dict for use in creative payloads::
 
-            fmt = env.setup_generative_build(format_id="gen_banner")
+            fmt = env.setup_generative_build()
             creative = {"creative_id": "c1", "name": "Test", "format_id": fmt, ...}
-        """
-        from adcp.types import FormatId as LibraryFormatId
 
+        The default format is a format the PINNED reference agent actually serves
+        (see :data:`REFERENCE_GENERATIVE_FORMAT_ID`), so the same setup is
+        realizable over e2e — the live stack runs with ``ADCP_TESTING=true``, under
+        which the registry serves the same reference catalog and a derived
+        ``build_creative`` result. See :func:`_realize_generative_build`.
+        """
         agent = agent_url or self.DEFAULT_AGENT_URL
 
-        # Create format mock with matching FormatId
-        mock_format = MagicMock()
-        mock_format.format_id = LibraryFormatId(agent_url=agent, id=format_id)
-        mock_format.agent_url = agent
-        mock_format.output_format_ids = [format_id]  # Non-empty → generative
+        generative_format = make_generative_format(format_id, agent_url=agent)
 
         # Configure run_async to return this format for list_all_formats
-        self.set_run_async_result([mock_format])
+        self.set_run_async_result([generative_format])
 
-        # Configure build_creative return value
-        default_build = {
-            "status": "draft",
-            "context_id": "ctx-test-123",
-            "creative_output": {
-                "assets": {"headline": {"text": "Generated headline"}},
-                "output_format": {"url": "https://generated.example.com/creative.html"},
-            },
-        }
         registry = self.mock["registry"].return_value
-        registry.build_creative = AsyncMock(return_value=build_result or default_build)
+        self.set_build_creative_result(build_result or DEFAULT_GENERATIVE_BUILD_RESULT)
 
         # Also configure get_format to return this format for validation
-        registry.get_format = AsyncMock(return_value=mock_format)
+        registry.get_format = AsyncMock(return_value=generative_format)
 
         # Set gemini API key
         self.mock["config"].return_value.gemini_api_key = gemini_api_key
 
         return {"agent_url": agent, "id": format_id}
+
+    def set_build_creative_result(self, build_result: dict[str, Any] | GenerativeBuildResult | None) -> None:
+        """Make ``build_creative`` return *build_result*, as the real registry would.
+
+        The production ``CreativeAgentRegistry.build_creative`` returns a
+        ``GenerativeBuildResult`` model (or ``None`` when the agent returned no
+        payload), so a double that returns a raw dict lets a test pass against a
+        contract production does not have. A dict is validated into the model
+        here — the convenience of writing the response as a literal without the
+        double drifting from the type the caller actually receives.
+        """
+        result = GenerativeBuildResult.model_validate(build_result) if isinstance(build_result, dict) else build_result
+        self.mock["registry"].return_value.build_creative = AsyncMock(return_value=result)
+
+    def set_build_creative_side_effect(self, side_effect: Any) -> None:
+        """Make ``build_creative`` run *side_effect* — an exception or a callable.
+
+        The one place the double's failure behaviour is configured, so
+        :meth:`set_build_creative_error` and the callable-based configurators
+        (e.g. one that renders the manifest through production so the raised
+        error is the REAL one) share a single seam.
+        """
+        self.mock["registry"].return_value.build_creative = AsyncMock(side_effect=side_effect)
+
+    def set_build_creative_error(self, error: BaseException) -> None:
+        """Make ``build_creative`` raise *error* on the generative path.
+
+        Use after :meth:`setup_generative_build`. The real ``CreativeAgentRegistry``
+        raises the *internal* typed ``AdCPError`` taxonomy from ``build_creative``
+        (it translates the SDK's ``ADCPError`` via ``raise_mapped_adcp_error``), so
+        pass an internal ``AdCPError`` to exercise recovery classification, or a
+        bare ``Exception`` for the unknown-failure fallback.
+        """
+        self.set_build_creative_side_effect(error)
+
+    def set_build_creative_seam_error(self, *, status: int | None) -> None:
+        """Fail ``build_creative`` exactly as the GUARDED SEAM does for an HTTP *status*.
+
+        ``build_creative`` dials through ``call_operator_mcp_tool`` (#1802), which
+        owns the error mapping: a failure is re-raised by
+        ``raise_mapped_mcp_error`` as the AdCP error an OPERATOR-endpoint failure
+        warrants — a 401/403 from a creative agent is CONFIGURATION_ERROR /
+        terminal, because the buyer did not choose that address and cannot fix
+        its credentials; an unreachable agent is SERVICE_UNAVAILABLE / transient.
+
+        Routing the double through the PRODUCTION mapper (rather than raising a
+        hand-picked internal error) is what makes the case pin the whole chain —
+        seam failure → typed AdCP error → wire code — instead of only the half
+        after the mapping. The previous version routed through
+        ``raise_mapped_adcp_error``, the mapper the retired ``ADCPMultiAgentClient``
+        path used; it kept passing while pinning a translation production no
+        longer performs.
+        """
+        from src.core.helpers.outbound_error_mapping import adcp_error_for_status
+        from src.core.security.outbound_http import OperatorEndpoint
+
+        mapped = adcp_error_for_status(status, retry_after=None, provenance=OperatorEndpoint("the creative agent"))
+        self.set_build_creative_side_effect(mapped)
 
     def set_run_async_result(self, formats: list[Any]) -> None:
         """Configure run_async_in_sync_context to return *formats*.
@@ -196,6 +333,17 @@ class CreativeSyncEnv(EgressHatchMixin, IntegrationEnv):
 
         return _sync_creatives_impl(**kwargs)
 
+    def call_internal_impl(self, **kwargs: Any) -> SyncCreativesResponse:
+        """Call ``_sync_creatives_impl`` including its orchestration-only inputs.
+
+        Same impl as :meth:`call_impl`; this entry point exists to name the intent
+        of a test that passes a keyword-only, orchestration-only input (currently
+        ``media_buy_brand``, supplied in production by
+        ``process_and_upload_package_creatives``). Those inputs are not on the wire
+        contract, so there is no transport equivalent to compare against.
+        """
+        return self.call_impl(**kwargs)
+
     def deliver_a2a(self, **kwargs: Any) -> DeliverResult:
         """Dispatch sync_creatives through the REAL A2A ``on_message_send`` pipeline.
 
@@ -210,25 +358,17 @@ class CreativeSyncEnv(EgressHatchMixin, IntegrationEnv):
         Task/Artifact DataPart) makes the a2a seat grade the real handler,
         per-item failures included, instead of standing in for it.
 
-        Outbound kwargs are JSON-normalized through :meth:`_wire_value` — the
-        SAME normalizer the REST leg's ``build_rest_body`` uses, not a second
-        hand-rolled one — because they now travel via
-        ``create_a2a_message_with_skill`` -> ``_dict_to_value`` (protobuf),
-        which cannot carry the Pydantic models the raw wrapper accepted as live
-        Python objects (account, push_notification_config) and would otherwise
-        turn them into repr strings instead of a document a buyer could send.
-        Normalization is applied per-kwarg rather than by calling
-        ``build_rest_body``, because that helper SELECTS the REST body's keys:
-        routing through it would silently drop the three kwargs
-        ``_run_a2a_handler`` consumes itself (see ``_A2A_RESERVED_KWARGS``),
-        which must reach it untouched.
+        Parameters travel via ``create_a2a_message_with_skill`` ->
+        ``_dict_to_value`` (protobuf), which cannot carry a Pydantic model and
+        would turn one into a repr string instead of a document a buyer could
+        send. ``_run_a2a_handler`` normalizes every SKILL parameter itself, after
+        popping the kwargs it consumes (identity, req, the protocol push config)
+        — so kwargs pass through here untouched. Normalizing again in this env
+        would mean a second normalizer plus a list of names to exempt from it,
+        at a layer that does not know which kwargs the handler eats.
         """
         kwargs.setdefault("creatives", [])
-        return self._run_a2a_handler(
-            "sync_creatives",
-            SyncCreativesResponse,
-            **{k: v if k in _A2A_RESERVED_KWARGS else self._wire_value(v) for k, v in kwargs.items()},
-        )
+        return self._run_a2a_handler("sync_creatives", SyncCreativesResponse, **kwargs)
 
     def deliver_mcp(self, **kwargs: Any) -> DeliverResult:
         """Call sync_creatives via Client(mcp) — full pipeline dispatch.

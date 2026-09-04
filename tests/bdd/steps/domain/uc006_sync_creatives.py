@@ -1585,7 +1585,6 @@ def then_uc006_result_should_be(ctx: dict, outcome: str) -> None:
         "CREATIVE_FORMAT_UNKNOWN",
         "CREATIVE_AGENT_UNREACHABLE",
         "CREATIVE_NAME_EMPTY",
-        "CREATIVE_GEMINI_KEY_MISSING",
     ):
         _assert_per_creative_failure(ctx, outcome)
     elif outcome == "assignment updated":
@@ -2110,8 +2109,8 @@ def _promote_creative_errors_to_ctx(ctx: dict, errs: list) -> None:
     """Promote SyncCreativeResult.errors[] to ctx["error"] for downstream Then steps.
 
     Production stores per-creative failures as plain strings in errors[]. Some
-    error strings contain structured info (e.g. "GEMINI_API_KEY not configured")
-    that downstream steps can parse. We wrap the first error as a synthetic object
+    error strings contain structured info (e.g. "no previews returned") that
+    downstream steps can parse. We wrap the first error as a synthetic object
     with error_code/message/suggestion derived from the string content.
     """
     if not errs:
@@ -2141,8 +2140,6 @@ def _promote_creative_errors_to_ctx(ctx: dict, errs: list) -> None:
 def _infer_error_code_from_message(msg: str) -> str:
     """Map production error strings to spec error codes."""
     lower = msg.lower()
-    if "gemini_api_key" in lower and "not configured" in lower:
-        return "CREATIVE_GEMINI_KEY_MISSING"
     if "preview" in lower and ("failed" in lower or "no preview" in lower):
         return "CREATIVE_PREVIEW_FAILED"
     if "format" in lower and "required" in lower:
@@ -2155,8 +2152,6 @@ def _infer_error_code_from_message(msg: str) -> str:
 def _infer_suggestion_from_message(msg: str) -> str | None:
     """Extract or generate a suggestion from a production error message."""
     lower = msg.lower()
-    if "gemini_api_key" in lower:
-        return "Ask the seller to configure GEMINI_API_KEY in their agent settings"
     if "preview" in lower:
         return "Provide a media_url for the creative"
     return None
@@ -4475,7 +4470,7 @@ def given_creative_with_generative_format(ctx: dict) -> None:
     """Set up a creative with a generative format (output_format_ids populated)."""
     env = ctx["env"]
     _ensure_tenant_principal(ctx, env)
-    fmt = env.setup_generative_build(format_id="display_gen", gemini_api_key="test-gemini-key")
+    fmt = env.setup_generative_build(gemini_api_key="test-gemini-key")
     creative_payload = {
         "creative_id": "creative-generative-001",
         "name": "Generative Creative",
@@ -4651,7 +4646,7 @@ def given_creative_output_format_ids_present(ctx: dict) -> None:
     """
     env = ctx["env"]
     _ensure_tenant_principal(ctx, env)
-    fmt = env.setup_generative_build(format_id="display_gen", gemini_api_key="test-gemini-key")
+    fmt = env.setup_generative_build(gemini_api_key="test-gemini-key")
     creative_payload = {
         "creative_id": "creative-generative-part-001",
         "name": "Generative Partition Creative",
@@ -4671,7 +4666,7 @@ def given_creative_output_format_ids_present_create(ctx: dict) -> None:
     """
     env = ctx["env"]
     _ensure_tenant_principal(ctx, env)
-    fmt = env.setup_generative_build(format_id="display_gen", gemini_api_key="test-gemini-key")
+    fmt = env.setup_generative_build(gemini_api_key="test-gemini-key")
     creative_payload = {
         "creative_id": "creative-generative-create-001",
         "name": "My Summer Campaign Banner",
@@ -4730,10 +4725,12 @@ def given_no_prompt_assets_or_inputs(ctx: dict) -> None:
 
 @given("message asset but no GEMINI_API_KEY")
 def given_message_asset_no_gemini_key(ctx: dict) -> None:
-    """Add a message asset but remove the GEMINI_API_KEY from config.
+    """Add a message asset and clear GEMINI_API_KEY from config.
 
-    Production checks gemini_api_key early in the generative path and
-    raises ValueError when missing (BR-RULE-036, INV formerly-2).
+    Generation is delegated to the creative agent over AdCP (build_creative), so
+    the absence of a seller-side key must NOT change the outcome — the build still
+    proceeds with the message prompt. Reconciled in PR #1482 when the seller-side
+    gate was removed; the previous form of this step expected a ValueError.
     """
     creatives = ctx.get("creatives", [])
     assert creatives, "No creative in context to add message asset to"
@@ -4774,7 +4771,7 @@ def given_creative_generative_with_prompt(ctx: dict) -> None:
     """Set up a generative creative with a message asset containing prompt text (boundary)."""
     env = ctx["env"]
     _ensure_tenant_principal(ctx, env)
-    fmt = env.setup_generative_build(format_id="display_gen", gemini_api_key="test-gemini-key")
+    fmt = env.setup_generative_build(gemini_api_key="test-gemini-key")
     asset_prompt = "Design a responsive ad for holiday promotion"
     creative_payload = {
         "creative_id": "creative-gen-prompt-001",
@@ -4797,7 +4794,7 @@ def given_new_creative_generative_no_prompt_with_name(ctx: dict) -> None:
     """
     env = ctx["env"]
     _ensure_tenant_principal(ctx, env)
-    fmt = env.setup_generative_build(format_id="display_gen", gemini_api_key="test-gemini-key")
+    fmt = env.setup_generative_build(gemini_api_key="test-gemini-key")
     creative_payload = {
         "creative_id": "creative-gen-name-fallback-001",
         "name": "Summer Sale Banner",
@@ -4812,15 +4809,16 @@ def given_new_creative_generative_no_prompt_with_name(ctx: dict) -> None:
 
 @given("a creative with a generative format but GEMINI_API_KEY not configured")
 def given_creative_generative_no_gemini(ctx: dict) -> None:
-    """Set up a generative creative but with GEMINI_API_KEY removed (boundary).
+    """Set up a generative creative with GEMINI_API_KEY removed (boundary).
 
-    Production raises ValueError when gemini_api_key is not configured
-    for a generative format.
+    The seller-side key is not part of the generative contract — build_creative
+    delegates generation to the creative agent — so this boundary must behave
+    exactly like the key-present case (PR #1482).
     """
     env = ctx["env"]
     _ensure_tenant_principal(ctx, env)
     # Set up generative format but WITHOUT gemini key
-    fmt = env.setup_generative_build(format_id="display_gen", gemini_api_key="test-gemini-key")
+    fmt = env.setup_generative_build(gemini_api_key="test-gemini-key")
     # Now remove the key — setup_generative_build sets it, we override
     env.mock["config"].return_value.gemini_api_key = None
     creative_payload = {
@@ -4910,7 +4908,7 @@ def given_creative_format_with_output_format_ids(ctx: dict) -> None:
     """
     env = ctx["env"]
     _ensure_tenant_principal(ctx, env)
-    fmt = env.setup_generative_build(format_id="display_gen", gemini_api_key="test-gemini-key")
+    fmt = env.setup_generative_build(gemini_api_key="test-gemini-key")
     creative_payload = {
         "creative_id": "creative-gen-inv1-001",
         "name": "Generative Detection Test",
@@ -4941,7 +4939,7 @@ def given_generative_creative_with_asset_role(ctx: dict, role: str, content: str
     """
     env = ctx["env"]
     _ensure_tenant_principal(ctx, env)
-    fmt = env.setup_generative_build(format_id="display_gen", gemini_api_key="test-gemini-key")
+    fmt = env.setup_generative_build(gemini_api_key="test-gemini-key")
     creative_payload = {
         "creative_id": "creative-gen-inv2-001",
         "name": "Generative Prompt From Assets",
@@ -4968,7 +4966,7 @@ def given_generative_creative_with_context_description(ctx: dict, description: s
     """
     env = ctx["env"]
     _ensure_tenant_principal(ctx, env)
-    fmt = env.setup_generative_build(format_id="display_gen", gemini_api_key="test-gemini-key")
+    fmt = env.setup_generative_build(gemini_api_key="test-gemini-key")
     creative_payload = {
         "creative_id": "creative-gen-inv3-001",
         "name": "Generative Context Description",
@@ -4990,7 +4988,7 @@ def given_generative_creative_named_no_prompt(ctx: dict, name: str) -> None:
     """
     env = ctx["env"]
     _ensure_tenant_principal(ctx, env)
-    fmt = env.setup_generative_build(format_id="display_gen", gemini_api_key="test-gemini-key")
+    fmt = env.setup_generative_build(gemini_api_key="test-gemini-key")
     creative_payload = {
         "creative_id": "creative-gen-inv4-001",
         "name": name,
@@ -5017,7 +5015,7 @@ def given_generative_creative_exists_with_content(ctx: dict) -> None:
     _ensure_tenant_principal(ctx, env)
     tenant = ctx["tenant"]
     principal = ctx["principal"]
-    fmt = env.setup_generative_build(format_id="display_gen", gemini_api_key="test-gemini-key")
+    fmt = env.setup_generative_build(gemini_api_key="test-gemini-key")
 
     creative_id = "creative-gen-inv5-001"
     existing_data = {
@@ -5039,7 +5037,7 @@ def given_generative_creative_exists_with_content(ctx: dict) -> None:
         creative_id=creative_id,
         name="Existing Generative Creative",
         agent_url=env.DEFAULT_AGENT_URL,
-        format="display_gen",
+        format=fmt["id"],
         data=existing_data,
     )
     env._commit_factory_data()
@@ -5082,7 +5080,7 @@ def given_generative_creative_with_user_assets_and_prompt(ctx: dict) -> None:
     """
     env = ctx["env"]
     _ensure_tenant_principal(ctx, env)
-    fmt = env.setup_generative_build(format_id="display_gen", gemini_api_key="test-gemini-key")
+    fmt = env.setup_generative_build(gemini_api_key="test-gemini-key")
     user_image = image_spec("image", url="https://example.com/user-banner.png")
     creative_payload = {
         "creative_id": "creative-gen-inv6-001",
@@ -5127,9 +5125,53 @@ def when_buyer_updates_creative(ctx: dict) -> None:
 # ═══════════════════════════════════════════════════════════════════════
 
 
+def _stored_generative_build(ctx: dict) -> dict:
+    """The generative build result persisted on the synced creative.
+
+    The one piece of evidence that the generative path ran which is observable on
+    EVERY transport: only ``_apply_build_result`` writes this key, and it writes
+    it from what the creative agent returned.
+    """
+    env = ctx["env"]
+    session = env.get_session()
+    assert session is not None, "no DB session available to verify the generative build"
+
+    from sqlalchemy import select
+
+    from src.core.database.models import Creative as CreativeModel
+
+    creative_id = ctx["creatives"][-1]["creative_id"]
+    db_creative = session.scalars(
+        select(CreativeModel).filter_by(creative_id=creative_id, tenant_id=env._tenant_id)
+    ).first()
+    assert db_creative is not None, f"Creative {creative_id} not found in DB"
+    creative_data = db_creative.data or {}
+    assert "generative_build_result" in creative_data, (
+        f"Expected 'generative_build_result' in creative data, got keys: {list(creative_data.keys())}"
+    )
+    return creative_data
+
+
+def _assert_build_creative_dialled(ctx: dict) -> None:
+    """Assert the creative agent's generative build actually ran — transport-aware.
+
+    In-process the registry IS the harness mock, so the call itself is the sharpest
+    evidence. Over e2e the sync runs inside the live server: there is no local mock
+    to inspect (asserting on one there passes or fails for reasons unrelated to the
+    server), so the evidence is the build result the server persisted.
+    """
+    if is_e2e(ctx):
+        _stored_generative_build(ctx)
+        return
+    registry = ctx["env"].mock["registry"].return_value
+    assert registry.build_creative.called, (
+        "build_creative should have been called for generative format (output_format_ids present)"
+    )
+
+
 @then("the creative should be processed as generative")
 def then_processed_as_generative(ctx: dict) -> None:
-    """Assert the creative was classified as generative and build_creative was called.
+    """Assert the creative was classified as generative and the build was delegated.
 
     INV-1: format_obj.output_format_ids is truthy -> creative classified as generative.
     """
@@ -5142,12 +5184,7 @@ def then_processed_as_generative(ctx: dict) -> None:
     assert any(a in ("created", "updated") for a in actions), (
         f"Expected created/updated for generative processing, got {actions}"
     )
-    # Verify build_creative WAS invoked (generative detection)
-    env = ctx["env"]
-    registry = env.mock["registry"].return_value
-    assert registry.build_creative.called, (
-        "build_creative should have been called for generative format (output_format_ids present)"
-    )
+    _assert_build_creative_dialled(ctx)
 
 
 @then("the creative should have generated content")
@@ -5161,30 +5198,8 @@ def then_creative_has_generated_content(ctx: dict) -> None:
         pytest.xfail(f"SPEC-PRODUCTION GAP: expected generated content but got {type(error).__name__}: {error}")
 
     # Verify via DB: read the creative back and check for generative data
-    env = ctx["env"]
-    session = env.get_session()
-    if session is None:
-        pytest.xfail("SPEC-PRODUCTION GAP: no DB session available to verify generated content")
-
-    from sqlalchemy import select
-
-    from src.core.database.models import Creative as CreativeModel
-
-    creative_id = ctx["creatives"][-1]["creative_id"]
-    db_creative = session.scalars(
-        select(CreativeModel).filter_by(
-            creative_id=creative_id,
-            tenant_id=env._tenant_id,
-        )
-    ).first()
-    assert db_creative is not None, f"Creative {creative_id} not found in DB"
-    creative_data = db_creative.data or {}
-    assert "generative_build_result" in creative_data, (
-        f"Expected 'generative_build_result' in creative data, got keys: {list(creative_data.keys())}"
-    )
-    env = ctx["env"]
-    registry = env.mock["registry"].return_value
-    assert registry.build_creative.called, "build_creative should have been called to generate content"
+    _stored_generative_build(ctx)
+    _assert_build_creative_dialled(ctx)
 
 
 @then(parsers.parse('the generative build should use "{expected_prompt}" as the prompt'))
@@ -5205,22 +5220,16 @@ def then_generative_build_uses_prompt(ctx: dict, expected_prompt: str) -> None:
     env = ctx["env"]
     registry = env.mock["registry"].return_value
     assert registry.build_creative.called, "build_creative should have been called for generative format"
-    call_kwargs = registry.build_creative.call_args
-    # Extract the message argument (keyword or positional)
-    message_arg = call_kwargs.kwargs.get("message")
-    if message_arg is None:
-        # Try positional: build_creative(agent_url, format_id, message, ...)
-        if len(call_kwargs.args) > 2:
-            message_arg = call_kwargs.args[2]
-    if message_arg is None:
-        for kw_name in ("prompt", "text"):
-            message_arg = call_kwargs.kwargs.get(kw_name)
-            if message_arg:
-                break
-    assert message_arg is not None, (
-        f"build_creative must be called with a message/prompt, got args={call_kwargs.args}, kwargs={call_kwargs.kwargs}"
+    call_args = registry.build_creative.call_args
+    # ``message`` is a named parameter of CreativeAgentRegistry.build_creative and the
+    # caller passes it by keyword — no positional/alias fallbacks, which would let a
+    # renamed parameter pass silently by matching something else.
+    assert "message" in call_args.kwargs, (
+        f"build_creative must be called with a message, got args={call_args.args}, kwargs={call_args.kwargs}"
     )
-    assert message_arg == expected_prompt, f"Expected prompt '{expected_prompt}', got '{message_arg}'"
+    assert call_args.kwargs["message"] == expected_prompt, (
+        f"Expected prompt '{expected_prompt}', got '{call_args.kwargs['message']}'"
+    )
 
 
 @then("the generative build should be skipped")

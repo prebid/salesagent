@@ -2085,6 +2085,14 @@ def _add_inline_creatives(ctx: dict, count: int = 1, fmt_id: str = "display_300x
                     },
                     "assets": {
                         "primary": {
+                            # asset_type is the AssetVariant discriminator: without it
+                            # the union cannot resolve an arm, so EVERY inline-creative
+                            # scenario failed on "Unable to extract tag using
+                            # discriminator 'asset_type'" rather than on the thing it
+                            # meant to exercise (the ext-g missing-URL scenario passed
+                            # only because pydantic echoed the input dict, whose text
+                            # happens to contain "url").
+                            "asset_type": "image",
                             "url": f"https://example.com/banner-{i + 1}.png",
                             "width": 300,
                             "height": 250,
@@ -2296,9 +2304,10 @@ def given_inline_creative_missing_url(ctx: dict) -> None:
     for creative in creatives:
         primary = creative.get("assets", {}).get("primary")
         assert primary is not None, "Inline creative has no primary asset to clear the URL on"
-        # Empty (not absent) URL keeps the asset structurally valid so it syncs to
-        # the library, then production's reference-creative URL validation rejects
-        # it with a message naming the missing URL (ext-g intent).
+        # Empty (not absent) URL keeps the asset's discriminator resolvable, so the
+        # rejection is about the URL — "assets.primary.AssetVariant.image.url: Input
+        # should be a valid URL" — rather than about an asset the union cannot type
+        # at all (ext-g intent: the buyer is told WHICH field is missing).
         primary["url"] = ""
 
 

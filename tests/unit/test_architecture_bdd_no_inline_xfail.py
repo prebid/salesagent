@@ -165,7 +165,10 @@ _ALLOWLIST: set[XfailSite] = {
     ("domain/uc006_sync_creatives.py", "then_creative_action_created_or_updated", 1),
     ("domain/uc006_sync_creatives.py", "then_creative_action_failed", 1),
     ("domain/uc006_sync_creatives.py", "then_creative_associated_with_principal", 1),
-    ("domain/uc006_sync_creatives.py", "then_creative_has_generated_content", 2),
+    # 2 -> 1 (PR #1482): the second inline xfail guarded a DB-session probe that the
+    # step no longer does for itself — the read moved into _stored_generative_build,
+    # which asserts the session is present instead of xfailing when it is not.
+    ("domain/uc006_sync_creatives.py", "then_creative_has_generated_content", 1),
     ("domain/uc006_sync_creatives.py", "then_creative_validated_by_agent", 1),
     ("domain/uc006_sync_creatives.py", "then_error_assignment_creative_id_required", 1),
     ("domain/uc006_sync_creatives.py", "then_error_assignment_package_id_required", 1),

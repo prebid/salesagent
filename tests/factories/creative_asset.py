@@ -12,6 +12,7 @@ from dataclasses import dataclass
 import factory
 from adcp.types import CreativeAsset, FormatId
 
+from src.core.creative_agent_registry import GenerativeBuildResult
 from tests.factories.format import AGENT_URL
 
 
@@ -198,3 +199,18 @@ def make_test_banner_creative(**overrides: object) -> CreativeAsset:
     }
     defaults.update(overrides)
     return make_creative_asset_minimal(**defaults)
+
+
+def make_build_result(**fields: object) -> GenerativeBuildResult:
+    """The typed generative-build response a creative agent returns.
+
+    ``CreativeAgentRegistry.build_creative`` returns a ``GenerativeBuildResult``
+    model, so every double for it must too: a double returning a raw dict lets a
+    test pass against a contract production does not have (the caller reads
+    ``result.status`` / ``result.creative_output``, not ``.get()``).
+
+    Defaults are the minimal draft build; pass ``creative_output=`` to add
+    generated assets or an ``output_format``.
+    """
+    defaults: dict[str, object] = {"status": "draft", "context_id": "ctx_1", "creative_output": {}}
+    return GenerativeBuildResult.model_validate({**defaults, **fields})

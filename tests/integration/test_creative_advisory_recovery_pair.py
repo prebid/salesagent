@@ -94,11 +94,6 @@ pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 # identically on every dispatch path.
 _ALL_TRANSPORTS = [Transport.IMPL, Transport.A2A, Transport.REST, Transport.MCP]
 
-# A generative format id (``output_format_ids`` non-empty via
-# ``CreativeSyncEnv.setup_generative_build``) — the branch whose
-# GEMINI_API_KEY check is production's OWN ``AdCPConfigurationError`` raise.
-_GENERATIVE_FORMAT_ID = "display_gen_banner"
-
 
 def _creative(creative_id: str, **overrides: Any) -> CreativeAsset:
     """A creative naming the tenant's registered format; ``overrides`` vary one field.
@@ -212,16 +207,21 @@ class TestConfigurationErrorAdvisoryCarriesThePinnedPair:
             )
 
     @pytest.mark.parametrize("transport", _ALL_TRANSPORTS, ids=lambda t: t.value)
-    def test_update_path_missing_generative_key(self, integration_db, transport):
-        """Production's OWN AdCPConfigurationError raise, on the update-path arm.
+    def test_update_path_agent_configuration_error(self, integration_db, transport):
+        """The same fault on the UPDATE-path dial must carry the same pair.
 
-        No injection: a generative format with no GEMINI_API_KEY configured is
-        the exact condition ``_update_existing_creative`` raises
-        ``AdCPConfigurationError`` for (``_processing.py`` :223-228), and it is
-        the deployment misconfiguration the ``except`` arm's comment names. It
-        must classify identically to the create-path arm (:434-442) — the same
-        fault on the same tool cannot carry two different pairs depending on
-        whether the creative already existed.
+        The invariant this class exists for: one fault on one tool cannot carry
+        two different (code, recovery) pairs depending on whether the creative
+        already existed. So the stimulus is the create-path arm's stimulus — a
+        registry refusing its own configured endpoint, which is what
+        ``raise_mapped_outbound_error``'s operator arm produces.
+
+        This used to drive the update arm through the GEMINI_API_KEY gate
+        instead. That gate is gone (PR #1482, Change 3): generation is the
+        creative agent's job, reached over AdCP via ``build_creative``, and no
+        seller-side generation key is part of the contract — so a missing key is
+        no longer a misconfiguration production can raise for, and grading the
+        arm through it would pin a deleted branch rather than the classification.
         """
         from tests.factories import CreativeFactory
 
@@ -234,32 +234,24 @@ class TestConfigurationErrorAdvisoryCarriesThePinnedPair:
                 principal=principal,
                 creative_id=creative_id,
                 name="Original Name",
-                format=_GENERATIVE_FORMAT_ID,
+                format=_FORMAT_ID,
                 agent_url=env.DEFAULT_AGENT_URL,
                 status="approved",
                 data={"assets": {}, "url": "https://example.com/original.png"},
             )
-            generative_format = env.setup_generative_build(
-                format_id=_GENERATIVE_FORMAT_ID,
-                gemini_api_key="",  # unset key -> production raises AdCPConfigurationError
+            env.set_run_async_result([_registered_format()])
+            env.mock["registry"].return_value.preview_creative = AsyncMock(
+                side_effect=AdCPConfigurationError(
+                    "The configured endpoint for creative agent is not reachable under this deployment's egress policy."
+                )
             )
 
-            result = env.call_via(
-                transport,
-                creatives=[
-                    CreativeAssetFactory(
-                        creative_id=creative_id,
-                        name="Attempted New Name",
-                        format_id=generative_format,
-                    )
-                ],
-            )
+            result = env.call_via(transport, creatives=[_creative(creative_id, name="Attempted New Name")])
 
             _assert_pair(
                 _advisory(result, creative_id),
                 code="CONFIGURATION_ERROR",
                 recovery="terminal",
-                message_substr="GEMINI_API_KEY not configured",
             )
 
 

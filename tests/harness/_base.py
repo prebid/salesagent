@@ -23,10 +23,12 @@ Multi-transport support (subclasses may also override):
 from __future__ import annotations
 
 import os
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from contextlib import suppress
 from typing import TYPE_CHECKING, Any, Self
 from unittest.mock import AsyncMock, MagicMock, patch
+
+from pydantic import BaseModel
 
 # The MCP transport boots the real FastMCP app lifespan, which starts the
 # background schedulers. Those run a batch immediately on the *real* wall clock
@@ -371,6 +373,23 @@ class _TestClock:
         from datetime import UTC, datetime, timedelta
 
         return self._iso(datetime.now(UTC) - timedelta(days=days))
+
+
+def _as_wire_json(value: Any) -> Any:
+    """Recursively convert Pydantic models to JSON-safe values.
+
+    What a real A2A/REST client sends: the wire carries JSON, never model
+    instances. Used by :meth:`BaseTestEnv._run_a2a_handler` so a test may pass
+    typed models (as it does to ``call_impl``) without the transport silently
+    turning them into ``repr`` strings.
+    """
+    if isinstance(value, BaseModel):
+        return value.model_dump(mode="json")
+    if isinstance(value, Mapping):
+        return {key: _as_wire_json(item) for key, item in value.items()}
+    if isinstance(value, list | tuple):
+        return [_as_wire_json(item) for item in value]
+    return value
 
 
 class BaseTestEnv:
@@ -782,6 +801,13 @@ class BaseTestEnv:
             parameters = {**req_fields, **kwargs}
         else:
             parameters = dict(kwargs)
+
+        # A2A parameters cross a protobuf Struct, which holds only JSON values:
+        # a Pydantic model left in here is stringified by the Struct conversion
+        # (repr()!) and reaches the skill handler as unparseable text. Serialize
+        # exactly as a real A2A client would — the same normalization the `req`
+        # branch above applies, extended to every parameter value.
+        parameters = {name: _as_wire_json(value) for name, value in parameters.items()}
 
         handler = AdCPRequestHandler()
 

@@ -1312,11 +1312,6 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 "_SyntheticError, spec expects structured AdCPError with suggestion "
                 "(preview-failure path, _processing.py:712-737)"
             ),
-            "T-UC-006-ext-i": (
-                "SPEC-PRODUCTION GAP: production returns plain-string errors[] via "
-                "_SyntheticError, spec expects structured AdCPError with suggestion "
-                "(GEMINI_API_KEY not configured path)"
-            ),
             # Creative unchanged: production returns action "updated" not "unchanged"
             "T-UC-006-main-unchanged": (
                 "SPEC-PRODUCTION GAP: production returns action 'updated', "
@@ -3997,6 +3992,12 @@ ENV_ROUTES: list[EnvRoute] = [
                     "webhook-ssrf",
                     "uc006-storyboard-routing",
                     "uc006-idempotency",
+                    # Graduated in PR #1482: a generative build is delegated to the
+                    # creative agent, with no seller-side generation key in the
+                    # contract. It replaced a CREATIVE_GEMINI_KEY_MISSING xfail — a
+                    # code absent from enums/error-code.json @ 3.1.1, demanded for a
+                    # gate production no longer has.
+                    "generative-no-seller-key",
                 }
             ),
         ),

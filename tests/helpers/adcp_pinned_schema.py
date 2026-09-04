@@ -57,21 +57,20 @@ class PinnedSchemaError(Exception):
 def schema_root() -> Path:
     """The installed adcp SDK's schema tree for the pinned spec version.
 
-    The SDK stores schemas under ``adcp/_schemas/<major.minor>/`` (e.g. the
-    3.1.1 spec lives in ``_schemas/3.1/``; its ``index.json`` carries the full
-    ``adcp_version``).
+    Delegates to :func:`src.core.adcp_schema_tree.schema_root` — production code
+    reads the same tree (the creative-agent registry derives the pinned
+    ``asset_type`` vocabulary from it), and two copies of "where the pinned
+    schemas live" is the same one-pin-moved-the-other-didn't defect this module
+    was written to end. The failure is re-raised as ``PinnedSchemaError`` so
+    callers keep catching one error type for "the instrument is broken".
     """
-    import adcp
+    from src.core.adcp_schema_tree import AdCPSchemaTreeError
+    from src.core.adcp_schema_tree import schema_root as _sdk_schema_root
 
-    spec_version = adcp.get_adcp_spec_version()
-    major_minor = ".".join(spec_version.split(".")[:2])
-    root = Path(adcp.__file__).parent / "_schemas" / major_minor
-    if not root.is_dir():
-        raise PinnedSchemaError(
-            f"Installed adcp SDK (spec {spec_version}) has no schema tree at {root} — "
-            "the SDK layout changed; update schema_root()."
-        )
-    return root
+    try:
+        return _sdk_schema_root()
+    except AdCPSchemaTreeError as exc:
+        raise PinnedSchemaError(str(exc)) from exc
 
 
 def normalize_ref(ref: str) -> str:

@@ -45,6 +45,7 @@ async def sync_creatives(
         validation_mode: Validation strictness (strict or lenient)
         push_notification_config: Push notification config for async notifications (AdCP spec, optional)
         context: Application level context per adcp spec
+        account: Account reference for multi-account tenants
         ctx: FastMCP context (automatically provided)
 
     Returns:
@@ -102,6 +103,7 @@ def sync_creatives_raw(
         validation_mode: Validation strictness (strict or lenient)
         push_notification_config: Push notification config for status updates
         context: Application level context per adcp spec
+        account: Account reference for multi-account tenants
         ctx: FastMCP context (automatically provided)
         identity: ResolvedIdentity (transport-agnostic, preferred over ctx)
 

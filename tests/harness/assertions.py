@@ -103,6 +103,28 @@ def assert_rejected(
         assert message_contains in str(message), f"Expected '{message_contains}' in message. Got: {str(message)[:200]}"
 
 
+# The two boundary validators phrase a missing required field differently:
+# FastMCP's TypeAdapter says "Field required", the A2A/REST
+# adcp_validation_boundary says "Required field is missing". The graded contract
+# is WHICH field was missing, not the phrasing.
+_MISSING_FIELD_PHRASES = ("Field required", "Required field is missing")
+
+
+def assert_rejected_missing_field(result: TransportResult, field: str) -> None:
+    """Assert the request was rejected because *field* was missing.
+
+    One home for the boundary-wording tolerance (see ``_MISSING_FIELD_PHRASES``)
+    so a test does not have to know which validator its transport happens to hit
+    — and so the tolerance is not re-spelled at each call site, where one copy
+    would inevitably learn a third phrasing the others do not.
+    """
+    assert_rejected(result, field=field)
+    error_str = str(result.error)
+    assert any(phrase in error_str for phrase in _MISSING_FIELD_PHRASES), (
+        f"rejection must say '{field}' is missing, got: {error_str[:200]}"
+    )
+
+
 def assert_payload_field(
     result: TransportResult,
     field: str,

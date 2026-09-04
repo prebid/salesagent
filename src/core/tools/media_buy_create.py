@@ -2904,10 +2904,13 @@ async def _create_media_buy_impl(
             try:
                 logger.info("[INLINE_CREATIVE_DEBUG] Calling process_and_upload_package_creatives")
                 # Cast packages to local PackageRequest type (runtime compatible, mypy list invariance)
+                # req.brand is BrandReference | None here — string shorthand was coerced in
+                # _build_create_request() before CreateMediaBuyRequest was constructed.
                 updated_packages, uploaded_ids = process_and_upload_package_creatives(
                     packages=cast(list[PackageRequest], req.packages),
                     context=identity,
                     testing_ctx=testing_ctx,
+                    media_buy_brand=req.brand,
                 )
                 # Replace packages with updated versions (functional approach)
                 req.packages = cast(list[AdcpPackageRequest], updated_packages)  # type: ignore[assignment]
@@ -4597,9 +4600,12 @@ def _build_create_media_buy_request(
     A2A, and REST share one funnel.
     """
     # brand string/dict/URL shorthand is normalized via ``to_brand_reference``
-    # (#1537). The validation boundary (#1417) is the SINGLE translation point:
-    # it turns a Pydantic ValidationError into a typed AdCPValidationError
-    # carrying the field path + suggestion.
+    # (#1537) — the single str/dict/model → BrandReference converter shared with
+    # build_creative and create_get_products_request, so scheme-bearing/uppercase
+    # shorthand ("https://Example.COM") normalizes the same way on every path.
+    # The validation boundary (#1417) is the SINGLE translation point: it turns a
+    # Pydantic ValidationError into a typed AdCPValidationError carrying the
+    # field path + suggestion.
     with adcp_validation_boundary(context="request"):
         return CreateMediaBuyRequest(
             brand=to_brand_reference(brand),

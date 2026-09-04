@@ -46,7 +46,7 @@ from sqlalchemy import select
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Creative as DBCreative
 from tests.factories import PrincipalFactory, TenantFactory
-from tests.factories.creative_asset import build_assets, image_spec, video_spec
+from tests.factories.creative_asset import build_assets, image_spec, make_build_result, video_spec
 from tests.harness._base import IntegrationEnv
 from tests.helpers.creative_test_helpers import assert_stored_creative_assets
 
@@ -276,17 +276,16 @@ class TestCreativeSyncDataPreservation:
 
             registry = _setup_generative_registry(env, "display_300x250_generative", ["display_300x250"])
             registry.build_creative = AsyncMock(
-                return_value={
-                    "status": "draft",
-                    "context_id": "ctx-123",
-                    "creative_output": {
+                return_value=make_build_result(
+                    context_id="ctx-123",
+                    creative_output={
                         "assets": {
                             "generated_headline": {"text": "AI Generated Headline"},
                             "generated_image": {"url": "https://ai-generated.example.com/output.png"},
                         },
                         "output_format": {"url": "https://ai-generated.example.com/creative.html"},
                     },
-                }
+                )
             )
 
             # User-provided assets (SDK 5.7: assets are discriminated-union lists)
@@ -336,14 +335,13 @@ class TestCreativeSyncDataPreservation:
 
             registry = _setup_generative_registry(env, "video_generative", ["video_mp4"])
             registry.build_creative = AsyncMock(
-                return_value={
-                    "status": "draft",
-                    "context_id": "ctx-456",
-                    "creative_output": {
+                return_value=make_build_result(
+                    context_id="ctx-456",
+                    creative_output={
                         "assets": {"video": {"url": "https://ai-generated.example.com/video.mp4"}},
                         "output_format": {"url": "https://ai-generated.example.com/video-final.mp4"},
                     },
-                }
+                )
             )
 
             user_url = "https://user-video.example.com/campaign-video.mp4"
