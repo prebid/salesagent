@@ -381,7 +381,7 @@ class TestA2ASkillInvocation:
     ):
         """A short webhook credential on the A2A protocol-layer config REFUSES the create.
 
-        INVERTED by salesagent-pldmk.8, deliberately. This test previously asserted
+        INVERTED by GH #1802, deliberately. This test previously asserted
         the opposite -- that an 18-character credential still created the buy --
         on the premise that ``params.configuration`` is a TRANSPORT-layer parameter
         outside request-body validation, citing gh-#1299.
@@ -686,41 +686,27 @@ class TestA2ASkillInvocation:
 
     def test_skill_handler_mapping(self, handler):
         """Test that all advertised skills have handlers."""
-        # Get skills from agent card
         from src.a2a_server.adcp_a2a_server import create_agent_card
 
-        agent_card = create_agent_card()
-
-        # Verify all skills have handlers
-        expected_skills = {skill.name for skill in agent_card.skills}
-
-        # Test that _handle_explicit_skill can handle all advertised skills
-        for skill_name in expected_skills:
-            # This should not raise an exception for any advertised skill
-            try:
-                # We can't easily test the actual execution without full setup,
-                # but we can at least verify the skill name is recognized
-                assert skill_name in [
-                    "get_adcp_capabilities",  # AdCP v3 discovery endpoint
-                    "get_products",
-                    "create_media_buy",
-                    "update_media_buy",  # Added for media buy management
-                    "get_media_buy_delivery",  # Added for delivery metrics
-                    "get_creative_delivery",  # Added for creative-level delivery metrics
-                    "update_performance_index",  # Added for performance optimization
-                    "sync_creatives",
-                    "list_creatives",
-                    "approve_creative",
-                    "get_media_buy_status",
-                    "optimize_media_buy",
-                    "list_creative_formats",  # Keep existing creative format endpoint
-                    "list_authorized_properties",  # Added for AdCP compliance
-                    "get_media_buys",
-                    "list_accounts",  # Added for account management (UC-011)
-                    "sync_accounts",  # Added for account sync (UC-011)
-                ], f"Skill {skill_name} not in expected skill list"
-            except Exception as e:
-                pytest.fail(f"Skill {skill_name} should be handled but caused error: {e}")
+        advertised = {skill.name for skill in create_agent_card().skills}
+        # Dispatch SSOT is `_build_skill_handlers()` (rebuilt each call; no cached
+        # `self._skill_handlers` attribute after #1802 error-API alignment).
+        skill_handlers = handler._build_skill_handlers()
+        handlers = set(skill_handlers)
+        # Docstring contract: every advertised skill is dispatchable. Handlers may
+        # include unadvertised internal skills (create_creative / assign_creative);
+        # equality would force advertising UnsupportedOperation stubs.
+        missing = advertised - handlers
+        assert not missing, f"Advertised skills without handlers: {sorted(missing)}"
+        # Other direction: a handler dropped from the card (but kept dispatchable)
+        # would leave `missing` empty, making the skill undiscoverable to buyers.
+        # Pin this PR's two new skills as a floor so that regression reddens.
+        assert {"get_task", "complete_task"} <= advertised
+        # Value-type contract: map values are plain strings resolved via `getattr`
+        # at dispatch, so a typo'd handler name is invisible to the key-only checks
+        # above — assert every value actually resolves.
+        unresolvable = [name for name in skill_handlers.values() if not hasattr(handler, name)]
+        assert not unresolvable, f"Skill handler map has unresolvable method names: {unresolvable}"
 
     # Phase 2: Tests for previously untested skills
 

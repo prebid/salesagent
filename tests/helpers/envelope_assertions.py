@@ -47,6 +47,7 @@ def assert_envelope_shape(
     recovery: str,
     message_substr: str | None = None,
     field: str | None = None,
+    suggestion: str | None = None,
     check_mcp_tool_error: bool = False,
 ) -> None:
     """Assert the AdCP spec two-layer error envelope shape.
@@ -86,6 +87,11 @@ def assert_envelope_shape(
                 ``field`` is optional in the schema, so most envelopes legally
                 carry none. A call site that needs "no ``field`` key at all"
                 asserts that itself.
+        suggestion: If provided, must equal the buyer-facing ``suggestion`` on
+                ``errors[0]`` (falling back to ``adcp_error.suggestion``). Pass
+                the pinned ``enums/error-code.json`` enumMetadata text — never a
+                Python ClassVar — so nulling the envelope seam or swapping the
+                ClassVar reddens (#1812 B4).
         check_mcp_tool_error: If ``True``, additionally assert that ``target``
                 is an ``AdCPToolError`` instance before reading its envelope.
                 MCP-boundary call sites use this to pin the exception type as
@@ -135,3 +141,9 @@ def assert_envelope_shape(
     if message_substr is not None:
         actual = body["errors"][0].get("message", "")
         assert message_substr in actual, f"errors[0].message={actual!r} does not contain {message_substr!r}"
+
+    if suggestion is not None:
+        actual_suggestion = body["errors"][0].get("suggestion") or body["adcp_error"].get("suggestion")
+        assert actual_suggestion == suggestion, (
+            f"wire suggestion={actual_suggestion!r}, expected pinned {suggestion!r} for {code}"
+        )

@@ -64,10 +64,11 @@ def _discover_integration_test_files() -> list[str]:
     conftest.py files. These suites all exercise real DB state and must use
     factories, not inline session.add() / get_db_session() in test bodies.
 
-    Also scans every module under tests/helpers/. Shared DB-seed helpers there are
-    not named test_*.py but must follow the same factory-only rule, so that new
-    session.add() debt in helper code is caught at the source rather than hidden
-    behind a module the guard never reads.
+    Also scans every module under tests/helpers/ and tests/utils/. (tests/harness/** deferred to #1957.)
+    Shared DB-seed helpers there are not named test_*.py but must follow the same
+    factory-only rule, so that new session.add() debt in helper code is caught at
+    the source rather than hidden behind a module the guard never reads
+    (Chris R4 E3 — utils is zero-cost; harness carries a shrink-only allowlist).
     """
     roots = ("tests/integration*", "tests/admin", "tests/e2e")
     test_files: list[str] = []
@@ -76,7 +77,10 @@ def _discover_integration_test_files() -> list[str]:
         test_files.extend(glob.glob(f"{root}/**/test_*.py", recursive=True))
         conftest_files.extend(glob.glob(f"{root}/conftest.py", recursive=True))
     helper_files = glob.glob("tests/helpers/**/*.py", recursive=True)
-    return sorted(set(test_files + conftest_files + helper_files))
+    utils_files = glob.glob("tests/utils/**/*.py", recursive=True)
+    # tests/harness/** widen deferred to #1957 (widen-and-fix together;
+    # do not grow allowlists for pre-existing admin_accounts debt here).
+    return sorted(set(test_files + conftest_files + helper_files + utils_files))
 
 
 INTEGRATION_TEST_FILES = _discover_integration_test_files()

@@ -267,6 +267,39 @@ class TestTypeAdapterValidationEnvelope:
             principal_id="buyer-1",
         )
 
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("tool_name", ["get_task", "complete_task"])
+    async def test_typeadapter_missing_task_id_uses_l2_message(self, middleware, tool_name):
+        """Omitted task_id via TypeAdapter must match A2A L2 wording (not FastMCP text)."""
+        from src.core.tools.task_management import TASK_ID_REQUIRED_MESSAGE
+
+        ctx = _make_context(tool_name, {})
+        validation_error = _typeadapter_validation_error(
+            tool_name,
+            {
+                "type": "missing",
+                "loc": ("task_id",),
+                "input": {},
+            },
+        )
+        call_next = AsyncMock(side_effect=validation_error)
+
+        with patch("src.core.config.is_production", return_value=False):
+            with pytest.raises(AdCPToolError) as exc_info:
+                await middleware.on_call_tool(ctx, call_next)
+
+        assert_envelope_shape(
+            exc_info.value,
+            "VALIDATION_ERROR",
+            recovery="correctable",
+            message_substr=TASK_ID_REQUIRED_MESSAGE,
+            check_mcp_tool_error=True,
+        )
+        assert exc_info.value.envelope["errors"][0]["field"] == "task_id"
+        wire_message = exc_info.value.envelope["errors"][0]["message"]
+        assert wire_message == TASK_ID_REQUIRED_MESSAGE
+        assert_no_raw_validation_leak(wire_message)
+
 
 class TestMiddlewareEdgeCases:
     """Edge cases: None arguments, empty arguments."""

@@ -15249,6 +15249,18 @@ mappings:
       upstream_refs: ["BR-UC-027-ext-h", "BR-RULE-208"]
       business_rules: []
       status: new
+    - adcp_scenario_id: "T-UC-027-local-sibling-get"
+      adcp_feature: "local-uc027-sibling-principal-isolation.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-027-ext-c", "BR-RULE-203"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-027-local-sibling-complete"
+      adcp_feature: "local-uc027-sibling-principal-isolation.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-027-ext-c", "BR-RULE-203"]
+      business_rules: []
+      status: new
   UC-028:
     - adcp_scenario_id: "T-UC-028-main-list-happy"
       adcp_feature: "BR-UC-028-manage-collection-lists.feature"

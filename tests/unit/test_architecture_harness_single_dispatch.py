@@ -116,6 +116,10 @@ _KNOWN_DELIVER_OVERRIDES: set[tuple[str, str, str]] = {
     # production, so it delegates and its entry is gone — the allowlist shrank.
     ("tests/harness/creative_formats.py", "CreativeFormatsEnv", "deliver_mcp"),
     ("tests/harness/creative_formats.py", "CreativeFormatsEnv", "deliver_a2a"),
+    # Selects get_task vs complete_task from kwargs (``tool=``), so it cannot
+    # declare a single MCP_TOOL / A2A_SKILL for base client-core delegation.
+    ("tests/harness/task_management.py", "TaskEnv", "deliver_mcp"),
+    ("tests/harness/task_management.py", "TaskEnv", "deliver_a2a"),
     # Test doubles, not real envs: they exist to prove the dispatch contract.
     ("tests/harness/test_harness_base.py", "_TestEnv", "deliver_mcp"),
     # Contrasts CreativeSyncEnv's bypass by dispatching sync_creatives through

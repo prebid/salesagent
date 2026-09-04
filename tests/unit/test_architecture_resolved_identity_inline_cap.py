@@ -97,7 +97,6 @@ RESOLVED_IDENTITY_PER_FILE_CAP: dict[str, int] = {
     "tests/unit/test_sync_creatives_async_fix.py": 3,
     "tests/unit/test_sync_creatives_format_validation.py": 1,
     "tests/unit/test_task_management_auth.py": 2,
-    "tests/unit/test_task_management_tools.py": 3,
 }
 
 

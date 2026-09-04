@@ -53,6 +53,7 @@ that the test-side oracles grade against:
 
 from __future__ import annotations
 
+import json
 from functools import cache
 from pathlib import Path
 from typing import Any
@@ -138,6 +139,39 @@ def auth_scheme_values() -> frozenset[str]:
     Cached: a pure function of the installed SDK's pinned tree.
     """
     return frozenset(load("enums/auth-scheme.json")["enum"])
+
+
+_VENDORED_FIXTURE_ROOT = Path(__file__).resolve().parent.parent / "fixtures" / "adcp_schemas_pinned"
+
+
+def load_vendored(ref: str) -> dict[str, Any]:
+    """Load one schema from the *vendored* fixture tree (not the SDK pin).
+
+    Resolves ``ref`` relative to ``tests/fixtures/adcp_schemas_pinned/`` via
+    ``__file__`` (never CWD). Use for suggestion text that must follow the
+    vendored enumMetadata when SDK and fixture diverge (#1812 B4).
+    """
+    rel = ref.lstrip("/")
+    if rel.startswith("enums/"):
+        path = _VENDORED_FIXTURE_ROOT / rel
+    elif "/" not in rel:
+        # bare filename — prefer enums/ then root
+        candidate = _VENDORED_FIXTURE_ROOT / "enums" / rel
+        path = candidate if candidate.is_file() else _VENDORED_FIXTURE_ROOT / rel
+    else:
+        path = _VENDORED_FIXTURE_ROOT / rel
+    if not path.is_file():
+        raise PinnedSchemaError(f"Vendored fixture not found: {ref} -> {path}")
+    return json.loads(path.read_text())
+
+
+def vendored_enum_suggestion(code: str) -> str:
+    """Return the vendored ``enums/error-code.json`` suggestion for ``code``."""
+    meta = load_vendored("error-code.json")["enumMetadata"]
+    entry = meta.get(code)
+    if not isinstance(entry, dict) or not entry.get("suggestion"):
+        raise PinnedSchemaError(f"{code!r} has no suggestion in vendored error-code.json enumMetadata")
+    return entry["suggestion"]
 
 
 def _canonicalize_refs(node: Any, *, file_dir: Path, root: Path) -> Any:

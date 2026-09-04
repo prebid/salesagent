@@ -16,7 +16,7 @@ Feature: BR-UC-027 Manage Async Tasks
   #   POST-F1: System state is unchanged on failure
   #   POST-F2: Buyer knows what failed and the specific error code
   #   POST-F3: Application context is still echoed when possible
-  #   POST-F4: When a task is not found, the error references the provided task_id
+  #   POST-F4: When a task is not found, the error is REFERENCE_NOT_FOUND (uniform response)
   #
   # Rules: BR-RULE-203..208 (6 rules, 24 invariants)
   # Extensions: A (Get Task Details), B (Complete Task), C (REFERENCE_NOT_FOUND),
@@ -237,9 +237,8 @@ Feature: BR-UC-027 Manage Async Tasks
     When the Buyer Agent invokes get_task with task_id "task_nonexistent_999"
     Then the operation should fail with error code "REFERENCE_NOT_FOUND"
     And the error code should be "REFERENCE_NOT_FOUND"
-    And the error message should reference task_id "task_nonexistent_999"
     And the error should include "suggestion" field
-    And the suggestion should contain "Verify the task_id"
+    And the suggestion should contain "verify the referenced identifier"
     And the request context is echoed in the response
     # POST-F1: System state unchanged
     # POST-F2: Buyer knows REFERENCE_NOT_FOUND
@@ -253,9 +252,8 @@ Feature: BR-UC-027 Manage Async Tasks
     When the Buyer Agent invokes complete_task with task_id "task_ghost_001" and status "completed"
     Then the operation should fail with error code "REFERENCE_NOT_FOUND"
     And the error code should be "REFERENCE_NOT_FOUND"
-    And the error message should reference task_id "task_ghost_001"
     And the error should include "suggestion" field
-    And the suggestion should contain "Verify the task_id"
+    And the suggestion should contain "verify the referenced identifier"
     # POST-F1: System state unchanged, no task modified
     # POST-F2: Buyer knows REFERENCE_NOT_FOUND
     # POST-F4: Error references task_id
@@ -268,12 +266,11 @@ Feature: BR-UC-027 Manage Async Tasks
     When the Buyer Agent invokes get_task with task_id "task_cross_001"
     Then the operation should fail with error code "REFERENCE_NOT_FOUND"
     And the error code should be "REFERENCE_NOT_FOUND"
-    And the error message should reference task_id "task_cross_001"
     And the error should include "suggestion" field
-    And the suggestion should contain "belongs to the current tenant"
+    And the suggestion should contain "verify the referenced identifier"
     # POST-F1: Tenant isolation enforced
     # POST-F2: No leakage of cross-tenant information
-    # POST-F4: Error references provided task_id
+    # POST-F4: Uniform REFERENCE_NOT_FOUND (no resource-qualified message)
 
   @T-UC-027-ext-d-completed @extension @ext-d @error @post-f1 @post-f2 @post-f3
   Scenario: TASK_NOT_COMPLETABLE -- task already completed
@@ -617,7 +614,7 @@ Feature: BR-UC-027 Manage Async Tasks
     Then the operation should fail with error code "REFERENCE_NOT_FOUND"
     And the error code should be "REFERENCE_NOT_FOUND"
     And the error should include "suggestion" field
-    And the suggestion should contain "Verify the task_id"
+    And the suggestion should contain "verify the referenced identifier"
     # INV-3: Task not found within tenant scope
     # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/core/tasks-list-request.json
 
@@ -755,7 +752,7 @@ Feature: BR-UC-027 Manage Async Tasks
     And the error code should be "REFERENCE_NOT_FOUND"
     And no audit log entry is written for task "task_aud_inv2_ghost"
     And the error should include "suggestion" field
-    And the suggestion should contain "Verify the task_id"
+    And the suggestion should contain "verify the referenced identifier"
     # INV-2: Failed completion has no audit entry
     # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/core/tasks-list-request.json
 

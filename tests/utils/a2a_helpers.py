@@ -14,6 +14,15 @@ from a2a.types import Artifact, Message, Part, Role
 from google.protobuf import json_format, struct_pb2
 
 
+def assert_failed_task_artifact(result: Any) -> None:
+    """Assert an A2A failed-task response carries at least one artifact.
+
+    Shared seam for integration tests that previously inlined
+    ``assert result.artifacts is not None and len(result.artifacts) > 0``.
+    """
+    assert result.artifacts is not None and len(result.artifacts) > 0
+
+
 def assert_delivery_forwarded_account(mock_delivery, expected_account) -> None:
     """Assert ``core_get_media_buy_delivery_tool`` was called once forwarding ``expected_account``.
 

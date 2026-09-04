@@ -540,7 +540,7 @@ Feature: BR-UC-009 Update Performance Index
     And the error code should be "AUTH_REQUIRED"
     And the error should indicate authentication failure
     And the error should include "suggestion" field
-    And the suggestion should contain "provide valid credentials"
+    And the suggestion should contain "provide credentials when missing"
     # BR-RULE-285 INV-1: no resolvable principal credential -> AUTH_REQUIRED
     # POST-F1: No data written
     # POST-F2: Buyer knows auth failed on A2A path

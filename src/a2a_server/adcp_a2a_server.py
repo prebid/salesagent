@@ -106,6 +106,8 @@ from src.core.tools import (
 from src.core.tools import (
     update_performance_index_raw as core_update_performance_index_tool,
 )
+from src.core.tools.task_management import complete_task as core_complete_task
+from src.core.tools.task_management import get_task as core_get_task
 from src.core.validation_helpers import (
     adcp_validation_boundary,
 )
@@ -261,6 +263,47 @@ class AdCPRequestHandler(RequestHandler):
         # to the sender, so it must carry the gate's receipt.
         self._task_push_configs: dict[str, ValidatedWebhookRegistration] = {}
         logger.info("AdCP Request Handler initialized for direct function calls")
+
+    def _build_skill_handlers(self) -> dict[str, str]:
+        """Map skill names to handler method names (dispatch + card oracle SSOT).
+
+        Values are plain method-name strings resolved via ``getattr`` at call
+        time so ``unittest.mock.patch.object`` on the handler remains visible.
+        Do **not** derive names from ``bound_method.__name__`` here: that map is
+        rebuilt on every dispatch, and a patched mock's ``__name__`` (e.g.
+        ``mock_skill``) would make ``getattr`` miss the real attribute.
+        """
+        return {
+            # Core AdCP Discovery Skills
+            "get_adcp_capabilities": "_handle_get_adcp_capabilities_skill",
+            # Core AdCP Media Buy Skills
+            "get_products": "_handle_get_products_skill",
+            "create_media_buy": "_handle_create_media_buy_skill",
+            # ✅ NEW: Missing AdCP Discovery Skills (CRITICAL for protocol compliance)
+            "list_creative_formats": "_handle_list_creative_formats_skill",
+            "list_accounts": "_handle_list_accounts_skill",
+            "sync_accounts": "_handle_sync_accounts_skill",
+            "list_authorized_properties": "_handle_list_authorized_properties_skill",
+            # ✅ NEW: Missing Media Buy Management Skills (CRITICAL for campaign lifecycle)
+            "update_media_buy": "_handle_update_media_buy_skill",
+            "get_media_buys": "_handle_get_media_buys_skill",
+            "get_media_buy_delivery": "_handle_get_media_buy_delivery_skill",
+            "update_performance_index": "_handle_update_performance_index_skill",
+            # AdCP Spec Creative Management (centralized library approach)
+            "sync_creatives": "_handle_sync_creatives_skill",
+            "list_creatives": "_handle_list_creatives_skill",
+            "create_creative": "_handle_create_creative_skill",
+            "assign_creative": "_handle_assign_creative_skill",
+            # Creative Management & Approval
+            "approve_creative": "_handle_approve_creative_skill",
+            "get_media_buy_status": "_handle_get_media_buy_status_skill",
+            "optimize_media_buy": "_handle_optimize_media_buy_skill",
+            # Durable AdCP task tools (principal-scoped get / complete)
+            "get_task": "_handle_get_task_skill",
+            "complete_task": "_handle_complete_task_skill",
+            # Note: signals skills removed - should come from dedicated signals agents
+            # Note: legacy get_pricing/get_targeting removed - use get_products and get_adcp_capabilities instead
+        }
 
     @staticmethod
     def _build_error_envelope(exc: Exception) -> dict[str, Any]:
@@ -496,7 +539,7 @@ class AdCPRequestHandler(RequestHandler):
             # row is expected and the registration this sender holds
             # (ValidatedWebhookRegistration) carries no scope ids to give it.
             # Stating them as None is what makes that visible -- the dict this
-            # replaced simply had no such keys (salesagent-pldmk.39).
+            # replaced simply had no such keys (GH #1802).
             webhook_task = WebhookTaskContext(
                 task_id=task.id,
                 task_type=skills[0] if skills else "unknown",
@@ -1251,7 +1294,7 @@ class AdCPRequestHandler(RequestHandler):
             # manufactures field="push_notification_config.url" plus the https SSRF
             # wording for a non-AdCP error -- so a credential refusal raised from
             # inside the repository would reach the buyer as "fix your URL" about a
-            # URL that is fine (salesagent-47n9.20).
+            # URL that is fine (GH #1802).
             registration = _accept_a2a_push_config(url, auth_type, auth_token_value)
 
             # No ValueError funnel around upsert any more: the repository no longer
@@ -1534,7 +1577,7 @@ class AdCPRequestHandler(RequestHandler):
         # order (``error.data.adcp_error``). Without it the A2A wire carried a
         # bare JSON-RPC error and the buyer-facing code and suggestion that REST
         # returns were simply absent, which the test harness was papering over by
-        # synthesizing an envelope production never sent (salesagent-pldmk.26).
+        # synthesizing an envelope production never sent (GH #1802).
         #
         # AUTH_REQUIRED is the correct code at the 3.1.1 pin, not merely the
         # consistent one. The pin's enum marks it deprecated in favour of
@@ -1545,7 +1588,7 @@ class AdCPRequestHandler(RequestHandler):
         # attached". The generated features grade AUTH_REQUIRED accordingly,
         # including for the invalid-token case (BR-UC-011:256). The pin
         # contradicts itself here -- transport-errors.mdx separately reserves
-        # -32028 for AUTH_MISSING -- and salesagent-pldmk.38 tracks raising that
+        # -32028 for AUTH_MISSING -- and GH #1802 tracks raising that
         # upstream and migrating when the pin actually performs the split.
         if skill_name not in DISCOVERY_SKILLS and (identity is None or not identity.principal_id):
             raise InvalidRequestError(
@@ -1562,41 +1605,16 @@ class AdCPRequestHandler(RequestHandler):
         # (discovery skills accept ``identity: ResolvedIdentity | None``; the rest
         # require non-None), so the dispatch is typed dynamically — the non-discovery
         # guard above enforces a non-None identity before the call.
-        skill_handlers: dict[str, Callable[..., Awaitable[Any]]] = {
-            # Core AdCP Discovery Skills
-            "get_adcp_capabilities": self._handle_get_adcp_capabilities_skill,
-            # Core AdCP Media Buy Skills
-            "get_products": self._handle_get_products_skill,
-            "create_media_buy": self._handle_create_media_buy_skill,
-            # ✅ NEW: Missing AdCP Discovery Skills (CRITICAL for protocol compliance)
-            "list_creative_formats": self._handle_list_creative_formats_skill,
-            "list_accounts": self._handle_list_accounts_skill,
-            "sync_accounts": self._handle_sync_accounts_skill,
-            "list_authorized_properties": self._handle_list_authorized_properties_skill,
-            # ✅ NEW: Missing Media Buy Management Skills (CRITICAL for campaign lifecycle)
-            "update_media_buy": self._handle_update_media_buy_skill,
-            "get_media_buys": self._handle_get_media_buys_skill,
-            "get_media_buy_delivery": self._handle_get_media_buy_delivery_skill,
-            "update_performance_index": self._handle_update_performance_index_skill,
-            # AdCP Spec Creative Management (centralized library approach)
-            "sync_creatives": self._handle_sync_creatives_skill,
-            "list_creatives": self._handle_list_creatives_skill,
-            "create_creative": self._handle_create_creative_skill,
-            "assign_creative": self._handle_assign_creative_skill,
-            # Creative Management & Approval
-            "approve_creative": self._handle_approve_creative_skill,
-            "get_media_buy_status": self._handle_get_media_buy_status_skill,
-            "optimize_media_buy": self._handle_optimize_media_buy_skill,
-            # Note: signals skills removed - should come from dedicated signals agents
-            # Note: legacy get_pricing/get_targeting removed - use get_products and get_adcp_capabilities instead
-        }
+        skill_handlers = self._build_skill_handlers()
 
         if skill_name not in skill_handlers:
             available_skills = list(skill_handlers.keys())
             raise MethodNotFoundError(message=f"Unknown skill '{skill_name}'. Available skills: {available_skills}")
 
         try:
-            handler = skill_handlers[skill_name]
+            # Resolve by name at call time so unittest ``patch.object`` on the
+            # handler method is honored (bound methods baked at __init__ are not).
+            handler: Callable[..., Awaitable[Any]] = getattr(self, skill_handlers[skill_name])
             # Handlers return raw Pydantic models (or raise typed AdCPError on validation failure)
             if skill_name == "create_media_buy":
                 result = await handler(parameters, identity, raw_wire_payload=raw_wire_payload)
@@ -1920,6 +1938,47 @@ class AdCPRequestHandler(RequestHandler):
     async def _handle_approve_creative_skill(self, parameters: dict, identity: ResolvedIdentity) -> dict:
         """Handle explicit approve_creative skill invocation."""
         raise UnsupportedOperationError(message="approve_creative skill not yet implemented")
+
+    async def _handle_get_task_skill(self, parameters: dict, identity: ResolvedIdentity) -> dict:
+        """Handle explicit get_task skill — durable principal-scoped workflow lookup.
+
+        Spec grounding (AdCP 3.1.1 enums/error-code.json REFERENCE_NOT_FOUND):
+        a typed task_id that does not exist or is not accessible by the caller
+        MUST emit REFERENCE_NOT_FOUND uniformly (sibling principal = unknown id).
+
+        Unknown-key rejection shares ``assert_known_task_params`` with MCP
+        middleware. Presence/type lives only in ``require_task_id`` inside
+        ``get_task`` — forward the raw value (do not coerce with ``or ""``).
+        """
+        from src.core.tools.task_management import GET_TASK_BUYER_PARAMS, assert_known_task_params
+
+        with adcp_validation_boundary(context="get_task request"):
+            assert_known_task_params(parameters, allowed=GET_TASK_BUYER_PARAMS)
+            kwargs: dict[str, Any] = {"identity": identity}
+            for key in GET_TASK_BUYER_PARAMS:
+                if key in parameters:
+                    kwargs[key] = parameters[key]
+            kwargs.setdefault("task_id", parameters.get("task_id"))
+            return await core_get_task(**kwargs)
+
+    async def _handle_complete_task_skill(self, parameters: dict, identity: ResolvedIdentity) -> dict:
+        """Handle explicit complete_task skill — principal-scoped durable completion.
+
+        Reject unknown buyer keys via shared ``assert_known_task_params``, then
+        forward only declared L2 buyer kwargs with raw ``task_id`` (presence/type
+        enforced once inside ``complete_task``).
+        """
+        from src.core.tools.task_management import COMPLETE_TASK_BUYER_PARAMS, assert_known_task_params
+
+        with adcp_validation_boundary(context="complete_task request"):
+            assert_known_task_params(parameters, allowed=COMPLETE_TASK_BUYER_PARAMS)
+            kwargs: dict[str, Any] = {"identity": identity}
+            for key in COMPLETE_TASK_BUYER_PARAMS:
+                if key in parameters:
+                    kwargs[key] = parameters[key]
+            # Ensure task_id key exists even when omitted so require_task_id sees None.
+            kwargs.setdefault("task_id", parameters.get("task_id"))
+            return await core_complete_task(**kwargs)
 
     # Signals skill handlers removed - should come from dedicated signals agents
 
@@ -2419,6 +2478,19 @@ def create_agent_card() -> AgentCard:
                 name="optimize_media_buy",
                 description="Optimize media buy performance and targeting",
                 tags=["optimization", "performance", "targeting", "adcp"],
+            ),
+            # Durable AdCP task tools (principal-scoped)
+            AgentSkill(
+                id="get_task",
+                name="get_task",
+                description="Get details for a durable workflow task by task_id",
+                tags=["task", "workflow", "status", "adcp"],
+            ),
+            AgentSkill(
+                id="complete_task",
+                name="complete_task",
+                description="Complete or fail a durable workflow task by task_id",
+                tags=["task", "workflow", "complete", "adcp"],
             ),
             # Note: signals skills removed - should come from dedicated signals agents
             # Note: legacy get_pricing/get_targeting removed - use get_products and get_adcp_capabilities instead

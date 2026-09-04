@@ -23,7 +23,11 @@ from tests.factories.principal import PrincipalFactory
 from tests.helpers import assert_envelope_shape, assert_no_raw_validation_leak
 from tests.helpers.adcp_factories import create_test_package_request_dict
 from tests.integration.conftest import seed_error_test_tenant
-from tests.utils.a2a_helpers import create_a2a_message_with_skill, extract_data_from_artifact
+from tests.utils.a2a_helpers import (
+    assert_failed_task_artifact,
+    create_a2a_message_with_skill,
+    extract_data_from_artifact,
+)
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -675,10 +679,52 @@ class TestA2AErrorPropagation:
         result = await handler.on_message_send(params, ServerCallContext())
 
         assert isinstance(result, Task)
-        assert result.artifacts is not None and len(result.artifacts) > 0
+        assert_failed_task_artifact(result)
 
         artifact_data = self.extract_data_from_artifact(result.artifacts[0])
         assert_envelope_shape(artifact_data, "VALIDATION_ERROR", message_substr="media_buy_id", recovery="correctable")
+
+    async def test_get_task_missing_task_id_wire_envelope(self, handler, test_tenant, test_principal):
+        """get_task with no task_id surfaces VALIDATION_ERROR on the A2A wire.
+
+        Input contract lives in the shared tool (not the A2A wrapper) so MCP and
+        A2A emit the same code. Pins suggestion-bearing AdCPValidationError.
+        """
+        identity = PrincipalFactory.make_identity(
+            principal_id=test_principal["principal_id"],
+            tenant_id=test_tenant["tenant_id"],
+            tenant=test_tenant,
+            auth_token=test_principal["access_token"],
+            protocol="a2a",
+        )
+        handler._get_auth_token = MagicMock(return_value=test_principal["access_token"])
+        handler._resolve_a2a_identity = MagicMock(return_value=identity)
+
+        from src.core.config_loader import set_current_tenant
+
+        set_current_tenant(test_tenant)
+
+        message = self.create_message_with_skill("get_task", {})
+        params = SendMessageRequest(message=message)
+
+        result = await handler.on_message_send(params, ServerCallContext())
+
+        assert isinstance(result, Task)
+        assert_failed_task_artifact(result)
+
+        artifact_data = self.extract_data_from_artifact(result.artifacts[0])
+        # B4: pin wire suggestion to vendored enumMetadata via assert_envelope_shape
+        # (not the Python ClassVar — ClassVar swap / envelope-null must redden).
+        from tests.helpers import pinned_schema
+
+        expected_suggestion = pinned_schema.vendored_enum_suggestion("VALIDATION_ERROR")
+        assert_envelope_shape(
+            artifact_data,
+            "VALIDATION_ERROR",
+            message_substr="task_id",
+            recovery="correctable",
+            suggestion=expected_suggestion,
+        )
 
     @pytest.fixture
     def active_media_buy(self, _seeded):
@@ -1075,7 +1121,7 @@ class TestA2AContextEcho:
 
         # Must be a Task with artifacts — AdCPError flows through dispatcher (not A2AError).
         assert isinstance(result, Task)
-        assert result.artifacts is not None and len(result.artifacts) > 0
+        assert_failed_task_artifact(result)
 
         artifact_data = extract_data_from_artifact(result.artifacts[0])
 

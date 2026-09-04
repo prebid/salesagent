@@ -411,7 +411,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     And the error code should be "principal_id_missing"
     And the error message should contain "authentication"
     And the error should include "suggestion" field
-    And the suggestion should contain "provide valid credentials"
+    And the suggestion should contain "provide credentials when missing"
     # POST-F1: System state unchanged
     # POST-F2: Error explains authentication required
     # POST-F3: Suggestion to provide credentials

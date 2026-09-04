@@ -86,6 +86,10 @@ Tenant users have access to specific tenants through the `User` model. They can 
 
 Each advertiser (principal) has isolated access tokens. Tokens are scoped to a specific tenant and cannot access other tenants or principals.
 
+Durable `get_task` / `complete_task` are principal-scoped at the workflow
+repository seam (same-tenant sibling → `REFERENCE_NOT_FOUND`); `list_tasks`
+is still tenant-scoped and may surface sibling-owned rows — tracked in #1808
+
 ### Audit trail
 
 The system logs all admin actions to the `audit_logs` table, including the timestamp, user, action, and result. The audit trail supports compliance and security monitoring.

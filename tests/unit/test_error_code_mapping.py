@@ -1,15 +1,16 @@
-"""Tests for the error code mapping from internal codes to SDK STANDARD_ERROR_CODES.
+"""Tests for the error code mapping from internal codes to wire-standard codes.
 
 Verifies that:
 1. ERROR_CODE_MAPPING exists and maps all known non-standard codes
-2. Every mapped target is in STANDARD_ERROR_CODES
+2. Every mapped target is in WIRE_STANDARD_CODES (SDK STANDARD_ERROR_CODES +
+   pinned-spec supplement such as REFERENCE_NOT_FOUND / CREATIVE_NOT_FOUND)
 3. INTERNAL_CODES set exists for codes that never reach the wire
 4. All AdCPError subclass error_code attributes are either standard or internal
 """
 
 from adcp.server.helpers import STANDARD_ERROR_CODES
 
-from src.core.exceptions import ERROR_CODE_MAPPING, INTERNAL_CODES, AdCPError
+from src.core.exceptions import ERROR_CODE_MAPPING, INTERNAL_CODES, WIRE_STANDARD_CODES, AdCPError
 
 
 class TestErrorCodeMapping:
@@ -20,29 +21,34 @@ class TestErrorCodeMapping:
         assert len(ERROR_CODE_MAPPING) > 0, "Mapping must not be empty"
 
     def test_all_targets_are_standard(self):
-        """Every mapped-to code must be in SDK STANDARD_ERROR_CODES."""
-        std = set(STANDARD_ERROR_CODES)
-        bad = {k: v for k, v in ERROR_CODE_MAPPING.items() if v not in std}
-        assert not bad, f"Mapping targets not in STANDARD_ERROR_CODES: {bad}"
+        """Every mapped-to code must be in WIRE_STANDARD_CODES (SDK + pinned supplement).
+
+        REFERENCE_NOT_FOUND is a pinned AdCP 3.1.1 enum code (spec supplement),
+        not an SDK STANDARD_ERROR_CODES entry — mapping TASK_NOT_FOUND → it is
+        intentional and must stay wire-safe.
+        """
+        wire = set(WIRE_STANDARD_CODES)
+        bad = {k: v for k, v in ERROR_CODE_MAPPING.items() if v not in wire}
+        assert not bad, f"Mapping targets not in WIRE_STANDARD_CODES: {bad}"
 
     def test_internal_codes_exist(self):
         assert isinstance(INTERNAL_CODES, frozenset)
         assert len(INTERNAL_CODES) > 0, "Internal codes set must not be empty"
 
     def test_internal_codes_overlap_with_mapping_have_wire_safe_targets(self):
-        """Internal codes that also appear in the mapping must translate to STANDARD targets.
+        """Internal codes that also appear in the mapping must translate to wire-safe targets.
 
         INTERNAL_CODES documents codes that should never reach the wire as-is.
         ERROR_CODE_MAPPING is the safety net: if an internal code escapes to a
         boundary (base-class raise instead of a specific subclass), the mapping
-        translates it to STANDARD_ERROR_CODES. Overlap is intentional — it
+        translates it to WIRE_STANDARD_CODES. Overlap is intentional — it
         means "this code is internal AND has a wire-safe fallback if it leaks".
         Both invariants must hold for every overlap entry.
         """
-        std = set(STANDARD_ERROR_CODES)
+        wire = set(WIRE_STANDARD_CODES)
         overlap = set(ERROR_CODE_MAPPING.keys()) & INTERNAL_CODES
-        unsafe = {code: ERROR_CODE_MAPPING[code] for code in overlap if ERROR_CODE_MAPPING[code] not in std}
-        assert not unsafe, f"Internal codes in mapping must translate to STANDARD targets: {unsafe}"
+        unsafe = {code: ERROR_CODE_MAPPING[code] for code in overlap if ERROR_CODE_MAPPING[code] not in wire}
+        assert not unsafe, f"Internal codes in mapping must translate to WIRE_STANDARD targets: {unsafe}"
 
     def test_class_error_codes_are_standard_or_internal(self):
         """Every AdCPError subclass _default_error_code must be standard, internal, or spec-required.
@@ -51,8 +57,6 @@ class TestErrorCodeMapping:
         ). The public ``error_code`` is an instance attribute
         set in ``__init__`` and is not present on the class object.
         """
-        from src.core.exceptions import WIRE_STANDARD_CODES
-
         # Spec-required codes not yet in WIRE_STANDARD_CODES' supplement
         spec_codes = {"BILLING_NOT_SUPPORTED"}
         allowed = set(WIRE_STANDARD_CODES) | INTERNAL_CODES | spec_codes
@@ -64,3 +68,10 @@ class TestErrorCodeMapping:
         assert not violations, "AdCPError subclasses with non-standard, non-internal codes:\n" + "\n".join(
             f"  {v}" for v in violations
         )
+
+    def test_task_not_found_maps_to_reference_not_found(self):
+        """Pinned AdCP 3.1.1: typed task_id not found / not accessible → REFERENCE_NOT_FOUND."""
+        assert ERROR_CODE_MAPPING["TASK_NOT_FOUND"] == "REFERENCE_NOT_FOUND"
+        assert "REFERENCE_NOT_FOUND" in WIRE_STANDARD_CODES
+        # Sanity: SDK baseline alone does not define REFERENCE_NOT_FOUND — supplement does.
+        assert "REFERENCE_NOT_FOUND" not in STANDARD_ERROR_CODES

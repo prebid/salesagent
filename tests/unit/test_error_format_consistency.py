@@ -738,7 +738,7 @@ class TestErrorCodeVocabularyConsistency:
         "SESSION_NOT_FOUND",  # SDK standard: AdCPContextNotFoundError (unresolvable context_id)
         "CREATIVE_NOT_FOUND",  # Spec supplement: AdCPCreativeNotFoundError (wire passthrough via WIRE_STANDARD_CODES)
         "FORMAT_NOT_FOUND",  # Internal: AdCPFormatNotFoundError (wire → INVALID_REQUEST)
-        "TASK_NOT_FOUND",  # Internal: AdCPTaskNotFoundError (wire → INVALID_REQUEST)
+        "TASK_NOT_FOUND",  # Internal: AdCPTaskNotFoundError (wire → REFERENCE_NOT_FOUND)
         "BUDGET_TOO_LOW",  # SDK standard: AdCPBudgetTooLowError
         "UNSUPPORTED_FEATURE",  # SDK standard: AdCPCapabilityNotSupportedError
         "IDEMPOTENCY_CONFLICT",  # SDK standard: AdCPIdempotencyConflictError

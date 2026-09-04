@@ -16,13 +16,26 @@ handles commit/rollback at the boundary.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Any, Final
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from src.core.database.models import Context as DBContext
 from src.core.database.models import ObjectWorkflowMapping, Principal, WorkflowStep
+
+# Sentinel for resolve-then-authorize miss branch — never a real principal_id.
+_MISSING_OWNER: Final[object] = object()
+
+# Fail-closed buyer-path message — do not name the ownership column on the wire
+# (ValueError → AdCPValidationError via normalize_to_adcp_error).
+_OWNER_SCOPE_REQUIRED: Final[str] = "Owner scope is required"
+
+
+def _require_owner_scope(principal_id: str | None) -> None:
+    """Reject falsy principal_id when an owner-scoped call was requested."""
+    if not principal_id:
+        raise ValueError(_OWNER_SCOPE_REQUIRED)
 
 
 class WorkflowRepository:
@@ -48,10 +61,52 @@ class WorkflowRepository:
     # WorkflowStep reads
     # ------------------------------------------------------------------
 
-    def get_by_step_id(self, step_id: str) -> WorkflowStep | None:
-        """Get a workflow step by its ID within the tenant."""
-        return self._session.scalars(
-            select(WorkflowStep)
+    def get_by_step_id(self, step_id: str, *, principal_id: str | None = None) -> WorkflowStep | None:
+        """Get a workflow step by its ID within the tenant.
+
+        When ``principal_id`` is set, also require ``contexts.principal_id`` to
+        match (buyer-path ownership). Admin/service callers omit it for
+        tenant-only lookup. ``WorkflowStep.owner`` is a role enum
+        (principal|publisher|system), not the ownership key — ownership is
+        ``Context.principal_id``.
+        """
+        conditions = [
+            WorkflowStep.step_id == step_id,
+            DBContext.tenant_id == self._tenant_id,
+        ]
+        # None (omitted) → tenant-only. Explicit "" must not silently widen —
+        # same fail-closed rule as get_by_step_id_or_raise / update_status.
+        if principal_id is not None:
+            _require_owner_scope(principal_id)
+            conditions.append(DBContext.principal_id == principal_id)
+        return self._session.scalars(select(WorkflowStep).join(DBContext).where(*conditions)).first()
+
+    def get_by_step_id_or_raise(self, step_id: str, *, principal_id: str) -> WorkflowStep:
+        """Get a workflow step by ID or raise ``AdCPTaskNotFoundError``.
+
+        Requires a non-empty ``principal_id`` (buyer-path). Missing step **or**
+        wrong principal yields the same ``AdCPTaskNotFoundError`` (no ownership
+        oracle on this lookup). Collapses the fetch-and-raise guard shared by
+        get_task and complete_task. No transport ``context`` parameter by design.
+
+        Falsy ``principal_id`` is rejected before lookup so callers cannot
+        accidentally fall through to tenant-only scoping via
+        ``get_by_step_id(..., principal_id=None)``.
+
+        Resolve-then-authorize (AdCP 3.1.1 error-handling.mdx): select by
+        ``step_id`` + ``tenant_id`` only, then compare ``contexts.principal_id``
+        in Python — including a sentinel comparison when the row is missing —
+        so both legs do equal-shape authorization work. One raise site keeps
+        the wire envelope uniform.
+
+        Message is the generic REFERENCE_NOT_FOUND text (AdCP 3.1.1
+        error-handling Uniform response — no resource-qualified message).
+        """
+        _require_owner_scope(principal_id)
+
+        # Step 1 — resolve within tenant (no principal predicate in SQL).
+        row = self._session.execute(
+            select(WorkflowStep, DBContext.principal_id)
             .join(DBContext)
             .where(
                 WorkflowStep.step_id == step_id,
@@ -59,19 +114,21 @@ class WorkflowRepository:
             )
         ).first()
 
-    def get_by_step_id_or_raise(self, step_id: str) -> WorkflowStep:
-        """Get a workflow step by ID or raise ``AdCPTaskNotFoundError``.
+        # Step 2 — authorize with equal-shape work on both hit and miss.
+        # Sentinel is never a real principal_id, so miss always denies.
+        if row is None:
+            step: WorkflowStep | None = None
+            owner: str | object = _MISSING_OWNER
+        else:
+            step, owner = row
 
-        Collapses the task fetch-and-raise guard shared by get_task/complete_task.
-        No ``context`` parameter by design: those tools carry the FastMCP transport
-        ``Context``, not an AdCP ``ContextObject``, so the task not-found envelope
-        stays context-less rather than echoing a transport object into a repository.
-        """
-        step = self.get_by_step_id(step_id)
-        if step is None:
+        if owner != principal_id:
             from src.core.exceptions import AdCPTaskNotFoundError
 
-            raise AdCPTaskNotFoundError(f"Task {step_id} not found")
+            # Default message comes from the typed exception (spec supplement) —
+            # L3 must not hand-transcribe wire wording.
+            raise AdCPTaskNotFoundError()
+        assert step is not None  # owner matched a real row
         return step
 
     def list_by_tenant(
@@ -282,13 +339,25 @@ class WorkflowRepository:
         completed_at: datetime | None = None,
         response_data: dict[str, Any] | None = None,
         error_message: str | None = None,
+        principal_id: str | None = None,
     ) -> WorkflowStep | None:
         """Update the status of a workflow step.
 
-        Returns the updated step, or None if not found.
+        When ``principal_id`` is set, the re-fetch also requires
+        ``contexts.principal_id`` to match (buyer-path ownership) so the
+        terminalize write is scoped at the same seam as the read, instead of
+        relying on an earlier scoped read in the same unit of work. Admin/
+        service callers omit it for tenant-only scoping (unchanged).
+
+        Explicit empty-string ``principal_id`` raises (same as the read gate)
+        rather than silently widening to tenant-only scope.
+
+        Returns the updated step, or None if not found (including "found but
+        not owned by principal_id").
         Does NOT commit — the caller handles that.
         """
-        step = self.get_by_step_id(step_id)
+        # Empty principal_id is rejected inside get_by_step_id (single authority).
+        step = self.get_by_step_id(step_id, principal_id=principal_id)
         if step is None:
             return None
 

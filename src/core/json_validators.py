@@ -12,6 +12,8 @@ from typing import Any
 from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy.orm import validates
 
+from src.core.exceptions import ERROR_MESSAGE_TYPE_MESSAGE
+
 # Pydantic models for JSON field validation
 
 
@@ -101,6 +103,23 @@ class JSONValidatorMixin:
         if not isinstance(value, dict):
             # If it's not a dict and not None, make it an empty dict
             return {}
+        return value
+
+    @validates("error_message")
+    def validate_error_message(self, key, value):
+        """Reject non-string ``error_message`` before it reaches the DB driver.
+
+        A plain Text column with no validator lets a dict/list through to
+        psycopg2, which raises ``ProgrammingError`` whose ``str()`` includes the
+        full ``UPDATE`` statement and bind parameters — that text previously
+        reached the buyer wire as ``SERVICE_UNAVAILABLE``. Raise a clean
+        ``ValueError`` so ``normalize_to_adcp_error`` maps to
+        ``AdCPValidationError`` without leaking SQL.
+        """
+        if value is None:
+            return None
+        if not isinstance(value, str):
+            raise ValueError(ERROR_MESSAGE_TYPE_MESSAGE)
         return value
 
     @validates("comments")

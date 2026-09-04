@@ -82,6 +82,7 @@ pytest_plugins = [
     "tests.bdd.steps.domain.uc_brand_shorthand",
     "tests.bdd.steps.domain.compat_normalization",
     "tests.bdd.steps.domain.local_constraint_relaxations",
+    "tests.bdd.steps.domain.uc027_manage_async_tasks",
 ]
 
 # ---------------------------------------------------------------------------
@@ -3189,9 +3190,10 @@ _UC002_V31_SUCCESS_WIRED: set[str] = {
 # They must NOT be parametrized across MCP/A2A/REST/IMPL API transports.
 _ADMIN_TAG_PREFIX = "T-ADMIN-"
 
-# UCs whose tool has no REST route — parametrize across A2A + MCP only (a REST
-# variant would 404). get_media_buys (UC-019) is A2A/MCP-only.
-_NO_REST_UC_TAG_PREFIXES = ("T-UC-019-",)
+# UCs whose tool has no REST binding in AdCP 3.1.1 — parametrize across A2A + MCP
+# only. get_media_buys (UC-019) and get_task/complete_task (UC-027) are bound to
+# MCP+A2A in the pinned spec (docs/adcp-spec-version.md); there is no REST binding.
+_NO_REST_UC_TAG_PREFIXES = ("T-UC-019-", "T-UC-027-")
 
 
 def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
@@ -4076,6 +4078,22 @@ ENV_ROUTES: list[EnvRoute] = [
         when=_uc("UC-019", lambda m: "post-create-poll" in m),
         env_builder=_build_media_buy_create_list_env,
         seed=_seed_media_buy_chain,
+    ),
+    # ── UC-027 ──────────────────────────────────────────────────────────────
+    # get_task / complete_task — TaskEnv against a real DB.
+    # Wired today: @sibling-principal isolation (#1812) — same-tenant sibling
+    # denial is wire-indistinguishable from unknown task_id (REFERENCE_NOT_FOUND).
+    # Remaining BR-UC-027 scenarios stay on the not-wired catch-all.
+    EnvRoute(
+        tag="uc027-sibling-principal",
+        when=_uc("UC-027", lambda m: "sibling-principal" in m),
+        env_builder=_env("tests.harness.task_management.TaskEnv"),
+    ),
+    EnvRoute(
+        tag="uc027-not-wired",
+        when=_uc("UC-027", lambda m: True),
+        env_builder=_env("tests.harness.task_management.TaskEnv"),
+        xfail_reason="UC-027 harness wired only for the @sibling-principal isolation scenarios (#1812)",
     ),
 ]
 

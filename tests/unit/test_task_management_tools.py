@@ -10,8 +10,8 @@ from unittest.mock import ANY, MagicMock, Mock, patch
 import pytest
 
 from src.core.database.models import WorkflowStep
-from src.core.exceptions import AdCPTaskNotFoundError
-from src.core.resolved_identity import ResolvedIdentity
+from src.core.exceptions import VALIDATION_ERROR_SUGGESTION, AdCPTaskNotFoundError
+from tests.factories.principal import PrincipalFactory
 
 
 class TestListTasksTool:
@@ -63,7 +63,7 @@ class TestListTasksTool:
 
     def _make_identity(self, sample_tenant):
         """Create a ResolvedIdentity for testing."""
-        return ResolvedIdentity(
+        return PrincipalFactory.make_identity(
             principal_id="principal_123",
             tenant_id=sample_tenant["tenant_id"],
             tenant=sample_tenant,
@@ -157,7 +157,7 @@ class TestGetTaskTool:
 
     def _make_identity(self, sample_tenant):
         """Create a ResolvedIdentity for testing."""
-        return ResolvedIdentity(
+        return PrincipalFactory.make_identity(
             principal_id="principal_123",
             tenant_id=sample_tenant["tenant_id"],
             tenant=sample_tenant,
@@ -180,6 +180,7 @@ class TestGetTaskTool:
 
         assert result["task_id"] == "step_123"
         assert result["status"] == "requires_approval"
+        mock_workflow_repo.get_by_step_id_or_raise.assert_called_once_with("step_123", principal_id="principal_123")
 
     async def test_get_task_not_found_raises_error(self, mock_uow, mock_workflow_repo, sample_tenant):
         """Test that get_task raises ToolError when task not found.
@@ -199,6 +200,19 @@ class TestGetTaskTool:
         with patch("src.core.tools.task_management.WorkflowUoW", return_value=mock_uow):
             with pytest.raises(ToolError, match="not found"):
                 await get_task_fn(task_id="nonexistent", identity=identity)
+
+    async def test_get_task_empty_task_id_raises_validation(self, mock_uow, mock_workflow_repo, sample_tenant):
+        """Empty task_id is validated in the shared tool (uniform A2A+MCP)."""
+        from src.core.exceptions import AdCPValidationError
+        from src.core.tools.task_management import get_task
+
+        identity = self._make_identity(sample_tenant)
+        with patch("src.core.tools.task_management.WorkflowUoW", return_value=mock_uow):
+            with pytest.raises(AdCPValidationError, match="task_id is required") as exc:
+                await get_task(task_id="", identity=identity)
+        assert exc.value.field == "task_id"
+        assert exc.value.suggestion == VALIDATION_ERROR_SUGGESTION
+        mock_workflow_repo.get_by_step_id_or_raise.assert_not_called()
 
 
 class TestCompleteTaskTool:
@@ -248,7 +262,7 @@ class TestCompleteTaskTool:
 
     def _make_identity(self, sample_tenant):
         """Create a ResolvedIdentity for testing."""
-        return ResolvedIdentity(
+        return PrincipalFactory.make_identity(
             principal_id="principal_123",
             tenant_id=sample_tenant["tenant_id"],
             tenant=sample_tenant,
@@ -269,11 +283,13 @@ class TestCompleteTaskTool:
 
         assert result["status"] == "completed"
         assert result["task_id"] == "step_123"
+        mock_workflow_repo.get_by_step_id_or_raise.assert_called_once_with("step_123", principal_id="principal_123")
         mock_workflow_repo.update_status.assert_called_once_with(
             "step_123",
             status="completed",
             completed_at=ANY,
             response_data={"manually_completed": True, "completed_by": "principal_123"},
+            principal_id="principal_123",
         )
 
     async def test_complete_task_rejects_invalid_status(self, mock_uow, mock_workflow_repo, sample_tenant):
@@ -290,3 +306,91 @@ class TestCompleteTaskTool:
 
         with pytest.raises(ToolError, match="Invalid status"):
             await complete_task_fn(task_id="step_123", status="invalid_status", identity=identity)
+
+    async def test_complete_task_empty_task_id_raises_validation(self, mock_uow, mock_workflow_repo, sample_tenant):
+        """Empty task_id is validated in the shared tool (uniform A2A+MCP)."""
+        from src.core.exceptions import AdCPValidationError
+        from src.core.tools.task_management import complete_task
+
+        identity = self._make_identity(sample_tenant)
+        with patch("src.core.tools.task_management.WorkflowUoW", return_value=mock_uow):
+            with pytest.raises(AdCPValidationError, match="task_id is required") as exc:
+                await complete_task(task_id="", identity=identity)
+        assert exc.value.field == "task_id"
+        assert exc.value.suggestion == VALIDATION_ERROR_SUGGESTION
+        mock_workflow_repo.get_by_step_id_or_raise.assert_not_called()
+
+    @pytest.mark.parametrize("bad_id", [123, True, ["x"], {"id": "x"}])
+    async def test_require_task_id_rejects_truthy_non_string(self, mock_uow, mock_workflow_repo, sample_tenant, bad_id):
+        """Type half of require_task_id — present wrong type ≠ presence (KM Aug-12)."""
+        from src.core.exceptions import AdCPValidationError
+        from src.core.tools.task_management import complete_task, get_task
+
+        identity = self._make_identity(sample_tenant)
+        with patch("src.core.tools.task_management.WorkflowUoW", return_value=mock_uow):
+            with pytest.raises(AdCPValidationError, match="task_id must be a string") as get_exc:
+                await get_task(task_id=bad_id, identity=identity)
+            with pytest.raises(AdCPValidationError, match="task_id must be a string") as complete_exc:
+                await complete_task(task_id=bad_id, identity=identity)
+        assert get_exc.value.field == complete_exc.value.field == "task_id"
+        mock_workflow_repo.get_by_step_id_or_raise.assert_not_called()
+
+
+class TestCompleteTaskA2AForwarder:
+    """A2A complete_task rejects unknown buyer keys; forwards only L2 buyer params."""
+
+    @pytest.mark.asyncio
+    async def test_unknown_buyer_key_raises_validation(self):
+        from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
+        from src.core.exceptions import AdCPValidationError
+
+        handler = object.__new__(AdCPRequestHandler)
+        identity = PrincipalFactory.make_identity(
+            principal_id="p1",
+            tenant_id="t1",
+            tenant={"tenant_id": "t1"},
+            protocol="a2a",
+        )
+        with pytest.raises(AdCPValidationError, match="Unexpected parameter") as exc:
+            await handler._handle_complete_task_skill(
+                {"task_id": "step-1", "statas": "failed", "push_notification_config": {}},
+                identity,
+            )
+        assert "statas" in str(exc.value)
+
+    @pytest.mark.asyncio
+    async def test_forwarded_kwargs_match_signature_buyer_params(self):
+        from unittest.mock import AsyncMock, patch
+
+        from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
+        from src.core.tools.task_management import COMPLETE_TASK_BUYER_PARAMS
+
+        handler = object.__new__(AdCPRequestHandler)
+        identity = PrincipalFactory.make_identity(
+            principal_id="p1",
+            tenant_id="t1",
+            tenant={"tenant_id": "t1"},
+            protocol="a2a",
+        )
+        with patch(
+            "src.a2a_server.adcp_a2a_server.core_complete_task",
+            new_callable=AsyncMock,
+            return_value={"task_id": "step-1", "status": "failed"},
+        ) as mock_complete:
+            await handler._handle_complete_task_skill(
+                {
+                    "task_id": "step-1",
+                    "status": "failed",
+                    "error_message": "boom",
+                    "response_data": {"ok": True},
+                },
+                identity,
+            )
+        mock_complete.assert_awaited_once()
+        kwargs = mock_complete.await_args.kwargs
+        forwarded_buyer = set(kwargs) - {"identity"}
+        assert forwarded_buyer == COMPLETE_TASK_BUYER_PARAMS
+        assert "context" not in kwargs
+        assert kwargs["status"] == "failed"
+        assert kwargs["error_message"] == "boom"
+        assert kwargs["identity"] is identity

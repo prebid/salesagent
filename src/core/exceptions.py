@@ -122,7 +122,12 @@ RECOVERY_BY_WIRE_CODE: dict[str, RecoveryHint] = _load_pinned_recovery()
 # here — this is a set of code NAMES; RECOVERY_BY_WIRE_CODE answers what they
 # mean. The remaining demoted spec code (BILLING_NOT_SUPPORTED) is tracked for
 # the same treatment in #1602.
-_SPEC_SUPPLEMENT_CODES: frozenset[str] = frozenset({"CREATIVE_NOT_FOUND", "CONFIGURATION_ERROR"})
+_SPEC_SUPPLEMENT_CODES: frozenset[str] = frozenset({"CREATIVE_NOT_FOUND", "CONFIGURATION_ERROR", "REFERENCE_NOT_FOUND"})
+
+# Repo-authored uniform buyer message for REFERENCE_NOT_FOUND (enumMetadata has
+# suggestion + recovery only — no canonical message field).
+REFERENCE_NOT_FOUND_MESSAGE = "Reference not found"
+REFERENCE_NOT_FOUND_SUGGESTION = "verify the referenced identifier exists and is accessible to the caller"
 
 # Codes the SDK helper ships that the PINNED spec does not define. The pin is the
 # authority and the helper is a cross-check (CLAUDE.md spec-grounding gate), so a
@@ -175,12 +180,17 @@ ERROR_CODE_MAPPING: dict[str, str] = {
     # specific subclasses; the mappings stay as a safety net.
     "NOT_FOUND": "INVALID_REQUEST",
     # Entity-specific not-found codes the pinned spec enum does NOT define
-    # (unlike CREATIVE_NOT_FOUND, which the enum defines and therefore passes
-    # through untranslated). The typed subclasses exist for
-    # recovery=correctable + guard-enforceability; the buyer-visible wire code
-    # is INVALID_REQUEST.
+    # as named codes. FORMAT_NOT_FOUND stays INVALID_REQUEST — tracked cleanup
+    # to REFERENCE_NOT_FOUND per the pinned enum (# FIXME(#1847)): needs
+    # generic (non-resource-qualified) messages at both raise sites plus a
+    # BR-UC-021-ext-e update, since that scenario currently pins a
+    # resource-qualified message this code's target (REFERENCE_NOT_FOUND)
+    # would forbid.
+    # TASK_NOT_FOUND → REFERENCE_NOT_FOUND: pinned 3.1.1 enum mandates
+    # REFERENCE_NOT_FOUND for a typed task_id that "does not exist or is not
+    # accessible by the caller" (uniform not-found for sibling principal).
     "FORMAT_NOT_FOUND": "INVALID_REQUEST",
-    "TASK_NOT_FOUND": "INVALID_REQUEST",
+    "TASK_NOT_FOUND": "REFERENCE_NOT_FOUND",
     "INTERNAL_ERROR": "SERVICE_UNAVAILABLE",
     # Authentication / authorisation
     "AUTHORIZATION_ERROR": "AUTH_REQUIRED",
@@ -238,7 +248,7 @@ INTERNAL_CODES: frozenset[str] = frozenset(
         "INTERNAL_ERROR",  # Base-class default; never instantiated for wire
         "NOT_FOUND",  # Base-class for entity-specific NotFound subclasses
         "FORMAT_NOT_FOUND",  # AdCPFormatNotFoundError; wire → INVALID_REQUEST
-        "TASK_NOT_FOUND",  # AdCPTaskNotFoundError; wire → INVALID_REQUEST
+        "TASK_NOT_FOUND",  # AdCPTaskNotFoundError; wire → REFERENCE_NOT_FOUND
         "API_ERROR",  # Raw adapter API failure detail
         "WORKFLOW_CREATION_FAILED",  # GAM workflow orchestration detail
         "LINE_ITEM_CREATION_FAILED",  # GAM line-item creation detail
@@ -451,6 +461,10 @@ class AdCPError(Exception):
     # "provide valid credentials") sets this so no raise site can forget the
     # graded top-level ``suggestion``. Per-raise ``suggestion=`` overrides.
     _default_suggestion: ClassVar[str | None] = None
+    # Optional class-level message default — subclasses whose every raise shares
+    # one uniform wire message (e.g. REFERENCE_NOT_FOUND) set this so they do
+    # not need a custom ``__init__`` that restates the base kwargs.
+    _default_message: ClassVar[str | None] = None
 
     # Instance attributes — set in __init__ from _default_* unless overridden.
     # ``recovery`` is NOT among them: it is a read-only property, derived below.
@@ -473,6 +487,10 @@ class AdCPError(Exception):
         # sanctioned ``synthesize()`` classmethod for boundary fallback paths
         # that need a wire code the typed class hierarchy doesn't model.
         # Direct raises use a typed subclass and inherit its ``_default_*``.
+        if not message:
+            default_message = type(self)._default_message
+            if default_message is not None:
+                message = default_message
         super().__init__(message)
         self.message = message
         self.details = details
@@ -692,7 +710,10 @@ class AdCPInvalidRequestError(AdCPValidationError):
     _default_error_code: ClassVar[str] = "INVALID_REQUEST"
 
 
-AUTH_REQUIRED_SUGGESTION = "Provide valid credentials (x-adcp-auth token)."
+# Pinned AdCP 3.1.1 enumMetadata suggestion for AUTH_REQUIRED (error-code.json).
+AUTH_REQUIRED_SUGGESTION = (
+    "provide credentials when missing; do NOT auto-retry rejected credentials — escalate for rotation"
+)
 
 
 class AdCPAuthenticationError(AdCPError):
@@ -1037,17 +1058,27 @@ class AdCPFormatNotFoundError(AdCPNotFoundError):
 
 
 class AdCPTaskNotFoundError(AdCPNotFoundError):
-    """Requested workflow task/step does not exist (404, wire → INVALID_REQUEST).
+    """Requested workflow task/step does not exist (404, wire → REFERENCE_NOT_FOUND).
 
     No standard ``TASK_NOT_FOUND`` SDK code exists, so the raw code is internal
-    and translated to ``INVALID_REQUEST`` at the wire boundary. The gain over the
-    bare ``AdCPNotFoundError`` is recovery=correctable + a typed identity.
+    and translated to ``REFERENCE_NOT_FOUND`` at the wire boundary — the pinned
+    AdCP 3.1.1 enum mandate for a typed ``task_id`` that does not exist or is
+    not accessible by the caller (uniform response for sibling-principal denial).
+    The gain over the bare ``AdCPNotFoundError`` is recovery=correctable + a
+    typed identity.
 
     Recovery=correctable: the buyer can correct by supplying a valid task_id
     (discoverable via list_tasks).
+
+    Default ``message`` is the REFERENCE_NOT_FOUND uniform-response string from
+    ``_SPEC_SUPPLEMENT_CODES`` via ``_default_message`` — raise sites should
+    call ``AdCPTaskNotFoundError()`` with no message so L3 does not duplicate
+    wire wording.
     """
 
     _default_error_code: ClassVar[str] = "TASK_NOT_FOUND"
+    _default_message: ClassVar[str | None] = REFERENCE_NOT_FOUND_MESSAGE
+    _default_suggestion: ClassVar[str | None] = REFERENCE_NOT_FOUND_SUGGESTION
 
 
 class AdCPBudgetTooLowError(AdCPError):
@@ -1270,10 +1301,21 @@ def build_two_layer_error_envelope(exc: AdCPError) -> dict[str, Any]:
     so they always land in ``WIRE_STANDARD_CODES`` (the SDK's
     ``STANDARD_ERROR_CODES`` plus the pinned-spec supplement, e.g.
     ``CREATIVE_NOT_FOUND``).
+
+    Uniform-response wire codes (``REFERENCE_NOT_FOUND``): the buyer-facing
+    ``message`` is the repo-authored ``REFERENCE_NOT_FOUND_MESSAGE``, not
+    ``exc.message``. Raise-site positionals must not override the generic
+    message on the wire (AdCP L3 inaccessible-references rule; review A1 /
+    KM finding 2).
     """
+    wire_code = exc.wire_error_code
+    if wire_code == "REFERENCE_NOT_FOUND":
+        buyer_message = REFERENCE_NOT_FOUND_MESSAGE
+    else:
+        buyer_message = exc.message
     payload = adcp_error(
-        exc.wire_error_code,
-        exc.message,
+        wire_code,
+        buyer_message,
         recovery=exc.recovery,
         field=exc.field,
         suggestion=exc.suggestion,
@@ -1298,6 +1340,8 @@ def build_two_layer_error_envelope(exc: AdCPError) -> dict[str, Any]:
 # INVALID_REQUEST's text.
 INVALID_REQUEST_SUGGESTION = "check request parameters and fix"
 VALIDATION_ERROR_SUGGESTION = "review error details and fix field values"
+
+ERROR_MESSAGE_TYPE_MESSAGE = "error_message must be a string"
 
 
 def first_validation_error_field(validation_error: ValidationError) -> str | None:
@@ -1346,6 +1390,10 @@ def normalize_to_adcp_error(exc: Exception) -> AdCPError:
     ``AdCPValidationError``; other ``ValueError`` instances map to the plain
     validation error, ``PermissionError`` to ``AdCPAuthorizationError``, and
     anything else wraps in base ``AdCPError`` (INTERNAL_ERROR).
+
+    Database-driver / SQLAlchemy errors are *not* forwarded via ``str(exc)`` —
+    those messages embed SQL text and bind parameters that must never reach
+    the buyer wire.
     """
     if isinstance(exc, AdCPError):
         return exc
@@ -1361,4 +1409,30 @@ def normalize_to_adcp_error(exc: Exception) -> AdCPError:
         return AdCPValidationError(str(exc))
     if isinstance(exc, PermissionError):
         return AdCPAuthorizationError(str(exc))
+    if _leaks_sql_or_bind_params(exc):
+        # Keep INTERNAL_ERROR / transient recovery, but never echo driver text.
+        return AdCPError("An unexpected error occurred")
     return AdCPError(str(exc) or type(exc).__name__)
+
+
+# SSOT for buyer-wire SQL/bind-param disclosure markers (tests import this).
+SQL_LEAK_MARKERS: tuple[str, ...] = (
+    "[parameters:",
+    "SQL:",
+    "psycopg2",
+    "asyncpg",
+    "can't adapt type",
+)
+
+
+def _leaks_sql_or_bind_params(exc: BaseException) -> bool:
+    """True when ``str(exc)`` would disclose SQL / bind params to the buyer."""
+    try:
+        from sqlalchemy.exc import DBAPIError, StatementError
+
+        if isinstance(exc, (DBAPIError, StatementError)):
+            return True
+    except ImportError:  # pragma: no cover - sqlalchemy is a hard dep
+        pass
+    text = str(exc)
+    return any(marker in text for marker in SQL_LEAK_MARKERS)

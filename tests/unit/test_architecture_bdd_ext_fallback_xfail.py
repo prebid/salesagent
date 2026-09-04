@@ -9,6 +9,8 @@ the normal gate.
 
   - UC-002: fixed in commit 655ba1f56
   - UC-003: fixed in #1417 (this guard's motivating bug)
+  - UC-027: `@sibling-principal` membership split (#1812 / #1945) — same disease,
+    different syntactic form than the historical `-ext-` startswith splits
 
 RESTRUCTURED FOR LANE F, as this guard's own failure
 message instructed. The `if/elif/else` chain it used to walk is gone: routing is

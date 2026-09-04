@@ -66,6 +66,10 @@ class TestA2AProtocolCompliance:
             "optimize_media_buy",
             "list_authorized_properties",
             "update_performance_index",
+            # Seller durable workflow tools (#1741): pinned AdCP index has
+            # list-tasks + get-task-status, not get_task / complete_task.
+            "get_task",  # FIXME(#1942)
+            "complete_task",  # FIXME(#1942)
         }
     )
 

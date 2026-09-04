@@ -70,6 +70,7 @@ EXPECTED_WIRED_ROUTES: frozenset[str] = frozenset(
         "uc011-list",
         "uc011-sync",
         "uc018-list",
+        "uc027-sibling-principal",
     }
 )
 

@@ -470,10 +470,10 @@ Feature: BR-UC-003 Update Media Buy
     And the error code should be "AUTH_REQUIRED"
     And the error message should contain "authentication"
     And the error should include "suggestion" field
-    And the suggestion should contain "valid credentials"
+    And the suggestion should contain "provide credentials when missing"
     # POST-F1: System state unchanged
     # POST-F2: Error explains authentication failed
-    # POST-F3: Suggestion to obtain valid credentials
+    # POST-F3: Suggestion matches pinned AUTH_REQUIRED enumMetadata
 
   @T-UC-003-ext-a-unknown @extension @ext-a @error @post-f1 @post-f2 @post-f3
   Scenario: Authentication error -- principal not found in database

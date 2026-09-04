@@ -34,17 +34,21 @@ WORKFLOW_REPO_FILE = "src/core/database/repositories/workflow.py"
 
 # Patterns that indicate a WorkflowStep or ObjectWorkflowMapping query.
 # These REQUIRE a DBContext/Context join for tenant isolation.
+# ``\b`` (not ``\)``) so resolve-then-authorize multi-column selects like
+# ``select(WorkflowStep, DBContext.principal_id)`` are graded too (Chris R4 E2).
 _MULTI_TENANT_QUERY_PATTERNS = [
-    re.compile(r"select\(\s*WorkflowStep\s*\)"),
-    re.compile(r"select\(\s*ObjectWorkflowMapping\s*\)"),
+    re.compile(r"select\(\s*WorkflowStep\b"),
+    re.compile(r"select\(\s*ObjectWorkflowMapping\b"),
     re.compile(r"session\.get\(\s*WorkflowStep\s*,"),
     re.compile(r"self\._session\.get\(\s*WorkflowStep\s*,"),
-    re.compile(r"self\._session\.scalars\(\s*select\(\s*WorkflowStep"),
-    re.compile(r"self\._session\.scalars\(\s*select\(\s*ObjectWorkflowMapping"),
+    re.compile(r"self\._session\.scalars\(\s*select\(\s*WorkflowStep\b"),
+    re.compile(r"self\._session\.scalars\(\s*select\(\s*ObjectWorkflowMapping\b"),
 ]
 
-# Pattern that indicates tenant isolation is present (DBContext join).
-_CONTEXT_JOIN_PATTERN = re.compile(r"DBContext|join\(Context\)")
+# Pattern that indicates tenant isolation is present (DBContext.tenant_id predicate).
+# Joining DBContext alone is not enough — every multi-tenant query method must
+# compare ``DBContext.tenant_id == self._tenant_id``.
+_CONTEXT_JOIN_PATTERN = re.compile(r"DBContext\.tenant_id\s*==\s*self\._tenant_id")
 
 # Pre-existing violations: method names in WorkflowRepository that are known
 # to lack tenant isolation. Each entry needs a FIXME tracking its fix.
@@ -123,3 +127,49 @@ class TestWorkflowRepositoryTenantIsolation:
                 "When fixed, remove the method from WORKFLOW_ISOLATION_ALLOWLIST."
             ),
         )
+
+
+def test_join_without_tenant_predicate_is_violation() -> None:
+    """Negative self-test: ``join(DBContext)`` alone must not satisfy the guard.
+
+    Deleting ``DBContext.tenant_id == self._tenant_id`` while keeping the join
+    token previously left the guard green; the tightened pattern must catch it.
+    """
+    body = """
+    def list_by_tenant(self):
+        return self._session.scalars(select(WorkflowStep).join(DBContext)).all()
+    """
+    assert _method_queries_without_context_join("list_by_tenant", body) is True
+
+    body_ok = """
+    def list_by_tenant(self):
+        return self._session.scalars(
+            select(WorkflowStep).join(DBContext).where(DBContext.tenant_id == self._tenant_id)
+        ).all()
+    """
+    assert _method_queries_without_context_join("list_by_tenant", body_ok) is False
+
+
+def test_multi_column_select_without_tenant_predicate_is_violation() -> None:
+    """``select(WorkflowStep, …)`` must be graded the same as ``select(WorkflowStep)``.
+
+    Resolve-then-authorize uses a multi-column select; a ``)``-anchored pattern
+    previously left that shape invisible to the guard (Chris R4 E2).
+    """
+    body = """
+    def get_by_step_id_or_raise(self):
+        return self._session.execute(
+            select(WorkflowStep, DBContext.principal_id).join(DBContext).where(WorkflowStep.step_id == step_id)
+        ).one_or_none()
+    """
+    assert _method_queries_without_context_join("get_by_step_id_or_raise", body) is True
+
+    body_ok = """
+    def get_by_step_id_or_raise(self):
+        return self._session.execute(
+            select(WorkflowStep, DBContext.principal_id)
+            .join(DBContext)
+            .where(WorkflowStep.step_id == step_id, DBContext.tenant_id == self._tenant_id)
+        ).one_or_none()
+    """
+    assert _method_queries_without_context_join("get_by_step_id_or_raise", body_ok) is False
