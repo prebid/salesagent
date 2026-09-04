@@ -215,7 +215,10 @@ def payload_or_none(ctx: dict) -> object | None:
     """
     result = ctx.get("result")
     if not isinstance(result, TransportResult):
-        return ctx.get("self_dispatched_response")
+        # Legacy/harness-only fallback: a few direct helper tests and older
+        # self-dispatching steps still populate ``ctx["response"]`` without a
+        # ``TransportResult`` wrapper. Prefer the newer explicit key first.
+        return ctx.get("self_dispatched_response", ctx.get("response"))
     return result.payload
 
 

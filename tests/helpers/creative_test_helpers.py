@@ -30,6 +30,20 @@ def make_creative_dict(creative_id: str = "c1", name: str = "Test Banner") -> di
 
 _DEFAULT_AGENT_URL = "https://creative.test.example.com"
 
+# Independent oracle for the GEMINI misconfig advisory suggestion (must match
+# production ``_GEMINI_KEY_MISSING_SUGGESTION``; kept as a test literal so a
+# silent production-string drift still fails these pins).
+_EXPECTED_GEMINI_KEY_MISSING_SUGGESTION = "Ask the seller to configure a Gemini API key for this account"
+
+
+def assert_gemini_key_missing_advisory(errs: list) -> None:
+    """Pin platform ``X_PREBID_CREATIVE_GEMINI_KEY_MISSING`` + ``terminal`` + suggestion."""
+    assert errs, "expected non-empty errors[] for GEMINI key missing advisory"
+    err = errs[0]
+    assert err.code == "X_PREBID_CREATIVE_GEMINI_KEY_MISSING", f"unexpected code: {err.code!r}"
+    assert err.recovery == "terminal", f"unexpected recovery: {err.recovery!r}"
+    assert err.suggestion == _EXPECTED_GEMINI_KEY_MISSING_SUGGESTION, f"unexpected suggestion: {err.suggestion!r}"
+
 
 def creative_payload(**overrides: object) -> dict:
     """Build a minimal creative request dict (``creative_id``/``name``/``format_id``/``assets``).

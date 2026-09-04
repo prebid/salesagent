@@ -12,13 +12,13 @@ import logging
 import time
 import uuid
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Protocol, cast
 
 from adcp.types import CreativeAsset
+from adcp.types import Error as AdCPErrorDetail
 from pydantic import BaseModel
 
-from src.core.exceptions import AdCPConfigurationError, wire_advisory
-from src.core.format_resolver import find_format, is_agent_backed, is_generative
+from src.core.exceptions import AdCPConfigurationError, RecoveryHint
 from src.core.helpers import _extract_format_info, _validate_creative_assets
 from src.core.helpers.outbound_error_mapping import raise_mapped_outbound_error
 from src.core.schemas import CreativeStatusEnum, SyncCreativeResult
@@ -30,38 +30,142 @@ from ._assets import _build_creative_data, _extract_message_from_assets, _extrac
 if TYPE_CHECKING:
     from src.core.database.repositories.creative import CreativeRepository
 
+
+class _FormatIdLike(Protocol):
+    """SDK FormatId / FormatReferenceStructuredObject / repo FormatId — all expose ``.id``."""
+
+    id: str
+
+
 logger = logging.getLogger(__name__)
+
+
+_GEMINI_KEY_MISSING_SUGGESTION = "Ask the seller to configure a Gemini API key for this account"
+
+
+def _failed_sync_result_from_error(creative_id: str, error: AdCPErrorDetail) -> SyncCreativeResult:
+    """Wrap a per-creative advisory Error in a failed SyncCreativeResult."""
+    return SyncCreativeResult(
+        creative_id=creative_id,
+        action="failed",
+        errors=[error],
+        review_feedback=None,
+        assigned_to=None,
+        assignment_errors=None,
+    )
 
 
 def _failed_sync_result(
     creative_id: str,
     error_msg: str,
     *,
-    code: str = "SERVICE_UNAVAILABLE",
+    recovery: RecoveryHint,
+    code: str,
+    suggestion: str | None = None,
     field: str | None = None,
 ) -> SyncCreativeResult:
     """Build a SyncCreativeResult for a failed creative sync operation.
 
-    The CODE is the choice; the recovery follows from it. ``wire_advisory``
-    derives the buyer-facing retry classification from the pinned enumMetadata,
-    so a call site says what happened and the retry signal follows — for EVERY
-    call site now: the last hand-forwarded recovery went with the constructor
-    kwarg. Pass the condition-specific code: ``CONFIGURATION_ERROR`` for a
-    seller-side misconfiguration (pinned terminal — the buyer must not retry),
-    ``CREATIVE_NOT_FOUND`` for an assignment referencing an unknown creative_id
-    (matching the strict-mode ``AdCPCreativeNotFoundError`` raise since
-    287c93099), ``VALIDATION_ERROR`` for other buyer-correctable causes. The
-    default ``SERVICE_UNAVAILABLE`` (pinned transient) covers a creative agent
-    that is simply down.
+    ``code`` and ``recovery`` are both required keyword-only classifications —
+    a compile error at every call site — because ``error-handling.mdx``
+    (AdCP 3.1.1) requires senders to populate ``error.recovery`` on every
+    error, and a thought-through ``recovery`` must not ride a defaulted
+    unrelated ``code`` (e.g. ``SERVICE_UNAVAILABLE`` + ``correctable``).
+
+    ``transient`` distinguishes a retriable failure (creative agent down) from
+    ``correctable`` (buyer-fixable input) or ``terminal`` (server
+    misconfiguration — retrying cannot fix it). Pair ``SERVICE_UNAVAILABLE``
+    with ``recovery="transient"`` per the pinned enum. ``CONFIGURATION_ERROR``
+    is a wire-standard code but must not be used in payload advisories: the
+    enum requires flipped transport failure markers for that code, and
+    advisories live inside a successful ``sync_creatives`` artifact.
+    Misconfiguration advisories (e.g. missing GEMINI) use
+    ``_gemini_key_missing_result`` (seller-specific
+    ``X_PREBID_CREATIVE_GEMINI_KEY_MISSING`` + ``recovery="terminal"`` — AdCP
+    3.1.1 ``transport-errors.mdx`` § Seller-Specific Error Codes MUST:
+    ``X_{VENDOR}_{CODE}``). Buyer-correctable per-item failures pass the
+    condition-specific code: ``CREATIVE_NOT_FOUND`` for an assignment
+    referencing an unknown creative_id (matching the strict-mode
+    ``AdCPCreativeNotFoundError`` raise since 287c93099), ``VALIDATION_ERROR``
+    for other correctable causes.
+
+    Prefer ``to_wire_error_code(...)`` (not raw ``AdCPError.error_code`` or
+    ``wire_error_code``) when threading a typed exception into ``code`` —
+    advisories serialize verbatim and must not leak INTERNAL_CODES.
     """
-    return SyncCreativeResult(
-        creative_id=creative_id,
-        action="failed",
-        errors=[wire_advisory(code, error_msg, field=field)],
-        review_feedback=None,
-        assigned_to=None,
-        assignment_errors=None,
+    return _failed_sync_result_from_error(
+        creative_id,
+        AdCPErrorDetail(  # structural-guard: advisory per-creative result in SyncCreativeResult.errors[]
+            code=code,
+            message=error_msg,
+            recovery=recovery,
+            suggestion=suggestion,
+            field=field,
+        ),
     )
+
+
+def _gemini_key_missing_result(creative_id: str, error_msg: str) -> SyncCreativeResult:
+    """Per-creative advisory for missing GEMINI_API_KEY (seller-specific code + terminal)."""
+    return _failed_sync_result(
+        creative_id,
+        error_msg,
+        code="X_PREBID_CREATIVE_GEMINI_KEY_MISSING",
+        recovery="terminal",
+        suggestion=_GEMINI_KEY_MISSING_SUGGESTION,
+    )
+
+
+def _service_unavailable_result(creative_id: str, error_msg: str) -> SyncCreativeResult:
+    """Per-creative advisory for transient creative-agent / preview outages."""
+    return _failed_sync_result(
+        creative_id,
+        error_msg,
+        code="SERVICE_UNAVAILABLE",
+        recovery="transient",
+    )
+
+
+def _account_gemini_api_key(tenant: dict[str, Any]) -> str | None:
+    """Resolve the account Gemini key the same way admin AI review does.
+
+    Prefer ``ai_config.api_key`` (what the current admin AI-settings UI writes),
+    then the legacy ``gemini_api_key`` column. Never consult process-global
+    ``get_config().gemini_api_key`` — a keyless seller on a server that injects
+    ``GEMINI_API_KEY`` must still see the misconfiguration advisory.
+    """
+    ai_config = tenant.get("ai_config")
+    if isinstance(ai_config, dict):
+        ai_key = ai_config.get("api_key")
+        if ai_key:
+            return str(ai_key)
+    elif ai_config is not None:
+        ai_key = getattr(ai_config, "api_key", None)
+        if ai_key:
+            return str(ai_key)
+    legacy = tenant.get("gemini_api_key")
+    return str(legacy) if legacy else None
+
+
+def _check_gemini_key_or_advisory(
+    creative_id: str,
+    *,
+    action_verb: str,
+    creative_format: _FormatIdLike,
+    tenant: dict[str, Any],
+) -> str | SyncCreativeResult:
+    """Return the account-scoped GEMINI API key, or a missing-key advisory result.
+
+    Policy: sole sources are account AI settings (``ai_config.api_key``) then the
+    legacy ``gemini_api_key`` column on the tenant dict. Process-global
+    ``get_config().gemini_api_key`` is intentionally not consulted.
+    """
+    gemini_api_key = _account_gemini_api_key(tenant)
+    if gemini_api_key:
+        return gemini_api_key
+    error_msg = f"Cannot {action_verb} generative creative {creative_format.id}: GEMINI_API_KEY not configured"
+    logger.error("[sync_creatives] %s (creative %s)", error_msg, creative_id)
+    return _gemini_key_missing_result(creative_id, error_msg)
 
 
 def _update_existing_creative(
@@ -193,31 +297,33 @@ def _update_existing_creative(
             # Use pre-fetched formats (fetched outside transaction at function start)
             # This avoids async HTTP calls inside savepoint
 
-            # ONE answer to "same format?", from format_resolver — not a local
-            # `==` over the model, which compares Python CLASSES as well as
-            # values and so missed every format the A2A path pre-upgraded.
-            format_obj = find_format(creative_format, all_formats)
+            # Find matching format
+            format_obj = None
+            for fmt in all_formats:
+                if fmt.format_id == creative_format:
+                    format_obj = fmt
+                    break
 
-            if format_obj and is_agent_backed(format_obj):
-                if is_generative(format_obj):
+            if format_obj and format_obj.agent_url:
+                # Check if format is generative (has output_format_ids)
+                is_generative = bool(getattr(format_obj, "output_format_ids", None))
+
+                if is_generative:
                     # Generative creative update - rebuild using AI
                     logger.info(
                         f"[sync_creatives] Detected generative format update: {creative_format}, "
                         f"checking for Gemini API key"
                     )
 
-                    # Get Gemini API key from config
-                    from src.core.config import get_config
-
-                    config = get_config()
-                    gemini_api_key = config.gemini_api_key
-
-                    if not gemini_api_key:
-                        error_msg = (
-                            f"Cannot update generative creative {creative_format}: GEMINI_API_KEY not configured"
-                        )
-                        logger.error(f"[sync_creatives] {error_msg}")
-                        raise AdCPConfigurationError(error_msg)
+                    gemini_or_advisory = _check_gemini_key_or_advisory(
+                        existing_creative.creative_id,
+                        action_verb="update",
+                        creative_format=creative_format,
+                        tenant=tenant,
+                    )
+                    if isinstance(gemini_or_advisory, SyncCreativeResult):
+                        return (gemini_or_advisory, False)
+                    gemini_api_key = gemini_or_advisory
 
                     # Extract message/brief from assets or inputs
                     message = _extract_message_from_assets(creative)
@@ -421,24 +527,36 @@ def _update_existing_creative(
                     # Creative agent should have generated previews but didn't
                     error_msg = f"Preview generation failed for {existing_creative.creative_id}: no previews returned and no media_url provided"
                     logger.error(f"[sync_creatives] {error_msg}")
-                    return (_failed_sync_result(existing_creative.creative_id, error_msg), False)
+                    return (
+                        _service_unavailable_result(existing_creative.creative_id, error_msg),
+                        False,
+                    )
 
         except AdCPConfigurationError as config_error:
-            # Server-side misconfiguration (e.g. GEMINI_API_KEY missing) is terminal
-            # and admin-fixable — not a transient creative-agent outage. Surface it
-            # honestly so the buyer does not retry a misconfiguration.
+            # Seller-side misconfiguration raised by the dial/registry (not the
+            # GEMINI early-return path, which uses _gemini_key_missing_result).
+            # CONFIGURATION_ERROR / terminal — buyer must not retry.
             error_msg = str(config_error)
             logger.error(
-                "[sync_creatives] %s for update of %s", error_msg, existing_creative.creative_id, exc_info=True
+                "[sync_creatives] %s for update of %s",
+                error_msg,
+                existing_creative.creative_id,
+                exc_info=True,
             )
-            return (_failed_sync_result(existing_creative.creative_id, error_msg, code="CONFIGURATION_ERROR"), False)
+            return (
+                _failed_sync_result(
+                    existing_creative.creative_id,
+                    error_msg,
+                    recovery="terminal",
+                    code="CONFIGURATION_ERROR",
+                ),
+                False,
+            )
         except OutboundError as outbound_error:
-            # A refused/undeliverable egress request is already correctly classified
-            # by the seam — delegate rather than laundering it into the generic
-            # "Retry recommended" transient message below. raise_mapped_outbound_error
-            # always raises; the mapped AdCPError propagates out of this function to
-            # _sync.py's per-creative `except AdCPError as e:` handler, which already
-            # forwards a typed error's own code/recovery onto the per-item result.
+            # A refused/undeliverable egress request is already classified by the
+            # seam — do not launder into the generic "Retry recommended" transient
+            # message below. raise_mapped_outbound_error always raises; the mapped
+            # AdCPError propagates to _sync.py's per-creative except AdCPError.
             raise_mapped_outbound_error(
                 outbound_error,
                 provenance=OperatorEndpoint("the creative agent"),
@@ -455,7 +573,10 @@ def _update_existing_creative(
                 f"[sync_creatives] {error_msg} for update of {existing_creative.creative_id}",
                 exc_info=True,
             )
-            return (_failed_sync_result(existing_creative.creative_id, error_msg), False)
+            return (
+                _service_unavailable_result(existing_creative.creative_id, error_msg),
+                False,
+            )
 
     # In full upsert, consider all fields as changed
     changes.extend(["url", "click_url", "width", "height", "duration"])
@@ -518,28 +639,32 @@ def _create_new_creative(
             # Use pre-fetched formats (fetched outside transaction at function start)
             # This avoids async HTTP calls inside savepoint
 
-            # ONE answer to "same format?", from format_resolver — not a local
-            # `==` over the model, which compares Python CLASSES as well as
-            # values and so missed every format the A2A path pre-upgraded.
-            format_obj = find_format(creative_format, all_formats)
+            # Find matching format
+            format_obj = None
+            for fmt in all_formats:
+                if fmt.format_id == creative_format:
+                    format_obj = fmt
+                    break
 
-            if format_obj and is_agent_backed(format_obj):
-                if is_generative(format_obj):
+            if format_obj and format_obj.agent_url:
+                # Check if format is generative (has output_format_ids)
+                is_generative = bool(getattr(format_obj, "output_format_ids", None))
+
+                if is_generative:
                     # Generative creative - call build_creative
                     logger.info(
                         f"[sync_creatives] Detected generative format: {creative_format}, checking for Gemini API key"
                     )
 
-                    # Get Gemini API key from config
-                    from src.core.config import get_config
-
-                    config = get_config()
-                    gemini_api_key = config.gemini_api_key
-
-                    if not gemini_api_key:
-                        error_msg = f"Cannot build generative creative {creative_format}: GEMINI_API_KEY not configured"
-                        logger.error(f"[sync_creatives] {error_msg}")
-                        raise AdCPConfigurationError(error_msg)
+                    gemini_or_advisory = _check_gemini_key_or_advisory(
+                        creative_id,
+                        action_verb="build",
+                        creative_format=creative_format,
+                        tenant=tenant,
+                    )
+                    if isinstance(gemini_or_advisory, SyncCreativeResult):
+                        return (gemini_or_advisory, False)
+                    gemini_api_key = gemini_or_advisory
 
                     # Extract message/brief from assets or inputs
                     message = _extract_message_from_assets(creative)
@@ -711,22 +836,36 @@ def _create_new_creative(
                         # Creative agent should have generated previews but didn't
                         error_msg = f"Preview generation failed for {creative_id}: no previews returned and no media_url provided"
                         logger.error(f"[sync_creatives] {error_msg}")
-                        return (_failed_sync_result(creative_id, error_msg), False)
+                        return (
+                            _service_unavailable_result(creative_id, error_msg),
+                            False,
+                        )
 
         except AdCPConfigurationError as config_error:
-            # Server-side misconfiguration (e.g. GEMINI_API_KEY missing) is terminal
-            # and admin-fixable — not a transient creative-agent outage. Surface it
-            # honestly so the buyer does not retry a misconfiguration.
+            # Seller-side misconfiguration raised by the dial/registry (not the
+            # GEMINI early-return path, which uses _gemini_key_missing_result).
+            # CONFIGURATION_ERROR / terminal — buyer must not retry.
             error_msg = str(config_error)
-            logger.error("[sync_creatives] %s - rejecting creative %s", error_msg, creative_id, exc_info=True)
-            return (_failed_sync_result(creative_id, error_msg, code="CONFIGURATION_ERROR"), False)
+            logger.error(
+                "[sync_creatives] %s - rejecting creative %s",
+                error_msg,
+                creative_id,
+                exc_info=True,
+            )
+            return (
+                _failed_sync_result(
+                    creative_id,
+                    error_msg,
+                    recovery="terminal",
+                    code="CONFIGURATION_ERROR",
+                ),
+                False,
+            )
         except OutboundError as outbound_error:
-            # A refused/undeliverable egress request is already correctly classified
-            # by the seam — delegate rather than laundering it into the generic
-            # "Retry recommended" transient message below. raise_mapped_outbound_error
-            # always raises; the mapped AdCPError propagates out of this function to
-            # _sync.py's per-creative `except AdCPError as e:` handler, which already
-            # forwards a typed error's own code/recovery onto the per-item result.
+            # A refused/undeliverable egress request is already classified by the
+            # seam — do not launder into the generic "Retry recommended" transient
+            # message below. raise_mapped_outbound_error always raises; the mapped
+            # AdCPError propagates to _sync.py's per-creative except AdCPError.
             raise_mapped_outbound_error(
                 outbound_error,
                 provenance=OperatorEndpoint("the creative agent"),
@@ -743,7 +882,10 @@ def _create_new_creative(
                 f"[sync_creatives] {error_msg} - rejecting creative {creative_id}",
                 exc_info=True,
             )
-            return (_failed_sync_result(creative_id, error_msg), False)
+            return (
+                _service_unavailable_result(creative_id, error_msg),
+                False,
+            )
 
     # Determine creative status based on approval mode
 

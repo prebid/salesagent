@@ -440,6 +440,13 @@ EXPECTED_UNSUPPORTED_DECLARATIONS: frozenset[tuple[str, str, str]] = frozenset(
             "live stack always serves the agent catalog; an empty catalog cannot be realized over e2e",
         ),
         ("tests/harness/creative_formats.py", "_validate_registry_formats", "<dynamic>"),
+        (
+            "tests/harness/creative_sync.py",
+            "setup_generative_build",
+            "generative build grading injects an in-process format mock and "
+            "registry.build_creative AsyncMock; the live e2e creative-agent "
+            "catalog cannot be stubbed mid-suite, and Then steps assert the mock (#1964)",
+        ),
     }
 )
 

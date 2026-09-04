@@ -1312,11 +1312,6 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 "_SyntheticError, spec expects structured AdCPError with suggestion "
                 "(preview-failure path, _processing.py:712-737)"
             ),
-            "T-UC-006-ext-i": (
-                "SPEC-PRODUCTION GAP: production returns plain-string errors[] via "
-                "_SyntheticError, spec expects structured AdCPError with suggestion "
-                "(GEMINI_API_KEY not configured path)"
-            ),
             # Creative unchanged: production returns action "updated" not "unchanged"
             "T-UC-006-main-unchanged": (
                 "SPEC-PRODUCTION GAP: production returns action 'updated', "

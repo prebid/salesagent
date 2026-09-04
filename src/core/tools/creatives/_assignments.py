@@ -340,7 +340,7 @@ def _process_assignments(
             # PACKAGE_NOT_FOUND; per-condition parity is tracked in GH #1598).
             message = "; ".join(sorted(set(errors.values())))
             code = "CREATIVE_NOT_FOUND" if creative_id in not_found_creative_ids else "VALIDATION_ERROR"
-            entry = _failed_sync_result(creative_id, message, code=code)
+            entry = _failed_sync_result(creative_id, message, recovery="correctable", code=code)
             entry.assignment_errors = errors
         results.append(entry)
 

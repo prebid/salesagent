@@ -213,15 +213,15 @@ class TestConfigurationErrorAdvisoryCarriesThePinnedPair:
 
     @pytest.mark.parametrize("transport", _ALL_TRANSPORTS, ids=lambda t: t.value)
     def test_update_path_missing_generative_key(self, integration_db, transport):
-        """Production's OWN AdCPConfigurationError raise, on the update-path arm.
+        """Missing account GEMINI key on the update-path generative arm.
 
         No injection: a generative format with no GEMINI_API_KEY configured is
-        the exact condition ``_update_existing_creative`` raises
-        ``AdCPConfigurationError`` for (``_processing.py`` :223-228), and it is
-        the deployment misconfiguration the ``except`` arm's comment names. It
-        must classify identically to the create-path arm (:434-442) — the same
-        fault on the same tool cannot carry two different pairs depending on
-        whether the creative already existed.
+        the exact condition ``_check_gemini_key_or_advisory`` grades. Per #1831
+        this seller-specific misconfiguration uses
+        ``X_PREBID_CREATIVE_GEMINI_KEY_MISSING`` / ``terminal`` (AdCP 3.1.1
+        seller-specific code shape), not ``CONFIGURATION_ERROR`` (which the
+        enum pairs with flipped transport failure markers unsuitable for a
+        success-path per-creative advisory).
         """
         from tests.factories import CreativeFactory
 
@@ -257,7 +257,7 @@ class TestConfigurationErrorAdvisoryCarriesThePinnedPair:
 
             _assert_pair(
                 _advisory(result, creative_id),
-                code="CONFIGURATION_ERROR",
+                code="X_PREBID_CREATIVE_GEMINI_KEY_MISSING",
                 recovery="terminal",
                 message_substr="GEMINI_API_KEY not configured",
             )

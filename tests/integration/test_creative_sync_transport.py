@@ -26,7 +26,13 @@ from src.core.database.models import Creative as DBCreative
 from src.core.exceptions import AdCPAuthenticationError, AdCPNotFoundError
 from tests.factories.creative_asset import build_assets, image_spec, text_spec
 from tests.harness import CreativeSyncEnv, Transport, assert_envelope, make_identity
-from tests.helpers.creative_test_helpers import assert_stored_creative_assets, creative_payload
+from tests.harness.transport import assert_wire_advisory
+from tests.helpers.creative_test_helpers import (
+    _EXPECTED_GEMINI_KEY_MISSING_SUGGESTION,
+    assert_gemini_key_missing_advisory,
+    assert_stored_creative_assets,
+    creative_payload,
+)
 
 
 def _error_messages(errors: list | None) -> list[str]:
@@ -1145,7 +1151,7 @@ class TestGeminiKeyMissing:
             fmt = env.setup_generative_build(gemini_api_key="")
 
             # Override: remove the gemini key after setup
-            env.mock["config"].return_value.gemini_api_key = None
+            env.clear_gemini_api_key()
 
             result = env.call_via(
                 transport,
@@ -1164,7 +1170,35 @@ class TestGeminiKeyMissing:
         assert_envelope(result, transport)
         creative_result = result.payload.creatives[0]
         assert creative_result.action == "failed"
-        assert any("gemini" in e.lower() for e in _error_messages(creative_result.errors))
+        errs = creative_result.errors or []
+        assert any("gemini" in e.lower() for e in _error_messages(errs))
+        assert_gemini_key_missing_advisory(errs)
+        # Wire transports must expose the nested advisory on the success-path body.
+        # CreativeSyncEnv A2A stashes a model_dump proxy (#1919) — refuse that as
+        # real-wire evidence; typed advisory above already graded the payload.
+        wire_is_proxy = bool(result.envelope.get("wire_response_is_proxy"))
+        if transport is not Transport.IMPL and not wire_is_proxy:
+            assert_wire_advisory(
+                result.wire_response,
+                "X_PREBID_CREATIVE_GEMINI_KEY_MISSING",
+                recovery="terminal",
+                suggestion=_EXPECTED_GEMINI_KEY_MISSING_SUGGESTION,
+                transport=transport,
+                response=result.payload,
+                require_real_wire=True,
+            )
+        elif wire_is_proxy:
+            assert transport is Transport.A2A
+            with pytest.raises(AssertionError, match="model_dump proxy"):
+                assert_wire_advisory(
+                    result.wire_response,
+                    "X_PREBID_CREATIVE_GEMINI_KEY_MISSING",
+                    recovery="terminal",
+                    transport=transport,
+                    response=result.payload,
+                    wire_is_proxy=True,
+                    require_real_wire=True,
+                )
 
 
 # ---------------------------------------------------------------------------

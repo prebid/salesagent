@@ -11,7 +11,12 @@ from pydantic import BaseModel
 
 from src.core.auth import require_identity, require_principal_id, require_tenant
 from src.core.database.repositories.uow import CreativeUoW
-from src.core.exceptions import AdCPError
+from src.core.exceptions import (
+    VALIDATION_ERROR_SUGGESTION,
+    AdCPError,
+    first_validation_error_field,
+    to_wire_error_code,
+)
 from src.core.helpers import log_tool_activity
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import SyncCreativeResult, SyncCreativesResponse
@@ -20,7 +25,12 @@ from src.core.webhook_validator import webhook_url_for_log
 from src.core.webhooks.registration import accept_push_notification_config
 
 from ._assignments import _process_assignments
-from ._processing import _create_new_creative, _failed_sync_result, _update_existing_creative
+from ._processing import (
+    _create_new_creative,
+    _failed_sync_result,
+    _service_unavailable_result,
+    _update_existing_creative,
+)
 from ._validation import _get_field, _validate_creative_input, check_provenance_required
 from ._workflow import _audit_log_sync, _create_sync_workflow_steps, _send_creative_notifications
 
@@ -44,7 +54,7 @@ def _sync_creatives_impl(
     delete_missing: bool = False,
     dry_run: bool = False,
     validation_mode: str = "strict",
-    push_notification_config: PushNotificationConfig | None = None,
+    push_notification_config: PushNotificationConfig | dict | None = None,
     context: ContextObject | dict | None = None,
     identity: ResolvedIdentity | None = None,
 ) -> SyncCreativesResponse:
@@ -107,12 +117,14 @@ def _sync_creatives_impl(
     # SEND-time gate and re-checks with DNS when the callback is actually dialed —
     # so no second address check belongs on this path.
     webhook_url = None
+    normalized_push_notification_config: PushNotificationConfig | None = None
     if push_notification_config:
         registration = accept_push_notification_config(
             push_notification_config,
             field_prefix="push_notification_config",
             context=context,
         )
+        normalized_push_notification_config = registration.config
         webhook_url = registration.url
         if webhook_url is not None and str(webhook_url).strip():
             # Log scheme+host+path only — never credentials / full auth blob.
@@ -165,7 +177,7 @@ def _sync_creatives_impl(
             )
 
         # Process each creative with proper transaction isolation
-        for creative_index, raw_creative in enumerate(creatives):
+        for raw_creative in creatives:
             try:
                 # Normalize to CreativeAsset model (handles dicts from A2A raw, BaseModel subclasses)
                 if isinstance(raw_creative, CreativeAsset):
@@ -180,20 +192,33 @@ def _sync_creatives_impl(
 
                 # Validate the creative against schema and business rules
                 try:
-                    validated_creative = _validate_creative_input(creative, registry, principal_id, creative_index)
+                    validated_creative = _validate_creative_input(creative, registry, principal_id)
                     format_value = validated_creative.format
 
                 except (ValidationError, ValueError) as validation_error:
                     # Creative failed validation - add to failed list
                     creative_id = creative.creative_id or "unknown"
                     # Format ValidationError nicely for clients, pass through ValueError as-is
+                    field: str | None = None
+                    suggestion: str | None = None
                     if isinstance(validation_error, ValidationError):
                         error_msg = format_validation_error(validation_error, context=f"creative {creative_id}")
+                        field = first_validation_error_field(validation_error)
+                        suggestion = VALIDATION_ERROR_SUGGESTION
                     else:
                         error_msg = str(validation_error)
                     failed_creatives.append({"creative_id": creative_id, "error": error_msg})
                     failed_count += 1
-                    results.append(_failed_sync_result(creative_id, error_msg))
+                    results.append(
+                        _failed_sync_result(
+                            creative_id,
+                            error_msg,
+                            code="VALIDATION_ERROR",
+                            recovery="correctable",
+                            field=field,
+                            suggestion=suggestion,
+                        )
+                    )
                     continue  # Skip to next creative
 
                 # Check provenance requirement (EU AI Act Article 50)
@@ -371,22 +396,17 @@ def _sync_creatives_impl(
                     {"creative_id": creative_id, "name": _get_field(raw_creative, "name"), "error": error_msg}
                 )
                 failed_count += 1
-                # Carry the typed error's OWN classification onto the per-item
-                # result. The default is SERVICE_UNAVAILABLE — now paired with the
-                # pin's `transient` rather than left empty — which for a
-                # correctable error reports the SELLER as unavailable for a
-                # problem in the buyer's own document, and drops the `field` that
-                # says which input to fix. That matters most for an egress
-                # refusal, whose message deliberately says nothing.
-                # The recovery is no longer forwarded: it derives from the code in
-                # wire_advisory, and the raise sites that used to hand-type a
-                # contradicting terminal no longer can.
+                # e.recovery is correctable/terminal here (transient re-raises above) —
+                # thread the typed error's own classification through.
                 results.append(
                     _failed_sync_result(
                         creative_id,
                         error_msg,
-                        code=e.error_code,
-                        field=getattr(e, "field", None),
+                        # to_wire_error_code (not e.error_code / e.wire_error_code):
+                        # advisories serialize verbatim and must not leak INTERNAL_CODES.
+                        code=to_wire_error_code(e.error_code),
+                        recovery=e.recovery,
+                        field=e.field,
                     )
                 )
             except Exception as e:
@@ -397,7 +417,7 @@ def _sync_creatives_impl(
                     {"creative_id": creative_id, "name": _get_field(raw_creative, "name"), "error": error_msg}
                 )
                 failed_count += 1
-                results.append(_failed_sync_result(creative_id, error_msg))
+                results.append(_service_unavailable_result(creative_id, error_msg))
 
         # Archive creatives not in the sync payload when delete_missing=True
         if delete_missing:
@@ -441,7 +461,7 @@ def _sync_creatives_impl(
             principal_id=principal_id,
             tenant=tenant,
             approval_mode=approval_mode,
-            push_notification_config=push_notification_config,
+            push_notification_config=normalized_push_notification_config,
             context=context,
             identity=identity,
         )

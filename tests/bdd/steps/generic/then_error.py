@@ -16,6 +16,65 @@ from tests.bdd.steps._outcome_helpers import payload_or_none, wire_error_envelop
 # ── Helpers ─────────────────────────────────────────────────────────
 
 
+def _nested_creative_advisory_error(ctx: dict) -> dict | None:
+    """First failed ``creatives[].errors[0]`` from a success-path ``wire_response``.
+
+    Per-creative advisories live inside a successful sync artifact (no
+    ``wire_error_envelope``). Delegates entirely to the single guarded harness
+    oracle (``tests.harness.transport.first_failed_creative_advisory``) so BDD
+    steps and integration tests share one traversal — including the "wire
+    present but the failed creative dropped errors[]" regression check.
+
+    Loud when a wire-stashing transport omitted ``wire_response`` **and** the
+    typed response already shows a failed creative (success+advisory path) —
+    the ``_response_has_failed_creative`` discriminator, shared from the
+    harness rather than reimplemented here. Soft ``None`` otherwise so
+    envelope-less error Then steps (UC003/UC019) keep the reconstructed
+    fallback — they never stash success-path wire.
+
+    When ``wire_response`` is a dict, ``ctx["transport"]`` MUST be set — defaulting
+    to an in-process / no-wire transport would disarm the loud guards.
+
+    CreativeSyncEnv A2A stashes a ``model_dump`` proxy (``wire_response_is_proxy``),
+    not Task/Artifact DataPart framing (#1919). BDD still grades that proxy's
+    *payload* (byte-identical to REST's ``model_dump``) so nested-advisory Then
+    steps stay live; callers that need genuine A2A framing pass
+    ``require_real_wire=True`` (integration) and refuse the proxy.
+    """
+    from tests.harness.transport import (
+        _response_has_failed_creative,
+        _transport_has_no_wire,
+        first_failed_creative_advisory,
+    )
+
+    wire = ctx.get("wire_response")
+    transport = ctx.get("transport")
+    response = payload_or_none(ctx)
+    result = ctx.get("result")
+    wire_is_proxy = bool(getattr(result, "envelope", None) and result.envelope.get("wire_response_is_proxy"))
+    if isinstance(wire, dict):
+        if transport is None:
+            raise AssertionError(
+                "wire_response present but ctx['transport'] unset — "
+                "refusing an implicit no-wire default that would disarm loud guards"
+            )
+        return first_failed_creative_advisory(
+            wire,
+            transport=transport,
+            response=response,
+            wire_is_proxy=wire_is_proxy,
+            # Payload content OK until #1919; framing-sensitive callers use True.
+            require_real_wire=False,
+        )
+    # No-wire / unset: no success-path wire to require.
+    if transport is None or _transport_has_no_wire(transport):
+        return None
+    if _response_has_failed_creative(response):
+        # Success+advisory on a wire transport without a stashed body — loud.
+        return first_failed_creative_advisory(None, transport=transport)
+    return None
+
+
 def _wire_code(ctx: dict) -> str | None:
     """Return the authoritative wire error code when a wire envelope was captured.
 
@@ -420,8 +479,9 @@ def then_error_recovery(ctx: dict, recovery: str) -> None:
     """Assert the error recovery hint matches — wire-first, reconstructed fallback.
 
     On a wire transport the recovery is read from the real envelope via
-    ``assert_wire_error`` (the buyer-facing contract); IMPL/no-wire scenarios
-    fall back to the reconstructed ``ctx['error']``.
+    ``assert_wire_error`` (the buyer-facing contract). Success+advisory sync
+    grades nested ``creatives[].errors[0].recovery`` on ``wire_response``.
+    IMPL/no-wire scenarios fall back to the reconstructed ``ctx['error']``.
     """
     envelope = wire_error_envelope_or_none(ctx)
     if envelope is not None:
@@ -429,14 +489,42 @@ def then_error_recovery(ctx: dict, recovery: str) -> None:
         assert wire_code, f"Expected wire error code when asserting recovery={recovery!r}: {envelope}"
         ctx["result"].assert_wire_error(wire_code, recovery=recovery)
         return
+    nested = _nested_creative_advisory_error(ctx)
+    if nested is not None:
+        wire = ctx.get("wire_response")
+        transport = ctx["transport"]
+        code = nested.get("code")
+        assert code, f"Expected nested advisory code when asserting recovery={recovery!r}: {nested}"
+        result = ctx.get("result")
+        wire_is_proxy = bool(getattr(result, "envelope", None) and result.envelope.get("wire_response_is_proxy"))
+        # Payload grading on CreativeSyncEnv A2A model_dump proxy stays allowed
+        # until #1919 (Chris GH #1802); require_real_wire=True would refuse that arm.
+        from tests.harness.transport import assert_wire_advisory
+
+        assert_wire_advisory(
+            wire,
+            code,
+            recovery=recovery,
+            transport=transport,
+            response=payload_or_none(ctx),
+            wire_is_proxy=wire_is_proxy,
+            require_real_wire=False,
+        )
+        return
     error = ctx.get("error")
     assert error is not None, "No error recorded in ctx"
     from src.core.exceptions import AdCPError
 
     if isinstance(error, AdCPError):
         assert error.recovery == recovery, f"Expected recovery '{recovery}', got '{error.recovery}'"
-    else:
-        raise AssertionError(f"Cannot check recovery on non-AdCPError: {type(error).__name__}")
+        return
+    # Per-creative / per-package advisory Error models — reuse _get_error_dict.
+    err_dict = _get_error_dict(error)
+    actual = err_dict.get("recovery")
+    if actual is not None:
+        assert actual == recovery, f"Expected recovery '{recovery}', got '{actual}'"
+        return
+    raise AssertionError(f"Cannot check recovery on {type(error).__name__}: {error!r}")
 
 
 @then('the error should include a "suggestion" field')

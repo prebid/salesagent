@@ -53,6 +53,9 @@ def serialize_tenant_to_dict(tenant: Tenant) -> dict[str, Any]:
         "account_approval_mode": tenant.account_approval_mode,
         "supported_billing": safe_json_loads(tenant.supported_billing, None),
         "gemini_api_key": tenant.gemini_api_key,
+        # Admin AI-settings UI writes here; creative-sync key resolution prefers
+        # ai_config.api_key over the legacy gemini_api_key column (#1831 / #1835).
+        "ai_config": tenant.ai_config,
         "creative_review_criteria": tenant.creative_review_criteria,
         "brand_manifest_policy": tenant.brand_manifest_policy,
         "advertising_policy": safe_json_loads(tenant.advertising_policy, None),

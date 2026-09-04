@@ -1816,6 +1816,11 @@ class TestGenerativeCreativeBuild:
         Note: mock_format_obj.format_id uses _adcp_format_id() (the library type)
         to match the CreativeAsset.format_id type from _make_creative_asset().
         FormatId equality requires same type instances.
+
+        ``gemini_key`` is returned for the caller to put on the **tenant**
+        dict — production creative-sync advisories are account-scoped and do
+        not read ``get_config().gemini_api_key``. The config mock is still
+        populated so unrelated surfaces stay consistent in the patch stack.
         """
         mock_format_obj = MagicMock()
         mock_format_obj.format_id = _adcp_format_id()
@@ -1826,6 +1831,16 @@ class TestGenerativeCreativeBuild:
         mock_config.gemini_api_key = gemini_key
 
         return mock_format_obj, mock_config
+
+    @staticmethod
+    def _tenant(*, gemini_key: str | None = "test-gemini-key") -> dict:
+        """Tenant dict for generative unit tests (account-scoped GEMINI key)."""
+        return {
+            "tenant_id": "t1",
+            "approval_mode": "auto-approve",
+            "slack_webhook_url": None,
+            "gemini_api_key": gemini_key,
+        }
 
     def test_format_with_output_format_ids_classified_as_generative(self):
         """Format with output_format_ids is classified as a generative creative.
@@ -1839,7 +1854,7 @@ class TestGenerativeCreativeBuild:
         from src.core.tools.creatives._processing import _create_new_creative
 
         mock_session = _make_mock_creative_repo()
-        tenant = {"tenant_id": "t1", "approval_mode": "auto-approve", "slack_webhook_url": None}
+        tenant = self._tenant()
         mock_format_obj, mock_config = self._setup_generative_mocks(mock_session)
 
         with (
@@ -1890,7 +1905,7 @@ class TestGenerativeCreativeBuild:
         from src.core.tools.creatives._processing import _create_new_creative
 
         mock_session = _make_mock_creative_repo()
-        tenant = {"tenant_id": "t1", "approval_mode": "auto-approve", "slack_webhook_url": None}
+        tenant = self._tenant()
         mock_format_obj, mock_config = self._setup_generative_mocks(mock_session)
 
         with (
@@ -1949,7 +1964,7 @@ class TestGenerativeCreativeBuild:
         from src.core.tools.creatives._processing import _create_new_creative
 
         mock_session = _make_mock_creative_repo()
-        tenant = {"tenant_id": "t1", "approval_mode": "auto-approve", "slack_webhook_url": None}
+        tenant = self._tenant()
         mock_format_obj, mock_config = self._setup_generative_mocks(mock_session)
 
         with (
@@ -1999,7 +2014,7 @@ class TestGenerativeCreativeBuild:
         from src.core.tools.creatives._processing import _create_new_creative
 
         mock_session = _make_mock_creative_repo()
-        tenant = {"tenant_id": "t1", "approval_mode": "auto-approve", "slack_webhook_url": None}
+        tenant = self._tenant()
         mock_format_obj, mock_config = self._setup_generative_mocks(mock_session)
 
         with (
@@ -2051,7 +2066,7 @@ class TestGenerativeCreativeBuild:
         from src.core.tools.creatives._processing import _create_new_creative
 
         mock_session = _make_mock_creative_repo()
-        tenant = {"tenant_id": "t1", "approval_mode": "auto-approve", "slack_webhook_url": None}
+        tenant = self._tenant()
         mock_format_obj, mock_config = self._setup_generative_mocks(mock_session)
 
         with (
@@ -2106,7 +2121,7 @@ class TestGenerativeCreativeBuild:
         from src.core.tools.creatives._processing import _create_new_creative
 
         mock_session = _make_mock_creative_repo()
-        tenant = {"tenant_id": "t1", "approval_mode": "auto-approve", "slack_webhook_url": None}
+        tenant = self._tenant()
         mock_format_obj, mock_config = self._setup_generative_mocks(mock_session)
 
         with (
@@ -2162,7 +2177,7 @@ class TestGenerativeCreativeBuild:
         from src.core.tools.creatives._processing import _update_existing_creative
 
         mock_session = MagicMock()
-        tenant = {"tenant_id": "t1", "approval_mode": "auto-approve", "slack_webhook_url": None}
+        tenant = self._tenant()
         mock_format_obj, mock_config = self._setup_generative_mocks(mock_session)
 
         mock_existing = MagicMock()
@@ -2223,7 +2238,7 @@ class TestGenerativeCreativeBuild:
         from src.core.tools.creatives._processing import _create_new_creative
 
         mock_session = _make_mock_creative_repo()
-        tenant = {"tenant_id": "t1", "approval_mode": "auto-approve", "slack_webhook_url": None}
+        tenant = self._tenant()
         mock_format_obj, mock_config = self._setup_generative_mocks(mock_session)
 
         with (
@@ -2279,13 +2294,15 @@ class TestGenerativeCreativeBuild:
         """Generative creative without GEMINI_API_KEY configured fails with clear error.
 
         GAP: BR-UC-006-ext-i -- Gemini key missing for generative.
-        Production code at _processing.py lines 520-525.
+        Production early-returns ``_gemini_key_missing_result`` in
+        ``_create_new_creative`` when ``gemini_api_key`` is unset.
         Covers: UC-006-EXT-I-01
         """
         from src.core.tools.creatives._processing import _create_new_creative
+        from tests.helpers.creative_test_helpers import assert_gemini_key_missing_advisory
 
         mock_session = _make_mock_creative_repo()
-        tenant = {"tenant_id": "t1", "approval_mode": "auto-approve", "slack_webhook_url": None}
+        tenant = self._tenant(gemini_key=None)
         mock_format_obj, mock_config = self._setup_generative_mocks(mock_session, gemini_key=None)
 
         with (
@@ -2319,7 +2336,66 @@ class TestGenerativeCreativeBuild:
             if hasattr(action_val, "value"):
                 action_val = action_val.value
             assert action_val == "failed"
-            assert any("GEMINI_API_KEY" in e.message for e in (result.errors or []))
+            errs = result.errors or []
+            assert any("GEMINI_API_KEY" in e.message for e in errs)
+            assert_gemini_key_missing_advisory(errs)
+
+    @pytest.mark.parametrize(
+        ("tenant_key", "ai_config_key", "global_key", "expect_advisory", "expected_key"),
+        [
+            ("tenant-key", None, None, False, "tenant-key"),
+            (None, "ai-config-key", None, False, "ai-config-key"),
+            (None, "ai-config-key", "global-key", False, "ai-config-key"),
+            ("tenant-key", "ai-config-key", None, False, "ai-config-key"),
+            (None, None, "global-key", True, None),
+            (None, None, None, True, None),
+            ("tenant-key", None, "global-key", False, "tenant-key"),
+        ],
+        ids=[
+            "legacy_column_only",
+            "ai_config_only",
+            "ai_config_ignores_global",
+            "ai_config_prefers_over_legacy",
+            "global_only_ignored",
+            "neither",
+            "legacy_with_global",
+        ],
+    )
+    def test_gemini_key_is_account_scoped(self, tenant_key, ai_config_key, global_key, expect_advisory, expected_key):
+        """Account-scoped key: ai_config.api_key first, then legacy column; never process-global.
+
+        An account that configured Gemini only via admin AI settings (``ai_config``)
+        must not receive a terminal missing-key advisory. Process-global alone must
+        not rescue a keyless tenant.
+        """
+        from types import SimpleNamespace
+        from unittest.mock import patch
+
+        from src.core.tools.creatives._processing import _check_gemini_key_or_advisory
+
+        tenant: dict = {"tenant_id": "t1"}
+        if tenant_key is not None:
+            tenant["gemini_api_key"] = tenant_key
+        if ai_config_key is not None:
+            tenant["ai_config"] = {"provider": "gemini", "api_key": ai_config_key}
+        mock_config = MagicMock()
+        mock_config.gemini_api_key = global_key
+        fmt = SimpleNamespace(id="display_gen")
+
+        with patch("src.core.config.get_config", return_value=mock_config):
+            out = _check_gemini_key_or_advisory(
+                "c1",
+                action_verb="create",
+                creative_format=fmt,
+                tenant=tenant,
+            )
+
+        if expect_advisory:
+            assert not isinstance(out, str)
+            errs = out.errors or []
+            assert errs and errs[0].code == "X_PREBID_CREATIVE_GEMINI_KEY_MISSING"
+        else:
+            assert out == expected_key
 
 
 # ============================================================================

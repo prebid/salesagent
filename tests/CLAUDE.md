@@ -487,7 +487,8 @@ and so cannot catch a serialization regression.
 |-----------|------------------------|-------|
 | REST | HTTP JSON body (`response.json()`) | Real wire; equals `raw_response.json()`. |
 | MCP  | `ToolResult.structured_content` (real wire) | Stored by `_run_mcp_client`. |
-| A2A  | Full artifact DataPart (real wire) | Stored by `_run_a2a_handler` before the `message`/`success` strip, so top-level envelope fields are present. |
+| A2A  | Full artifact DataPart (real wire), or a `model_dump()` proxy for envs blocked on a documented real-dispatch bug | Stored by `_run_a2a_handler` before the `message`/`success` strip (real wire), so top-level envelope fields are present. Envs that instead call the `_raw()` wrapper directly (e.g. `CreativeSyncEnv`) set `envelope["wire_response_is_proxy"] = True` — check that flag before treating `wire_response` as a genuine A2A-framing check. |
+| IMPL | `None` (no wire by definition) | Serialize the typed `payload` (`model_dump(mode="json")`) — exercises the production serializer, not transport framing. |
 
 See
 `tests/integration/test_harness_wire_response.py` (verifies that the field is

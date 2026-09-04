@@ -140,6 +140,150 @@ def _envelope_from_mcp_error(exc: Exception) -> dict[str, Any] | None:
     return None
 
 
+def _enum_value(x: Any) -> Any:
+    """Unwrap enum-or-str discriminators to a comparable value."""
+    return x.value if hasattr(x, "value") else x
+
+
+def _transport_has_no_wire(transport: Transport) -> bool:
+    """True when *transport* is IMPL (no success-path wire to stash)."""
+    return _enum_value(transport) == Transport.IMPL.value
+
+
+def _action_value(obj: Any) -> Any:
+    """Unwrap dict/enum/str action discriminators to a comparable value."""
+    if isinstance(obj, dict):
+        action = obj.get("action")
+        if isinstance(action, dict):
+            return action.get("value")
+        return _enum_value(action)
+    return _enum_value(getattr(obj, "action", None))
+
+
+def _iter_creative_entries(container: Any) -> list[Any]:
+    """Return the creatives list from a typed response or wire dict (no ``results`` key)."""
+    if container is None:
+        return []
+    if isinstance(container, dict):
+        return list(container.get("creatives") or [])
+    return list(getattr(container, "creatives", None) or [])
+
+
+def _response_has_failed_creative(response: Any) -> bool:
+    """True when a typed sync response carries a per-creative ``action == "failed"``.
+
+    Single home for the discriminator shared by ``first_failed_creative_advisory``
+    (wire-present-but-dropped-advisory case) and the BDD ``then_error`` reader
+    (wire-absent case) — decides whether a missing/advisory-free wire on a
+    wire-stashing transport is a buyer-facing regression (loud) vs a genuinely
+    envelope-only error path that never carries a success+advisory response
+    (soft ``None``, e.g. UC003/UC019 validation failures).
+    """
+    for creative in _iter_creative_entries(response):
+        if _action_value(creative) == "failed":
+            return True
+    return False
+
+
+def first_failed_creative_advisory(
+    wire: dict[str, Any] | None,
+    *,
+    transport: Transport,
+    response: Any = None,
+    wire_is_proxy: bool = False,
+    require_real_wire: bool = False,
+) -> dict[str, Any] | None:
+    """First failed ``creatives[].errors[0]`` from a success-path wire body.
+
+    Grades the buyer-facing nested advisory inside a successful ``sync_creatives``
+    artifact (no ``wire_error_envelope``). Filters to ``action == "failed"``.
+
+    Loud guards (same contract as BDD ``wire_dict`` / ``wire_field``):
+    - A wire-stashing transport (REST/A2A/MCP/…) that did not stash ``wire`` at
+      all raises unconditionally instead of silently returning ``None``.
+    - A wire-stashing transport that stashed a *present* wire whose failed
+      creative dropped ``errors[]`` — the buyer-facing regression this
+      accessor exists to catch — raises when the caller passes the typed
+      ``response`` and it shows a failed creative (``_response_has_failed_creative``).
+      Without ``response`` this case cannot be distinguished from "no failed
+      creative on the wire" and returns ``None``.
+    - When ``require_real_wire=True`` and ``wire_is_proxy=True`` (CreativeSyncEnv
+      A2A ``model_dump`` proxy — not Task/Artifact DataPart; see #1919), raises
+      instead of treating the proxy as real A2A framing evidence.
+
+    IMPL transport legitimately has no wire and returns ``None``.
+    """
+    if require_real_wire and wire_is_proxy:
+        raise AssertionError(
+            f"{transport}: wire_response is a model_dump proxy — not real A2A Task/Artifact "
+            "framing (see #1919); refuse require_real_wire grading"
+        )
+    no_wire = _transport_has_no_wire(transport)
+    if wire is None:
+        if no_wire:
+            return None
+        raise AssertionError(f"{transport}: wire_response missing — env does not stash success-path wire")
+    if not isinstance(wire, dict):
+        return None
+    for creative in _iter_creative_entries(wire):
+        if not isinstance(creative, dict):
+            continue
+        if _action_value(creative) != "failed":
+            continue
+        errs = creative.get("errors") or []
+        if errs and isinstance(errs[0], dict):
+            return errs[0]
+    if not no_wire and _response_has_failed_creative(response):
+        raise AssertionError(f"{transport}: advisory missing from wire body — failed creative dropped errors[]")
+    return None
+
+
+def assert_wire_advisory(
+    wire: dict[str, Any] | None,
+    code: str,
+    *,
+    recovery: str | None = None,
+    suggestion: str | None = None,
+    transport: Transport,
+    response: Any = None,
+    wire_is_proxy: bool = False,
+    require_real_wire: bool = False,
+) -> dict[str, Any] | None:
+    """Assert the first failed creative's nested advisory on the success-path wire.
+
+    On wire transports the advisory **must** be present (dropped ``errors[]`` is
+    a buyer-facing regression) — this call is unconditionally loud regardless of
+    ``response`` (see ``first_failed_creative_advisory``'s unconditional
+    missing-wire raise; callers here already know they expect an advisory). On
+    IMPL, returns ``None`` without asserting. When an advisory is present,
+    grades ``code`` and optional ``recovery`` and ``suggestion`` — the single
+    wire oracle for BDD Then-steps and integration tests alike.
+
+    Pass ``require_real_wire=True`` to refuse CreativeSyncEnv's A2A
+    ``model_dump`` proxy (``wire_is_proxy=True`` / envelope flag) — that path
+    is not Task/Artifact framing (#1919).
+    """
+    advisory = first_failed_creative_advisory(
+        wire,
+        transport=transport,
+        response=response,
+        wire_is_proxy=wire_is_proxy,
+        require_real_wire=require_real_wire,
+    )
+    if _transport_has_no_wire(transport):
+        return advisory
+    assert advisory, "advisory missing from wire body"
+    assert advisory.get("code") == code, f"unexpected wire advisory code: {advisory.get('code')!r}"
+    if recovery is not None:
+        actual = advisory.get("recovery")
+        actual_str = _enum_value(actual)
+        assert actual_str == recovery, f"unexpected wire advisory recovery: {actual_str!r}"
+    if suggestion is not None:
+        actual_suggestion = advisory.get("suggestion")
+        assert actual_suggestion == suggestion, f"unexpected wire advisory suggestion: {actual_suggestion!r}"
+    return advisory
+
+
 class Transport(StrEnum):
     """Dispatch transports for behavioral tests."""
 
@@ -298,9 +442,14 @@ class TransportResult:
         raw_response: Unprocessed transport response (httpx.Response, ToolResult, etc.).
         wire_response: Serialized success-path response body as a dict, captured
             from the real wire (REST HTTP JSON body, MCP structured_content, A2A
-            artifact DataPart). ``None`` on error and on IMPL (no wire — serialize
-            the typed ``payload`` instead). Lets success-path tests assert the
-            actual serialized shape (e.g. the v3.1 format_id federation contract).
+            artifact DataPart) for most envs. Some envs blocked on a documented
+            real-dispatch bug (e.g. ``CreativeSyncEnv``'s A2A path) instead stash
+            a re-serialized ``model_dump()`` proxy and flag
+            ``envelope["wire_response_is_proxy"] = True`` — that field is NOT the
+            real Task/Artifact framing for those envs. ``None`` on error and on
+            IMPL (no wire — serialize the typed ``payload`` instead). Lets
+            success-path tests assert the actual serialized shape (e.g. the v3.1
+            format_id federation contract).
         wire_error_envelope: Raw two-layer error envelope dict captured from
             the actual wire bytes (REST HTTP body, MCP ToolError content text,
             A2A failed-Task artifact DataPart). ``None`` on success or on the

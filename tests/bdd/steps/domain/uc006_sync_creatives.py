@@ -29,6 +29,7 @@ from tests.factories.creative_asset import (
     url_spec,
 )
 from tests.factories.principal import PrincipalFactory
+from tests.helpers.creative_test_helpers import _EXPECTED_GEMINI_KEY_MISSING_SUGGESTION
 
 # ═══════════════════════════════════════════════════════════════════════
 # E2E format helpers — real creative agent data for Docker transport
@@ -1496,8 +1497,12 @@ def _get_assignment_from_db(ctx: dict) -> object:
 def _assert_per_creative_failure(ctx: dict, expected_code: str) -> None:
     """Assert a per-creative failure with the expected error code.
 
-    Checks SyncCreativeResult.action=="failed" first, then falls back to ctx["error"].
+    Prefers production ``errors[].code`` on a failed SyncCreativeResult, then
+    falls back to message inference / ``ctx["error"]``. Typed production codes
+    hard-assert equality (no soft-xfail on mismatch).
     """
+    from adcp.types import Error as AdCPErrorDetail
+
     from src.core.exceptions import AdCPError
 
     resp = payload_or_none(ctx)
@@ -1509,21 +1514,29 @@ def _assert_per_creative_failure(ctx: dict, expected_code: str) -> None:
             if action_str == "failed":
                 errs = getattr(r, "errors", None) or []
                 if errs:
-                    inferred = _infer_error_code_from_message(str(errs[0]))
+                    first = errs[0]
+                    production_code = first.code if isinstance(first, AdCPErrorDetail) else getattr(first, "code", None)
+                    if production_code is not None:
+                        assert production_code == expected_code, (
+                            f"Expected errors[0].code={expected_code!r}, got {production_code!r} from {first!r}"
+                        )
+                        return
+                    inferred = _infer_error_code_from_message(str(first))
                     if inferred == expected_code:
                         return
-                    pytest.xfail(
-                        f"SPEC-PRODUCTION GAP: expected {expected_code}, inferred '{inferred}' "
-                        f"from error message: {errs[0]}"
+                    raise AssertionError(
+                        f"Expected errors[0].code={expected_code!r}, inferred {inferred!r} from error message: {first}"
                     )
     if error is not None:
         if isinstance(error, AdCPError) and error.error_code == expected_code:
             return
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: expected {expected_code}, got "
-            f"{type(error).__name__}(code={getattr(error, 'error_code', '?')}): {error}"
+        err_code = getattr(error, "code", None) or getattr(error, "error_code", None)
+        if err_code == expected_code:
+            return
+        raise AssertionError(
+            f"Expected error code={expected_code!r}, got {type(error).__name__}(code={err_code!r}): {error}"
         )
-    pytest.xfail(f"SPEC-PRODUCTION GAP: expected {expected_code} but no error occurred. Response: {resp}")
+    raise AssertionError(f"Expected error code={expected_code!r} but no error occurred. Response: {resp}")
 
 
 @then(parsers.parse('the result should be "{outcome}"'))
@@ -1585,7 +1598,7 @@ def then_uc006_result_should_be(ctx: dict, outcome: str) -> None:
         "CREATIVE_FORMAT_UNKNOWN",
         "CREATIVE_AGENT_UNREACHABLE",
         "CREATIVE_NAME_EMPTY",
-        "CREATIVE_GEMINI_KEY_MISSING",
+        "X_PREBID_CREATIVE_GEMINI_KEY_MISSING",
     ):
         _assert_per_creative_failure(ctx, outcome)
     elif outcome == "assignment updated":
@@ -2109,15 +2122,21 @@ def then_creative_action_failed(ctx: dict) -> None:
 def _promote_creative_errors_to_ctx(ctx: dict, errs: list) -> None:
     """Promote SyncCreativeResult.errors[] to ctx["error"] for downstream Then steps.
 
-    Production stores per-creative failures as plain strings in errors[]. Some
-    error strings contain structured info (e.g. "GEMINI_API_KEY not configured")
-    that downstream steps can parse. We wrap the first error as a synthetic object
-    with error_code/message/suggestion derived from the string content.
+    Prefer the typed production Error (``code`` / ``suggestion`` / ``recovery``)
+    when present. Older plain-string advisories fall back to message inference.
     """
+    from adcp.types import Error as AdCPErrorDetail
+
     if not errs:
         return
 
-    first_err = str(errs[0])
+    first = errs[0]
+    if isinstance(first, AdCPErrorDetail):
+        # Real adcp.types.Error — Then steps already understand .code/.message/.suggestion
+        ctx["error"] = first
+        return
+
+    first_err = str(first)
     error_code = _infer_error_code_from_message(first_err)
     suggestion = _infer_suggestion_from_message(first_err)
 
@@ -2142,7 +2161,7 @@ def _infer_error_code_from_message(msg: str) -> str:
     """Map production error strings to spec error codes."""
     lower = msg.lower()
     if "gemini_api_key" in lower and "not configured" in lower:
-        return "CREATIVE_GEMINI_KEY_MISSING"
+        return "X_PREBID_CREATIVE_GEMINI_KEY_MISSING"
     if "preview" in lower and ("failed" in lower or "no preview" in lower):
         return "CREATIVE_PREVIEW_FAILED"
     if "format" in lower and "required" in lower:
@@ -2153,10 +2172,15 @@ def _infer_error_code_from_message(msg: str) -> str:
 
 
 def _infer_suggestion_from_message(msg: str) -> str | None:
-    """Extract or generate a suggestion from a production error message."""
+    """Fallback suggestion for plain-string advisories (typed Errors promote as-is).
+
+    GEMINI path: return the shared test-side pin
+    ``_EXPECTED_GEMINI_KEY_MISSING_SUGGESTION`` (independent of the production
+    constant so drift still fails pins).
+    """
     lower = msg.lower()
     if "gemini_api_key" in lower:
-        return "Ask the seller to configure GEMINI_API_KEY in their agent settings"
+        return _EXPECTED_GEMINI_KEY_MISSING_SUGGESTION
     if "preview" in lower:
         return "Provide a media_url for the creative"
     return None
@@ -4489,9 +4513,9 @@ def given_creative_with_generative_format(ctx: dict) -> None:
 
 @given("the Seller Agent does not have GEMINI_API_KEY configured")
 def given_no_gemini_api_key(ctx: dict) -> None:
-    """Remove GEMINI_API_KEY from the config mock."""
+    """Remove GEMINI_API_KEY from the config mock (impl-only on e2e)."""
     env = ctx["env"]
-    env.mock["config"].return_value.gemini_api_key = None
+    env.clear_gemini_api_key()
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -4741,9 +4765,9 @@ def given_message_asset_no_gemini_key(ctx: dict) -> None:
     last_creative.setdefault("assets", {}).update(
         build_assets(text_spec("message", content="Generate a banner ad for summer sale"))
     )
-    # Remove GEMINI_API_KEY from config mock
+    # Remove GEMINI_API_KEY from config mock (impl-only on e2e)
     env = ctx["env"]
-    env.mock["config"].return_value.gemini_api_key = None
+    env.clear_gemini_api_key()
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -4821,8 +4845,8 @@ def given_creative_generative_no_gemini(ctx: dict) -> None:
     _ensure_tenant_principal(ctx, env)
     # Set up generative format but WITHOUT gemini key
     fmt = env.setup_generative_build(format_id="display_gen", gemini_api_key="test-gemini-key")
-    # Now remove the key — setup_generative_build sets it, we override
-    env.mock["config"].return_value.gemini_api_key = None
+    # Now remove the key — setup_generative_build sets it, we clear via env
+    env.clear_gemini_api_key()
     creative_payload = {
         "creative_id": "creative-gen-no-key-001",
         "name": "Generative No Key",

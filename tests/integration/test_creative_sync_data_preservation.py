@@ -121,8 +121,23 @@ def _setup_generative_registry(env: _DataPreservationEnv, format_id: str, output
     mock_registry.get_format = AsyncMock(return_value=mock_format)
     env.mock["registry"].return_value = mock_registry
 
-    # Enable Gemini API key for generative tests
+    # Account-scoped sole source for creative-sync GEMINI advisories — config
+    # mock alone no longer rescues a keyless tenant dict.
     env.mock["config"].return_value = MagicMock(gemini_api_key="test-gemini-key")
+    env._tenant_overrides["gemini_api_key"] = "test-gemini-key"
+    env._identity_cache.clear()
+    tenant_dict = getattr(env.identity, "tenant", None)
+    if isinstance(tenant_dict, dict):
+        tenant_dict["gemini_api_key"] = "test-gemini-key"
+    if env.use_real_db and env._session is not None:
+        from sqlalchemy import select
+
+        from src.core.database.models import Tenant
+
+        row = env._session.scalars(select(Tenant).filter_by(tenant_id=env._tenant_id)).first()
+        if row is not None:
+            row.gemini_api_key = "test-gemini-key"
+            env._commit_factory_data()
 
     return mock_registry
 

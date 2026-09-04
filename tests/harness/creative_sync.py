@@ -53,6 +53,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 from src.core.schemas import SyncCreativesResponse
 from tests.harness._base import IntegrationEnv
+from tests.harness._realize import e2e_unsupported, realize_e2e
 from tests.harness.egress import EgressHatchMixin
 from tests.harness.transport import DeliverResult
 
@@ -60,6 +61,26 @@ from tests.harness.transport import DeliverResult
 # push config, request model) rather than forwarding as skill parameters — see
 # tests/harness/_base.py. They must reach it untouched.
 _A2A_RESERVED_KWARGS = frozenset({"identity", "a2a_push_notification_config", "req"})
+
+
+def _clear_gemini_api_key_e2e(env: IntegrationEnv) -> None:
+    """Null the shared-DB tenant ``gemini_api_key`` so live e2e sees a keyless seller.
+
+    Production creative-sync advisories are account-scoped (tenant dict / DB
+    column only), so clearing the process env is unnecessary — the live server
+    re-reads the tenant row on each request.
+    """
+    from sqlalchemy import select
+
+    from src.core.database.models import Tenant
+
+    tenant = env.get_session().scalars(select(Tenant).filter_by(tenant_id=env._tenant_id)).first()
+    if tenant is not None:
+        tenant.gemini_api_key = None
+        env._commit_factory_data()
+    tenant_dict = getattr(env.identity, "tenant", None)
+    if isinstance(tenant_dict, dict):
+        tenant_dict["gemini_api_key"] = None
 
 
 class CreativeSyncEnv(EgressHatchMixin, IntegrationEnv):
@@ -110,6 +131,13 @@ class CreativeSyncEnv(EgressHatchMixin, IntegrationEnv):
         mock_config.gemini_api_key = None
         self.mock["config"].return_value = mock_config
 
+    @realize_e2e(
+        e2e_unsupported(
+            "generative build grading injects an in-process format mock and "
+            "registry.build_creative AsyncMock; the live e2e creative-agent "
+            "catalog cannot be stubbed mid-suite, and Then steps assert the mock (#1964)"
+        )
+    )
     def setup_generative_build(
         self,
         format_id: str = "display_gen",
@@ -122,8 +150,15 @@ class CreativeSyncEnv(EgressHatchMixin, IntegrationEnv):
         Sets up:
         - A format mock with output_format_ids (makes it generative)
         - build_creative AsyncMock with the given return value
-        - gemini_api_key on the config mock
+        - gemini_api_key on the account-scoped tenant dict (and config mock
+          for unrelated surfaces)
         - run_async to return the generative format list
+
+        In-process only (a2a/mcp/rest). Live e2e_rest cannot stub the
+        creative-agent catalog or observe ``registry.build_creative`` —
+        declare E2EUnsupportedSetup so the BDD hook non-strict-xfails e2e
+        (#1964; partial adoption — ``set_run_async_result`` and direct
+        registry pokes remain unwrapped).
 
         Returns a format_id dict for use in creative payloads::
 
@@ -158,10 +193,58 @@ class CreativeSyncEnv(EgressHatchMixin, IntegrationEnv):
         # Also configure get_format to return this format for validation
         registry.get_format = AsyncMock(return_value=mock_format)
 
-        # Set gemini API key
-        self.mock["config"].return_value.gemini_api_key = gemini_api_key
+        # Account-scoped key is the sole advisory source; keep config mock
+        # aligned for unrelated surfaces. Prefer ``set_gemini_keys`` when the
+        # surfaces must diverge.
+        self.set_gemini_keys(tenant=gemini_api_key, global_key=gemini_api_key)
 
         return {"agent_url": agent, "id": format_id}
+
+    def set_gemini_keys(
+        self,
+        *,
+        tenant: str | None = None,
+        global_key: str | None = None,
+    ) -> None:
+        """Set tenant and process-global GEMINI keys independently.
+
+        Production creative-sync advisories read only
+        ``tenant["gemini_api_key"]`` (account-scoped). ``call_via`` builds a
+        per-protocol identity via ``identity_for`` *after* setup, and MCP/REST
+        with a real auth token re-load the tenant from the DB — so this setter
+        MUST (1) stash the key in ``_tenant_overrides`` and clear the identity
+        cache, (2) update any already-cached tenant dicts, and (3) persist the
+        DB column when a session is bound. The config mock remains writable so
+        regression arms can still set a process-global key that must *not*
+        rescue a keyless tenant.
+        """
+        self.mock["config"].return_value.gemini_api_key = global_key
+        # Future identity_for builds (all protocols) pick this up via make_tenant.
+        self._tenant_overrides["gemini_api_key"] = tenant
+        for ident in self._identity_cache.values():
+            tenant_dict = getattr(ident, "tenant", None)
+            if isinstance(tenant_dict, dict):
+                tenant_dict["gemini_api_key"] = tenant
+        # Drop cached identities so the next call_via rebuilds with overrides.
+        self._identity_cache.clear()
+        if self.use_real_db and self._session is not None:
+            from sqlalchemy import select
+
+            from src.core.database.models import Tenant
+
+            row = self._session.scalars(select(Tenant).filter_by(tenant_id=self._tenant_id)).first()
+            if row is not None:
+                row.gemini_api_key = tenant
+                self._commit_factory_data()
+
+    @realize_e2e(_clear_gemini_api_key_e2e)
+    def clear_gemini_api_key(self) -> None:
+        """Clear account-scoped GEMINI key (tenant dict + config mock).
+
+        E2E: null the shared-DB tenant column so the live server sees a keyless
+        seller even when the process still has ``GEMINI_API_KEY`` injected.
+        """
+        self.set_gemini_keys(tenant=None, global_key=None)
 
     def set_run_async_result(self, formats: list[Any]) -> None:
         """Configure run_async_in_sync_context to return *formats*.

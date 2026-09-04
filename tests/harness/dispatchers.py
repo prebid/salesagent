@@ -83,9 +83,10 @@ class ImplDispatcher:
 class A2ADispatcher:
     """Dispatch via ``handler.on_message_send`` — exercises the full A2A pipeline.
 
-    ``env.call_a2a`` drives ``AdCPRequestHandler.on_message_send`` end-to-end
-    (message parsing → skill routing → handler dispatch → ``_serialize_for_a2a``
-    → Task/Artifact framing). On a failed Task, the harness reconstructs the
+    ``env.call_a2a`` for envs that drive ``AdCPRequestHandler.on_message_send``
+    end-to-end (message parsing → skill routing → handler dispatch →
+    ``_serialize_for_a2a`` → Task/Artifact framing) stashes the real
+    Task/Artifact DataPart. On a failed Task, the harness reconstructs the
     ``AdCPError`` from the artifact DataPart and stashes the real wire
     envelope on the exception via ``_wire_error_envelope`` — read off it by
     ``client.py``'s ``unwrap_a2a_error``, the one A2A error unwrap.
