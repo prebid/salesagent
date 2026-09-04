@@ -44,6 +44,8 @@ from pathlib import Path
 
 import pytest
 
+from tests._collection_manifest import load, manifest_dir
+
 _BDD_DIR = Path(__file__).resolve().parents[1] / "bdd"
 _CONFTEST = _BDD_DIR / "conftest.py"
 
@@ -369,24 +371,25 @@ class TestTheRoutingOutcome:
         per-transport rows to deselection and everything else to selection) reds nothing,
         because no test in the lane runs collection and asserts which rows survive.
 
-        So this runs the real collection and names the rows. It is a subprocess because
-        the hook under test lives in ``tests/bdd/conftest.py`` and only fires for a
-        session rooted there; importing it would test a function, not the wiring.
+        So this reads which rows survived a REAL collection. It needs an UNFILTERED
+        record: `[testenv:bdd_e2e]` runs `pytest tests/bdd/ -k e2e_rest`, where every
+        mcp/rest row is deselected by the `-k` expression rather than by the exemption
+        this grades, so `selected` there answers a different question. `filter=""`
+        demands a record with no `-k`/`-m` narrowing — a shard on the sharded path,
+        `[testenv:bdd]` on the plain one — and `target=None` because a shard's target is
+        its file list, which moves whenever a bdd file is added.
         """
-        import subprocess
-
-        completed = subprocess.run(
-            ["uv", "run", "pytest", str(_UC003_MODULE), "--collect-only", "-q", "-p", "no:randomly"],
-            capture_output=True,
-            text=True,
-            cwd=_REPO_ROOT,
-            timeout=300,
+        rows = load(manifest_dir(), target=None, filter="")
+        uc003 = f"{_UC003_MODULE.relative_to(_REPO_ROOT).as_posix()}::"
+        module_rows = [row for row in rows if row["nodeid"].startswith(uc003)]
+        assert module_rows, (
+            f"no collected rows for {uc003} in any unfiltered collection record. Without them this test grades nothing."
         )
 
-        collected = completed.stdout
-        assert "error" not in collected.lower() or "collected" in collected, (
-            f"collection did not complete:\n{completed.stdout[-2000:]}\n{completed.stderr[-2000:]}"
-        )
+        def _is_mcp_or_rest(nodeid: str) -> bool:
+            return any(token in nodeid for token in ("[mcp-", "[rest-", "[mcp]", "[rest]"))
+
+        _CONFLICT_TOKENS = ("stale_revision", "ahead_revision", "revision below current", "revision above current")
 
         # The CONFLICT rows carry cause=production-gap scope=per-transport ref=#1607, so
         # the exemption must keep their mcp and rest copies. If the predicate inverts,
@@ -397,13 +400,11 @@ class TestTheRoutingOutcome:
         # survive either way — the assertion was reading the wrong population, which is
         # this child's own defect in its own grader.
         protected = [
-            line
-            for line in collected.splitlines()
-            if ("[mcp-" in line or "[rest-" in line)
-            and any(
-                token in line
-                for token in ("stale_revision", "ahead_revision", "revision below current", "revision above current")
-            )
+            row["nodeid"]
+            for row in module_rows
+            if row["selected"]
+            and _is_mcp_or_rest(row["nodeid"])
+            and any(token in row["nodeid"] for token in _CONFLICT_TOKENS)
         ]
 
         assert len(protected) == 8, (
@@ -411,5 +412,20 @@ class TestTheRoutingOutcome:
             f"{len(protected)}. These carry `cause=production-gap scope=per-transport "
             f"ref=#1607`, so the exemption must keep them; losing them means the "
             f"predicate is inverted or gone. No AST-shape assertion in this file can see "
-            f"that — only running the collection can.\n" + "\n".join(protected)
+            f"that — only reading a real collection can.\n" + "\n".join(protected)
+        )
+
+        # Positive control. The count above is a survival assertion, so it cannot tell
+        # "the exemption kept these 8" from "nothing was deselected at all" — which is
+        # what BDD_ALL_TRANSPORTS=1 (tests/bdd/conftest.py) produces by disabling the
+        # exemption outright, with `filter` still empty. Requiring that SOME mcp/rest row
+        # was deselected reds under both an inverted predicate and an all-transports run.
+        deselected_mcp_or_rest = [
+            row["nodeid"] for row in module_rows if not row["selected"] and _is_mcp_or_rest(row["nodeid"])
+        ]
+        assert deselected_mcp_or_rest, (
+            "no mcp/rest row in this module was deselected, so the 8 above survived a "
+            "collection that deselected nothing. Either the exemption is disabled "
+            "(BDD_ALL_TRANSPORTS=1) or the deselection is gone; in both cases the count "
+            "above passes while grading nothing."
         )

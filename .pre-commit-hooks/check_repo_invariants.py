@@ -7,6 +7,7 @@ Each check function returns a list of "<file>:<line>: <message>" strings.
 from __future__ import annotations
 
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -90,7 +91,35 @@ def check_no_unresolvable_citations(files: list[Path]) -> list[str]:
 CHECKS = [check_no_skip_tests, check_no_fn_calls, check_no_unresolvable_citations]
 
 
+def _merge_in_progress() -> bool:
+    """True while a merge is being concluded.
+
+    A merge STAGES THE OTHER SIDE WHOLESALE -- every file the incoming branch
+    touched, whether or not the person merging wrote a line of it. This hook
+    grades AUTHORED changes: a citation is a thing its author chose. Run it over
+    a merge and it grades the other branch's entire backlog instead, and the
+    person merging is handed a list they cannot honestly fix (they do not know
+    which issue each of someone else's notes meant).
+
+    Measured when this exemption was added: merging origin/main reported 283
+    violations, none of them written by the merge.
+
+    The guard is not weakened for authored work -- the same files are graded on
+    the next ordinary commit that touches them, by whoever touches them. What is
+    given up is catching a violation at the moment it ARRIVES via a merge rather
+    than when it is next edited.
+    """
+    git_dir = subprocess.run(
+        ["git", "rev-parse", "--git-dir"], capture_output=True, text=True, check=False
+    ).stdout.strip()
+    return bool(git_dir) and (Path(git_dir) / "MERGE_HEAD").exists()
+
+
 def main(argv: list[str]) -> int:
+    if _merge_in_progress():
+        print("repo-invariants: skipped (merge in progress; grades authored changes)", file=sys.stderr)
+        return 0
+
     files = [Path(p) for p in argv[1:] if p.endswith(".py")]
     if not files:
         # When invoked with no filenames (always_run-style), scan tests/ and src/

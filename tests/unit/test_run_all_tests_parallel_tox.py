@@ -55,7 +55,7 @@ printf '%s\\n' "$*" >> "$DOCKER_STUB_LOG"
 case "$*" in
   *tox*)
     mkdir -p .tox
-    for _s in unit integration bdd bdd_inprocess bdd_e2e admin e2e ui storyboard; do
+    for _s in unit integration bdd bdd_inprocess bdd_e2e admin e2e ui storyboard collection; do
       printf '%s' '{"summary": {"collected": 1, "total": 1, "passed": 1, "deselected": 0}, "exitcode": 0}' \\
         > ".tox/${_s}.json"
     done

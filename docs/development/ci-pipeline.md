@@ -73,7 +73,7 @@ uv run pytest $(uv run python scripts/ci/shard_paths.py bdd 1)
 
 **Load metric note:** greedy assignment balances Gherkin `Scenario` line counts (~920 total). Collected pytest items are much higher (~9×) because each scenario expands by `Examples:` rows and transport parametrization. Wall-clock is dominated by slow DB-heavy scenarios, not test volume — the reason 2 shards was chosen over 3–4.
 
-Structural guard: `tests/unit/test_architecture_ci_bdd_shard_manifest.py`.
+Structural guard: `tests/collection/test_architecture_ci_bdd_shard_manifest.py`.
 
 ## Integration Test Shards
 

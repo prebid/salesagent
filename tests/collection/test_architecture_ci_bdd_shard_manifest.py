@@ -2,9 +2,6 @@
 
 from __future__ import annotations
 
-import re
-import subprocess
-import sys
 from pathlib import Path
 
 import pytest
@@ -18,59 +15,35 @@ from scripts.ci.shard_split import (
     list_suite_files,
 )
 from scripts.ci.workflow_helpers import CI_WORKFLOW_PATH
+from tests._collection_manifest import BDD_TREE, load, manifest_dir
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
-_COLLECT_TAG = re.compile(r"^<(Dir|Package|Module) ([^>]+)>$")
 
 
-def _pytest_bdd_module_paths(repo_root: Path) -> set[str]:
-    """Collect BDD test module paths via pytest (independent of shard_split glob)."""
-    result = subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "pytest",
-            "tests/bdd/",
-            "--collect-only",
-            "-q",
-            "--no-header",
-        ],
-        capture_output=True,
-        text=True,
-        cwd=str(repo_root),
-        timeout=120,
-        check=False,
-    )
-    if result.returncode != 0:
-        msg = result.stderr.strip() or result.stdout.strip() or f"exit {result.returncode}"
-        pytest.fail(f"pytest --collect-only tests/bdd/ failed: {msg}")
+def _pytest_bdd_module_paths() -> set[str]:
+    """Every BDD module the real run collected, independent of shard_split's glob.
 
-    stack: list[str] = []
-    paths: set[str] = set()
-    for line in result.stdout.splitlines():
-        stripped = line.strip()
-        match = _COLLECT_TAG.match(stripped)
-        if match is None:
-            continue
-        kind, name = match.groups()
-        if kind == "Module":
-            if "bdd" not in stack:
-                continue
-            bdd_idx = stack.index("bdd")
-            if bdd_idx < 1:
-                continue
-            paths.add("/".join(stack[bdd_idx - 1 : bdd_idx + 1] + [name]))
-        elif kind in {"Dir", "Package"}:
-            stack.append(name)
+    Reads the FULL-TREE record, never a shard's. A shard is invoked with the
+    paths `shard_paths.py` produced, so its rows ARE the assignment, and
+    comparing those against `assign_files_to_shards()` below would be circular:
+    a file the glob misses is absent from both sides and the guard would agree
+    with itself. `[testenv:bdd]` and `[testenv:bdd_e2e]` are both invoked as
+    `pytest tests/bdd/`, so the full-tree record exists on either run path and
+    is derived from pytest's own collection rather than from the glob.
 
+    `-k e2e_rest` on the bdd_e2e path is irrelevant here: rows are retained
+    before deselection, so the module set is complete either way.
+    """
+    rows = load(manifest_dir(), target=BDD_TREE)
+    paths = {row["nodeid"].split("::")[0] for row in rows}
     if not paths:
-        pytest.fail("pytest --collect-only tests/bdd/ returned no BDD module paths")
+        pytest.fail("the full-tree collection record contains no BDD module paths")
     return paths
 
 
 @pytest.mark.arch_guard
 def test_bdd_shards_partition_suite() -> None:
-    expected = _pytest_bdd_module_paths(_REPO_ROOT)
+    expected = _pytest_bdd_module_paths()
     buckets = assign_files_to_shards("bdd", repo_root=_REPO_ROOT)
     assigned = {path for paths in buckets.values() for path in paths}
 

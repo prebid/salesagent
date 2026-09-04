@@ -52,8 +52,10 @@ itself, not inferred from the file's absence.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -63,6 +65,7 @@ from pytest_bdd.exceptions import StepDefinitionNotFoundError
 from pytest_bdd.scenario import get_step_function
 
 from scripts.audit import storyboard_spec
+from scripts.ci import shard_split
 from tests.helpers.ledger import load_ledger_nodeids
 from tests.helpers.marker_names import derive_marker_names
 
@@ -170,6 +173,11 @@ _WORKEROUTPUT_KEY = "bdd_scenario_liveness"
 #: Controller-side merge target: ``scenario_id -> record dict``, folded from every
 #: worker's shard plus the controller's own (empty under xdist) records.
 _SHARDS: dict[str, dict[str, Any]] = {}
+
+#: Every xdist worker the controller saw shut down, and the subset that shipped
+#: its records. A worker in the first set and not the second lost its scenarios.
+_WORKERS_SEEN: set[str] = set()
+_WORKERS_REPORTED: set[str] = set()
 
 
 def _scenario_identifier(scenario: Scenario, feature: Feature) -> str | None:
@@ -357,10 +365,94 @@ def pytest_testnodedown(node: Any, error: Any) -> None:
     xdist calls this for every node BEFORE the controller's ``runtestloop``
     returns — i.e. before the controller's own ``pytest_sessionfinish`` — so the
     merged artifact below is complete. This is the pattern pytest-cov uses.
+
+    A worker that ships nothing is RECORDED, not skipped. This hook used to read
+    ``if workeroutput and key in workeroutput`` and do nothing otherwise, so a
+    worker that died took its scenarios with it and the controller published a
+    file that looked whole. Nothing downstream could tell: the run scope is
+    written from the controller's own session, so it describes the full target
+    list either way.
+
+    Losing records is therefore not detected here — it is made unrepresentable.
+    The file names every worker that failed to report, and ``load_run`` refuses
+    a file that names any.
     """
+    worker_id = getattr(getattr(node, "gateway", None), "id", None) or repr(node)
+    _WORKERS_SEEN.add(worker_id)
+
     workeroutput = getattr(node, "workeroutput", None)
     if workeroutput and _WORKEROUTPUT_KEY in workeroutput:
         _merge_shard(workeroutput[_WORKEROUTPUT_KEY])
+        _WORKERS_REPORTED.add(worker_id)
+
+
+IN_PROCESS_TRANSPORTS = frozenset({"mcp", "a2a", "rest"})
+
+#: Per-session artifact files live beside the merged one. Two shards are two
+#: SEPARATE pytest sessions, so both wrote the single merged path and the last
+#: one won -- see `_run_scope`'s `target`.
+_SESSIONS_DIRNAME = "liveness-sessions"
+
+#: Where the per-session files live. Named by the runner so the directory is
+#: PER RUN, exactly as `PYTEST_COLLECTION_MANIFEST` is: `artifact_path()` points
+#: at a stable top-level file, so deriving the directory from it alone leaves
+#: yesterday's sessions sitting beside today's, where they satisfy the coverage
+#: check and get merged into the measurement. One resolver, used by the writer
+#: and by every reader, so the two cannot disagree about which run is being read.
+SESSIONS_ENV_VAR = "BDD_LIVENESS_SESSIONS"
+
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _relative_target(config: pytest.Config) -> list[str]:
+    """The invocation paths, relative to rootdir, normalized and sorted."""
+    rootdir = Path(str(config.rootdir)).resolve()
+    targets = []
+    for arg in config.args:
+        path = Path(str(arg).split("::", 1)[0])
+        try:
+            targets.append(path.resolve().relative_to(rootdir).as_posix().rstrip("/") or ".")
+        except ValueError:
+            targets.append(str(arg))
+    return sorted(set(targets))
+
+
+def _write_sessions_dir() -> Path:
+    """Where THIS session writes its file. Falls back, because writing is harmless."""
+    override = os.environ.get(SESSIONS_ENV_VAR)
+    return Path(override) if override else artifact_path().parent / _SESSIONS_DIRNAME
+
+
+def sessions_dir() -> Path:
+    """Where a READER finds this run's sessions. Refuses to guess.
+
+    Deliberately asymmetric with `_write_sessions_dir` above, and the asymmetry
+    is the point. A writer that falls back to the shared top-level directory
+    costs nothing. A READER that falls back silently grades whatever previous
+    runs left there — which is exactly how this went unnoticed once already:
+    `BDD_LIVENESS_SESSIONS` was absent from docker-compose's curated env block,
+    the resolver fell back, and run innet_020926_1010 read a shared directory
+    while appearing to honour a per-run one. Raising makes that misconfiguration
+    a failure instead of a quietly weaker measurement.
+
+    Mirrors `tests/_collection_manifest.manifest_dir()`, which refuses the same
+    way for the same reason.
+    """
+    override = os.environ.get(SESSIONS_ENV_VAR)
+    if not override:
+        raise IncompleteLivenessRun(
+            f"{SESSIONS_ENV_VAR} is unset, so there is no way to tell THIS run's "
+            "liveness sessions from any other run's. run_all_tests.sh and "
+            "run_all_tests_host.sh export it per run; docker-compose.e2e.yml "
+            "forwards it into the test container."
+        )
+    return Path(override)
+
+
+def _session_filename(scope: dict[str, Any]) -> str:
+    """A name no two concurrent sessions can share, derived from the scope."""
+    key = json.dumps([scope["target"], scope["selection"], scope["markers"]], sort_keys=True)
+    return f"{hashlib.sha256(key.encode('utf-8')).hexdigest()[:12]}.json"
 
 
 def _run_scope(session: pytest.Session) -> dict[str, Any]:
@@ -383,10 +475,20 @@ def _run_scope(session: pytest.Session) -> dict[str, Any]:
     config = session.config
     return {
         "collected": session.testscollected,
+        # The PATHS this session was invoked with. `selection`/`markers` below
+        # cover a -k/-m narrowing; a SHARD narrows by neither -- it is handed a
+        # file list. Without this a shard's artifact is indistinguishable from a
+        # whole-suite one, which is exactly how the published file came to
+        # describe 9 of 21 modules while claiming to measure the suite.
+        "target": _relative_target(config),
         "selection": getattr(config.option, "keyword", "") or "",
         "markers": getattr(config.option, "markexpr", "") or "",
         "deselected": len(getattr(session, "deselected", ()) or ()),
         "workers": len(getattr(config, "workerinput", {})) or _worker_count(config),
+        # Which workers shut down without shipping records. Empty on a healthy
+        # run and on a serial one. A reader refuses a file where this is not
+        # empty, so a lost shard cannot be read as a complete measurement.
+        "workers_missing": sorted(_WORKERS_SEEN - _WORKERS_REPORTED),
         "exitstatus": int(session.exitstatus or 0),
         "testsfailed": int(session.testsfailed or 0),
     }
@@ -423,7 +525,7 @@ def pytest_sessionfinish(session: pytest.Session) -> None:
     # empty file — so the next artifact regeneration silently reports liveness
     # as 0 for every check.
     #
-    # This is not hypothetical. tests/unit/test_architecture_env_route_agreement.py
+    # This is not hypothetical. tests/collection/test_architecture_env_route_agreement.py
     # shells out to `pytest tests/bdd --collect-only` to derive its marker sets,
     # which means `make quality` destroyed the liveness artifact on every run and
     # the published "graded by a LIVE scenario" figure could not be reproduced by
@@ -434,7 +536,144 @@ def pytest_sessionfinish(session: pytest.Session) -> None:
     # Controller (or a serial run): merge this process's own records over any
     # shards received, then write once.
     _merge_shard([_RECORDS[k].to_dict() for k in sorted(_RECORDS)])
-    path = artifact_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
     artifact = {"run": _run_scope(session), "scenarios": [_SHARDS[k] for k in sorted(_SHARDS)]}
-    path.write_text(json.dumps(artifact, indent=2, sort_keys=False) + "\n", encoding="utf-8")
+    body = json.dumps(artifact, indent=2, sort_keys=False) + "\n"
+
+    # ALSO write a per-session copy, so a second session cannot silently replace
+    # this measurement with its own. The merged path is kept as-is because other
+    # consumers read it by name; the directory is what `load_run` folds.
+    sessions = _write_sessions_dir()
+    _write(artifact_path(), body)
+    _write(sessions / _session_filename(artifact["run"]), body)
+
+
+def _write(path: Path, body: str) -> None:
+    """Write one artifact file, reporting a write failure instead of raising.
+
+    A diagnostic never changes the outcome of the thing it measures. Both the
+    mkdir and the write raise on an unwritable parent, on a path occupied by a
+    regular file, and on a full disk; an exception out of `pytest_sessionfinish`
+    is an unhandled error, so a suite whose scenarios all passed exits nonzero
+    with no summary line. This plugin is registered for EVERY bdd session
+    (tests/bdd/conftest.py), which makes that the ordinary case rather than a
+    corner.
+
+    Losing the artifact is not silent, and that is why swallowing the write is
+    safe here: every consumer fails CLOSED on a missing or empty artifact --
+    `scripts/audit/scenario_liveness_join.load_artifact` refuses an empty file,
+    and `load_run` raises `IncompleteLivenessRun` when the session files do not
+    add up to the suite. The absence is detected where it is read, so it does
+    not also need to fail the run that produced it.
+
+    OSError, not Exception: PermissionError, FileExistsError, IsADirectoryError
+    and ENOSPC are all subclasses of it, while a defect in the artifact dict
+    stays loud instead of being hidden by the guard that tolerates a read-only
+    disk.
+    """
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(body, encoding="utf-8")
+    except OSError as exc:
+        print(f"[scenario-liveness] could not write the artifact to {path}: {exc}", file=sys.stderr)
+
+
+class IncompleteLivenessRun(RuntimeError):
+    """The session files on disk do not add up to a measurement of the suite.
+
+    Raised rather than returning what was found. A consumer handed a partial
+    artifact asks its question of a partial population and passes, which is the
+    failure this whole artifact exists to prevent -- and is what the single
+    fixed write path produced for as long as the suite was sharded.
+    """
+
+
+def _project_in_process(record: dict[str, Any]) -> dict[str, Any]:
+    """One scenario, as the in-process transports alone measured it.
+
+    The record-level fields are DERIVED from observations, so filtering the
+    observations without re-deriving them leaves a record whose summary
+    describes a population its own observation list no longer contains. That is
+    not hypothetical: `ledgered` is set from an e2e_rest nodeid, so the three
+    uc005 scenarios ledgered only on e2e_rest carry `ledgered=True` while every
+    in-process run of them passes.
+
+    Re-derivation replays through `ScenarioLiveness.record_observation`, the
+    single owner of that rule, rather than restating it here.
+    `steps_bound`/`unbound_steps` are carried through instead: they come from
+    `record_unbound`, never from an observation, and an unbound step is unbound
+    on every transport.
+    """
+    replay = ScenarioLiveness(scenario_id=record["scenario_id"], feature=record.get("feature", ""))
+    kept = [o for o in record["observations"] if o.get("transport") in IN_PROCESS_TRANSPORTS]
+    for obs in kept:
+        replay.record_observation(
+            Observation(
+                nodeid=obs["nodeid"],
+                transport=obs["transport"],
+                outcome=obs["outcome"],
+                reason=obs.get("reason", ""),
+                reason_category=obs["reason_category"],
+            )
+        )
+    projected = dict(record)
+    projected["observations"] = kept
+    projected["ledgered"] = replay.ledgered
+    projected["harness_wired"] = replay.harness_wired
+    return projected
+
+
+def load_run(directory: str | Path) -> dict[str, Any]:
+    """Every scenario the real run measured, merged across sessions.
+
+    Folds the per-session files with the same `_merge_record` the controller
+    already uses for workers, then projects each scenario onto the in-process
+    transports.
+
+    A FILTERED session is skipped rather than refused: on the fast path
+    `[testenv:bdd_e2e]` always writes one (`-k e2e_rest`) beside the shards, so
+    refusing on its presence would red every such run. Skipping it and letting
+    the coverage check below decide is the single-valued rule. The exclusion is
+    still load-bearing -- bdd_e2e's TARGET is the whole tree, so a path-only
+    check would accept it, and its in-process projection is empty for every
+    scenario at once.
+    """
+    directory = Path(directory)
+    merged: dict[str, dict[str, Any]] = {}
+    covered: set[str] = set()
+    for path in sorted(directory.glob("*.json")):
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        scope = payload.get("run", {})
+        if scope.get("selection") or scope.get("markers"):
+            continue
+        missing = scope.get("workers_missing") or []
+        if missing:
+            raise IncompleteLivenessRun(
+                f"{path.name} was written by a session whose workers {missing} shut down "
+                "without shipping their records, so the scenarios they ran are absent from "
+                "it. The file is a partial measurement wearing a whole run's target list."
+            )
+        covered.update(scope.get("target", []))
+        for record in payload.get("scenarios", []):
+            existing = merged.get(record["scenario_id"])
+            merged[record["scenario_id"]] = record if existing is None else _merge_record(existing, record)
+
+    expected = {Path(f).as_posix() for f in shard_split.list_suite_files("bdd", repo_root=_REPO_ROOT)}
+    if not _covers(covered, expected):
+        raise IncompleteLivenessRun(
+            f"the liveness sessions in {directory} cover {sorted(covered) or 'nothing'}, "
+            f"which does not account for the {len(expected)} BDD modules. A partial "
+            "measurement cannot be graded as the suite."
+        )
+    return {"scenarios": {k: _project_in_process(v) for k, v in merged.items()}}
+
+
+def _covers(targets: set[str], expected: set[str]) -> bool:
+    """True when the union of session targets accounts for every BDD module.
+
+    Two shapes reach here. A session invoked on the DIRECTORY (`pytest tests/bdd`)
+    names one target that is a prefix of every module. Sharded sessions each name
+    their own files, and must union to the whole set.
+    """
+    if not targets:
+        return False
+    return all(any(module == t or module.startswith(f"{t}/") for t in targets) for module in expected)

@@ -399,6 +399,21 @@ jobs:
           # No host uvx in this job (no _setup-env); the dedicated Security
           # Audit check owns the uv-secure scan.
           RUN_ALL_SKIP_AUDIT: 1
+      # The FULL-TREE collection record. This job is the only one that produces
+      # it: bdd-tests-shard invokes pytest with a shard's file list, so its
+      # records are path-scoped, while run_all_tests.sh here invokes
+      # `pytest tests/bdd/` whole. Three of the four collection observers ask
+      # for that target by name, so without this upload they have nothing to
+      # read and bdd-tests fails loudly rather than grading a shard.
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: bdd-in-network-collection
+          path: |
+            test-results/*/collection-manifest/
+            test-results/*/liveness-sessions/
+          include-hidden-files: true
+          if-no-files-found: error
       - name: Cleanup Docker services
         if: always()
         run: docker compose -f docker-compose.e2e.yml down -v 2>/dev/null || true
@@ -615,6 +630,13 @@ jobs:
         env:
           # Separate data file per shard so artifacts cannot collide with unit's .coverage.
           COVERAGE_FILE: .coverage.bdd-${{ matrix.shard }}
+          # What this shard COLLECTED and what it MEASURED, published for the
+          # bdd-tests aggregator below. This job runs `_pytest` directly rather
+          # than tox or run_all_tests.sh, so neither variable is set for it the
+          # way it is everywhere else -- it needs them named here or the
+          # artifacts are simply never written.
+          PYTEST_COLLECTION_MANIFEST: collection-manifest
+          BDD_LIVENESS_SESSIONS: liveness-sessions
         with:
           paths: ${{ steps.bdd_shard.outputs.paths }}
           coverage_xml: coverage-bdd-${{ matrix.shard }}.xml
@@ -634,22 +656,28 @@ jobs:
           path: |
             .coverage.bdd-${{ matrix.shard }}
             coverage-bdd-${{ matrix.shard }}.xml
+            collection-manifest/
+            liveness-sessions/
           include-hidden-files: true
           if-no-files-found: error
 
   bdd-tests:
     name: BDD Tests
     runs-on: ubuntu-latest
-    needs: [bdd-tests-shard]
+    # bdd-in-network is needed for its ARTIFACT, not only its verdict: it is the
+    # only job that collects `tests/bdd/` whole, and three of the four
+    # collection observers ask for that full-tree target by name.
+    needs: [bdd-tests-shard, bdd-in-network]
     if: always()
     permissions:
       contents: read
-    timeout-minutes: 5
+    # Was 5 while this job only read a result string. It now runs a real pytest
+    # env, so it needs setup time; the suite itself is set operations over JSON.
+    timeout-minutes: 15
     steps:
       - uses: step-security/harden-runner@8d3c67de8e2fe68ef647c8db1e6a09f647780f40 # v2.19.0
         with:
           egress-policy: audit
-          disable-sudo-and-containers: true
       - name: Aggregate BDD shards
         run: |
           if [ "${{ needs.bdd-tests-shard.result }}" != "success" ]; then
@@ -657,6 +685,58 @@ jobs:
             exit 1
           fi
           echo "BDD shards passed."
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/_setup-env
+      - uses: ./.github/actions/_adcp-bundle
+      # Every producer's records into ONE directory. Filenames are content
+      # fingerprints (collection: target+filter; liveness: target+selection+
+      # markers), so two shards and the in-network run cannot collide, and
+      # merge-multiple is safe rather than last-writer-wins.
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: "bdd-shard-*-coverage"
+          path: bdd-artifacts
+          merge-multiple: true
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: bdd-in-network-collection
+          path: bdd-artifacts
+      - name: Gather every producer's records into one directory
+        run: |
+          set -euo pipefail
+          # Collect by DIRECTORY NAME wherever it sits, rather than by an
+          # assumed depth. upload-artifact strips the common prefix of the paths
+          # it matched, so the in-network job's `test-results/<ts>/...` arrives
+          # as `collection-manifest/...` while the shards' arrives at the root
+          # already. Keying on the name survives both layouts.
+          mkdir -p bdd-artifacts/collection-manifest bdd-artifacts/liveness-sessions
+          for kind in collection-manifest liveness-sessions; do
+            find bdd-artifacts -type f -name '*.json' -path "*/$kind/*" \
+              -not -path "bdd-artifacts/$kind/*" \
+              -exec cp -n {} "bdd-artifacts/$kind/" \;
+          done
+
+          records=$(find bdd-artifacts/collection-manifest -name '*.json' | wc -l)
+          sessions=$(find bdd-artifacts/liveness-sessions -name '*.json' | wc -l)
+          echo "collection records: $records"
+          echo "liveness sessions:  $sessions"
+
+          # Fail here, with the cause, rather than in 32 tests that each report
+          # the same missing record. Three of the four collection observers need
+          # the FULL-TREE record, which only bdd-in-network produces.
+          # Fail here, with the cause, rather than in 32 tests that each
+          # report the same missing record.
+          python3 scripts/ci/assert_full_tree_record.py bdd-artifacts/collection-manifest
+
+      - uses: ./.github/actions/_pytest
+        env:
+          PYTEST_COLLECTION_MANIFEST: bdd-artifacts/collection-manifest
+          BDD_LIVENESS_SESSIONS: bdd-artifacts/liveness-sessions
+        with:
+          paths: tests/collection/
+          extra_args: --timeout=300
 
   migration-roundtrip:
     name: Migration Roundtrip

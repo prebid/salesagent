@@ -20,7 +20,6 @@ import functools
 import os
 import re
 import subprocess
-import sys
 import warnings
 from collections.abc import Callable, Iterable, Iterator
 from pathlib import Path
@@ -1134,39 +1133,6 @@ def format_failure(
 # ---------------------------------------------------------------------------
 # BDD collection helper (e2e_rest transport fitness)
 # ---------------------------------------------------------------------------
-
-
-def collect_bdd_node_ids_with_e2e_enabled(target: str, *, timeout: int = 300) -> list[str]:
-    """Collect pytest node ids under *target* with BDD_E2E_ENABLED=true.
-
-    Shared by the e2e_rest known-failures ledger fitness function and any
-    test asserting a specific scenario's transport parametrization —
-    same subprocess invocation, same env, same flags (-n0 satisfies the
-    BDD_E2E_ENABLED xdist guard; addopts is cleared so -q prints bare
-    nodeids).
-    """
-    proc = subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "pytest",
-            target,
-            "--collect-only",
-            "-q",
-            "-o",
-            "addopts=",
-            "-p",
-            "no:randomly",
-            "-n0",
-        ],
-        cwd=repo_root(),
-        env={**os.environ, "BDD_E2E_ENABLED": "true", "BDD_XDIST_N": "0"},
-        capture_output=True,
-        text=True,
-        timeout=timeout,
-    )
-    assert proc.returncode == 0, f"{target} collection failed (rc={proc.returncode}):\n{proc.stderr[-2000:]}"
-    return [line.strip() for line in proc.stdout.splitlines() if "::" in line]
 
 
 def scan_src(

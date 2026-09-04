@@ -4,6 +4,10 @@ Global pytest configuration and fixtures for all tests.
 This file provides fixtures available to all test modules.
 """
 
+# First import in this file: tests/_worker_profile stamps its module-import time
+# as t0, and everything heavy (the app, the harness, the factories) is imported
+# after this point, so that stamp is early enough to bound the startup cost it
+# measures. Inert unless PYTEST_WORKER_PROFILE names a directory.
 import functools
 import json
 import multiprocessing
@@ -20,6 +24,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from tests import _collection_manifest, _worker_profile
 from tests._xdist_report_safety import sanitize_serialized_report
 
 # ---------------------------------------------------------------------------
@@ -806,6 +811,46 @@ def benchmark(request):
 
 
 # ---------------------------------------------------------------------------
+# Per-worker timing profile (opt-in) — see tests/_worker_profile.py
+# ---------------------------------------------------------------------------
+# Declared here rather than as a `-p` plugin because addopts cannot load
+# `tests._worker_profile`: the rootdir is not on sys.path when plugins are
+# registered ("No module named 'tests'"). A rootdir conftest always loads, needs
+# no PYTHONPATH, and forwards to the box through one environment variable.
+
+
+def pytest_collection(session):
+    _worker_profile.on_collection_start()
+
+
+def pytest_itemcollected(item):
+    # Fires during genitems, BEFORE any deselection -- the only point that sees
+    # the pre-deselection population. See tests/_collection_manifest.py.
+    _collection_manifest.retain(item)
+
+
+def pytest_collection_finish(session):
+    _worker_profile.on_collection_finish(len(session.items))
+    # AFTER every pytest_collection_modifyitems, so the marker sets recorded
+    # here include the entity markers applied below and the transport xfail
+    # markers tests/bdd/conftest.py applies.
+    _collection_manifest.serialize(session)
+
+
+def pytest_runtestloop(session):
+    _worker_profile.on_loop_start()
+
+
+def pytest_runtest_logreport(report):
+    _worker_profile.record_test_duration(getattr(report, "duration", 0.0))
+
+
+def pytest_sessionfinish(session, exitstatus):
+    _worker_profile.on_session_finish()
+    _collection_manifest.on_session_finish()
+
+
+# ---------------------------------------------------------------------------
 # Leaked-patch guard — a test must not leave a patch running
 # ---------------------------------------------------------------------------
 # The #2006 root cause was a leaked patch("os.getpid"): a sabotaged patcher's
@@ -929,20 +974,19 @@ def _resolve_dotted(dotted: str) -> Any:
 #     timed out after 60 seconds
 #
 # while passing at -n 8 and serially. Raising the timeout would hide the
-# contention rather than remove it; a shared cached collection across the three
-# would remove the duplicated work outright and is the right follow-up. Until
-# then, one xdist_group means at most ONE nested collection runs at a time,
-# whatever the worker count -- which is the property that was actually missing.
+# contention rather than remove it.
+#
+# The "shared cached collection" this comment used to name as the right
+# follow-up now exists: tests/_collection_manifest.py publishes what the real
+# run collected, and the two modules that used to sit here beside
+# test_xdist_report_serialization -- test_architecture_ci_bdd_shard_manifest and
+# test_e2e_rest_ledger_fitness -- read it instead of spawning, so they no longer
+# belong to this set by the membership rule above. One module is left, and the
+# group still means at most ONE nested collection runs at a time.
 #
 # Requires `--dist loadgroup` (tox.ini's unit env); under any other dist mode
 # the marker is inert and these simply spread out again.
-_NESTED_PYTEST_MODULES: frozenset[str] = frozenset(
-    {
-        "test_architecture_ci_bdd_shard_manifest",
-        "test_e2e_rest_ledger_fitness",
-        "test_xdist_report_serialization",
-    }
-)
+_NESTED_PYTEST_MODULES: frozenset[str] = frozenset({"test_xdist_report_serialization"})
 
 
 @functools.lru_cache(maxsize=4096)

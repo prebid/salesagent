@@ -21,3 +21,18 @@ description = "test-fixture idempotency_key literals (request IDs, not secrets)"
 paths = ['''tests/.*\.py''']
 regexTarget = "line"
 regexes = ['''idempotency_key["']?\s*[:=]+\s*["'][A-Za-z0-9_.:-]{16,255}["']''']
+
+# Pinned AdCP webhook HMAC conformance vectors. The `secret` field is a
+# PUBLISHED test vector: the file's own `secret_provenance` records it as the
+# SHA-256 of a fixed ASCII string, chosen so cross-language runs are
+# reproducible, and its `WARNING` field says in full that implementations must
+# never use it in production. High entropy by construction, which is exactly
+# why the generic-api-key rule fires on it.
+#
+# Scoped to this one fixture directory rather than to *.json: a real credential
+# committed into any other fixture still trips the rule. The sibling allowlist
+# above covers tests/*.py only, so these vectors -- which arrive as .json --
+# were not covered by it.
+[[allowlists]]
+description = "pinned AdCP webhook HMAC test vectors (published, non-production by construction)"
+paths = ['''tests/fixtures/adcp_webhook_vectors_pinned/.*\.json''']

@@ -1,4 +1,4 @@
-"""Regression: T-UC-004-webhook-ssrf-blocked must be collected on e2e_rest too (salesagent-47n9.3).
+"""Regression: T-UC-004-webhook-ssrf-blocked must be collected on e2e_rest too (#1802).
 
 ``tests/bdd/conftest.py``'s ``_NO_E2E_REST_TAGS`` silently drops
 ``Transport.E2E_REST`` from this scenario's parametrize list inside
@@ -10,16 +10,21 @@ scenario is exercised on a2a/mcp/rest but never even attempted on e2e_rest —
 a silent, untracked exemption class the PR's own stated posture (exemptions
 fail loudly, never age into prose) exists to prevent.
 
-Reproduces the bug behaviorally: real pytest collection of the real BDD
-module, asserting the e2e_rest-parametrized test id exists. An AST scan of
-``_NO_E2E_REST_TAGS`` would only prove the set is non-empty, not that a
-scenario is actually missing from collection — this test proves the actual
-collected-item behavior the bug describes.
+Reproduces the bug behaviorally: real pytest collection, asserting the
+e2e_rest-parametrized test id exists. An AST scan of ``_NO_E2E_REST_TAGS``
+would only prove the set is non-empty, not that a scenario is actually missing
+from collection — this test proves the actual collected-item behavior the bug
+describes.
+
+The collection it reads is the REAL RUN's, published by
+``tests/_collection_manifest.py``, not a nested ``--collect-only`` subprocess of
+its own (#2168). Same evidence, and stronger: the suite that ran is the one
+graded, rather than a second collection that could drift from it.
 """
 
 from __future__ import annotations
 
-from tests.unit._architecture_helpers import collect_bdd_node_ids_with_e2e_enabled
+from tests._collection_manifest import BDD_TREE, load, manifest_dir
 
 _UC004_MODULE = "tests/bdd/test_uc004_deliver_media_buy_metrics.py"
 _SCENARIO_TEST_NAME = "test_blocked_outbound_webhook_url_skips_delivery_without_post"
@@ -34,7 +39,11 @@ def test_ssrf_blocked_scenario_has_an_e2e_rest_variant():
     none — it isn't even attempted, so it can't be xfailed, ledgered, or
     declared E2EUnsupportedSetup. That invisibility is the bug.
     """
-    node_ids = collect_bdd_node_ids_with_e2e_enabled(_UC004_MODULE)
+    # e2e_enabled=True is demanded, not inferred: the ids this test looks for
+    # only EXIST in a collection with the e2e_rest transport on, so a record
+    # without it must fail loudly rather than report the scenario missing.
+    rows = load(manifest_dir(), target=BDD_TREE, e2e_enabled=True)
+    node_ids = [row["nodeid"] for row in rows if row["nodeid"].startswith(f"{_UC004_MODULE}::")]
     scenario_ids = [n for n in node_ids if _SCENARIO_TEST_NAME in n]
     assert scenario_ids, f"scenario {_SCENARIO_TEST_NAME!r} not collected at all:\n{node_ids}"
 

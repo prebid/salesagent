@@ -1,7 +1,7 @@
 """Fitness function for the storyboard-conformance ledger.
 
 ``tests/bdd/e2e_rest_known_failures.txt`` has one
-(``tests/unit/test_e2e_rest_ledger_fitness.py::
+(``tests/collection/test_e2e_rest_ledger_fitness.py::
 test_every_ledger_entry_resolves_to_a_collected_item``);
 ``tests/storyboard/known_failures.txt`` — whose exact contents are pinned by
 ``EXPECTED_LEDGER`` — has none. The consequence is written into the ledger's own header, which

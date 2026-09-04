@@ -21,7 +21,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 _RUNNER = _REPO_ROOT / "run_all_tests.sh"
 _HOST_RUNNER = _REPO_ROOT / "run_all_tests_host.sh"
 _TOX_INI = _REPO_ROOT / "tox.ini"
-_ALL_SUITES = "unit,integration,bdd,admin,e2e,ui"
+_ALL_SUITES = "unit,integration,bdd,admin,e2e,ui,collection"
 
 
 def _resolve(*args: str) -> str:

@@ -23,6 +23,14 @@ PYTEST_ARGS="${@:3}"
 RESULTS_DIR="$(pwd)/test-results/$(date +%d%m%y_%H%M)"
 mkdir -p "$RESULTS_DIR"
 
+# The `collection` env grades what a real session collected, so the sessions
+# that run before it have to publish that. Exported here rather than left to the
+# caller: this runner runs `tox -p -o`, which includes `collection`, and those
+# tests fail loudly on a missing artifact rather than skipping -- correctly, but
+# it means the runner cannot leave the variable unset.
+export PYTEST_COLLECTION_MANIFEST="${PYTEST_COLLECTION_MANIFEST:-$RESULTS_DIR/collection-manifest}"
+export BDD_LIVENESS_SESSIONS="${BDD_LIVENESS_SESSIONS:-$RESULTS_DIR/liveness-sessions}"
+
 # Keep only the last 10 result directories
 ls -dt "$(pwd)/test-results"/*/ 2>/dev/null | tail -n +11 | xargs rm -rf
 
@@ -45,7 +53,7 @@ from src.core.tools.media_buy_create import _create_media_buy_impl
 # Suite reports this script may publish. Named once so the pre-run purge and the
 # copy below cannot drift apart — a report present in one list and absent from
 # the other is how a stale file survives.
-_REPORT_SUITES="unit integration e2e admin bdd ui"
+_REPORT_SUITES="unit integration e2e admin bdd ui collection"
 
 purge_stale_reports() {
     # `.tox/` persists between invocations, so a suite that dies before writing

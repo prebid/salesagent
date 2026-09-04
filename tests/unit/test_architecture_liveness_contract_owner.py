@@ -15,7 +15,7 @@ copying constants or re-implementing a lookup on each side.
 
 This module grades the STRUCTURE of that extraction. The behavioral half — that
 the two call sites now agree per collected scenario — lives in
-``tests/unit/test_architecture_env_route_agreement.py``.
+``tests/collection/test_architecture_env_route_agreement.py``.
 
 ## The pinned contract (authored RED before implementation)
 

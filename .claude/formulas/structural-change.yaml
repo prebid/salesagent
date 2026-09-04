@@ -54,6 +54,10 @@ setup:
       # without it status/kill target the default box and report a phantom run.
       export REMOTE_TEST_HOST=noetis-b-vm
       export UNIT_XDIST_N=16 INTEGRATION_XDIST_N=16 BDD_XDIST_N=16 PYTEST_XDIST_AUTO_NUM_WORKERS=16
+      # 2 bdd shards x 8 = the same 16 BDD processes the pre-shard baseline
+      # used. Without it the after runs 8 and the step reads as a 1.6x
+      # regression that is the override moving, not the sharding.
+      export BDD_SHARD_XDIST_N=8
       cassini run --detach       # returns a run id; exit 0 = LAUNCHED, not passed
       cassini status <id>        # poll until 'finished'; pulls test-results/<latest>/
       ls tests/unit/test_architecture_*.py tests/unit/test_guards*.py | wc -l
@@ -341,6 +345,10 @@ iterate:
         ```bash
         export REMOTE_TEST_HOST=noetis-b-vm      # required on every cassini call
         export UNIT_XDIST_N=16 INTEGRATION_XDIST_N=16 BDD_XDIST_N=16 PYTEST_XDIST_AUTO_NUM_WORKERS=16
+        # 2 bdd shards x 8 = the same 16 BDD processes the pre-shard baseline
+        # used. Without it the after runs 8 and the step reads as a 1.6x
+        # regression that is the override moving, not the sharding.
+        export BDD_SHARD_XDIST_N=8
         cassini run --detach
         cassini status <id>                      # poll until 'finished'
         # then diff test-results/<latest>/*.json against the baseline run

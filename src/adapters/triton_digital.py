@@ -410,6 +410,45 @@ class TritonDigital(AdServerAdapter):
                 self.log(f"Error checking Triton Campaign status: {e}")
                 return CheckMediaBuyStatusResponse(media_buy_id=media_buy_id, status="unknown")
 
+    def _dry_run_delivery(
+        self, media_buy_id: str, date_range: ReportingPeriod, today: datetime
+    ) -> AdapterGetMediaBuyDeliveryResponse:
+        """What a delivery report WOULD do, and the figures it would return.
+
+        The dry-run arm is a self-contained narration plus a simulated result;
+        kept beside the real request path it was two thirds of the statements in
+        a function whose subject is the real request.
+        """
+        self.log(f"Would call: POST {self.base_url}/reports")
+        self.log("  Report Request: {")
+        self.log("    'reportType': 'FLIGHT',")
+        self.log(f"    'startDate': '{date_range.start.isoformat()}',")
+        self.log(f"    'endDate': '{date_range.end.isoformat()}',")
+        self.log(f"    'filters': {{'campaigns': ['{media_buy_id}']}},")
+        self.log("    'columns': ['flightName', 'impressions', 'totalRevenue']")
+        self.log("  }")
+        self.log("Would poll for report completion and download results")
+
+        # Simulate response based on campaign progress
+        days_elapsed = (today.date() - date_range.start.date()).days
+        progress_factor = min(days_elapsed / 14, 1.0)  # Assume 14-day campaigns
+
+        # Calculate simulated delivery for audio campaigns
+        impressions = int(300000 * progress_factor * 0.92)  # 92% delivery rate for audio
+        spend = impressions * 25 / 1000  # $25 CPM for audio
+
+        self.log(f"Would return: {impressions:,} impressions, ${spend:,.2f} spend")
+
+        return AdapterGetMediaBuyDeliveryResponse(
+            media_buy_id=media_buy_id,
+            reporting_period=date_range,
+            totals=DeliveryTotals(
+                impressions=impressions, spend=spend, clicks=0, ctr=0.0, completed_views=0, completion_rate=0.0
+            ),
+            by_package=[],
+            currency="USD",
+        )
+
     def get_media_buy_delivery(
         self, media_buy_id: str, date_range: ReportingPeriod, today: datetime
     ) -> AdapterGetMediaBuyDeliveryResponse:
@@ -421,35 +460,7 @@ class TritonDigital(AdServerAdapter):
         self.log(f"Date range: {date_range.start} to {date_range.end}", dry_run_prefix=False)
 
         if self.dry_run:
-            self.log(f"Would call: POST {self.base_url}/reports")
-            self.log("  Report Request: {")
-            self.log("    'reportType': 'FLIGHT',")
-            self.log(f"    'startDate': '{date_range.start.isoformat()}',")
-            self.log(f"    'endDate': '{date_range.end.isoformat()}',")
-            self.log(f"    'filters': {{'campaigns': ['{media_buy_id}']}},")
-            self.log("    'columns': ['flightName', 'impressions', 'totalRevenue']")
-            self.log("  }")
-            self.log("Would poll for report completion and download results")
-
-            # Simulate response based on campaign progress
-            days_elapsed = (today.date() - date_range.start.date()).days
-            progress_factor = min(days_elapsed / 14, 1.0)  # Assume 14-day campaigns
-
-            # Calculate simulated delivery for audio campaigns
-            impressions = int(300000 * progress_factor * 0.92)  # 92% delivery rate for audio
-            spend = impressions * 25 / 1000  # $25 CPM for audio
-
-            self.log(f"Would return: {impressions:,} impressions, ${spend:,.2f} spend")
-
-            return AdapterGetMediaBuyDeliveryResponse(
-                media_buy_id=media_buy_id,
-                reporting_period=date_range,
-                totals=DeliveryTotals(
-                    impressions=impressions, spend=spend, clicks=0, ctr=0.0, completed_views=0, completion_rate=0.0
-                ),
-                by_package=[],
-                currency="USD",
-            )
+            return self._dry_run_delivery(media_buy_id, date_range, today)
         else:
             report_payload: dict[str, JsonValue] = {
                 "reportType": "FLIGHT",
