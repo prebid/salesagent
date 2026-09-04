@@ -131,12 +131,60 @@ def test_assert_anchor_consistency_flags_intra_file_drift() -> None:
 
 
 # ---------------------------------------------------------------------------
-# iter_git_tracked_files fallback (PR #1567 round-3): the filesystem-walk
-# fallback must be LOUD (RuntimeWarning) and hermetic w.r.t. untracked local
-# dirs (.claude/ notes were producing spurious version-anchor guard failures
-# in the in-network container, where the bind-mounted worktree's .git
-# back-reference is unreachable and the fallback engages).
+# Accessors promoted into _architecture_helpers (PR #1699): positive + negative
+# contracts so a stubbed ``return True`` / wrong-name miss cannot stay green.
 # ---------------------------------------------------------------------------
+
+
+@pytest.mark.arch_guard
+def test_function_def_positive_and_negative() -> None:
+    from tests.unit._architecture_helpers import function_def
+
+    tree = ast.parse("def alpha():\n    pass\nasync def beta():\n    pass\n")
+    assert function_def(tree, "alpha").name == "alpha"
+    assert function_def(tree, "beta").name == "beta"
+    with pytest.raises(AssertionError, match="Function 'missing'"):
+        function_def(tree, "missing")
+
+
+@pytest.mark.arch_guard
+def test_assign_tuple_strs_positive_and_negative() -> None:
+    from tests.unit._architecture_helpers import assign_tuple_strs
+
+    tree = ast.parse('NAMES = ("a", "b")\nOTHER = 1\n')
+    assert assign_tuple_strs(tree, "NAMES") == ("a", "b")
+    with pytest.raises(AssertionError, match="Constant sequence 'OTHER'"):
+        assign_tuple_strs(tree, "OTHER")
+    with pytest.raises(AssertionError, match="Constant sequence 'missing'"):
+        assign_tuple_strs(tree, "missing")
+
+
+@pytest.mark.arch_guard
+def test_call_names_positive_and_negative() -> None:
+    from tests.unit._architecture_helpers import call_names
+
+    tree = ast.parse("f()\nx.g()\n")
+    names = call_names(tree)
+    assert "f" in names
+    assert "g" in names
+    assert "missing" not in names
+    assert call_names(ast.parse("x = 1\n")) == set()
+
+
+@pytest.mark.arch_guard
+def test_imports_name_from_positive_and_negative() -> None:
+    from tests.unit._architecture_helpers import imports_name_from
+
+    tree = ast.parse("from tests.e2e.stack_readiness import compose_argv, e2e_ports\nimport os\n")
+    assert imports_name_from(tree, "tests.e2e.stack_readiness", "compose_argv") is True
+    assert imports_name_from(tree, "tests.e2e.stack_readiness", "e2e_ports") is True
+    # Wrong name on the right module.
+    assert imports_name_from(tree, "tests.e2e.stack_readiness", "missing") is False
+    # Wrong module.
+    assert imports_name_from(tree, "tests.e2e.other", "compose_argv") is False
+    # Plain ``import os`` is not ImportFrom — must not count as importing ``os``.
+    assert imports_name_from(tree, "os", "path") is False
+    assert imports_name_from(ast.parse("import os\n"), "os", "os") is False
 
 
 @pytest.mark.arch_guard

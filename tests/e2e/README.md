@@ -27,6 +27,14 @@ the `live_server` fixture turns into URLs. `live_server["tls"]` is present
 only when the stack serves a verified TLS listener; tests that need HTTPS
 request that key and fail with an explicit error when it is absent.
 
+## Stack readiness
+
+`docker_services_e2e` waits through `stack_readiness.wait_for_e2e_stack` with
+required probe order `postgres → creative-agent → adcp /health` (both when
+reusing an already-running stack via `ADCP_TESTING=true` / `--skip-docker`, and
+after a self-`up`). On timeout it dumps compose logs (including
+`creative-agent`) once and fails once. See `stack_readiness.py`.
+
 ## Testing hooks
 
 The suite implements the AdCP testing hooks from

@@ -134,7 +134,10 @@ class TestDailyDeliveryWebhookFlow:
         set_live_adapter_behavior(live_server, manual_approval_required=False)
 
         # Wait for server readiness
-        wait_for_server_readiness(live_server["mcp"])
+        wait_for_server_readiness(
+            live_server["mcp"],
+            postgres_port=live_server["postgres_params"]["port"],
+        )
 
         async with make_mcp_client(live_server, token=test_auth_token) as client:
             # 1. Discover Product
@@ -181,13 +184,13 @@ class TestDailyDeliveryWebhookFlow:
 
             # 5. Wait for Webhook
             # The scheduler runs inside the container.
-            # We configured DELIVERY_WEBHOOK_INTERVAL=5 in conftest.py for E2E tests.
+            # DELIVERY_WEBHOOK_INTERVAL defaults to 5 via docker-compose.e2e.yml (${DELIVERY_WEBHOOK_INTERVAL:-5}); launchers may still export it.
             # It should trigger in 5 seconds.
 
             received = delivery_webhook_server["received"]
 
             # Wait for webhook. Each `received` access is now a readback HTTP round
-            # trip (salesagent-amht.3), not free like the old in-process shared
+            # trip (GH #1802), not free like the old in-process shared
             # list — wait_until's monotonic deadline keeps the actual wait bounded
             # at timeout_seconds regardless of readback latency, where an
             # iteration counter would silently drift past it.

@@ -1,11 +1,11 @@
 """Structural guard: one TLS terminator, every dialed origin https, one set of TLS material.
 
-salesagent-40qh gave the creative-agent origin in ``docker-compose.e2e.yml``
+GH #1802 gave the creative-agent origin in ``docker-compose.e2e.yml``
 a real TLS front specifically so ``ADCP_OUTBOUND_ALLOW_INSECURE`` could
-eventually close for it (salesagent-e6h0). salesagent-amht.2/.3/.4 then
+eventually close for it (GH #1802). GH #1802/.3/.4 then
 collapsed every outbound-only origin (creative-agent, webhook-capture) onto
 ONE shared ``tls-proxy`` front, one ``*.adcp.test`` alias per origin, one
-generated CA/leaf. salesagent-amht.5 generalizes what had been two
+generated CA/leaf. GH #1802 generalizes what had been two
 origin-specific checks (a CREATIVE_AGENT_URL-is-https check, and an
 ADCP_WEBHOOK_HOST-never-resurfaces check) into the structural invariant that
 made those checks correct in the first place, so a FUTURE origin (not just
@@ -45,7 +45,7 @@ def find_multiple_tls_terminators(compose: dict) -> list[str]:
 
     Exactly one service may mount ``nginx-tls-test.conf.template`` — the
     template that runs an ``ssl_certificate`` server block. A second service
-    mounting it is the tls-proxy-creative disease salesagent-amht.2 removed,
+    mounting it is the tls-proxy-creative disease GH #1802 removed,
     reappearing under a different name.
     """
     terminators = [
@@ -86,7 +86,7 @@ def find_non_https_adcp_test_origins(compose: dict) -> list[str]:
 def find_dead_webhook_env_var(compose: dict) -> list[str]:
     """Return one message per service that resurrects the deleted ``ADCP_WEBHOOK_HOST`` mechanism.
 
-    salesagent-amht.3 deleted this var entirely — the webhook-capture service
+    GH #1802 deleted this var entirely — the webhook-capture service
     is reachable at the fixed ``webhooks.adcp.test`` alias, never an
     env-configurable hostname. Its reappearance means a future change
     resurrected the per-launcher host-configuration disease this ticket removed.
@@ -108,7 +108,7 @@ def find_tls_material_outside_test_tls(compose: dict) -> list[str]:
     generator (``scripts/dev/gen_test_tls.py``), which writes under
     ``.test-tls/``. A ``.pem``/``.key`` path that does not mention
     ``.test-tls`` is a second, parallel TLS mechanism — exactly the disease
-    the in-process webhook-capture front was before salesagent-amht.3.
+    the in-process webhook-capture front was before GH #1802.
     """
     violations: list[str] = []
     for service_name, service in compose.get("services", {}).items():
@@ -136,7 +136,7 @@ def find_resurrected_allow_insecure_in_compose(compose: dict) -> list[str]:
 def find_resurrected_allow_insecure_in_src(src_root: Path) -> list[str]:
     """Return one message per ``src/`` file referencing the deleted ``ADCP_OUTBOUND_ALLOW_INSECURE`` hatch.
 
-    salesagent-e6h0 deleted this flag from ``src/`` entirely once every
+    GH #1802 deleted this flag from ``src/`` entirely once every
     outbound origin the server dials became TLS-fronted. Its reappearance —
     even as a bare string, since the only legitimate use was ``os.getenv``/
     ``os.environ`` lookups — means the escape hatch came back.

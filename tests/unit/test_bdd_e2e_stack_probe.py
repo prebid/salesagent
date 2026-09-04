@@ -1,6 +1,6 @@
 """The bdd_e2e stack probe must tell "no stack" apart from "broken TLS".
 
-salesagent-tgzb design step 7, promoted into scope by the disease scan.
+GH #1802 design step 7, promoted into scope by the disease scan.
 
 ``tests/bdd/conftest.py``'s ``e2e_stack`` fixture health-checks the stack and,
 today, ends in ``except Exception: return None``. Returning ``None`` means "the
@@ -9,7 +9,7 @@ against the PLAINTEXT config. So a certificate-verification failure — a broken
 test rig — is indistinguishable from a stack that was never started, and an
 https scenario grades the http branch while reporting green.
 
-That is precisely the vacuity salesagent-tgzb exists to remove, reintroduced by
+That is precisely the vacuity GH #1802 exists to remove, reintroduced by
 its own plumbing, which is why the fix is graded here rather than assumed.
 
 The network is the ONLY thing stubbed: ``httpx.get`` is replaced with a raiser
@@ -123,7 +123,7 @@ def test_a_tls_verification_failure_is_raised_and_never_reported_as_an_absent_st
 
     If this returns ``None``, the fixture hands back the plaintext config and an
     https scenario grades the http branch while reporting green — the single
-    failure mode salesagent-tgzb was opened to eliminate.
+    failure mode GH #1802 was opened to eliminate.
     """
     _configured_env(monkeypatch)
     failure = failure_factory()

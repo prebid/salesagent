@@ -27,16 +27,30 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 
 # Import contract validation - this automatically validates tool calls at test collection time
 from tests.e2e.conftest_contract_validation import pytest_collection_modifyitems  # noqa: F401
+from tests.e2e.stack_readiness import (
+    DEFAULT_E2E_COMPOSE_FILES,
+    E2EPorts,
+    compose_argv,
+    compose_available,
+    compose_down_argv,
+    compose_exec_argv,
+    e2e_db_url_build,
+    e2e_db_url_default,
+    e2e_host_default,
+    e2e_ports,
+    use_container_exec,
+    wait_for_e2e_stack,
+)
 
 
 def e2e_host() -> str:
-    """Host for e2e server URLs.
+    """Host for e2e server URLs — delegates to ``stack_readiness.e2e_host_default``.
 
     'localhost' on the host path (Docker publishes host ports); a compose service
     name (e.g. 'proxy') when the runner is in-network and reaches the server over
     the compose network with no published ports (ADCP_TEST_HOST).
     """
-    return os.getenv("ADCP_TEST_HOST", "localhost")
+    return e2e_host_default()
 
 
 def e2e_tls_host() -> str:
@@ -98,21 +112,30 @@ def e2e_db_url(fallback_port: int) -> str:
     """Server-side Postgres URL for direct-DB e2e helpers — the DB counterpart of
     :func:`e2e_host`.
 
-    Single source for the host/port/dbname the e2e stack's database lives at, so
-    every direct-DB helper resolves it the same way. Preference order::
+    Delegates to ``stack_readiness.e2e_db_url_default`` (env chain + endpoint SSOT)::
 
         E2E_DATABASE_URL  — in-network DB by compose service name (postgres:5432/adcp)
         DATABASE_URL      — host path: the e2e stack's localhost:<published>/adcp
         localhost:<fallback_port>/adcp — last-resort fallback
-
-    Replaces the ad-hoc ``ADCP_TEST_DB_HOST``/``ADCP_TEST_DB_PORT`` split, which
-    ignored ``E2E_DATABASE_URL`` and so pointed the post-reset diagnostic at
-    localhost in-network instead of the compose service.
     """
-    return (
-        os.getenv("E2E_DATABASE_URL")
-        or os.getenv("DATABASE_URL")
-        or f"postgresql://adcp_user:secure_password_change_me@localhost:{fallback_port}/adcp"
+    return e2e_db_url_default(fallback_host="localhost", fallback_port=fallback_port)
+
+
+def _export_and_wait(ports: E2EPorts, *, timeout_s: float) -> None:
+    """Export host-published ports for compose/tests, then run the ordered hard gate.
+
+    Collapses the verify-only and standalone wait blocks onto one seam. Compose
+    still needs ``POSTGRES_PORT`` / ``ADCP_SALES_PORT`` in the process env;
+    ``wait_for_server_readiness`` takes ``postgres_port`` explicitly and must
+    not read those exports.
+    """
+    os.environ["ADCP_SALES_PORT"] = str(ports["mcp"])
+    os.environ["POSTGRES_PORT"] = str(ports["postgres"])
+    wait_for_e2e_stack(
+        ports=ports,
+        compose_files=DEFAULT_E2E_COMPOSE_FILES,
+        host=e2e_host(),
+        timeout_s=timeout_s,
     )
 
 
@@ -217,36 +240,32 @@ def docker_services_e2e(request):
         a2a_port = mcp_port  # A2A is on same port as MCP (unified FastAPI process)
         admin_port = mcp_port  # Admin is on same port as MCP (unified FastAPI process)
         postgres_port = int(os.getenv("POSTGRES_PORT", "5435"))
+        # webhook-capture readback — must match docker-compose.e2e.ports.yml
+        # (${WEBHOOK_CAPTURE_PORT:-8090}:8080). CI pins ADCP_SALES_PORT=8080 for
+        # the proxy; without exporting this, _webhook_capture defaults would hit
+        # the wrong host port and DELETE /webhook/<key> 404s on /health's stack.
+        webhook_capture_port = int(os.getenv("WEBHOOK_CAPTURE_PORT", "8090"))
         # The TLS listener is OPTIONAL here: in-network it has no host port at
         # all (it is reached by its dotted network alias via E2E_TLS_BASE_URL),
         # and an older stack may predate it. Absent -> live_server has no "tls"
         # key, and the tests that need one fail saying so.
         tls_port = int(os.getenv("ADCP_TLS_PORT")) if os.getenv("ADCP_TLS_PORT") else None
 
-        print(f"✓ Using ports: Server={mcp_port} (MCP+A2A+Admin), Postgres={postgres_port}")
+        # Export resolved ports so later wrappers (e.g. wait_for_server_readiness)
+        # see the same values the fixture used — same contract as standalone.
+        os.environ["ADCP_SALES_PORT"] = str(mcp_port)
+        os.environ["POSTGRES_PORT"] = str(postgres_port)
+        os.environ["WEBHOOK_CAPTURE_PORT"] = str(webhook_capture_port)
 
-        # Wait for server to be ready. /health is proxied to the upstream
-        # (not returned by nginx directly), so this confirms the app is serving.
-        # 60s budget covers: alembic migration run on a fresh schema (~5-15s
-        # in CI), MCP/A2A/REST router registration, and the first-call cold
-        # path through the import graph (typed creative-format registry +
-        # adcp library module load). Empirically 25-45s in CI; 60s leaves
-        # ~30% headroom. Drop only if the startup cold-path measurably
-        # shrinks — don't widen further without root-causing the slowness.
-        max_wait = 60
-        start_time = time.time()
-        for _ in range(max_wait // 2):
-            try:
-                response = requests.get(f"http://{e2e_host()}:{mcp_port}/health", timeout=2)
-                if response.status_code == 200:
-                    elapsed = int(time.time() - start_time)
-                    print(f"✓ Server is healthy ({elapsed}s)")
-                    break
-            except requests.RequestException:
-                pass
-            time.sleep(2)
-        else:
-            pytest.fail(f"Server not ready after {max_wait}s (port {mcp_port})")
+        print(
+            f"✓ Using ports: Server={mcp_port} (MCP+A2A+Admin), Postgres={postgres_port}, "
+            f"WebhookCapture={webhook_capture_port}"
+        )
+
+        # Shared ordered readiness (postgres → creative-agent → adcp /health).
+        # CI already compose --wait'd; 60s is a safety net, not a cold start budget.
+        ports = e2e_ports(mcp=mcp_port, postgres=postgres_port)
+        _export_and_wait(ports, timeout_s=60)
 
     else:
         # Check if Docker is available
@@ -258,7 +277,9 @@ def docker_services_e2e(request):
         # Always clean up existing services and volumes to ensure fresh state
         print("Cleaning up any existing Docker services and volumes...")
         subprocess.run(
-            ["docker-compose", "-f", "docker-compose.e2e.yml", "down", "-v"], capture_output=True, check=False
+            compose_down_argv(),
+            capture_output=True,
+            check=False,
         )
 
         # Explicitly remove volumes in case docker-compose down -v didn't work
@@ -285,7 +306,7 @@ def docker_services_e2e(request):
         # clear of the Linux ephemeral range (32768+), which the 20000-30000
         # choice for those two was already picked to avoid.
         tls_port = int(os.getenv("ADCP_TLS_PORT")) if os.getenv("ADCP_TLS_PORT") else find_free_port(15000, 20000)
-        # webhook-capture's plain-HTTP READBACK control-plane (salesagent-amht.3)
+        # webhook-capture's plain-HTTP READBACK control-plane (GH #1802)
         # — same dynamic-allocation reasoning as tls_port above (a fixed default
         # would let two concurrent stacks cross-wire onto the same host port).
         # DELIVERY never uses this port; it goes through tls_port above.
@@ -345,96 +366,23 @@ def docker_services_e2e(request):
             raise subprocess.CalledProcessError(agent_build.returncode, "creative-agent-stack.sh build")
 
         print("Step 1/2: Building Docker images...")
-        compose_files = ["-f", "docker-compose.e2e.yml", "-f", "docker-compose.e2e.ports.yml"]
+        # Same argv preference as readiness (`docker compose` plugin first).
+        compose_base = compose_argv(DEFAULT_E2E_COMPOSE_FILES)
         build_result = subprocess.run(
-            ["docker-compose", *compose_files, "build", "--progress=plain"],
+            [*compose_base, "build", "--progress=plain"],
             env=env,
             capture_output=False,  # Show build output
         )
         if build_result.returncode != 0:
             print(f"❌ Docker build failed with exit code {build_result.returncode}")
-            raise subprocess.CalledProcessError(build_result.returncode, "docker-compose build")
+            raise subprocess.CalledProcessError(build_result.returncode, [*compose_base, "build"])
 
         print("Step 2/2: Starting services...")
-        subprocess.run(["docker-compose", *compose_files, "up", "-d"], check=True, env=env)
+        subprocess.run([*compose_base, "up", "-d"], check=True, env=env)
 
-        # Wait for unified server to be healthy (MCP + A2A + Admin all on same port)
-        max_wait = 120  # Increased from 60 to 120 seconds for CI
-        start_time = time.time()
-
-        server_ready = False
-
-        print(f"Waiting for server (max {max_wait}s)...")
-        print(f"  Health: http://{e2e_host()}:{mcp_port}/health")
-
-        while time.time() - start_time < max_wait:
-            elapsed = int(time.time() - start_time)
-
-            # Show progress every 5 seconds
-            if elapsed > 0 and elapsed % 5 == 0 and not server_ready:
-                print(f"  ⏱️  Still waiting... ({elapsed}s / {max_wait}s)")
-                # Show container status for debugging
-                try:
-                    ps_result = subprocess.run(
-                        ["docker-compose", "-f", "docker-compose.e2e.yml", "ps", "--format", "table"],
-                        capture_output=True,
-                        text=True,
-                        timeout=2,
-                    )
-                    if ps_result.returncode == 0 and ps_result.stdout:
-                        print(f"  Container status:\n{ps_result.stdout}")
-                except:
-                    pass
-
-            # Check server health. /health is proxied to upstream, so it
-            # confirms the FastAPI app is actually serving (not just nginx).
-            if not server_ready:
-                try:
-                    response = requests.get(f"http://{e2e_host()}:{mcp_port}/health", timeout=2)
-                    if response.status_code == 200:
-                        print(f"✓ Server is ready (after {elapsed}s)")
-                        server_ready = True
-                except requests.RequestException as e:
-                    if elapsed % 10 == 0:  # Log every 10 seconds
-                        print(f"  Server not ready yet ({elapsed}s): {type(e).__name__}")
-
-            if server_ready:
-                break
-
-            time.sleep(2)
-        else:
-            # Timeout - try to get container logs for debugging
-            print("\n❌ Health check timeout. Attempting to get container logs...")
-
-            # Get logs from all services
-            for service in ["proxy", "adcp-server", "postgres"]:
-                try:
-                    print(f"\n📋 {service} logs (last 100 lines):")
-                    result = subprocess.run(
-                        ["docker-compose", "-f", "docker-compose.e2e.yml", "logs", "--tail=100", service],
-                        capture_output=True,
-                        text=True,
-                        timeout=5,
-                    )
-                    if result.stdout:
-                        print(result.stdout)
-                    if result.stderr:
-                        print(f"STDERR: {result.stderr}")
-                except Exception as e:
-                    print(f"Could not get {service} logs: {e}")
-
-            # Show container status
-            try:
-                print("\n📊 Container status:")
-                ps_result = subprocess.run(
-                    ["docker-compose", "-f", "docker-compose.e2e.yml", "ps"], capture_output=True, text=True, timeout=2
-                )
-                print(ps_result.stdout)
-            except Exception as e:
-                print(f"Could not get container status: {e}")
-
-            if not server_ready:
-                pytest.fail(f"Server did not become healthy in time (waited {max_wait}s, port {mcp_port})")
+        # Same ordered readiness helper as verify-only (migrations + creative-agent start_period).
+        ports = e2e_ports(mcp=mcp_port, postgres=postgres_port)
+        _export_and_wait(ports, timeout_s=120)
 
     # Initialize CI test data now that services are healthy
     print("📦 Initializing CI test data (products, principals, etc.)...")
@@ -452,8 +400,11 @@ def docker_services_e2e(request):
     # fills the gap when E2E_DATABASE_URL is genuinely absent (this leak
     # case) — a real in-network run that already sets it (compose service
     # name, not a published port) is left untouched (#1838 review).
+    # Build via SSOT (no second DSN literal); prefer_env is skipped because
+    # setdefault must not read the stale DATABASE_URL we are protecting against.
     os.environ.setdefault(
-        "E2E_DATABASE_URL", f"postgresql://adcp_user:secure_password_change_me@localhost:{postgres_port}/adcp"
+        "E2E_DATABASE_URL",
+        e2e_db_url_build(host="localhost", port=postgres_port),
     )
 
     # Setup environment for init script - reuse existing env if available, else create minimal
@@ -462,26 +413,11 @@ def docker_services_e2e(request):
     init_env["POSTGRES_PORT"] = str(postgres_port)
     init_env["DATABASE_URL"] = e2e_db_url(postgres_port)
 
-    # Seed CI test data. On the host we shell into the server container via
-    # docker-compose exec (the host process can't reach the container DB
-    # directly) — that path uses the container's own DATABASE_URL, already
-    # correct, and ignores init_env. In-network there is no docker-compose
-    # binary, so it runs the seed script itself using init_env above (which
-    # carries the corrected DATABASE_URL set above) — the script only needs a
-    # DB connection, not Docker.
-    import shutil
-
-    if shutil.which("docker-compose"):
-        init_cmd = [
-            "docker-compose",
-            "-f",
-            "docker-compose.e2e.yml",
-            "exec",
-            "-T",
-            "adcp-server",
-            "python",
-            "scripts/setup/init_database_ci.py",
-        ]
+    # Seed CI test data. Host-path topology prefers compose exec; in-network
+    # runners reach the DB by service name and run the seed in-process.
+    # Topology (use_container_exec), not compose_available(), chooses the seam.
+    if use_container_exec(e2e_host()) and compose_available():
+        init_cmd = compose_exec_argv("adcp-server", "python", "scripts/setup/init_database_ci.py")
     else:
         init_cmd = [sys.executable, "scripts/setup/init_database_ci.py"]
 
@@ -607,7 +543,7 @@ def docker_services_e2e(request):
         try:
             # Stop and remove containers + volumes
             subprocess.run(
-                ["docker-compose", "-f", "docker-compose.e2e.yml", "down", "-v"],
+                compose_down_argv(),
                 capture_output=True,
                 check=False,
                 timeout=30,

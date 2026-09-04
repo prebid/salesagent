@@ -132,6 +132,53 @@ def parse_module(path: Path) -> ast.Module:
     return _parse_cached(str(path), path.stat().st_mtime)
 
 
+def function_def(tree: ast.Module, name: str) -> ast.FunctionDef | ast.AsyncFunctionDef:
+    """Return the top-level function/async-function named ``name``."""
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == name:
+            return node
+    raise AssertionError(f"Function {name!r} not found at module top level")
+
+
+def assign_tuple_strs(tree: ast.Module, name: str) -> tuple[str, ...]:
+    """Return string elts from a top-level ``name = (...)`` / AnnAssign sequence."""
+    for node in tree.body:
+        if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+            continue
+        targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+        if not any(isinstance(t, ast.Name) and t.id == name for t in targets):
+            continue
+        value = node.value
+        if isinstance(value, (ast.Tuple, ast.List)):
+            out: list[str] = []
+            for elt in value.elts:
+                if isinstance(elt, ast.Constant) and isinstance(elt.value, str):
+                    out.append(elt.value)
+            return tuple(out)
+    raise AssertionError(f"Constant sequence {name!r} not found")
+
+
+def call_names(tree: ast.AST) -> set[str]:
+    """Collect bare-name and attribute call targets under ``tree``."""
+    names: set[str] = set()
+    for node in iter_call_expressions(tree):
+        func = node.func
+        if isinstance(func, ast.Name):
+            names.add(func.id)
+        elif isinstance(func, ast.Attribute):
+            names.add(func.attr)
+    return names
+
+
+def imports_name_from(tree: ast.Module, module: str, name: str) -> bool:
+    """True when ``tree`` has ``from <module> import … <name> …``."""
+    for node in tree.body:
+        if isinstance(node, ast.ImportFrom) and node.module == module:
+            if any(alias.name == name for alias in node.names):
+                return True
+    return False
+
+
 def _base_expr_is_tenant(node: ast.expr) -> bool:
     """True when *node* is a tenant reference (``tenant``, ``self.tenant``, ``ctx.tenant``, …)."""
     if isinstance(node, ast.Name) and node.id == "tenant":
@@ -978,6 +1025,54 @@ def runtime_user_directives(lines: Iterable[str]) -> list[str]:
 # ---------------------------------------------------------------------------
 
 _PRE_COMMIT_CONFIG_PATH = Path(".pre-commit-config.yaml")
+
+
+def load_yaml_mapping(path: Path) -> dict[str, Any]:
+    """Read a YAML file and require a top-level mapping (shared guard preamble)."""
+    assert path.is_file(), f"missing {path}"
+    data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    assert isinstance(data, dict), f"{path} must parse to a mapping"
+    return data
+
+
+def job_run_text(job: dict[str, Any]) -> str:
+    """Flatten all ``run:`` step bodies from a workflow job into one string."""
+    chunks: list[str] = []
+    for step in job.get("steps") or []:
+        if isinstance(step, dict) and isinstance(step.get("run"), str):
+            chunks.append(step["run"])
+    return "\n".join(chunks)
+
+
+def find_step(
+    steps: list[dict[str, Any]],
+    *,
+    name_contains: str | None = None,
+    uses_contains: str | None = None,
+) -> dict[str, Any] | None:
+    """Locate the first workflow step matching name/uses substring predicates.
+
+    Returns the matched step mapping, or ``None``. At least one of
+    ``name_contains`` / ``uses_contains`` must be provided; when both are set,
+    both must match. Callers that need the index should enumerate ``steps``
+    themselves (see ``_find_free_disk_step``).
+    """
+    if name_contains is None and uses_contains is None:
+        raise ValueError("at least one of name_contains, uses_contains is required")
+    for step in steps:
+        if not isinstance(step, dict):
+            continue
+        if name_contains is not None and name_contains not in str(step.get("name", "")):
+            continue
+        if uses_contains is not None and uses_contains not in str(step.get("uses", "")):
+            continue
+        return step
+    return None
+
+
+def ipr_agreement_workflow_path(repo: Path | None = None) -> Path:
+    """Canonical path to ``.github/workflows/ipr-agreement.yml``."""
+    return (repo or repo_root()) / ".github" / "workflows" / "ipr-agreement.yml"
 
 
 def load_pre_commit_config(path: Path | None = None, repo: Path | None = None) -> dict[str, Any]:

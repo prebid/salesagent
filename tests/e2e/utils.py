@@ -1,14 +1,23 @@
-import shutil
 import subprocess
 import time
 from contextlib import contextmanager
+from urllib.parse import urlparse
 
-import httpx
 import psycopg2
 import pytest
 from fastmcp.client import Client
 from fastmcp.client.transports import StreamableHttpTransport
 from sqlalchemy import select
+
+from tests.e2e.stack_readiness import (
+    DEFAULT_E2E_COMPOSE_FILES,
+    compose_available,
+    compose_exec_argv,
+    e2e_host_default,
+    e2e_ports,
+    use_container_exec,
+    wait_for_e2e_stack,
+)
 
 
 def make_mcp_client(
@@ -112,7 +121,7 @@ def wait_until(predicate, timeout_seconds: float, poll_interval: float = 0.5) ->
 
     A ``time.monotonic()`` deadline, not an iteration counter — the caller's
     ``predicate`` may itself be a network round trip (e.g. a webhook-capture
-    readback, salesagent-amht.3), so counting iterations under-waits whenever
+    readback, GH #1802), so counting iterations under-waits whenever
     a single check costs more than ``poll_interval``. Returns whether
     ``predicate`` was ever truthy, so a caller can assert on the return value
     instead of re-evaluating ``predicate`` a second time.
@@ -125,32 +134,32 @@ def wait_until(predicate, timeout_seconds: float, poll_interval: float = 0.5) ->
     return bool(predicate())
 
 
-def wait_for_server_readiness(mcp_url: str, timeout: int = 60):
-    """
-    Wait for the MCP server to become ready by checking its health endpoint.
+def wait_for_server_readiness(mcp_url: str, *, postgres_port: int, timeout: int = 60):
+    """Wait for the E2E stack via the shared readiness helper.
+
+    Thin wrapper around :func:`tests.e2e.stack_readiness.wait_for_e2e_stack`.
+    Derives host/port from ``mcp_url`` and takes an explicit ``postgres_port``
+    so the full ordered hard gate (postgres → creative-agent → adcp ``/health``)
+    applies without reading process-global env.
 
     Args:
         mcp_url: Base URL of the MCP server (e.g., http://localhost:8080)
+        postgres_port: Host-published (or in-network) Postgres port for the gate
         timeout: Maximum time to wait in seconds (default: 60)
 
     Raises:
-        pytest.fail if server does not become ready within timeout
+        pytest.fail if the stack does not become ready within timeout
     """
-    print(f"Waiting for MCP server at {mcp_url}...")
-    for _ in range(timeout):
-        try:
-            # Synchronous wait logic using httpx for simplicity in sync/async contexts
-            # But since we are in a helper, we can use sync httpx.Client or requests
-            with httpx.Client() as client:
-                resp = client.get(f"{mcp_url}/health", timeout=1.0)
-                if resp.status_code == 200:
-                    print("✓ Server is ready")
-                    return
-        except Exception:
-            pass
-        time.sleep(1)
+    parsed = urlparse(mcp_url)
+    if not parsed.hostname or parsed.port is None:
+        pytest.fail(f"wait_for_server_readiness: cannot derive host/port from mcp_url={mcp_url!r}")
 
-    pytest.fail(f"Server at {mcp_url} did not become ready within {timeout} seconds")
+    wait_for_e2e_stack(
+        ports=e2e_ports(mcp=int(parsed.port), postgres=int(postgres_port)),
+        compose_files=DEFAULT_E2E_COMPOSE_FILES,
+        host=parsed.hostname,
+        timeout_s=float(timeout),
+    )
 
 
 def force_approve_media_buy_in_db(live_server: dict, media_buy_id: str):
@@ -231,13 +240,12 @@ except Exception as e:
             print(f"Direct DB update failed: {ex}")
             raise prior_exc if prior_exc else ex
 
-    # Host path: pytest runs on the host and cannot reach the container DB
-    # directly, so exec the update inside the adcp-server container. In-network
-    # there is no docker-compose binary and the runner CAN reach the server DB by
-    # service name — go straight to the direct update (mirrors the conftest seed).
-    if shutil.which("docker-compose"):
+    # Host path: prefer compose exec into adcp-server (topology via
+    # use_container_exec / e2e_host). In-network runners reach the DB by
+    # service name — go straight to the direct update (mirrors conftest seed).
+    if use_container_exec(e2e_host_default()) and compose_available():
         try:
-            cmd = ["docker-compose", "exec", "-T", "adcp-server", "python", "-c", update_script]
+            cmd = compose_exec_argv("adcp-server", "python", "-c", update_script)
             result = subprocess.run(cmd, capture_output=True, text=True, check=True)
             print(result.stdout)
         except subprocess.CalledProcessError as e:
