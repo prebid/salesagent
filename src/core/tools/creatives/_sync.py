@@ -193,7 +193,13 @@ def _sync_creatives_impl(
                         error_msg = str(validation_error)
                     failed_creatives.append({"creative_id": creative_id, "error": error_msg})
                     failed_count += 1
-                    results.append(_failed_sync_result(creative_id, error_msg))
+                    # A schema/business-rule failure is a problem in the BUYER's own
+                    # document, so it takes VALIDATION_ERROR (pinned correctable) rather
+                    # than the default SERVICE_UNAVAILABLE (pinned transient), which
+                    # reports the seller as down and tells a conforming buyer to retry a
+                    # permanent error forever. The recovery is not passed: wire_advisory
+                    # derives it from the code.
+                    results.append(_failed_sync_result(creative_id, error_msg, code="VALIDATION_ERROR"))
                     continue  # Skip to next creative
 
                 # Check provenance requirement (EU AI Act Article 50)

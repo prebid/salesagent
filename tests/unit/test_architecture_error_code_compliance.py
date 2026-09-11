@@ -135,3 +135,60 @@ class TestErrorCodeCompliance:
         assert not violations, "AdCPError subclasses with non-compliant codes:\n" + "\n".join(
             f"  {v}" for v in violations
         )
+
+
+class TestAdvisoryCodeNormalization:
+    """Runtime companion to the AST scan above.
+
+    The scan proves no string-literal internal code is *constructed* in an
+    advisory. This proves the other half: a code arriving from a typed
+    exception at runtime is normalized before it reaches the buyer. Advisory
+    ``errors[]`` serialize verbatim and never pass through the boundary
+    translator that handles raised ``AdCPError``s, so an unnormalized code
+    would leak with nothing to catch it.
+    """
+
+    def test_non_wire_typed_error_code_normalized_not_leaked(self):
+        """``_failed_sync_result`` routes through the normalizing advisory constructor.
+
+        Grades the SEAM, not the constructor: ``wire_advisory`` itself is graded
+        over every pinned code by
+        test_architecture_error_recovery_enum_conformance.py. What is checked here
+        is that the creative-sync builder actually goes THROUGH it rather than
+        constructing an ``adcp.types.Error`` of its own — which would type-check
+        clean, since that model takes a bare ``str`` code and a free ``recovery``.
+
+        Drives a real ``AdCPFormatNotFoundError`` exactly as ``_sync_creatives_impl``'s
+        ``except AdCPError`` arm forwards it: ``FORMAT_NOT_FOUND`` is internal-only,
+        and advisory ``errors[]`` serialize verbatim inside a SUCCESS response
+        without passing the boundary translator, so an unnormalized code would
+        reach the buyer with nothing downstream to catch it.
+
+        Recovery is asserted as DERIVED, not forwarded: the call passes no
+        ``recovery``, so ``correctable`` here can only have come from the pinned
+        enumMetadata entry for the NORMALIZED code (``INVALID_REQUEST``) — never
+        from the classification of the code it was translated from.
+
+        No DB and no transport — the offline choke-point check under the
+        per-transport wire grading in
+        tests/integration/test_creative_advisory_recovery_pair.py.
+        """
+        from src.core.exceptions import RECOVERY_BY_WIRE_CODE, AdCPFormatNotFoundError
+        from src.core.tools.creatives._processing import _failed_sync_result
+
+        err = AdCPFormatNotFoundError("format_does_not_exist_xyz")
+        assert err.error_code == "FORMAT_NOT_FOUND"  # a non-wire internal code
+
+        result = _failed_sync_result("c_leak", str(err), code=err.error_code)
+
+        emitted = result.errors[0]
+        assert emitted.code == "INVALID_REQUEST", (
+            f"non-wire typed code {err.error_code!r} must normalize to its wire value, got {emitted.code!r}"
+        )
+        assert emitted.code != "FORMAT_NOT_FOUND", "internal code leaked to the buyer verbatim"
+        # Derived from the NORMALIZED code's pinned entry, with no recovery passed in.
+        assert emitted.recovery is not None
+        assert emitted.recovery.value == RECOVERY_BY_WIRE_CODE["INVALID_REQUEST"] == "correctable", (
+            f"advisory recovery {emitted.recovery!r} must be the pin's classification for the "
+            f"normalized code, not the one belonging to {err.error_code!r}"
+        )
