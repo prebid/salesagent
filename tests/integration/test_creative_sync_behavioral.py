@@ -572,7 +572,11 @@ class TestCreativeValidation:
         """
         missing_format_id = "format_missing_on_agent_xyz"
 
-        def _get_format(agent_url, format_id):
+        # **_kwargs so a new registry kwarg cannot silently kill this oracle: production
+        # passes provenance=, and format_resolver swallows a stub TypeError into None,
+        # which would resolve every format to None and never raise the error under test.
+        # Matches the sibling stubs in test_creative_lifecycle_mcp.py / test_creative_v3.py.
+        def _get_format(agent_url, format_id, **_kwargs):
             # Raise the typed AdCPFormatNotFoundError (raw FORMAT_NOT_FOUND, an
             # INTERNAL code) for the one bad format so the except-AdCPError branch
             # (_sync.py) forwards e.error_code through _failed_sync_result ->
