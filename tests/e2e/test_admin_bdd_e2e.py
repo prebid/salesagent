@@ -15,53 +15,19 @@ through real HTTP requests against nginx -> FastAPI -> admin blueprint.
 
 from __future__ import annotations
 
-import os
-
 import pytest
 import requests
 
-from tests.e2e.conftest import e2e_host
+from tests.e2e.conftest import admin_stack_env, e2e_host
 
 
 @pytest.fixture()
 def admin_e2e_env(docker_services_e2e):
-    """Provide AdminAccountEnv in e2e mode against Docker stack.
-
-    Sets ADCP_SALES_PORT from the Docker services fixture so the harness
-    auto-detects e2e mode.
-    """
-    ports = docker_services_e2e
-    admin_port = ports["admin_port"]
-
-    # Ensure the env var is set for AdminAccountEnv auto-detection
-    old_port = os.environ.get("ADCP_SALES_PORT")
-    os.environ["ADCP_SALES_PORT"] = str(admin_port)
-
-    # Also set DATABASE_URL to point at the e2e Postgres (the SERVER's /adcp DB).
-    # In-network the runner exports E2E_DATABASE_URL (postgres:5432/adcp, no host
-    # port); on the host path build localhost:<published-port>.
-    old_db = os.environ.get("DATABASE_URL")
-    pg_port = ports["postgres_port"]
-    db_host = os.environ.get("ADCP_TEST_DB_HOST", "localhost")
-    db_port = os.environ.get("ADCP_TEST_DB_PORT", str(pg_port))
-    os.environ["DATABASE_URL"] = os.environ.get("E2E_DATABASE_URL") or (
-        f"postgresql://adcp_user:secure_password_change_me@{db_host}:{db_port}/adcp"
-    )
-
+    """Provide AdminAccountEnv in e2e mode against the Docker stack."""
     from tests.harness.admin_accounts import AdminAccountEnv
 
-    with AdminAccountEnv(mode="e2e") as env:
+    with admin_stack_env(docker_services_e2e, lambda: AdminAccountEnv(mode="e2e")) as env:
         yield env
-
-    # Restore env vars
-    if old_port is not None:
-        os.environ["ADCP_SALES_PORT"] = old_port
-    else:
-        os.environ.pop("ADCP_SALES_PORT", None)
-    if old_db is not None:
-        os.environ["DATABASE_URL"] = old_db
-    else:
-        os.environ.pop("DATABASE_URL", None)
 
 
 class TestAdminAccountsE2E:

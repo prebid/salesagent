@@ -13,21 +13,29 @@ fundamentally different transport layer:
 | Auth | ResolvedIdentity | Flask session cookies |
 | Response | Pydantic models | HTML pages + JSON API |
 | Parametrize | 4 API transports | Not parametrized (single transport) |
-| Harness | IntegrationEnv subclasses | AdminAccountEnv |
+| Harness | IntegrationEnv subclasses | AdminAccountEnv (and its subclass AdminTenantScopingEnv) |
 
 ## File Structure
 
 ```
 tests/bdd/
 ├── features/
-│   └── BR-ADMIN-ACCOUNTS.feature    # Gherkin scenarios
+│   ├── BR-ADMIN-ACCOUNTS.feature          # Gherkin scenarios
+│   └── BR-ADMIN-TENANT-SCOPING.feature    # Tenant-scoped route authorization (#2203)
 ├── steps/domain/
-│   └── admin_accounts.py            # Step definitions
-├── test_admin_accounts.py           # scenarios() binding
-└── conftest.py                      # T-ADMIN- tag handling
+│   ├── admin_accounts.py                  # Step definitions (shared Then vocabulary)
+│   └── admin_tenant_scoping.py            # Step definitions
+├── test_admin_accounts.py                 # scenarios() binding
+├── test_admin_tenant_scoping.py           # scenarios() binding
+└── conftest.py                            # T-ADMIN- tag handling, ENV_ROUTES rows
 
 tests/harness/
-└── admin_accounts.py                # AdminAccountEnv (dual transport)
+├── admin_accounts.py                      # AdminAccountEnv (dual transport)
+└── admin_tenant_scoping.py                # AdminTenantScopingEnv (subclass; member sessions)
+
+tests/e2e/
+├── test_admin_bdd_e2e.py                  # e2e transport for BR-ADMIN-ACCOUNTS
+└── test_admin_tenant_scoping_e2e.py       # e2e transport for BR-ADMIN-TENANT-SCOPING
 ```
 
 ## Adding a New Admin Feature
@@ -127,8 +135,11 @@ Available when `ADCP_SALES_PORT` is set (e.g., via `./run_all_tests.sh`).
 
 1. **No API transport parametrize**: `pytest_generate_tests` detects `T-ADMIN-`
    tags and skips the 4-transport parametrize.
-2. **Harness auto-wire**: `_harness_env` detects `ADMIN` UC and provides
-   `AdminAccountEnv` from `tests/harness/admin_accounts.py`.
+2. **Harness auto-wire**: `_harness_env` resolves `ENV_ROUTES`. The `ADMIN` bucket
+   row provides `AdminAccountEnv` from `tests/harness/admin_accounts.py` unless a
+   predicate row claims the scenario first (`T-ADMIN-SCOPE-*` gets
+   `AdminTenantScopingEnv`); a new admin harness is a new predicate row plus its
+   tag in `EXPECTED_WIRED_ROUTES` (`tests/unit/test_architecture_measurement_floors.py`).
 3. **Entity marker**: Admin scenarios get `pytest.mark.admin` automatically.
 4. **xfail for @pending**: Scenarios tagged `@pending` are xfailed until
    step definitions are implemented.

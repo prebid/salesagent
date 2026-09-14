@@ -52,6 +52,20 @@ def factory_session(integration_db):  # noqa: F811 — fixture parameter, not a 
 
 
 @pytest.fixture
+def scoping_env(integration_db):  # noqa: F811 — fixture parameter, not a redefinition
+    """``AdminTenantScopingEnv`` on the Flask test_client, target tenant seeded (#2203).
+
+    The e2e twin is the ``scoping_env`` fixture in tests/e2e/test_admin_tenant_scoping_e2e.py;
+    the test classes in tests/admin/test_tenant_scoped_routes_auth.py run against either.
+    """
+    from tests.harness.admin_tenant_scoping import AdminTenantScopingEnv
+
+    with AdminTenantScopingEnv.integration() as env:
+        env.seed_target_tenant()
+        yield env
+
+
+@pytest.fixture
 def ui_test_mode():
     """Enable UI test authentication mode."""
     os.environ["ADCP_AUTH_TEST_MODE"] = "true"

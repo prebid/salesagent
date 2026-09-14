@@ -23,7 +23,7 @@ import os
 import re
 import ssl
 from collections.abc import Callable, Generator
-from contextlib import AbstractContextManager, contextmanager, nullcontext
+from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, NamedTuple
@@ -33,6 +33,7 @@ import pytest
 from scripts.audit import storyboard_spec
 from tests.helpers.ledger import load_ledger_nodeids
 from tests.helpers.marker_names import derive_marker_names
+from tests.utils.database_helpers import production_db_pointed_at
 
 # Known mock-incompatible e2e_rest BDD scenarios — these dispatch over real HTTP
 # to the separate server, so in-process mock injection (set_registry_formats /
@@ -77,6 +78,7 @@ pytest_plugins = [
     "tests.bdd.steps.domain.uc005_format_id_third_party",
     "tests.bdd.steps.domain.uc011_accounts",
     "tests.bdd.steps.domain.admin_accounts",
+    "tests.bdd.steps.domain.admin_tenant_scoping",
     "tests.bdd.steps.domain.uc_get_products_inventory",
     "tests.bdd.steps.domain.egress_ssrf",
     "tests.bdd.steps.domain.uc_brand_shorthand",
@@ -3571,6 +3573,17 @@ def _build_admin_env(e2e_config: object | None) -> AbstractContextManager:
     return AdminAccountEnv(mode="integration")
 
 
+def _build_admin_tenant_scoping_env(e2e_config: object | None) -> AbstractContextManager:
+    """The T-ADMIN-SCOPE-* scenarios (#2203): same Flask test_client transport, different harness.
+
+    ``e2e_config`` is always ``None`` here for the same reason as ``_build_admin_env``;
+    the e2e transport for this feature is tests/e2e/test_admin_tenant_scoping_e2e.py.
+    """
+    from tests.harness.admin_tenant_scoping import AdminTenantScopingEnv
+
+    return AdminTenantScopingEnv.integration()
+
+
 def _build_product_env(e2e_config: object | None) -> AbstractContextManager:
     """Shared by COMPAT and UC-GET-PRODUCTS — both are read-only product listing."""
     from tests.harness.product import ProductEnv
@@ -3715,36 +3728,6 @@ def _uc(uc_name: str, predicate: Callable[[frozenset[str]], bool]) -> Callable[[
     return lambda markers: storyboard_spec.detect_uc(markers) == uc_name and predicate(markers)
 
 
-@contextmanager
-def _production_db_pointed_at(url: str) -> Generator[None, None, None]:
-    """Point production's cached DB engine at ``url`` for the scenario duration.
-
-    The e2e counterpart of ``integration_db``'s engine repoint: over e2e_rest
-    the env's factories write to the live server DB (``e2e_config.postgres_url``),
-    but the runner's ``DATABASE_URL`` targets the in-process test base (in-network:
-    ``.../adcp_test``), so any in-process production call inside an e2e scenario
-    (e.g. a TRANSPORT-BYPASS Given calling an ``_impl``) would read a different
-    database than the one being seeded. Repoint DATABASE_URL + reset the cached
-    engine on entry, restore both on exit (mirrors tests/conftest_db.py).
-    """
-    import src.core.context_manager as _context_manager_module
-    from src.core.database.database_session import reset_engine
-
-    original_url = os.environ.get("DATABASE_URL")
-    os.environ["DATABASE_URL"] = url
-    reset_engine()
-    _context_manager_module._context_manager_instance = None
-    try:
-        yield
-    finally:
-        if original_url is None:
-            os.environ.pop("DATABASE_URL", None)
-        else:
-            os.environ["DATABASE_URL"] = original_url
-        reset_engine()
-        _context_manager_module._context_manager_instance = None
-
-
 def _db_scope_for(request: pytest.FixtureRequest, e2e_config: object | None) -> AbstractContextManager[None]:
     """Select the production-DB scope for an e2e-capable harness branch.
 
@@ -3759,7 +3742,7 @@ def _db_scope_for(request: pytest.FixtureRequest, e2e_config: object | None) -> 
     if e2e_config is None:
         request.getfixturevalue("integration_db")
         return nullcontext()
-    return _production_db_pointed_at(e2e_config.postgres_url)  # type: ignore[attr-defined]
+    return production_db_pointed_at(e2e_config.postgres_url)  # type: ignore[attr-defined]
 
 
 def _run_env_route(
@@ -3810,10 +3793,11 @@ _UC_BUCKET_ROUTES: dict[str, EnvRoute] = {
     ),
     # The five rows below are keyed by the coarse `uc` bucket (from
     # _detect_uc), not a per-scenario tag: they are what a scenario in these
-    # UCs falls back to when no predicate row above claims it. ADMIN, COMPAT,
+    # UCs falls back to when no predicate row above claims it. COMPAT,
     # UC-GET-PRODUCTS and UC-005 have no predicate rows at all — one env + one
-    # seed serves every scenario. UC-019 does have one (@post-create-poll needs
-    # create + list in a single scenario), so its bucket row is the remainder.
+    # seed serves every scenario. ADMIN has one (T-ADMIN-SCOPE-* takes its own
+    # harness) and UC-019 has one (@post-create-poll needs create + list in a
+    # single scenario), so their bucket rows are the remainder.
     "ADMIN": EnvRoute(tag="ADMIN", env_builder=_build_admin_env),
     "COMPAT": EnvRoute(tag="COMPAT", env_builder=_build_product_env),
     "UC-GET-PRODUCTS": EnvRoute(tag="UC-GET-PRODUCTS", env_builder=_build_product_env),
@@ -3851,6 +3835,16 @@ _UC003_STORYBOARD_CLIENT_TAGS = frozenset(
 )
 
 ENV_ROUTES: list[EnvRoute] = [
+    # ── ADMIN (hand-authored admin UI features) ─────────────────────────────
+    # T-ADMIN-* detects as the ADMIN bucket (storyboard_spec.detect_uc); the
+    # bucket row serves BR-ADMIN-ACCOUNTS. BR-ADMIN-TENANT-SCOPING carries the
+    # narrower T-ADMIN-SCOPE- prefix and needs its own harness, so it is claimed
+    # here, ahead of the bucket, by predicate.
+    EnvRoute(
+        tag="admin-tenant-scoping",
+        when=lambda m: any(t.startswith("T-ADMIN-SCOPE-") for t in m),
+        env_builder=_build_admin_tenant_scoping_env,
+    ),
     # ── @egress (local SSRF / webhook-credential refusal feature) ───────────
     # These scenarios carry T-EGRESS-* identity tags, NOT T-UC-<n>, so
     # storyboard_spec.detect_uc returns None for them and no coarse bucket can

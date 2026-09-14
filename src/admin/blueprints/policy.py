@@ -6,7 +6,7 @@ import logging
 from flask import Blueprint, jsonify, redirect, render_template, request, session, url_for
 from sqlalchemy import select
 
-from src.admin.utils import get_tenant_config_from_db, require_auth
+from src.admin.utils import get_tenant_config_from_db, require_auth, require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
 from src.core.audit_logger import AuditLogger
 from src.core.database.database_session import get_db_session
@@ -208,7 +208,7 @@ def update(tenant_id):
 
 
 @policy_bp.route("/rules", methods=["GET", "POST"])
-@require_auth()
+@require_tenant_access()
 def rules(tenant_id):
     """Redirect old policy rules URL to new comprehensive policy settings page."""
     return redirect(url_for("policy.index", tenant_id=tenant_id))

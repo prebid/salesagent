@@ -50,6 +50,7 @@ EXPECTED_WIRED_ROUTES: frozenset[str] = frozenset(
         "UC-019",
         "UC-GET-PRODUCTS",
         # literal ENV_ROUTES block
+        "admin-tenant-scoping",
         "egress-create",
         "egress-get-products",
         "egress-sync",
