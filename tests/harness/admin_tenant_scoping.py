@@ -12,35 +12,38 @@ inherited unchanged, and the harness lifecycle guard
 one hand-rolled ``__enter__``/``__exit__`` home to ``AdminAccountEnv``, so a second admin
 env inherits that lifecycle instead of restating it.
 
-The caller's session is always established against a HOME tenant that is never the
-target. On the e2e transport ``/test/auth`` stamps ``test_tenant_id`` with the login
-tenant, and ``require_tenant_access`` waives the membership lookup when that equals the
-requested tenant — logging in elsewhere is what makes the target tenant's ``User`` row the
-only thing that decides the outcome, on both transports, so a rejection here is the real
-membership check and not the test-mode bypass.
+The caller logs in through ``/test/auth`` on both transports, always against a HOME
+tenant that is never the target. That endpoint stamps ``test_tenant_id`` with the login
+tenant, and ``require_tenant_access`` waives the membership lookup only when that equals
+the requested tenant — logging in elsewhere is what makes the target tenant's ``User``
+row the only thing that decides the outcome, so a rejection here is the real membership
+check and not the test-mode bypass, and the in-process leg takes the same branch of the
+decorator the stack does.
 
-The module-level helpers (route table, seeding, state snapshot, assertion helpers) are
-shared with ``tests/admin/test_tenant_scoped_routes_auth.py`` and
-``tests/e2e/test_admin_tenant_scoping_e2e.py`` so the three layers grade one contract.
+The module-level helpers (route table, case expansion, seeding, state snapshot, assertion
+helpers) are shared with ``tests/admin/test_tenant_scoped_routes_auth.py`` (whose classes
+``tests/e2e/test_admin_tenant_scoping_e2e.py`` reuses) so the three layers grade one contract.
 """
 
 from __future__ import annotations
 
+import os
 import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
 from decimal import Decimal
 from typing import Any, NamedTuple
+from unittest import mock
 from urllib.parse import urlsplit
 
 from sqlalchemy.orm import Session
 
-from src.core.database.database_session import get_db_session, get_engine
+from src.core.database.database_session import get_db_session
 from src.core.database.models import Tenant
 from src.services.default_products import get_default_products
 from tests.factories import MediaBuyFactory, ProductFactory, TenantFactory, UserFactory
 from tests.harness.admin_accounts import AdminAccountEnv, _AdminResponse
-from tests.utils.database_helpers import bind_factories_to_session
+from tests.utils.database_helpers import bound_factory_session
 
 #: The one non-admin identity ``/test/auth`` accepts on the Docker stack. The integration
 #: transport uses the same address so both transports grade identical ``User`` rows.
@@ -62,6 +65,20 @@ ROUTES: dict[str, TenantScopedRoute] = {
     "product suggestions API": TenantScopedRoute("/api/tenant/{tenant_id}/products/suggestions", ("GET",), True),
     "policy rules page": TenantScopedRoute("/tenant/{tenant_id}/policy/rules", ("GET", "POST"), False),
 }
+
+
+#: ``pytest.mark.parametrize`` argnames for the rows ``route_cases()`` returns.
+ROUTE_CASE_PARAMS = "method,route,api_mode"
+
+
+def route_cases() -> tuple[list[str], list[tuple[str, str, bool]]]:
+    """``(ids, rows)`` for ``parametrize(ROUTE_CASE_PARAMS, rows, ids=ids)``: one row per route and method."""
+    cases = [
+        (f"{name}-{method}", (method, name, route.api_mode))
+        for name, route in ROUTES.items()
+        for method in route.methods
+    ]
+    return [case[0] for case in cases], [case[1] for case in cases]
 
 
 class TargetTenant(NamedTuple):
@@ -113,22 +130,6 @@ def tenant_state(session: Session, tenant_id: str) -> tuple:
 def redirect_path(response: Any) -> str:
     """Path of a redirect's Location, without the ``next`` query the login page carries."""
     return urlsplit(response.headers["Location"]).path
-
-
-def member_session(email: str, tenant_id: str) -> dict[str, Any]:
-    """The session keys of a normal tenant member logged in against ``tenant_id``.
-
-    ``test_user`` / ``test_user_role`` / ``test_tenant_id`` are deliberately absent: with
-    them present ``require_tenant_access`` takes the test-mode bypass instead of the
-    ``User`` membership lookup (``tests/helpers/media_buy_approval.login_as`` sets them,
-    which is why it is not reused here).
-    """
-    return {
-        "authenticated": True,
-        "user": {"email": email, "is_super_admin": False},
-        "email": email,
-        "tenant_id": tenant_id,
-    }
 
 
 #: The order today's handler emits get_default_products() in when no query parameters are
@@ -185,22 +186,6 @@ def assert_membership_rejected(response: Any, api_mode: bool) -> None:
         assert response.get_json() == {"error": "Access denied"}
 
 
-@contextmanager
-def bound_factories() -> Iterator[Session]:
-    """A session on the current engine with every factory bound to it for the block.
-
-    The env is not a ``BaseTestEnv`` (see the module docstring), so it cannot bind in
-    ``__enter__``; binding per call through the shared ``bind_factories_to_session`` keeps
-    whatever binding was in place outside the block.
-    """
-    session = Session(bind=get_engine())
-    try:
-        with bind_factories_to_session(session):
-            yield session
-    finally:
-        session.close()
-
-
 class AdminTenantScopingEnv(AdminAccountEnv):
     """Test environment for the tenant-scoping scenarios of #2203.
 
@@ -213,6 +198,22 @@ class AdminTenantScopingEnv(AdminAccountEnv):
         self._target: TargetTenant | None = None
         self._state: tuple | None = None
 
+    @classmethod
+    @contextmanager
+    def integration(cls) -> Iterator[AdminTenantScopingEnv]:
+        """The in-process env, with no ambient super-admin grant for the member identity.
+
+        ``MEMBER_EMAIL`` lives at ``example.com``; an inherited ``SUPER_ADMIN_DOMAINS=example.com``
+        would turn every rejection case into a super-admin pass. The stack's environment is the
+        server's own (docker-compose.e2e.yml forwards ``SUPER_ADMIN_EMAILS`` only), so this is the
+        one transport the test process controls, and both places that build the in-process env
+        (tests/admin/conftest.py, tests/bdd/conftest.py) come through here.
+        """
+        with mock.patch.dict(os.environ):
+            os.environ.pop("SUPER_ADMIN_DOMAINS", None)
+            with cls(mode="integration") as env:
+                yield env
+
     # ── Target tenant ─────────────────────────────────────────────────────
 
     @property
@@ -221,7 +222,7 @@ class AdminTenantScopingEnv(AdminAccountEnv):
         return self._target
 
     def seed_target_tenant(self) -> TargetTenant:
-        with bound_factories() as session:
+        with bound_factory_session() as session:
             self._target = seed_target_tenant(session)
         self._state = self.target_state()
         return self._target
@@ -245,26 +246,22 @@ class AdminTenantScopingEnv(AdminAccountEnv):
     def login_with_target_membership(self, *, is_active: bool) -> None:
         """A ``User`` row in the TARGET tenant with ``is_active`` as given; session held via a fresh home tenant."""
         home_tenant_id = self._new_home_tenant(with_member=False)
-        with bound_factories() as session:
+        with bound_factory_session() as session:
             target = session.get(Tenant, self.target.tenant_id)
             UserFactory(tenant=target, user_id=unique_id("user"), email=MEMBER_EMAIL, is_active=is_active)
         self._authenticate_member(home_tenant_id)
 
     def _new_home_tenant(self, *, with_member: bool) -> str:
         """A tenant the session is logged in against. Never the target, so the bypass cannot fire."""
-        with bound_factories():
+        with bound_factory_session():
             home = TenantFactory(tenant_id=unique_id("home"))
             if with_member:
                 UserFactory(tenant=home, user_id=unique_id("user"), email=MEMBER_EMAIL)
             return home.tenant_id
 
     def _authenticate_member(self, login_tenant_id: str) -> None:
-        """Session for a normal member — never the super-admin or ``test_user`` bypass keys."""
-        if self._mode == "integration":
-            with self._flask_client.session_transaction() as sess:
-                sess.update(member_session(MEMBER_EMAIL, login_tenant_id))
-            return
-        self._auth_e2e(login_tenant_id, email=MEMBER_EMAIL, password=MEMBER_PASSWORD)
+        """Log in as the non-admin test identity against ``login_tenant_id`` (never the target)."""
+        self._login_via_test_auth(login_tenant_id, email=MEMBER_EMAIL, password=MEMBER_PASSWORD)
 
     # ── Requests ──────────────────────────────────────────────────────────
 

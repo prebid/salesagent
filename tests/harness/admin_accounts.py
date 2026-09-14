@@ -174,7 +174,7 @@ class AdminAccountEnv:
         if self._mode == "integration":
             self._auth_integration(tid)
         else:
-            self._auth_e2e(tid)
+            self._login_via_test_auth(tid)
 
     def _auth_integration(self, tenant_id: str) -> None:
         """Session-based auth for Flask test_client."""
@@ -188,27 +188,27 @@ class AdminAccountEnv:
             sess["test_user_name"] = "Test User"
             sess["test_tenant_id"] = tenant_id
 
-    def _auth_e2e(
+    def _login_via_test_auth(
         self, tenant_id: str, *, email: str = "test_super_admin@example.com", password: str = "test123"
     ) -> None:
-        """Cookie-based auth via /test/auth endpoint on Docker stack.
+        """Cookie-based auth via ``/test/auth`` on whichever transport is active.
 
         Defaults to the super-admin test user; a subclass proving authorization passes
-        one of the non-admin identities ``/test/auth`` accepts instead.
+        one of the non-admin identities ``/test/auth`` accepts instead. Going through the
+        endpoint on both transports means the session carries exactly the keys
+        production's test login writes, so the decorators under test take the same
+        branch in-process as they do on the stack.
         """
-        assert self._session is not None
-        resp = self._session.post(
-            f"{self._base_url}/test/auth",
-            data={"email": email, "password": password, "tenant_id": tenant_id},
-            allow_redirects=False,
+        resp = self._post_form(
+            f"{self._base_url}/test/auth", {"email": email, "password": password, "tenant_id": tenant_id}
         )
         # /test/auth redirects on success (302) — session cookie is stored
         if resp.status_code not in (200, 302):
-            raise RuntimeError(f"E2E auth failed: {resp.status_code} {resp.text[:200]}")
+            raise RuntimeError(f"test auth failed: {resp.status_code} {resp.data[:200]!r}")
         # A rejected credential is ALSO a 302 (flash, then back to the login page); only
         # the dashboard redirect means the cookie now carries a session.
         if resp.status_code == 302 and urlsplit(resp.headers.get("Location", "")).path.endswith("/login"):
-            raise RuntimeError(f"E2E auth rejected credentials for {email!r} on tenant {tenant_id!r}")
+            raise RuntimeError(f"test auth rejected credentials for {email!r} on tenant {tenant_id!r}")
 
     def clear_auth(self) -> None:
         """Clear the authenticated session."""

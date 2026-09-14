@@ -42,11 +42,9 @@ _API_KEY = "machine caller authenticated by require_api_key_auth (src/admin/auth
 _SUPER_ADMIN_ONLY = (
     "require_auth(admin_only=True): super-admin action where the tenant is the subject, not the caller's scope"
 )
-# The two inline-check groups are the "adjacent, deliberately not in this issue" routes
-# that #2203's Notes section documents; they carry that reference until their own issue
-# exists, at which point the number here changes to it.
-_INLINE_DEAD_ROLE_CHECK = "#2203 Notes: inline session['role'] viewer/tenant_admin check that no production login sets"
-_INLINE_SESSION_TENANT_CHECK = "#2203 Notes: inline session['tenant_id'] == tenant_id compare instead of the decorator"
+_INLINE_DEAD_ROLE_CHECK = "#2233: inline session['role'] viewer/tenant_admin check that no production login sets"
+_INLINE_SESSION_TENANT_CHECK = "#2233: inline session['tenant_id'] == tenant_id compare instead of the decorator"
+_ISSUE_2234 = "#2234: GAM OAuth initiation proves the tenant exists, not that the caller belongs to it"
 _PR_2075 = "PR #2075 (open) adds require_tenant_access(api_mode=True) to publisher partners; remove when it merges"
 _ISSUE_2204 = "#2204: the module-local bare @require_auth in gam_reporting_api has to be removed first"
 
@@ -56,9 +54,7 @@ EXEMPT: dict[tuple[str, str], str] = {
     ("auth.tenant_google_auth", "/tenant/<tenant_id>/auth/google"): _LOGIN_ENTRY,
     ("oidc.login", "/auth/oidc/login/<tenant_id>"): _LOGIN_ENTRY,
     ("oidc.test_initiate", "/auth/oidc/test/<tenant_id>"): _LOGIN_ENTRY,
-    ("auth.gam_authorize", "/auth/gam/authorize/<tenant_id>"): (
-        "GAM OAuth initiation; checks only that the tenant exists — outside #2203, needs its own issue"
-    ),
+    ("auth.gam_authorize", "/auth/gam/authorize/<tenant_id>"): _ISSUE_2234,
     ("sync_api.trigger_sync", "/api/sync/trigger/<tenant_id>"): _API_KEY,
     ("sync_api.get_sync_history", "/api/sync/history/<tenant_id>"): _API_KEY,
     ("sync_api.sync_tenant_orders", "/api/sync/tenant/<tenant_id>/orders/sync"): _API_KEY,

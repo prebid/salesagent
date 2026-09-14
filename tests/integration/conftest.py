@@ -1378,14 +1378,7 @@ def bound_factory_session(integration_db):
     because a caller that only borrowed the binding would still have to manage the
     SASession itself and that is where the hand-rolled versions diverge.
     """
-    from sqlalchemy.orm import Session as SASession
+    from tests.utils.database_helpers import bound_factory_session as bound
 
-    from src.core.database.database_session import get_engine
-    from tests.utils.database_helpers import bind_factories_to_session
-
-    session = SASession(bind=get_engine())
-    try:
-        with bind_factories_to_session(session):
-            yield session
-    finally:
-        session.close()
+    with bound() as session:
+        yield session

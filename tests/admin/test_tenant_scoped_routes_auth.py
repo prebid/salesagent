@@ -15,191 +15,116 @@ decorator's observable contract:
 * active member    -> today's behaviour, same status and body
 * any rejection    -> no state change
 
-Sessions are real ``User`` memberships, never the super-admin or ``ADCP_AUTH_TEST_MODE``
-bypass, so each rejection test here fails if the decorator is removed. Test data comes
-from factory-boy factories (``tests/CLAUDE.md``); no ``session.add()`` in test bodies.
-The route table, seeding, state snapshot and assertion helpers are shared with the BDD
-harness (``tests/harness/admin_tenant_scoping.py``) so all three layers grade one contract.
+The three classes are the contract, written once. Here they run on the Flask
+``test_client`` through the ``scoping_env`` fixture in tests/admin/conftest.py;
+tests/e2e/test_admin_tenant_scoping_e2e.py imports them and supplies its own
+``scoping_env`` against the Docker stack. The harness
+(``tests/harness/admin_tenant_scoping.py``) logs in through ``/test/auth`` against a home
+tenant that is never the target, so the decorator's test-mode bypass cannot grant and the
+target tenant's ``User`` row is the only thing that decides; each rejection test fails if
+the decorator is removed. Test data comes from factory-boy factories (``tests/CLAUDE.md``).
 """
 
 from __future__ import annotations
 
-from collections.abc import Iterator
-
 import pytest
-from flask.testing import FlaskClient
-from sqlalchemy.orm import Session
-from werkzeug.test import TestResponse
 
-from src.admin.app import create_app
-from src.core.database.models import Tenant
-from tests.factories import UserFactory
 from tests.harness.admin_tenant_scoping import (
     ACTIVE_BUY_BUDGET,
-    ROUTES,
-    TargetTenant,
+    ROUTE_CASE_PARAMS,
+    AdminTenantScopingEnv,
     assert_anonymous_rejected,
     assert_membership_rejected,
     expected_suggestions_body,
-    member_session,
     redirect_path,
-    seed_target_tenant,
-    tenant_state,
+    route_cases,
 )
-
-app = create_app()
 
 pytestmark = [pytest.mark.admin, pytest.mark.requires_db]
 
-# (case id, method, path template, api_mode): one row per route and method.
-_CASES = [
-    (f"{name}-{method}", method, route.path, route.api_mode)
-    for name, route in ROUTES.items()
-    for method in route.methods
-]
-_CASE_PARAMS = "method,path,api_mode"
-_CASE_ROWS = [case[1:] for case in _CASES]
-_CASE_IDS = [case[0] for case in _CASES]
-
-# Two ways a logged-in user can fail membership in the requested tenant. Each builds the
-# User row whose email the session will carry.
-_REJECTED_MEMBERSHIPS = {
-    "other_tenant": lambda target: UserFactory(),  # active member of a different tenant
-    "inactive_member": lambda target: UserFactory(tenant=target, is_active=False),
-}
-
-
-@pytest.fixture
-def client() -> Iterator[FlaskClient]:
-    """Flask test client with CSRF disabled."""
-    app.config["TESTING"] = True
-    app.config["WTF_CSRF_ENABLED"] = False
-    app.config["SESSION_COOKIE_PATH"] = "/"
-    with app.test_client() as test_client:
-        yield test_client
-
-
-@pytest.fixture(autouse=True)
-def _no_ambient_super_admin(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Factory users live at ``@example.com``.
-
-    An inherited ``SUPER_ADMIN_DOMAINS=example.com`` would turn every rejection case below
-    into a super-admin pass and prove nothing about tenant membership.
-    """
-    monkeypatch.delenv("SUPER_ADMIN_DOMAINS", raising=False)
-
-
-def _member_session(client: FlaskClient, tenant_id: str, email: str) -> None:
-    """Authenticated session for a normal tenant member (never the test-mode bypass keys)."""
-    with client.session_transaction() as sess:
-        sess.update(member_session(email, tenant_id))
-
-
-def _seed(session: Session) -> tuple[TargetTenant, Tenant, tuple]:
-    """The target tenant, its ORM row (for membership factories) and its state snapshot."""
-    target = seed_target_tenant(session)
-    tenant = session.get(Tenant, target.tenant_id)
-    assert tenant is not None
-    return target, tenant, tenant_state(session, target.tenant_id)
-
-
-def _login_active_member(client: FlaskClient, tenant: Tenant) -> None:
-    user = UserFactory(tenant=tenant)
-    _member_session(client, tenant.tenant_id, user.email)
-
-
-def _dispatch(client: FlaskClient, method: str, path: str, tenant_id: str) -> TestResponse:
-    url = path.format(tenant_id=tenant_id)
-    if method == "GET":
-        return client.get(url)
-    if method == "POST":
-        return client.post(url, data={})
-    raise AssertionError(f"unexpected method {method}")
+_ROUTE_IDS, _ROUTE_ROWS = route_cases()
 
 
 class TestAnonymousDenied:
     """Unauthenticated callers are rejected before the handler runs, with no state change."""
 
-    @pytest.mark.parametrize(_CASE_PARAMS, _CASE_ROWS, ids=_CASE_IDS)
+    @pytest.mark.parametrize(ROUTE_CASE_PARAMS, _ROUTE_ROWS, ids=_ROUTE_IDS)
     def test_anonymous_is_rejected(
-        self, client: FlaskClient, factory_session: Session, method: str, path: str, api_mode: bool
+        self, scoping_env: AdminTenantScopingEnv, method: str, route: str, api_mode: bool
     ) -> None:
-        target, _tenant, before = _seed(factory_session)
+        scoping_env.clear_auth()
 
-        response = _dispatch(client, method, path, target.tenant_id)
+        response = scoping_env.send(method, route)
 
-        assert_anonymous_rejected(response, api_mode, target.tenant_id)
-        assert tenant_state(factory_session, target.tenant_id) == before
+        assert_anonymous_rejected(response, api_mode, scoping_env.target.tenant_id)
+        assert scoping_env.target_state() == scoping_env.seeded_state
 
 
 class TestNonMemberDenied:
     """A logged-in user without an active membership in the requested tenant receives 403.
 
-    ``other_tenant`` is an active member somewhere else; ``inactive_member`` has a row in the
-    requested tenant with ``is_active=False``. Both must be refused identically.
+    One caller is an active member somewhere else; the other has a row in the requested
+    tenant with ``is_active=False``. Both must be refused identically.
     """
 
-    @pytest.mark.parametrize("membership", sorted(_REJECTED_MEMBERSHIPS))
-    @pytest.mark.parametrize(_CASE_PARAMS, _CASE_ROWS, ids=_CASE_IDS)
-    def test_non_member_receives_403(
-        self,
-        client: FlaskClient,
-        factory_session: Session,
-        membership: str,
-        method: str,
-        path: str,
-        api_mode: bool,
+    @pytest.mark.parametrize(ROUTE_CASE_PARAMS, _ROUTE_ROWS, ids=_ROUTE_IDS)
+    def test_member_of_other_tenant_receives_403(
+        self, scoping_env: AdminTenantScopingEnv, method: str, route: str, api_mode: bool
     ) -> None:
-        target, tenant, before = _seed(factory_session)
-        user = _REJECTED_MEMBERSHIPS[membership](tenant)
-        _member_session(client, user.tenant_id, user.email)
+        scoping_env.login_as_member_of_other_tenant()
 
-        response = _dispatch(client, method, path, target.tenant_id)
+        response = scoping_env.send(method, route)
 
         assert_membership_rejected(response, api_mode)
-        assert tenant_state(factory_session, target.tenant_id) == before
+        assert scoping_env.target_state() == scoping_env.seeded_state
+
+    @pytest.mark.parametrize(ROUTE_CASE_PARAMS, _ROUTE_ROWS, ids=_ROUTE_IDS)
+    def test_inactive_member_receives_403(
+        self, scoping_env: AdminTenantScopingEnv, method: str, route: str, api_mode: bool
+    ) -> None:
+        scoping_env.login_with_target_membership(is_active=False)
+
+        response = scoping_env.send(method, route)
+
+        assert_membership_rejected(response, api_mode)
+        assert scoping_env.target_state() == scoping_env.seeded_state
 
 
 class TestActiveMemberUnchanged:
     """An active same-tenant ``User`` row is enough; status and body stay exactly as today."""
 
-    def test_revenue_chart_lists_the_tenant_buys(self, client: FlaskClient, factory_session: Session) -> None:
-        target, tenant, _before = _seed(factory_session)
-        _login_active_member(client, tenant)
+    def test_revenue_chart_lists_the_tenant_buy(self, scoping_env: AdminTenantScopingEnv) -> None:
+        scoping_env.login_with_target_membership(is_active=True)
 
-        response = client.get(f"/api/tenant/{target.tenant_id}/revenue-chart")
-
-        assert response.status_code == 200
-        assert response.get_json() == {"labels": [target.principal_name], "values": [float(ACTIVE_BUY_BUDGET)]}
-
-    def test_products_lists_the_tenant_catalogue(self, client: FlaskClient, factory_session: Session) -> None:
-        target, tenant, _before = _seed(factory_session)
-        _login_active_member(client, tenant)
-
-        response = client.get(f"/api/tenant/{target.tenant_id}/products")
+        response = scoping_env.send("GET", "revenue chart API")
 
         assert response.status_code == 200
-        assert response.get_json() == {"products": target.products_payload}
+        assert response.get_json() == {
+            "labels": [scoping_env.target.principal_name],
+            "values": [float(ACTIVE_BUY_BUDGET)],
+        }
 
-    def test_product_suggestions_list_the_default_catalogue(
-        self, client: FlaskClient, factory_session: Session
-    ) -> None:
-        target, tenant, _before = _seed(factory_session)
-        _login_active_member(client, tenant)
+    def test_products_lists_the_tenant_catalogue(self, scoping_env: AdminTenantScopingEnv) -> None:
+        scoping_env.login_with_target_membership(is_active=True)
 
-        response = client.get(f"/api/tenant/{target.tenant_id}/products/suggestions")
+        response = scoping_env.send("GET", "products API")
+
+        assert response.status_code == 200
+        assert response.get_json() == {"products": scoping_env.target.products_payload}
+
+    def test_product_suggestions_list_the_default_catalogue(self, scoping_env: AdminTenantScopingEnv) -> None:
+        scoping_env.login_with_target_membership(is_active=True)
+
+        response = scoping_env.send("GET", "product suggestions API")
 
         assert response.status_code == 200
         assert response.get_json() == expected_suggestions_body()
 
     @pytest.mark.parametrize("method", ["GET", "POST"])
-    def test_policy_rules_redirects_to_policy_index(
-        self, client: FlaskClient, factory_session: Session, method: str
-    ) -> None:
-        target, tenant, _before = _seed(factory_session)
-        _login_active_member(client, tenant)
+    def test_policy_rules_redirects_to_policy_index(self, scoping_env: AdminTenantScopingEnv, method: str) -> None:
+        scoping_env.login_with_target_membership(is_active=True)
 
-        response = _dispatch(client, method, "/tenant/{tenant_id}/policy/rules", target.tenant_id)
+        response = scoping_env.send(method, "policy rules page")
 
         assert response.status_code == 302
-        assert redirect_path(response) == f"/tenant/{target.tenant_id}/policy/"
+        assert redirect_path(response) == f"/tenant/{scoping_env.target.tenant_id}/policy/"
