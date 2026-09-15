@@ -394,9 +394,13 @@ class PolicyService:
                 tenant.ai_policy = updates["ai_policy"]
                 attributes.flag_modified(tenant, "ai_policy")
 
-            # Update advertising policy
+            # Update advertising policy. Merge over the stored dict: the Settings form
+            # carries only the enabled flag and the five lists, while the Policy page
+            # owns ``require_manual_review`` (and ``description`` is set elsewhere) —
+            # a plain replace here wiped those every time Settings was saved.
             if "advertising_policy" in updates:
-                tenant.advertising_policy = updates["advertising_policy"]
+                current = tenant.advertising_policy if isinstance(tenant.advertising_policy, dict) else {}
+                tenant.advertising_policy = {**current, **updates["advertising_policy"]}
                 attributes.flag_modified(tenant, "advertising_policy")
 
             # Update features
