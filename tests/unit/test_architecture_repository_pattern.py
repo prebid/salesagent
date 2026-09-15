@@ -1265,7 +1265,6 @@ GET_DB_SESSION_IN_TESTS_ALLOWLIST: set[tuple[str, str]] = {
     ("tests/integration/test_setup_checklist_service.py", "setup_minimal_tenant"),
     ("tests/integration/test_setup_checklist_service.py", "test_bulk_setup_status_for_multiple_tenants"),
     ("tests/integration/test_setup_checklist_service.py", "test_currency_count_in_details"),
-    ("tests/integration/test_setup_checklist_service.py", "test_gemini_api_key_detection"),
     ("tests/integration/test_setup_checklist_service.py", "test_progress_calculation"),
     ("tests/integration/test_setup_checklist_service.py", "test_ready_for_orders_without_sso_in_multi_tenant_mode"),
     ("tests/integration/test_setup_checklist_service.py", "test_sso_is_optional_not_critical_in_multi_tenant_mode"),

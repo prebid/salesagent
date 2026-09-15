@@ -29,6 +29,10 @@ def test_inventory_sync_checks_gam_inventory_not_products():
         mock_tenant.slack_webhook_url = None
         mock_tenant.enable_axe_signals = False
         mock_tenant.virtual_host = None
+        # The optional AI task resolves through TenantAIConfig.from_tenant, which reads
+        # these two fields and refuses a non-dict (a bare MagicMock attribute) by design.
+        mock_tenant.ai_config = None
+        mock_tenant.gemini_api_key = None
 
         # Mock scalars().first() for tenant query
         mock_db.scalars.return_value.first.return_value = mock_tenant
@@ -90,6 +94,10 @@ def test_inventory_sync_incomplete_when_no_gam_inventory():
         mock_tenant.slack_webhook_url = None
         mock_tenant.enable_axe_signals = False
         mock_tenant.virtual_host = None
+        # The optional AI task resolves through TenantAIConfig.from_tenant, which reads
+        # these two fields and refuses a non-dict (a bare MagicMock attribute) by design.
+        mock_tenant.ai_config = None
+        mock_tenant.gemini_api_key = None
 
         # Mock scalars().first() for tenant query
         mock_db.scalars.return_value.first.return_value = mock_tenant

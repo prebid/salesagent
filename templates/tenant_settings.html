@@ -1378,14 +1378,14 @@
                                     <li><code>{campaign_name}</code> - Campaign name (optional - may be empty)</li>
                                     <li><code>{promoted_offering}</code> - What's being advertised (always present)</li>
                                     <li><code>{media_buy_id}</code> - Media buy identifier (always present)</li>
-                                    <li><code>{auto_name}</code> - 🤖 AI-generated name from full context (requires Gemini API key)</li>
+                                    <li><code>{auto_name}</code> - 🤖 AI-generated name from full context (requires an AI provider API key)</li>
                                     <li><code>{date_range}</code> - Flight dates (e.g., "Oct 7-14, 2025")</li>
                                     <li><code>{month_year}</code> - Month and year (e.g., "Oct 2025")</li>
                                     <li><code>{package_count}</code> - Number of packages in order</li>
                                 </ul>
                                 <strong>Fallback syntax:</strong> <code>{var1|var2}</code> uses var1 if present, otherwise var2
                                 <br><strong>Example:</strong> <code>{campaign_name|promoted_offering}</code> tries campaign_name first, falls back to promoted_offering
-                                <br><strong>AI Naming:</strong> <code>{auto_name}</code> generates smart, concise names (~500ms). Falls back to promoted_offering if Gemini unavailable.
+                                <br><strong>AI Naming:</strong> <code>{auto_name}</code> generates smart, concise names (~500ms). Falls back to promoted_offering if no AI provider is configured.
                             </div>
                         </details>
                     </div>
@@ -1538,14 +1538,14 @@
 
                     <!-- AI Configuration (shown only for ai-powered mode) -->
                     <div id="ai-config-section" style="display: none; margin-top: 1rem;">
-                        {% if not has_gemini_key %}
+                        {% if not has_ai_key %}
                         <div class="alert alert-warning" style="padding: 0.75rem; background: #fef3c7; border: 1px solid #fbbf24; border-radius: 6px; margin-bottom: 1rem;">
-                            <strong>⚠️ Gemini API Key Required</strong>
-                            <p style="margin: 0.5rem 0 0;">AI review requires a Gemini API key. Please set your key in <a href="#" onclick="event.preventDefault(); switchSettingsSection('integrations')">Integrations → AI Services</a>.</p>
+                            <strong>⚠️ AI Provider Key Required</strong>
+                            <p style="margin: 0.5rem 0 0;">AI review requires an API key for an AI provider. Please set your key in <a href="#" onclick="event.preventDefault(); switchSettingsSection('integrations')">Integrations → AI Services</a>.</p>
                         </div>
                         {% else %}
                         <div class="alert alert-success" style="padding: 0.75rem; background: #d1fae5; border: 1px solid #34d399; border-radius: 6px; margin-bottom: 1rem;">
-                            <strong>✅ Gemini API Key Configured</strong>
+                            <strong>✅ AI Provider Configured</strong>
                             <p style="margin: 0.5rem 0 0; font-size: 0.875rem; color: #059669;">AI-powered creative review is enabled.</p>
                         </div>
                         {% endif %}
@@ -1712,10 +1712,10 @@ REJECT - Creative cannot be approved:
                     </div>
 
                     <div id="advertising-policy-config" style="{% if tenant.advertising_policy and tenant.advertising_policy.get('enabled') == False %}display: none;{% endif %}">
-                        {% if not tenant.gemini_api_key %}
+                        {% if not has_ai_key %}
                         <div class="alert alert-warning" style="padding: 0.75rem; background: #fef3c7; border: 1px solid #fbbf24; border-radius: 6px; margin-bottom: 1rem;">
-                            <strong>⚠️ Gemini API Key Required</strong>
-                            <p style="margin: 0.5rem 0 0;">Advertising policy checks require a Gemini API key to function. Without it, all campaigns will be allowed by default. Please set your key in <a href="#" onclick="event.preventDefault(); switchSettingsSection('integrations')">Integrations → AI Services</a>.</p>
+                            <strong>⚠️ AI Provider Key Required</strong>
+                            <p style="margin: 0.5rem 0 0;">Advertising policy checks require an API key for an AI provider to function. Without one, all campaigns will be allowed by default. Please set your key in <a href="#" onclick="event.preventDefault(); switchSettingsSection('integrations')">Integrations → AI Services</a>.</p>
                         </div>
                         {% endif %}
 
@@ -1761,7 +1761,7 @@ REJECT - Creative cannot be approved:
                             <ul style="margin: 0.5rem 0 0 1.5rem;">
                                 <li>AI analyzes each campaign brief against your baseline + additional rules</li>
                                 <li>Returns: <strong>Allowed</strong>, <strong>Restricted</strong>, or <strong>Blocked</strong></li>
-                                <li>Without Gemini API key: All campaigns allowed by default (policy checks disabled)</li>
+                                <li>Without an AI provider key: All campaigns allowed by default (policy checks disabled)</li>
                             </ul>
                         </div>
                     </div>
@@ -1782,10 +1782,10 @@ REJECT - Creative cannot be approved:
                         <small>When set, AI will use this prompt to rank products based on relevance to the buyer's brief. Leave empty to disable AI ranking and return all products.</small>
                     </div>
 
-                    {% if not has_gemini_key %}
+                    {% if not has_ai_key %}
                     <div class="alert alert-warning" style="padding: 0.75rem; background: #fef3c7; border: 1px solid #fbbf24; border-radius: 6px; margin-top: 1rem;">
-                        <strong>⚠️ Gemini API Key Required</strong>
-                        <p style="margin: 0.5rem 0 0;">Product ranking requires a Gemini API key. Please set your key in <a href="#" onclick="event.preventDefault(); switchSettingsSection('integrations')">Integrations → AI Services</a>.</p>
+                        <strong>⚠️ AI Provider Key Required</strong>
+                        <p style="margin: 0.5rem 0 0;">Product ranking requires an API key for an AI provider. Please set your key in <a href="#" onclick="event.preventDefault(); switchSettingsSection('integrations')">Integrations → AI Services</a>.</p>
                     </div>
                     {% endif %}
 

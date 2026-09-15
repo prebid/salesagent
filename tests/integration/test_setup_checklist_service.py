@@ -342,7 +342,7 @@ class TestSetupChecklistService:
 
             # Check that incomplete tasks have action URLs (except environment variables)
             for task in status["critical"]:
-                if not task["is_complete"] and task["key"] != "gemini_api_key":
+                if not task["is_complete"] and task["key"] != "ai_provider_key":
                     assert task["action_url"] is not None
                     assert f"/tenant/{test_tenant_id}" in task["action_url"]
 
@@ -652,30 +652,49 @@ class TestSetupValidation:
 class TestTaskDetails:
     """Tests for individual task checking logic."""
 
-    def test_gemini_api_key_detection(self, integration_db, setup_minimal_tenant, test_tenant_id):
-        """Test tenant-specific Gemini API key detection (moved to optional tasks)."""
+    def test_ai_provider_key_detection(self, integration_db):
+        """The optional AI task follows `TenantAIConfig.from_tenant`, not the legacy column alone.
+
+        The Admin UI's AI Services form writes `tenant.ai_config`; nothing writes
+        `tenant.gemini_api_key` any more. Reading only the legacy column kept this task
+        incomplete for every seller who configured AI the way the UI asks them to.
+        """
         from cryptography.fernet import Fernet
 
-        from src.core.database.database_session import get_db_session
+        from tests.factories import TenantFactory
+        from tests.harness._base import IntegrationEnv
 
-        # Without key (tenant.gemini_api_key is None)
-        service = SetupChecklistService(test_tenant_id)
-        status = service.get_setup_status()
-        gemini_task = next(t for t in status["optional"] if t["key"] == "gemini_api_key")
-        assert not gemini_task["is_complete"]
+        def ai_task(tenant_id):
+            status = SetupChecklistService(tenant_id).get_setup_status()
+            return next(t for t in status["optional"] if t["key"] == "ai_provider_key")
 
-        # With tenant-specific key (requires ENCRYPTION_KEY for encrypted storage)
-        test_encryption_key = Fernet.generate_key().decode()
-        with patch.dict(os.environ, {"ENCRYPTION_KEY": test_encryption_key}):
-            with get_db_session() as db_session:
-                tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=test_tenant_id)).first()
-                tenant.gemini_api_key = "test_tenant_key"  # Set tenant-specific key
-                db_session.commit()
+        # Nothing configured
+        with IntegrationEnv(tenant_id="chk_ai_none"):
+            TenantFactory(tenant_id="chk_ai_none")
+            task = ai_task("chk_ai_none")
+            assert not task["is_complete"]
+            assert task["name"] == "AI Features"
+            assert "Gemini" not in task["details"]
 
-            service = SetupChecklistService(test_tenant_id)
-            status = service.get_setup_status()
-            gemini_task = next(t for t in status["optional"] if t["key"] == "gemini_api_key")
-            assert gemini_task["is_complete"]
+        # Configured through the Admin UI: provider, model and key on ai_config (any provider)
+        with IntegrationEnv(tenant_id="chk_ai_ui"):
+            TenantFactory(
+                tenant_id="chk_ai_ui",
+                ai_config={"provider": "anthropic", "model": "claude-sonnet-4-20250514", "api_key": "sk-ant-tenant"},
+            )
+            assert ai_task("chk_ai_ui")["is_complete"]
+
+        # The keyless row the AI Services form writes when the key field is left blank is
+        # not a configuration ("AI features will be disabled", the form says as it saves it)
+        with IntegrationEnv(tenant_id="chk_ai_keyless"):
+            TenantFactory(tenant_id="chk_ai_keyless", ai_config={"provider": "google", "model": "gemini-2.0-flash"})
+            assert not ai_task("chk_ai_keyless")["is_complete"]
+
+        # The legacy encrypted column still counts (requires ENCRYPTION_KEY for encrypted storage)
+        with patch.dict(os.environ, {"ENCRYPTION_KEY": Fernet.generate_key().decode()}):
+            with IntegrationEnv(tenant_id="chk_ai_legacy"):
+                TenantFactory(tenant_id="chk_ai_legacy", gemini_api_key="test_tenant_key")
+                assert ai_task("chk_ai_legacy")["is_complete"]
 
     def test_currency_count_in_details(self, integration_db, test_tenant_id):
         """Test that currency count is shown in task details."""
