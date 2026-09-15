@@ -30,6 +30,7 @@ from src.core.database.repositories.signing_key import SigningKeyRepository
 from src.core.database.repositories.tenant_counts import count_by_tenant
 from src.core.database.repositories.tenant_lookup import TenantLookupRepository
 from src.core.signing.posture import KeyBacking, signing_key_backed
+from src.services.ai import TenantAIConfig
 
 logger = logging.getLogger(__name__)
 
@@ -678,17 +679,23 @@ class SetupChecklistService:
             )
         )
 
-        # 2. Gemini AI Features (Optional - Tenant-Specific)
-        gemini_configured = bool(tenant.gemini_api_key)
+        # 2. AI Features (Optional - Tenant-Specific)
+        # `TenantAIConfig.from_tenant` owns "does this tenant have a usable AI credential?"
+        # (`ai_config` first, the legacy `gemini_api_key` column second). The Admin UI's AI
+        # Services form writes `ai_config`, so reading the legacy column alone kept this task
+        # incomplete for every seller who configured AI the way the UI asks them to.
+        ai_configured = TenantAIConfig.from_tenant(tenant) is not None
         tasks.append(
             SetupTask(
-                key="gemini_api_key",
-                name="Gemini AI Features",
+                key="ai_provider_key",
+                name="AI Features",
                 description="Enable AI-assisted product recommendations and creative policy checks",
-                is_complete=gemini_configured,
+                is_complete=ai_configured,
                 action_url=f"/tenant/{self.tenant_id}/settings#integrations",
                 details=(
-                    "AI features enabled" if gemini_configured else "Optional: Configure Gemini API key for AI features"
+                    "AI features enabled"
+                    if ai_configured
+                    else "Optional: Configure an AI provider API key for AI features"
                 ),
             )
         )
@@ -1059,17 +1066,23 @@ class SetupChecklistService:
             )
         )
 
-        # 2. Gemini AI Features
-        gemini_configured = bool(tenant.gemini_api_key)
+        # 2. AI Features
+        # `TenantAIConfig.from_tenant` owns "does this tenant have a usable AI credential?"
+        # (`ai_config` first, the legacy `gemini_api_key` column second). The Admin UI's AI
+        # Services form writes `ai_config`, so reading the legacy column alone kept this task
+        # incomplete for every seller who configured AI the way the UI asks them to.
+        ai_configured = TenantAIConfig.from_tenant(tenant) is not None
         tasks.append(
             SetupTask(
-                key="gemini_api_key",
-                name="Gemini AI Features",
+                key="ai_provider_key",
+                name="AI Features",
                 description="Enable AI-assisted product recommendations and creative policy checks",
-                is_complete=gemini_configured,
+                is_complete=ai_configured,
                 action_url=f"/tenant/{self.tenant_id}/settings#integrations",
                 details=(
-                    "AI features enabled" if gemini_configured else "Optional: Configure Gemini API key for AI features"
+                    "AI features enabled"
+                    if ai_configured
+                    else "Optional: Configure an AI provider API key for AI features"
                 ),
             )
         )

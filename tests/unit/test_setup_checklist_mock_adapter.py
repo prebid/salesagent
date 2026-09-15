@@ -42,6 +42,10 @@ class TestSetupChecklistMockAdapter:
 
                 # Create mock tenant with mock adapter
                 mock_tenant = MagicMock()
+                # TenantAIConfig.from_tenant reads these two fields for the optional AI task and
+                # refuses a non-dict (a bare MagicMock attribute) by design.
+                mock_tenant.ai_config = None
+                mock_tenant.gemini_api_key = None
                 mock_tenant.tenant_id = tenant_id
                 mock_tenant.name = "Test Tenant"
                 mock_tenant.ad_server = "mock"
@@ -100,6 +104,10 @@ class TestSetupChecklistMockAdapter:
 
             # Create mock tenant with GAM adapter
             mock_tenant = MagicMock()
+            # TenantAIConfig.from_tenant reads these two fields for the optional AI task and
+            # refuses a non-dict (a bare MagicMock attribute) by design.
+            mock_tenant.ai_config = None
+            mock_tenant.gemini_api_key = None
             mock_tenant.tenant_id = tenant_id
             mock_tenant.name = "Test Tenant"
             mock_tenant.ad_server = "google_ad_manager"
@@ -146,6 +154,10 @@ class TestSetupChecklistMockAdapter:
 
             # Create mock tenant with GAM adapter
             mock_tenant = MagicMock()
+            # TenantAIConfig.from_tenant reads these two fields for the optional AI task and
+            # refuses a non-dict (a bare MagicMock attribute) by design.
+            mock_tenant.ai_config = None
+            mock_tenant.gemini_api_key = None
             mock_tenant.tenant_id = tenant_id
             mock_tenant.name = "Test Tenant"
             mock_tenant.ad_server = "google_ad_manager"
@@ -198,6 +210,10 @@ class TestSetupChecklistMockAdapter:
 
                 # Create mock tenant with no adapter selected
                 mock_tenant = MagicMock()
+                # TenantAIConfig.from_tenant reads these two fields for the optional AI task and
+                # refuses a non-dict (a bare MagicMock attribute) by design.
+                mock_tenant.ai_config = None
+                mock_tenant.gemini_api_key = None
                 mock_tenant.tenant_id = tenant_id
                 mock_tenant.name = "Test Tenant"
                 mock_tenant.ad_server = None  # No adapter selected
@@ -256,6 +272,10 @@ class TestSetupChecklistMockAdapter:
 
                 # Create mock tenant
                 mock_tenant = MagicMock()
+                # TenantAIConfig.from_tenant reads these two fields for the optional AI task and
+                # refuses a non-dict (a bare MagicMock attribute) by design.
+                mock_tenant.ai_config = None
+                mock_tenant.gemini_api_key = None
                 mock_tenant.tenant_id = tenant_id
                 mock_tenant.name = "Test Tenant"
                 mock_tenant.ad_server = "mock"
@@ -303,6 +323,10 @@ class TestSetupChecklistMockAdapter:
 
                 # Create mock tenant with GAM adapter - all critical tasks complete
                 mock_tenant = MagicMock()
+                # TenantAIConfig.from_tenant reads these two fields for the optional AI task and
+                # refuses a non-dict (a bare MagicMock attribute) by design.
+                mock_tenant.ai_config = None
+                mock_tenant.gemini_api_key = None
                 mock_tenant.tenant_id = tenant_id
                 mock_tenant.name = "Test Tenant"
                 mock_tenant.ad_server = "google_ad_manager"  # Real ad server
