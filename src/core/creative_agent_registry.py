@@ -28,6 +28,7 @@ from typing import Any
 # FIXME(#1388): ListCreativeFormatsRequest has a local subclass; import from src.core.schemas (Pattern #7/#4).
 from adcp import ListCreativeFormatsRequest
 from adcp.types import AssetContentType as AssetType
+from adcp.types import FormatIdParameter
 from pydantic import ValidationError
 
 from src.core.config import get_settings
@@ -71,6 +72,30 @@ def _known_asset_types() -> frozenset[str]:
 
 _KNOWN_ASSET_TYPES = _known_asset_types()
 
+# The ``accepts_parameters`` values the pinned adcp schema knows. Derived from the
+# enum, not hardcoded, for the same reason as _KNOWN_ASSET_TYPES.
+_KNOWN_FORMAT_ID_PARAMETERS: frozenset[str] = frozenset(member.value for member in FormatIdParameter)
+
+
+def _without_unknown_accepts_parameters(fmt_data: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
+    """Drop ``accepts_parameters`` values the pinned schema does not model.
+
+    Returns the patched dict and the values removed (empty when nothing changed).
+    A template parameter we do not model is ADDITIVE information about how the
+    format_id may be instantiated; the format itself (assets, renders, name) is
+    still fully understood, so keeping it with the known parameters is not a
+    mis-representation the way an unknown asset_type would be.
+    """
+    params = fmt_data.get("accepts_parameters")
+    if not isinstance(params, list):
+        return fmt_data, []
+    unknown = [p for p in params if not (isinstance(p, str) and p in _KNOWN_FORMAT_ID_PARAMETERS)]
+    if not unknown:
+        return fmt_data, []
+    patched = dict(fmt_data)
+    patched["accepts_parameters"] = [p for p in params if p not in unknown]
+    return patched, [str(p) for p in unknown]
+
 
 def _unknown_asset_types(fmt_data: dict[str, Any]) -> set[str]:
     """Asset-type values in a format dict that adcp's closed union does not model."""
@@ -105,35 +130,98 @@ def _is_purely_additive_asset_type(fmt_data: dict[str, Any], unknown_types: set[
     return True
 
 
+def _format_label(fmt_data: dict[str, Any]) -> str:
+    """A short, safe identifier for a raw format dict, for log lines."""
+    ref = fmt_data.get("format_id")
+    if isinstance(ref, dict):
+        return str(ref.get("id") or "?")
+    return str(ref or fmt_data.get("name") or "?")
+
+
+def _summarize_validation_error(exc: ValidationError) -> str:
+    """One line per pydantic error: ``loc: msg [input]``."""
+    parts = []
+    for err in exc.errors()[:3]:
+        loc = ".".join(str(x) for x in err.get("loc", ()))
+        got = err.get("input")
+        got_s = f" (got {got!r})" if isinstance(got, str | int | float | bool) else ""
+        parts.append(f"{loc}: {err.get('msg')}{got_s}")
+    return "; ".join(parts)
+
+
 def _validate_formats_tolerant(format_dicts: list[dict[str, Any]], logger: logging.Logger) -> list[Format]:
-    """Validate formats independently; tolerate ONLY AdCP-additive asset_type growth.
+    """Validate formats independently; one non-conforming format never discards the batch.
 
     Postel / asymmetric strictness: strict on what we emit (adcp Literal untouched),
-    liberal on peer responses. A format whose sole defect is an unrecognized additive
-    asset_type is DROPPED (never mis-represented — we never model a creative we
-    cannot fully understand), aggregated into ONE structured WARNING. Any other
-    ValidationError still fails LOUD so real contract breakage is not masked.
+    liberal on peer responses. A format the pinned adcp schema cannot validate is
+    DROPPED (never mis-represented — we never model a creative we cannot fully
+    understand) and the conforming remainder is returned. Two drop classes, each
+    aggregated into ONE structured WARNING:
+
+    * an unrecognized *additive* ``asset_type`` (the original tolerance);
+    * any other ValidationError — a new enum member, a renamed field, a missing
+      required field on one entry. Seen live 2026-09-15: the public reference agent
+      added ``pixel_ratio`` to ``display_image.accepts_parameters``, which adcp 6.6.0
+      rejects, and the old ``raise`` here turned that one entry into "0 formats" for
+      every buyer and every admin page (#1333).
+
+    One KEEP class, also aggregated into one WARNING: an unknown ``accepts_parameters``
+    value is stripped and the format kept (the format is still fully modeled; only how
+    its format_id may be parameterised is not) — dropping ``display_image`` would have
+    broken every product that names it.
+
+    When NOTHING survives a non-empty batch the drop is logged at ERROR: that is
+    real contract breakage, not drift, and the empty result must be visible.
     """
     validated: list[Format] = []
-    skipped_count = 0
     skipped_asset_types: set[str] = set()
+    skipped_asset_type_count = 0
+    skipped_invalid: list[str] = []
+    ignored_parameters: list[str] = []
     for fmt_data in format_dicts:
         try:
             validated.append(Format.model_validate(fmt_data))
-        except ValidationError:
+        except ValidationError as exc:
+            error: ValidationError = exc
+            # Additive template parameter (e.g. ``pixel_ratio``): keep the format,
+            # minus the parameter values we cannot model.
+            patched, unknown_params = _without_unknown_accepts_parameters(fmt_data)
+            if unknown_params:
+                try:
+                    validated.append(Format.model_validate(patched))
+                    ignored_parameters.append(f"{_format_label(fmt_data)} {unknown_params}")
+                    continue
+                except ValidationError as patched_exc:
+                    error = patched_exc
             unknown_types = _unknown_asset_types(fmt_data)
             if unknown_types and _is_purely_additive_asset_type(fmt_data, unknown_types):
-                skipped_count += 1
+                skipped_asset_type_count += 1
                 skipped_asset_types.update(unknown_types)
                 continue
-            raise
-    if skipped_count:
+            skipped_invalid.append(f"{_format_label(fmt_data)} [{_summarize_validation_error(error)}]")
+    if ignored_parameters:
+        logger.warning(
+            "Kept %d creative format(s) after ignoring accepts_parameters value(s) the pinned adcp "
+            "schema does not model: %s",
+            len(ignored_parameters),
+            "; ".join(ignored_parameters),
+        )
+    if skipped_asset_type_count:
         logger.warning(
             "Skipped %d creative format(s) using unsupported additive asset_type(s) %s "
             "(not modeled by the pinned adcp schema); returning the %d compatible format(s).",
-            skipped_count,
+            skipped_asset_type_count,
             sorted(skipped_asset_types),
             len(validated),
+        )
+    if skipped_invalid:
+        log = logger.error if not validated else logger.warning
+        log(
+            "Skipped %d creative format(s) the pinned adcp schema cannot validate; "
+            "returning the %d compatible format(s). Dropped: %s",
+            len(skipped_invalid),
+            len(validated),
+            "; ".join(skipped_invalid),
         )
     return validated
 
