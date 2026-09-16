@@ -1517,6 +1517,30 @@ class IntegrationEnv(BaseTestEnv):
             principal = PrincipalFactory(tenant=tenant, principal_id=self._principal_id)
         return tenant, principal
 
+    def _require_tenant_row(self, setter_name: str) -> Any:
+        """Return the env's Tenant row, raising if it does not exist yet.
+
+        No-Quiet-Failures: writing tenant config to a missing row silently drops
+        it, and over the real auth chain (MCP resolves the tenant from the DB, not
+        from the injected identity) the tool then never sees the setting. Direct
+        the caller to create the tenant first instead of skipping the write.
+
+        Lives here rather than on one env because every fluent setter that
+        DUAL-WRITES tenant config needs the identical lookup and the identical
+        failure message — ``AccountSyncEnv``'s billing/approval-mode setters and
+        ``ProductEnv``'s AI-ranking setter today. One rule, one copy.
+        """
+        from src.core.database.models import Tenant
+
+        tenant = self._session.get(Tenant, self._tenant_id) if self._session else None
+        if tenant is None:
+            raise RuntimeError(
+                f"{setter_name}() requires the tenant row '{self._tenant_id}' to exist. "
+                "Call env.setup_default_data() (or create the tenant via a Given step) "
+                "before configuring tenant policy."
+            )
+        return tenant
+
     # -- Public query API (step functions must use these, not env._session) ----
 
     def get_session(self) -> Session:

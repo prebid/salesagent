@@ -23,6 +23,7 @@ from src.core.database.database_session import get_db_session
 from src.core.database.models import Principal, Tenant
 from src.core.domain_config import get_sales_agent_domain
 from src.core.validation import sanitize_form_data, validate_form_data
+from src.services.ai import TenantAIConfig
 from src.services.setup_checklist_service import SetupChecklistService
 from src.services.slack_notifier import SlackNotifier
 
@@ -362,8 +363,13 @@ def tenant_settings(tenant_id, section=None):
             stmt = select(CurrencyLimit).filter_by(tenant_id=tenant_id).order_by(CurrencyLimit.currency_code)
             currency_limits = db_session.scalars(stmt).all()
 
-            # Check for Gemini API key (tenant-specific only - no environment fallback in production)
-            has_gemini_key = bool(tenant.gemini_api_key)
+            # Does the tenant have its OWN usable AI credential? `TenantAIConfig.from_tenant`
+            # owns that rule (`ai_config` first, the legacy `gemini_api_key` column second), so
+            # the Business Rules banners agree with what the policy check, AI review and
+            # ranking actually resolve. Reading the legacy column alone told a seller who had
+            # configured a key under Integrations -> AI Services (which writes `ai_config`) that
+            # a key was still required. Tenant-specific on purpose: no platform-key fallback.
+            has_ai_key = TenantAIConfig.from_tenant(tenant) is not None
 
             # Get AI configuration for template
             ai_config = tenant.ai_config or {}
@@ -387,7 +393,7 @@ def tenant_settings(tenant_id, section=None):
             return render_template(
                 "tenant_settings.html",
                 tenant=tenant,
-                has_gemini_key=has_gemini_key,
+                has_ai_key=has_ai_key,
                 current_provider=current_provider,
                 current_model=current_model,
                 has_logfire=has_logfire,

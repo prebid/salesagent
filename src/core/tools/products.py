@@ -13,7 +13,7 @@ from typing import Annotated, Any, cast
 from adcp import FormatId, ProductFilters
 from adcp import GetProductsRequest as GetProductsRequestGenerated
 from adcp import Product as LibraryProduct
-from adcp.types import BrandReference, ContextObject, PropertyListReference
+from adcp.types import BrandReference, ContextObject, Error, PropertyListReference
 from fastmcp.server.context import Context
 from pydantic import Field
 
@@ -24,6 +24,7 @@ from src.core.exceptions import (
     AdCPAdapterError,
     AdCPAuthenticationError,
     AdCPAuthorizationError,
+    AdCPConfigurationError,
     AdCPError,
     AdCPPolicyViolationError,
     AdCPValidationError,
@@ -39,6 +40,7 @@ from src.core.testing_hooks import AdCPTestContext
 from src.core.tool_context import ToolContext
 from src.core.transport_helpers import resolve_identity_from_context
 from src.core.validation_helpers import adcp_validation_boundary, safe_parse_json_field
+from src.services.ai.config import TenantAIConfig
 from src.services.policy_check_service import PolicyCheckService, PolicyStatus
 
 logger = logging.getLogger(__name__)
@@ -150,6 +152,193 @@ def filter_products_by_property_list(
     return [p for p in products if should_include_product_for_property_list(p, allowed_properties)]
 
 
+# The recovery classification each advisory code carries on the wire, mirroring the
+# `enumMetadata` block of the pinned `enums/error-code.json`. Derived from the code
+# rather than passed alongside it: recovery is a PROPERTY of the code, and a call site
+# free to pair them itself is a call site free to tell a buyer to retry a missing API
+# key (or to give up on a rate limit).
+#
+# * CONFIGURATION_ERROR -> "terminal" / "surface to a human at the seller — the buyer
+#   cannot resolve a seller-side deployment misconfiguration and MUST NOT auto-retry".
+# * SERVICE_UNAVAILABLE -> "transient" / "retry with exponential backoff".
+#
+# recovery is stated on the wire rather than left to be inferred from the enum because
+# pinned `core/error.json` makes the code vocabulary OPEN ("senders MAY emit codes
+# outside that set ... read `error.recovery` for the recovery classification"): a client
+# that does not consult the enum still classifies these correctly.
+_ADVISORY_RECOVERY: dict[str, str] = {
+    "CONFIGURATION_ERROR": "terminal",
+    "SERVICE_UNAVAILABLE": "transient",
+}
+
+
+def _unranked_products_advisory(tenant_id: str, *, code: str, cause: str) -> Error:
+    """The advisory that stands in for AI ranking a tenant asked for but did not get.
+
+    Ranking is configured (``product_ranking_prompt`` is set) but did not happen, so
+    ``products[]`` comes back in catalog order. Silence here is the bug: the buyer sees
+    a plausible-looking list and has no way to tell it was never ranked. One builder,
+    two callers — the shape, the field pointer and the ``PRODUCT_RANKING_UNAVAILABLE``
+    marker are identical; only the CODE and the ``cause`` clause differ, because the two
+    conditions need opposite advice:
+
+    * **Nothing resolved / nothing usable resolved** — CONFIGURATION_ERROR. The fault is
+      entirely on the seller's side of the wire (the buyer's request was valid) and no
+      retry, at any backoff, supplies a missing API key. This mirrors the ruling at
+      ``src/core/tools/media_buy_list.py::_omitted_row_advisory``.
+    * **The ranking call itself did not complete** — SERVICE_UNAVAILABLE. A provider
+      429, a 5xx, a timeout, an unexpected model response: pydantic-ai raises
+      ``ModelHTTPError`` / ``UnexpectedModelBehavior`` / ``UsageLimitExceeded`` /
+      ``UserError``, all of which subclass ``RuntimeError``. Telling the buyer
+      "terminal — MUST NOT auto-retry" for a rate limit is wrong advice; the pinned
+      enumDescription for SERVICE_UNAVAILABLE is "Seller service is temporarily
+      unavailable. Retry with exponential backoff. Recovery: transient."
+
+    The ``cause`` clause never interpolates ``str(exc)``. This message is wire-visible to
+    an anonymous buyer (``get_products`` is auth-optional discovery), and a provider
+    exception's text can carry request URLs, response bodies and key fragments; the
+    pinned enumDescription for CONFIGURATION_ERROR states sellers "MUST NOT include
+    credentials, connection strings, or stack traces — the message is wire-visible to
+    the buyer". The exception class name is enough to classify; the full text goes to
+    the seller's log.
+
+    It rides on ``payload.errors[]`` inside a SUCCESS envelope, never as an envelope
+    ``adcp_error``: pinned ``core/protocol-envelope.json`` states that non-fatal warnings
+    populate ONLY ``payload.errors[]`` with ``severity: warning`` and that the envelope
+    MUST NOT carry ``adcp_error`` for non-failures, and pinned
+    ``get-products-response.json`` requires ``errors[]`` only when ``status == "failed"``
+    while describing it as "Task-specific errors and warnings", so a completed response
+    may carry it. Ungraded: no phase in the pinned storyboards grades a get_products
+    ranking advisory.
+    """
+    return Error(  # structural-guard: advisory unranked-catalog notice in GetProductsResponse.errors[]
+        code=code,
+        recovery=_ADVISORY_RECOVERY[code],
+        # severity is not a field of the pinned core/error.json, whose
+        # additionalProperties is true; it is the marker the envelope schema names for a
+        # non-fatal payload error, and the envelope's own examples carry it exactly here.
+        # It is also what keeps the A2A envelope reporting success=True for an advisory
+        # (see AdCPRequestHandler._stamp_a2a_protocol_fields).
+        severity="warning",
+        message=(
+            f"PRODUCT_RANKING_UNAVAILABLE: seller {tenant_id!r} has AI product ranking "
+            f"configured but {cause}, so these products are returned unranked (catalog "
+            f"order), not ordered by relevance to the brief."
+        ),
+        field="products[]",
+    )
+
+
+async def _rank_products_with_ai(
+    products: list[Product],
+    tenant: Any,
+    ranking_prompt: str,
+    brief_text: str,
+    advisories: list[Error],
+) -> list[Product]:
+    """Order products by AI-scored relevance to the brief, dropping the irrelevant ones.
+
+    Returns the products unchanged when ranking cannot run, appending EXACTLY ONE
+    advisory to ``advisories`` on every such path — the unusable-configuration one and
+    the call-did-not-complete one alike. Owning the failure paths here, rather than in a
+    ``try`` at the call site, is what makes that "every" true: the caller's handler
+    logged a warning and dropped through with ``advisories`` untouched, so a provider
+    401/429/5xx returned a plausible-looking catalog-order list with ``errors=None`` —
+    precisely the silent failure the advisory exists to end, on the paths most likely to
+    happen in production.
+
+    Extracted from ``_get_products_impl`` so the ranking decision reads in one place —
+    and so this addition does not deepen a function already over every complexity
+    threshold.
+    """
+    from src.services.ai.agents.ranking_agent import create_ranking_agent, rank_products_async
+    from src.services.ai.factory import get_factory
+
+    tenant_id = tenant["tenant_id"]
+    factory = get_factory()
+    # TenantAIConfig.from_tenant owns "given a tenant, what is its AI configuration?" —
+    # ai_config first, the legacy gemini_api_key column second, None when neither is set.
+    # Reading only the platform environment key here meant a tenant that configured its
+    # key in the Admin UI got no ranking at all.
+    tenant_ai_config = TenantAIConfig.from_tenant(tenant)
+
+    # is_ai_enabled(), not `tenant_ai_config is not None`: the platform-key fallback is
+    # existing, relied-upon behaviour for ranking — a deployment-wide GEMINI_API_KEY
+    # ranks for every tenant that set a ranking prompt.
+    if not factory.is_ai_enabled(tenant_ai_config):
+        logger.warning(
+            "[GET_PRODUCTS] AI ranking is configured for tenant %s but no usable AI configuration "
+            "resolved (tenant ai_config/gemini_api_key: %s; platform environment key: absent). "
+            "Returning products unranked.",
+            tenant_id,
+            "present but unusable" if tenant_ai_config is not None else "absent",
+        )
+        advisories.append(
+            _unranked_products_advisory(
+                tenant_id,
+                code="CONFIGURATION_ERROR",
+                cause="no usable AI configuration resolved for it",
+            )
+        )
+        return products
+
+    try:
+        model = factory.create_model(tenant_ai_config=tenant_ai_config)
+        ranking_result = await rank_products_async(
+            agent=create_ranking_agent(model),
+            custom_prompt=ranking_prompt,
+            brief=brief_text,
+            products=products,
+        )
+    except (AdCPConfigurationError, ImportError, RuntimeError, OSError) as e:
+        # Two conditions, opposite advice, one handler so neither can be added without
+        # its advisory:
+        #
+        # * AdCPConfigurationError is the factory REFUSING this seller's configuration.
+        #   `is_ai_enabled` can report a coherent provider/model/key and `create_model`
+        #   still decline the combination (a provider with no explicit-API-key
+        #   integration, where the string form would authenticate with whatever ELSE is
+        #   in the environment). It extends Exception, not RuntimeError, so nothing here
+        #   caught it: a seller-side misconfiguration 500'd an auth-OPTIONAL discovery
+        #   call for every anonymous buyer. Same fault as the branch above, same code.
+        # * Everything else is the call not completing. pydantic-ai's ModelHTTPError,
+        #   UnexpectedModelBehavior, UsageLimitExceeded and UserError all subclass
+        #   RuntimeError, so every provider auth failure, 429, timeout and malformed
+        #   response lands here. That is transient, not a deployment misconfiguration.
+        #
+        # `str(e)` is logged for the seller and deliberately kept OFF the wire (see
+        # `_unranked_products_advisory`).
+        code, cause = (
+            ("CONFIGURATION_ERROR", "its AI configuration cannot build a model")
+            if isinstance(e, AdCPConfigurationError)
+            else ("SERVICE_UNAVAILABLE", "the ranking call did not complete")
+        )
+        logger.warning(
+            "[GET_PRODUCTS] AI ranking did not run for tenant %s (%s). Returning products unranked. Cause: %s",
+            tenant_id,
+            cause,
+            e,
+        )
+        advisories.append(_unranked_products_advisory(tenant_id, code=code, cause=f"{cause} ({type(e).__name__})"))
+        return products
+
+    # Build a map of product_id -> (score, reason); products the agent did not score sort last.
+    ranking_map = {r.product_id: (r.relevance_score, r.reason) for r in ranking_result.rankings}
+    ranked = sorted(products, key=lambda p: ranking_map.get(p.product_id, (0.0, ""))[0], reverse=True)
+    # Drop very low relevance. Deliberately NOT reported on errors[]: the pinned schema
+    # assigns score-threshold reporting to filter_diagnostics and calls it observability,
+    # not error reporting.
+    ranked = [p for p in ranked if ranking_map.get(p.product_id, (0.0, ""))[0] >= 0.1]
+
+    for r in ranking_result.rankings:
+        logger.info(f"[AI_RANKING] {r.product_id}: score={r.relevance_score:.2f}, reason={r.reason}")
+    logger.info(
+        f"[GET_PRODUCTS] AI ranking applied: {len(ranking_result.rankings)} products ranked, "
+        f"{len(ranked)} products above threshold"
+    )
+    return ranked
+
+
 async def _get_products_impl(
     req: GetProductsRequestGenerated, identity: ResolvedIdentity | None
 ) -> GetProductsResponse:
@@ -229,15 +418,41 @@ async def _get_products_impl(
         policy_disabled_reason = "disabled_by_tenant"
         logger.info(f"Policy checks disabled for tenant {tenant['tenant_id']}")
     else:
-        # Get tenant's Gemini API key for policy checks
-        tenant_gemini_key = tenant.get("gemini_api_key")
-        if not tenant_gemini_key:
-            # No API key - cannot run policy checks
+        # Resolve the tenant's own AI configuration. `TenantAIConfig.from_tenant` returns
+        # a config only when the tenant has its OWN usable credential — ai_config with a
+        # non-empty api_key first, the legacy gemini_api_key column second, None
+        # otherwise — so `is not None` here reads as "this seller has a credential of its
+        # own". That is the same question the pre-PR gate asked as
+        # `tenant.get("gemini_api_key")`, generalised to the column the Admin UI actually
+        # writes: reading only gemini_api_key meant a tenant that configured AI in the UI
+        # had its policy checks silently skipped even with "enabled" ticked.
+        #
+        # Usability is load-bearing, not incidental. src/admin/blueprints/settings.py
+        # stores {"provider": ..., "model": ...} with NO api_key when the seller leaves
+        # the key blank, and tells them "AI features will be disabled" as it does. If
+        # that row came back as a configuration, this gate would open and
+        # check_brief_compliance would make a live LLM call on the OPERATOR's platform
+        # credential — and a BLOCKED verdict raises AdCPPolicyViolationError below, a new
+        # buyer-visible rejection for a tenant the UI said was switched off.
+        #
+        # The gate is NOT factory.is_ai_enabled(): is_ai_enabled counts the platform
+        # GEMINI_API_KEY from the environment, so gating on it would silently switch
+        # policy checks on for every tenant on any deployment that sets that variable.
+        # Gating on the tenant's own configuration widens the gate exactly as far as the
+        # bug requires and no further.
+        tenant_ai_config = TenantAIConfig.from_tenant(tenant)
+        if tenant_ai_config is None:
+            # No AI configuration - cannot run policy checks
             policy_result = None
-            policy_disabled_reason = "no_gemini_api_key"
-            logger.warning(f"Policy checks enabled but no Gemini API key configured for tenant {tenant['tenant_id']}")
+            policy_disabled_reason = "no_ai_configuration"
+            logger.warning(f"Policy checks enabled but no AI configuration for tenant {tenant['tenant_id']}")
         else:
-            policy_service = PolicyCheckService(gemini_api_key=tenant_gemini_key)
+            # tenant_ai_config=, not the deprecated gemini_api_key=: that parameter pins
+            # provider/model instead of honouring the tenant's own, and its _UNSET
+            # sentinel treats an explicit None as "hard-disable AI". Leaving it unset
+            # keeps the intended branch — configuration honoured, platform defaults
+            # filling any field the tenant did not set.
+            policy_service = PolicyCheckService(tenant_ai_config=tenant_ai_config)
 
             # Use advertising_policy settings for tenant-specific rules
             tenant_policies = advertising_policy if advertising_policy else {}
@@ -653,54 +868,20 @@ async def _get_products_impl(
         eligible_products = filtered_products
 
     # AI-powered product ranking (when tenant has product_ranking_prompt configured)
+    advisories: list[Error] = []
     product_ranking_prompt = tenant.get("product_ranking_prompt")
     if product_ranking_prompt and brief_text and eligible_products:
-        try:
-            from src.services.ai.agents.ranking_agent import (
-                create_ranking_agent,
-                rank_products_async,
-            )
-            from src.services.ai.factory import get_factory
-
-            factory = get_factory()
-            if factory.is_ai_enabled():
-                model = factory.create_model()
-                agent = create_ranking_agent(model)
-
-                # Convert products to dicts for ranking
-                # Run AI ranking
-                ranking_result = await rank_products_async(
-                    agent=agent,
-                    custom_prompt=product_ranking_prompt,
-                    brief=brief_text,
-                    products=eligible_products,
-                )
-
-                # Build a map of product_id -> (score, reason)
-                ranking_map = {r.product_id: (r.relevance_score, r.reason) for r in ranking_result.rankings}
-
-                # Sort products by relevance score (highest first)
-                # Products not in ranking_map get score 0
-                eligible_products.sort(
-                    key=lambda p: ranking_map.get(p.product_id, (0.0, ""))[0],
-                    reverse=True,
-                )
-
-                # Filter out products with very low relevance (score < 0.1)
-                eligible_products = [p for p in eligible_products if ranking_map.get(p.product_id, (0.0, ""))[0] >= 0.1]
-
-                # Log the ranking results
-                for r in ranking_result.rankings:
-                    logger.info(f"[AI_RANKING] {r.product_id}: score={r.relevance_score:.2f}, reason={r.reason}")
-
-                logger.info(
-                    f"[GET_PRODUCTS] AI ranking applied: {len(ranking_result.rankings)} products ranked, "
-                    f"{len(eligible_products)} products above threshold"
-                )
-            else:
-                logger.debug("[GET_PRODUCTS] AI ranking configured but AI not enabled (no API key)")
-        except (ImportError, RuntimeError, OSError) as e:
-            logger.warning(f"Failed to apply AI product ranking: {e}. Returning unranked products.")
+        # No handler here on purpose: `_rank_products_with_ai` owns every failure path so
+        # that each one emits its advisory. A `try` here could only log and drop through
+        # with `advisories` empty — which is how a provider 429 returned an unranked list
+        # with `errors=None`.
+        eligible_products = await _rank_products_with_ai(
+            products=eligible_products,
+            tenant=tenant,
+            ranking_prompt=product_ranking_prompt,
+            brief_text=brief_text,
+            advisories=advisories,
+        )
 
     # Annotate pricing options with adapter support (AdCP PR #88)
     # Do this BEFORE serialization to avoid reconstruction issues
@@ -750,7 +931,7 @@ async def _get_products_impl(
     # but mypy still needs cast() due to list invariance in static typing
     resp = GetProductsResponse(
         products=cast(list[LibraryProduct], eligible_products),
-        errors=None,
+        errors=advisories or None,
         context=req.context,
     )
 

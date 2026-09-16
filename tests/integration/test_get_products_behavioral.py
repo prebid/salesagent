@@ -242,7 +242,13 @@ class TestRankingFailureFailopen:
 
     @pytest.mark.asyncio
     async def test_ranking_failure_returns_products_unranked(self, integration_db):
-        """When AI ranking service raises Exception, products returned in catalog order."""
+        """When AI ranking service raises Exception, products returned in catalog order — and said so.
+
+        Fail-open is only half the contract. This test used to assert the order alone,
+        which a response with ``errors=None`` satisfies — and that is exactly what the
+        buyer got: a plausible-looking list with no way to tell it was never ranked. The
+        advisory assertion below is the other half.
+        """
         with ProductEnv(tenant_id="rank-fail", principal_id="p1") as env:
             tenant = TenantFactory(
                 tenant_id="rank-fail",
@@ -270,6 +276,16 @@ class TestRankingFailureFailopen:
         assert len(response.products) == 2
         assert response.products[0].product_id == "p_first"
         assert response.products[1].product_id == "p_second"
+
+        # SERVICE_UNAVAILABLE / transient, not CONFIGURATION_ERROR / terminal: a
+        # RuntimeError out of the AI path is the call not completing, and telling the
+        # buyer "MUST NOT auto-retry" would be wrong advice for a 429 or a 503.
+        assert response.errors is not None and len(response.errors) == 1
+        advisory = response.errors[0]
+        assert advisory.code == "SERVICE_UNAVAILABLE"
+        assert advisory.recovery == "transient"
+        assert advisory.severity == "warning"
+        assert "PRODUCT_RANKING_UNAVAILABLE" in advisory.message
 
 
 # ---- Policy: tests 3, 4, 5 (S9, S8, S10) ----

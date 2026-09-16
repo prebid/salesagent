@@ -91,19 +91,19 @@ def generate_auto_name(
         "Nike Air Max Campaign - Q4 Holiday Push"
         "Acme Corp Brand Awareness - Premium Video"
     """
-    from src.services.ai import AIServiceFactory
+    from src.services.ai import AIServiceFactory, TenantAIConfig
 
     factory = AIServiceFactory()
 
-    # Handle backward compatibility: convert gemini_api_key to ai_config
-    effective_config = tenant_ai_config
-    if effective_config is None and tenant_gemini_key:
-        effective_config = {
-            "provider": "gemini",
-            "api_key": tenant_gemini_key,
-        }
+    # One owner for "ai_config first, legacy gemini_api_key second, else nothing":
+    # TenantAIConfig.from_tenant reads those two field names off whatever it is given,
+    # so the two deprecated-parameter shapes this function accepts resolve through the
+    # same rule as every other consumer. This site used to test `is None` where the
+    # others tested falsiness, which made an empty ai_config dict shadow the legacy key
+    # here and fall through to it everywhere else.
+    effective_config = TenantAIConfig.from_tenant({"ai_config": tenant_ai_config, "gemini_api_key": tenant_gemini_key})
 
-    # Check if AI is enabled
+    # Check if AI is enabled (None still falls back to the platform environment key)
     if not factory.is_ai_enabled(effective_config):
         logger.debug("No AI configuration available, falling back to brand_name")
         return _get_fallback_name(request)
