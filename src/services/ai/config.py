@@ -165,7 +165,11 @@ class TenantAIConfig(BaseModel):
             return None
 
         tenant_id = _read_tenant_field(tenant, "tenant_id")
-        source = f"tenant ai_config for tenant {tenant_id!r}" if tenant_id else "tenant ai_config"
+        # log_safe around the whole label: this string is built here and interpolated
+        # into the WARNING in coerce, so the tenant identifier reaches a log line
+        # through it. !r escapes a str's line breaks but _read_tenant_field is typed
+        # Any, and a non-str whose __repr__ spans lines would go through unescaped.
+        source = log_safe(f"tenant ai_config for tenant {tenant_id!r}") if tenant_id else "tenant ai_config"
 
         ai_config = _read_tenant_field(tenant, "ai_config")
         if ai_config:

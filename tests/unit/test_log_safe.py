@@ -61,3 +61,51 @@ class TestCallSites:
         records = [r for r in caplog.records if r.name == "src.services.ai.config"]
         assert len(records) == 1
         assert len(records[0].getMessage().splitlines()) == 1
+
+    def test_the_tenant_label_in_that_warning_cannot_forge_a_line(self, caplog):
+        """The SECOND value reaching that log line, through ``source``.
+
+        ``from_tenant`` builds the label as ``f"tenant ai_config for tenant {id!r}"``
+        and hands it to ``coerce``, which interpolates it. Escaping only the exception
+        left this path open; CodeQL found it after the first fix and the test above
+        does not cover it, because it forges a value INSIDE the config dict rather
+        than the tenant identifier.
+        """
+        from src.services.ai.config import TenantAIConfig
+
+        tenant = {
+            "tenant_id": "acme\nWARNING forged",
+            "ai_config": {"settings": {"temperature": 99}},
+        }
+        with caplog.at_level(logging.WARNING, logger="src.services.ai.config"):
+            TenantAIConfig.from_tenant(tenant)
+
+        records = [r for r in caplog.records if r.name == "src.services.ai.config"]
+        assert len(records) == 1, f"expected one WARNING, got {[r.getMessage() for r in records]}"
+        message = records[0].getMessage()
+        assert len(message.splitlines()) == 1, f"the tenant identifier forged a line: {message!r}"
+        assert "forged" in message, "escaped, not deleted"
+
+    def test_a_non_string_tenant_identifier_cannot_forge_a_line(self, caplog):
+        """The case ``!r`` does NOT cover, which is why the label is escaped.
+
+        ``repr()`` of a ``str`` already escapes its line breaks, so a forged string
+        identifier comes out single-line either way. ``_read_tenant_field`` is typed
+        ``Any``, though, and ``repr`` of an arbitrary object is whatever that object's
+        ``__repr__`` returns — line breaks included. Without the escape this is the
+        input that forges the line, so it is the one that grades the fix.
+        """
+        from src.services.ai.config import TenantAIConfig
+
+        class Sneaky:
+            def __repr__(self) -> str:
+                return "acme\nWARNING forged"
+
+        tenant = {"tenant_id": Sneaky(), "ai_config": {"settings": {"temperature": 99}}}
+        with caplog.at_level(logging.WARNING, logger="src.services.ai.config"):
+            TenantAIConfig.from_tenant(tenant)
+
+        records = [r for r in caplog.records if r.name == "src.services.ai.config"]
+        assert len(records) == 1, f"expected one WARNING, got {[r.getMessage() for r in records]}"
+        message = records[0].getMessage()
+        assert len(message.splitlines()) == 1, f"a non-str __repr__ forged a line: {message!r}"
