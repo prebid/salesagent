@@ -33,9 +33,9 @@ sys.path.insert(0, str(REPO_ROOT))
 # node ids by identity rather than by size.
 #
 # The set spans BOTH sources, deliberately. The literal `ENV_ROUTES` block holds
-# 20 wired rows; `ENV_ROUTES +=` appends 5 more from `_UC_BUCKET_ROUTES` at
+# 20 wired rows; `ENV_ROUTES +=` appends 6 more from `_UC_BUCKET_ROUTES` at
 # import time. "How many wired rows are there" therefore has two answers (20 and
-# 25), and a floor that does not say which it means is itself an ambiguous
+# 26), and a floor that does not say which it means is itself an ambiguous
 # counter. This pins the runtime set — what actually routes scenarios.
 #
 # Discipline, matching EXPECTED_LEDGER in test_storyboard_ledger_state.py:
@@ -46,6 +46,10 @@ EXPECTED_WIRED_ROUTES: frozenset[str] = frozenset(
         # bucket rows, appended from _UC_BUCKET_ROUTES
         "ADMIN",
         "COMPAT",
+        # UC-001 joined the wired set in PR #2167: get_products discovery has had a
+        # harness all along (ProductEnv), but no row claimed the bucket, so a
+        # @T-UC-001-* scenario xfailed as "No harness wired for UC-001".
+        "UC-001",
         "UC-005",
         "UC-019",
         "UC-GET-PRODUCTS",

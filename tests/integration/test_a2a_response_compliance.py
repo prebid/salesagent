@@ -426,27 +426,37 @@ class TestA2AResponseRegressionPrevention:
 
 
 @pytest.mark.integration
-class TestA2ASuccessDerivedFromErrorsOnRealWire:
-    """``_stamp_a2a_protocol_fields`` derives ``success`` from ``errors`` so a
-    response carrying per-item errors reports ``success=False`` uniformly
-    (single derivation point after three call sites used to duplicate it
-    inline — PR #1868, one of the three previously omitted the derivation
-    entirely and always forced ``success=True``).
+class TestA2ASuccessReportsFailureOnRealWire:
+    """The A2A ``success`` marker reports whether the task FAILED — not whether
+    ``errors[]`` is non-empty.
+
+    Two obligations, one predicate in ``_stamp_a2a_protocol_fields``:
+
+    * ONE derivation (PR #1868). Three call sites used to stamp ``success``
+      inline and two of them omitted the derivation entirely, always forcing
+      ``success=True``.
+    * The RIGHT derivation (PR #2167). ``not bool(errors)`` answered a
+      different question from the one the marker names. Pinned
+      ``core/protocol-envelope.json``: "Non-fatal warnings populate ONLY
+      ``payload.errors[]`` with ``severity: warning`` — the envelope MUST NOT
+      carry ``adcp_error`` for non-failures." So a seller whose AI ranking is
+      configured but unavailable — which attaches an advisory to EVERY
+      ``get_products`` response — reported ``success=false`` on every discovery
+      call while returning a complete, usable product list.
 
     Dispatched through the real ``AdCPRequestHandler`` (not by calling
     ``_stamp_a2a_protocol_fields`` directly) so a regression in the
     derivation — or in any call site that stopped routing through it — shows
     up on the real A2A wire, the same bytes a buyer actually receives.
-    Deleting the derivation in ``_stamp_a2a_protocol_fields`` must make this
-    test fail.
+
+    Both tests are sync on purpose: ``call_a2a``/``call_via`` bridge to
+    ``asyncio.run()`` internally (see ``ProductEnv.call_impl``'s docstring on the
+    same bridge) — an ``async def`` test would nest event loops and silently
+    swallow the resulting RuntimeError.
     """
 
-    def test_get_products_populated_errors_derive_wire_success_false(self, integration_db):
-        """Sync on purpose: ``call_a2a``/``call_via`` bridge to ``asyncio.run()``
-        internally (see ``ProductEnv.call_impl``'s docstring on the same bridge) —
-        an ``async def`` test would nest event loops and silently swallow the
-        resulting RuntimeError.
-        """
+    def test_get_products_unmarked_errors_derive_wire_success_false(self, integration_db):
+        """An entry that has NOT declared itself advisory is still a failure."""
         from unittest.mock import AsyncMock, patch
 
         from src.core.schemas import Error, GetProductsResponse
@@ -460,13 +470,11 @@ class TestA2ASuccessDerivedFromErrorsOnRealWire:
             tenant = TenantFactory(tenant_id="a2a-success-errors-test")
             PrincipalFactory(tenant=tenant, principal_id="test_principal")
 
-            # get_products has no production code path that populates
-            # non-fatal errors[] today (unlike CreateMediaBuySuccess's
-            # property_list_filtering advisory) — stub the tool boundary
-            # _handle_get_products_skill calls, the same seam the transport
-            # wrapper is contractually bound to (Pattern #5), to grade the
-            # stamping/derivation logic the wrapper owns independent of
-            # whether any business path currently exercises it.
+            # No production get_products path emits an UNMARKED errors[] entry —
+            # stub the tool boundary _handle_get_products_skill calls, the same
+            # seam the transport wrapper is contractually bound to (Pattern #5),
+            # to grade the stamping logic the wrapper owns independent of whether
+            # a business path currently produces this shape.
             errored_response = GetProductsResponse(
                 products=[],
                 errors=[Error(code="UNSUPPORTED_FEATURE", message="property_list_filtering unavailable")],
@@ -480,3 +488,44 @@ class TestA2ASuccessDerivedFromErrorsOnRealWire:
                 dispatch_request(ctx, brief="display ads")
 
             assert wire_field(ctx, "success") is False
+
+    def test_get_products_ranking_advisory_keeps_wire_success_true(self, integration_db):
+        """The live case, end to end: no stub for the response, no stub for the marker.
+
+        The seller sets a ``product_ranking_prompt`` and no AI configuration, and the
+        harness removes the platform key (verifying through production's own
+        ``is_ai_enabled`` that it is really gone), so ``_get_products_impl`` builds its
+        real ``PRODUCT_RANKING_UNAVAILABLE`` advisory and A2A serializes the real
+        response. That makes this one test grade both halves of the contract: the
+        advisory reaches the buyer as a ``severity: warning`` entry, AND the envelope
+        still reports the task as successful, because a complete product list returned
+        in catalog order is not a failed task.
+        """
+        from tests.bdd.steps._outcome_helpers import wire_dict, wire_field
+        from tests.bdd.steps.generic._dispatch import dispatch_request
+        from tests.factories import PricingOptionFactory, PrincipalFactory, ProductFactory, TenantFactory
+        from tests.harness.product import ProductEnv
+        from tests.harness.transport import Transport
+
+        with ProductEnv(tenant_id="a2a-advisory-success-test", principal_id="test_principal") as env:
+            tenant = TenantFactory(tenant_id="a2a-advisory-success-test")
+            PrincipalFactory(tenant=tenant, principal_id="test_principal")
+            product = ProductFactory(tenant=tenant, product_id="prod-a")
+            PricingOptionFactory(product=product)
+
+            env.set_tenant_ai_ranking(None, "rank by relevance to the brief")
+
+            ctx: dict = {"env": env, "transport": Transport.A2A}
+            dispatch_request(ctx, brief="display ads")
+
+        advisories = wire_dict(ctx).get("errors") or []
+        assert len(advisories) == 1, advisories
+        assert advisories[0]["severity"] == "warning", advisories[0]
+        assert "PRODUCT_RANKING_UNAVAILABLE" in advisories[0]["message"], advisories[0]
+
+        assert [p["product_id"] for p in wire_field(ctx, "products")] == ["prod-a"]
+        assert wire_field(ctx, "success") is True, (
+            "a complete product list plus a non-fatal advisory is a successful task; "
+            "reporting success=false here told every buyer of an advisory-carrying "
+            "seller that discovery had failed"
+        )

@@ -251,6 +251,44 @@ def _internal_error_for(operation: str, exc: Exception) -> InternalError:
     )
 
 
+def _response_failed(response_data: dict[str, Any]) -> bool:
+    """Did this task FAIL, as opposed to completing with something to say about it?
+
+    The A2A ``success`` marker (see ``_stamp_a2a_protocol_fields``) answers this
+    question, and until now it answered a different one: "is ``errors[]`` non-empty".
+    Pinned ``core/protocol-envelope.json`` is explicit that those are not the same
+    question — on ``adcp_error``: "a fatal task failure SHOULD populate both this
+    envelope-level field AND the payload's ``errors[]`` array ... Non-fatal warnings
+    populate ONLY ``payload.errors[]`` with ``severity: warning`` — the envelope MUST
+    NOT carry ``adcp_error`` for non-failures." The envelope's own two examples carry
+    exactly that contrast: ``severity: "warning"`` on a completed response, and
+    ``severity: "error"`` on ``status: "failed"``.
+
+    So an entry marked ``severity: "warning"`` is, by the schema's own definition, not a
+    failure and must not flip the marker. Anything else is: an entry with no severity
+    (every fatal ``errors[]`` this codebase emits — ``UpdateMediaBuyError``,
+    ``get_media_buys``' AUTH_REQUIRED degradation) keeps reporting ``success=False``, so
+    the marker only moves for entries that have explicitly declared themselves advisory.
+
+    Deliberately not keyed on the tool or the code. ``get_products``' unranked-ranking
+    advisory is the entry that surfaced this, and a per-tool branch here would leave
+    every sibling to be found separately: ``get_media_buys``'
+    ``_omitted_row_advisory``, and the ``property_list_unsupported_advisories`` that
+    ``create_media_buy`` / ``update_media_buy`` attach, are all non-fatal notices riding
+    a completed response, and all of them still report ``success=False`` today because
+    none of them carries the ``severity`` marker. That is their defect to fix, in one
+    keyword each, and this predicate is what makes fixing it work — the alternative
+    (inferring "advisory" from the code, or from which tool answered) would have to be
+    re-litigated for every new advisory.
+    """
+    if response_data.get("adcp_error"):
+        return True
+    errors = response_data.get("errors") or []
+    # A non-dict entry cannot be shown to be advisory, so it counts as a failure —
+    # unrecognised shapes must not silently upgrade a response to success.
+    return any(not isinstance(entry, dict) or entry.get("severity") != "warning" for entry in errors)
+
+
 class AdCPRequestHandler(RequestHandler):
     """Request handler for AdCP A2A operations supporting JSON-RPC 2.0."""
 
@@ -1418,9 +1456,9 @@ class AdCPRequestHandler(RequestHandler):
         ``task_id``/``adcp_version``; see
         ``tests/integration/test_harness_wire_response.py::ENVELOPE_MARKERS``),
         a deliberate A2A-binding deviation (#1868 review).
-        ``success`` is derived from ``errors`` so a response carrying
-        per-item errors reports ``success=False`` uniformly, regardless of
-        which caller stamped it.
+        ``success`` reports whether the task FAILED, so a response carrying
+        errors reports ``success=False`` uniformly, regardless of which
+        caller stamped it.
 
         Single point for this derivation — three sites used to duplicate it
         inline, and two of the three (the get_products explicit-skill and
@@ -1437,9 +1475,8 @@ class AdCPRequestHandler(RequestHandler):
         response_data = response.model_dump(mode="json")
         response_data["message"] = str(response)
 
-        # Derive success from errors field if present, default True otherwise
-        if "errors" in response_data:
-            response_data["success"] = not bool(response_data["errors"])
+        if "errors" in response_data or "adcp_error" in response_data:
+            response_data["success"] = not _response_failed(response_data)
         else:
             response_data.setdefault("success", True)
 

@@ -140,3 +140,86 @@ def test_account_approval_mode_defaults_to_none_when_unset(integration_db):
         assert ctx.account_approval_mode is None
         # Creative approval_mode keeps its own default, unaffected
         assert ctx.approval_mode == "require-human"
+
+
+@pytest.mark.requires_db
+def test_ai_config_round_trips_through_both_tenant_projections(integration_db):
+    """ai_config and product_ranking_prompt survive every tenant projection.
+
+    _get_products_impl resolves the tenant's AI configuration out of whatever shape the
+    tenant arrived in, so a field that the ORM model stores but a projection drops makes
+    ranking and policy checks silently fall back to the platform key. There are two
+    projections and they are maintained independently — serialize_tenant_to_dict (the
+    plain dict) and TenantContext — so both are graded here.
+    """
+    from src.core.tenant_context import TenantContext
+    from tests.factories import TenantFactory
+    from tests.harness._base import IntegrationEnv
+
+    ai_config = {"provider": "anthropic", "model": "claude-x", "api_key": "tenant-key"}
+
+    with IntegrationEnv(tenant_id="test_aicfg"):
+        tenant = TenantFactory(
+            tenant_id="test_aicfg",
+            ai_config=ai_config,
+            product_ranking_prompt="rank by relevance to the brief",
+        )
+
+        # 1. serialize_tenant_to_dict exposes both keys
+        d = serialize_tenant_to_dict(tenant)
+        assert d["ai_config"] == ai_config
+        assert d["product_ranking_prompt"] == "rank by relevance to the brief"
+
+        # 2. TenantContext.from_orm_model populates the fields
+        ctx = TenantContext.from_orm_model(tenant)
+        assert ctx.ai_config == ai_config
+        assert ctx.product_ranking_prompt == "rank by relevance to the brief"
+
+        # 3. Round-trip via from_dict preserves the values
+        ctx2 = TenantContext.from_dict(d)
+        assert ctx2.ai_config == ai_config
+        assert ctx2.product_ranking_prompt == "rank by relevance to the brief"
+
+        # 4. The dict-style read products.py performs works via TenantContext.get()
+        assert ctx.get("ai_config") == ai_config
+
+
+@pytest.mark.requires_db
+def test_ai_config_survives_the_lazy_tenant_chain(integration_db):
+    """LazyTenantContext resolves ai_config through the chain products.py walks.
+
+    The transports that inject an identity directly hand _get_products_impl a flat dict
+    that never passes through serialize_tenant_to_dict or TenantContext.from_dict, so
+    they cannot observe a projection that dropped the field. LazyTenantContext is the one
+    path that composes the whole chain — get_tenant_by_id -> serialize_tenant_to_dict ->
+    TenantContext.from_dict — so this is the assertion that dies if EITHER projection
+    stops carrying ai_config.
+
+    A missing tenant row would also make _resolve() fall back to a bare
+    TenantContext(tenant_id=...), whose ai_config is None; the equality assertion below
+    fails on that fallback too rather than passing vacuously.
+    """
+    from src.core.tenant_context import LazyTenantContext
+    from src.services.ai.config import TenantAIConfig
+    from tests.factories import TenantFactory
+    from tests.harness._base import IntegrationEnv
+
+    ai_config = {"provider": "anthropic", "model": "claude-x", "api_key": "tenant-key"}
+
+    with IntegrationEnv(tenant_id="test_aicfg_lazy"):
+        TenantFactory(
+            tenant_id="test_aicfg_lazy",
+            ai_config=ai_config,
+            product_ranking_prompt="rank by relevance to the brief",
+        )
+
+        lazy = LazyTenantContext("test_aicfg_lazy")
+
+        assert lazy.get("ai_config") == ai_config
+        assert lazy.get("product_ranking_prompt") == "rank by relevance to the brief"
+
+        # And the resolution rule reads it off the lazy proxy unchanged — the shape
+        # _rank_products_with_ai and the policy gate both consume.
+        assert TenantAIConfig.from_tenant(lazy) == TenantAIConfig(
+            provider="anthropic", model="claude-x", api_key="tenant-key"
+        )

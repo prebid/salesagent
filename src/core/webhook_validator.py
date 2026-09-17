@@ -49,6 +49,7 @@ from adcp.types import ContextObject, TaskType
 
 from src.core.exceptions import AdCPBlockedUrlError
 from src.core.security.egress.policy import EgressPolicy
+from src.core.utils.log_safe import log_safe
 
 # Fallback used when an action label is not a member of the SDK's closed
 # TaskType enum. create_mcp_webhook_payload() restricts task_type to that
@@ -111,16 +112,6 @@ def webhook_ssrf_suggestion() -> str:
     return WEBHOOK_SSRF_SUGGESTION
 
 
-# Every character ``str.splitlines()`` treats as a line boundary. ``urlsplit``
-# strips only \t \r \n (``parse._UNSAFE_URL_BYTES_TO_REMOVE``); VT, FF, the file/
-# group/record separators, NEL, U+2028 and U+2029 all survive it — and the PATH is
-# carried through verbatim below, so without this a buyer-supplied path forges a
-# second log line at every caller. Escaped rather than deleted: a dropped
-# character would silently change the URL an operator is reading.
-_LINE_BREAKING = "\n\r\v\f\x1c\x1d\x1e\x85  "
-_LOG_SAFE = str.maketrans({c: c.encode("unicode_escape").decode("ascii") for c in _LINE_BREAKING})
-
-
 def sanitize_webhook_url_for_log(url: str | None) -> str | None:
     """Return ``scheme://host/path`` for logs — never credentials or query.
 
@@ -138,7 +129,9 @@ def sanitize_webhook_url_for_log(url: str | None) -> str | None:
     except ValueError:
         return None
     if parsed.scheme and parsed.hostname:
-        return f"{parsed.scheme}://{parsed.hostname}{parsed.path or ''}".translate(_LOG_SAFE)
+        # The PATH is carried through verbatim, so a buyer-supplied path would
+        # otherwise forge a second log line at every caller.
+        return log_safe(f"{parsed.scheme}://{parsed.hostname}{parsed.path or ''}")
     return None
 
 

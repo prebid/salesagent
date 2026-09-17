@@ -88,24 +88,6 @@ class AccountSyncEnv(IntegrationEnv):
             self.set_approval_mode(self._account_approval_mode)
         return tenant, principal
 
-    def _require_tenant_row(self, setter_name: str) -> Any:
-        """Return the env's Tenant row, raising if it does not exist yet.
-
-        No-Quiet-Failures: writing tenant config to a missing row silently drops
-        it, and over e2e the live server then never sees the policy. Direct the
-        step to create the tenant first instead of skipping the write.
-        """
-        from src.core.database.models import Tenant
-
-        tenant = self._session.get(Tenant, self._tenant_id) if self._session else None
-        if tenant is None:
-            raise RuntimeError(
-                f"{setter_name}() requires the tenant row '{self._tenant_id}' to exist. "
-                "Call env.setup_default_data() (or create the tenant via a Given step) "
-                "before configuring billing policy / approval mode."
-            )
-        return tenant
-
     def set_billing_policy(self, supported: list[str]) -> None:
         """Configure which billing models this seller accepts (BR-RULE-059).
 

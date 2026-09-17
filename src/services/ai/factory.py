@@ -2,7 +2,7 @@
 
 import logging
 from functools import lru_cache
-from typing import Any
+from typing import Any, NamedTuple
 
 from src.core.exceptions import AdCPConfigurationError
 from src.services.ai.config import (
@@ -14,6 +14,25 @@ from src.services.ai.config import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+class ResolvedAIConfig(NamedTuple):
+    """What one AI call would actually run on, after platform defaults are applied.
+
+    The three fields are resolved TOGETHER by `AIServiceFactory._resolve` because they
+    are not independent: a model name and an API key both belong to a specific vendor.
+    Resolving them from independent expressions is what sent the platform's Google
+    credential to api.anthropic.com and paired a "claude-*" model name with a Google
+    client.
+
+    `model` and `api_key` are None when nothing coherent resolves for `provider` - that
+    is "AI is not available for this request", not "use whatever the platform has".
+    """
+
+    provider: str
+    model: str | None
+    api_key: str | None
+
 
 # Track if logfire has been configured
 _logfire_configured = False
@@ -75,9 +94,48 @@ class AIServiceFactory:
     def __init__(self):
         """Initialize the factory with platform defaults."""
         self._platform_defaults = get_platform_defaults()
+        self._platform_provider = canonicalize_google_provider(self._platform_defaults["provider"])
 
         # Try to configure logfire on factory creation
         configure_logfire(self._platform_defaults.get("logfire_token"))
+
+    def _resolve(
+        self,
+        tenant_ai_config: dict | TenantAIConfig | None,
+        provider_override: str | None = None,
+        model_override: str | None = None,
+    ) -> tuple[TenantAIConfig, ResolvedAIConfig]:
+        """Resolve provider, model and key together - the one place platform defaults apply.
+
+        The platform's model and API key belong to the PLATFORM's provider
+        (PYDANTIC_AI_PROVIDER, whose key `get_platform_defaults` reads from that
+        provider's own environment variable). They may therefore only fill in for a
+        request that resolves to that same provider. Filling them in regardless sent the
+        operator's Google secret to another vendor: a tenant naming "anthropic" got an
+        AnthropicModel whose client carried the platform's GEMINI_API_KEY, and
+        get_products is auth-OPTIONAL discovery, so an anonymous buyer's brief was
+        enough to trigger it.
+
+        When the providers differ and the tenant named no model/key of its own, the
+        fields stay None: `is_ai_enabled` then reports False and callers skip AI,
+        rather than building a model that cannot work or carries the wrong secret.
+
+        Returns the parsed tenant config alongside the resolution, because callers need
+        both (logfire token, settings, and "did the tenant name a provider at all").
+        """
+        config = TenantAIConfig.coerce(tenant_ai_config)
+
+        # Display form, not canonicalized: get_effective_config reports this string to
+        # the admin UI, and _create_provider_model canonicalizes for itself.
+        provider = provider_override or config.provider or self._platform_defaults["provider"]
+        platform_is_same_vendor = canonicalize_google_provider(provider) == self._platform_provider
+
+        model = (
+            model_override or config.model or (self._platform_defaults["model"] if platform_is_same_vendor else None)
+        )
+        api_key = config.api_key or (self._platform_defaults.get("api_key") if platform_is_same_vendor else None)
+
+        return config, ResolvedAIConfig(provider=provider, model=model, api_key=api_key)
 
     def create_model(
         self,
@@ -102,32 +160,31 @@ class AIServiceFactory:
             This can be passed directly to Agent(model=...).
 
         Raises:
-            AdCPConfigurationError: If no API key is available for the configured provider
+            AdCPConfigurationError: If no API key, or no model, resolves for the
+                configured provider. Gate on `is_ai_enabled()` first to skip AI
+                cleanly instead of raising into a request.
         """
-        # Parse tenant config if provided as dict
-        if isinstance(tenant_ai_config, dict):
-            config = TenantAIConfig.model_validate(tenant_ai_config)
-        elif tenant_ai_config:
-            config = tenant_ai_config
-        else:
-            config = TenantAIConfig()
-
-        # Resolve configuration with priority
-        provider = provider_override or config.provider or self._platform_defaults["provider"]
-        model_name = model_override or config.model or self._platform_defaults["model"]
-        api_key = config.api_key or self._platform_defaults.get("api_key")
+        config, resolved = self._resolve(tenant_ai_config, provider_override, model_override)
 
         # Configure logfire with tenant token if provided
         if config.logfire_token:
             configure_logfire(config.logfire_token)
 
-        provider = canonicalize_google_provider(provider)
+        if resolved.model is None:
+            raise AdCPConfigurationError(
+                f"No model configured for AI provider {resolved.provider!r}. The platform default model "
+                f"belongs to provider {self._platform_defaults['provider']!r}, so pairing it with this one "
+                "would send a model name to a vendor that does not have it. Set 'model' on the tenant's "
+                "AI configuration."
+            )
 
-        logger.debug(f"Creating Pydantic AI model: {provider}:{model_name}")
+        provider = canonicalize_google_provider(resolved.provider)
+
+        logger.debug(f"Creating Pydantic AI model: {provider}:{resolved.model}")
 
         # Create model with Provider that has API key directly configured
         # This avoids setting global environment variables
-        return self._create_provider_model(provider, model_name, api_key)
+        return self._create_provider_model(provider, resolved.model, resolved.api_key)
 
     def _create_provider_model(self, provider: str, model_name: str, api_key: str | None) -> Any:
         """Create a Pydantic AI model with explicit API key via Provider.
@@ -200,6 +257,17 @@ class AIServiceFactory:
             # Fallback: use model string and let Pydantic AI resolve it
             # This handles gateway providers and any new providers
             model_string = build_model_string(provider, model_name)
+            if api_key:
+                # No quiet failures: this branch has nowhere to put an explicit key, so
+                # returning the string would drop the configured credential on the floor
+                # and let pydantic-ai authenticate with whatever ELSE is in the
+                # environment - a different key than the one the seller configured.
+                raise AdCPConfigurationError(
+                    f"Provider '{provider}' has no explicit-API-key integration here, so the configured "
+                    f"API key cannot be used for it; '{model_string}' would authenticate with whatever "
+                    "credential pydantic-ai finds in the environment instead. Configure a supported "
+                    "provider, or add an explicit branch for this one."
+                )
             logger.warning(
                 f"Provider '{provider}' not explicitly supported, "
                 f"using model string '{model_string}' (API key must be in env var)"
@@ -210,9 +278,13 @@ class AIServiceFactory:
         self,
         tenant_ai_config: dict | TenantAIConfig | None = None,
     ) -> bool:
-        """Check if AI is enabled for the given configuration.
+        """Check whether a COHERENT AI configuration resolves - can this call actually run?
 
-        AI is enabled if there's an API key available (from tenant or platform).
+        Enabled means a provider with both a model and an API key that belong to it.
+        A key alone is not enough: the platform's key belongs to the platform's
+        provider, so "there is a key somewhere" answered True for a tenant whose named
+        provider had no credential at all, and the call it green-lit either carried the
+        wrong vendor's secret or 404'd on a model name from another vendor.
 
         Args:
             tenant_ai_config: Tenant's AI configuration
@@ -220,15 +292,8 @@ class AIServiceFactory:
         Returns:
             True if AI calls can be made, False otherwise
         """
-        if isinstance(tenant_ai_config, dict):
-            config = TenantAIConfig.model_validate(tenant_ai_config)
-        elif tenant_ai_config:
-            config = tenant_ai_config
-        else:
-            config = TenantAIConfig()
-
-        # AI is enabled if we have an API key from either source
-        return bool(config.api_key or self._platform_defaults.get("api_key"))
+        _, resolved = self._resolve(tenant_ai_config)
+        return bool(resolved.api_key and resolved.model)
 
     def get_effective_config(
         self,
@@ -242,25 +307,20 @@ class AIServiceFactory:
             tenant_ai_config: Tenant's AI configuration
 
         Returns:
-            dict with effective provider, model, and whether API key is set
+            dict with effective provider, model, and whether API key is set.
+            `has_api_key` is provider-scoped: it reports whether a key is available
+            FOR THE RESOLVED PROVIDER, not whether any key exists anywhere. Reporting
+            the platform's Google key as this tenant's key is what told
+            `PolicyCheckService` that AI was configured for a tenant that had no
+            credential of its own.
         """
-        if isinstance(tenant_ai_config, dict):
-            config = TenantAIConfig.model_validate(tenant_ai_config)
-        elif tenant_ai_config:
-            config = tenant_ai_config
-        else:
-            config = TenantAIConfig()
-
-        provider = config.provider or self._platform_defaults["provider"]
-        model = config.model or self._platform_defaults["model"]
-        has_api_key = bool(config.api_key or self._platform_defaults.get("api_key"))
-        has_logfire = bool(config.logfire_token or self._platform_defaults.get("logfire_token"))
+        config, resolved = self._resolve(tenant_ai_config)
 
         return {
-            "provider": provider,
-            "model": model,
-            "has_api_key": has_api_key,
-            "has_logfire": has_logfire,
+            "provider": resolved.provider,
+            "model": resolved.model,
+            "has_api_key": bool(resolved.api_key),
+            "has_logfire": bool(config.logfire_token or self._platform_defaults.get("logfire_token")),
             "settings": config.settings,
             "source": "tenant" if config.provider else "platform",
         }

@@ -440,6 +440,25 @@ EXPECTED_UNSUPPORTED_DECLARATIONS: frozenset[tuple[str, str, str]] = frozenset(
             "live stack always serves the agent catalog; an empty catalog cannot be realized over e2e",
         ),
         ("tests/harness/creative_formats.py", "_validate_registry_formats", "<dynamic>"),
+        # PR #2167, the BR-RULE-005 ranking scenarios. Both halves of their setup
+        # are in-process facts about THIS process, which is why neither is a silent
+        # parametrize drop: the platform AI key belongs to the live server's own
+        # environment, and the relevance scores stand in for a model call the live
+        # server would really make. Declared at the env methods so the reason
+        # travels with the setup instead of living in a nodeid ledger.
+        (
+            "tests/harness/product.py",
+            "set_tenant_ai_ranking",
+            "the platform GEMINI_API_KEY is read from the LIVE SERVER's own process environment "
+            "(and cached there by get_factory's lru_cache), so the harness cannot remove it; "
+            "'the tenant's own ai_config is the only AI configuration present' has no server surface",
+        ),
+        (
+            "tests/harness/product.py",
+            "set_ranking_scores",
+            "the ranking factory has no live-server injection surface: over e2e the server builds a "
+            "real model and calls the provider, so scripted relevance scores cannot be realized",
+        ),
     }
 )
 
