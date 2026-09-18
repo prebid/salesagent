@@ -47,6 +47,7 @@ from tests.factories.request import (
     SyncAccountsRequestFactory,
     SyncCreativesRequestFactory,
 )
+from tests.factories.signing import SigningKeyFactory
 from tests.factories.targeting import (
     CollectionListReferenceFactory,
     PropertyListReferenceFactory,
@@ -55,6 +56,12 @@ from tests.factories.targeting import (
 from tests.factories.user import TenantAuthConfigFactory, UserFactory
 from tests.factories.webhook import PushNotificationConfigFactory, WebhookTaskContextFactory
 
+# Only SQLAlchemyModelFactory subclasses belong here: the harness rebinds
+# ``_meta.sqlalchemy_session`` across every entry. Plain ``factory.Factory``
+# builders (BusinessEntityFactory, WebhookTaskContextFactory, TargetingFactory,
+# CreativeAssetFactory, Format*Factory, and the ``*RequestFactory`` family that
+# builds request DTOs) have no session to bind and are exported through
+# ``__all__`` only.
 ALL_FACTORIES = [
     TenantFactory,
     AccountFactory,
@@ -80,6 +87,7 @@ ALL_FACTORIES = [
     FormatPerformanceMetricsFactory,
     UserFactory,
     TenantAuthConfigFactory,
+    SigningKeyFactory,
 ]
 
 __all__ = [
@@ -119,6 +127,7 @@ __all__ = [
     "PublisherPartnerFactory",
     "PushNotificationConfigFactory",
     "SignalsAgentFactory",
+    "SigningKeyFactory",
     "SyncAccountsRequestFactory",
     "SyncCreativesRequestFactory",
     "TargetingFactory",

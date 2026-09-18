@@ -286,3 +286,23 @@ _TOOLS: dict[str, ToolSpec] = {
 #: surface deliberately and greppably, rather than the public surface being mutable so that
 #: it can.
 TOOLS: Mapping[str, ToolSpec] = MappingProxyType(_TOOLS)
+
+
+def is_adcp_operation(name: str) -> bool:
+    """Whether *name* is an AdCP operation this seller implements. THE predicate.
+
+    The registry owns the answer because the registry IS the answer: a row here is what makes
+    a tool reachable over MCP, A2A and REST, so "is this an AdCP operation name" and "is there
+    a row for it" are one question. Published as a function rather than leaving callers to
+    write ``name in TOOLS`` so that the question has a NAME, and so the one caller outside
+    this module that has to ask it -- the capability-declaration validator enforcing the
+    namespace split at security.mdx @ v3.1.1 :1053 -- asks the registry instead of deciding
+    tool-ness by looking for a ``/``.
+
+    A ``/`` test is what that validator would otherwise be, and it is the wrong shape twice
+    over: it is a second definition of a question this module already answers, and it answers
+    it differently. ``get_signals`` contains no slash and is not a row here; ``tasks/cancel``
+    contains one and is not an AdCP operation either. Only one of those two facts is derivable
+    from punctuation.
+    """
+    return name in TOOLS

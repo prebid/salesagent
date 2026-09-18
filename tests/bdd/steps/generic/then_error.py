@@ -560,10 +560,53 @@ def then_error_code(ctx: dict, code: str) -> None:
 # ── Error message content (generic) ───────────────────────────────────
 
 
+# DELETED — ``the error message should contain "<TEXT>"`` and the two
+# ``the wire error message should contain / should not contain "<TEXT>"`` steps.
+#
+# The first read ``ctx['error']`` through ``_get_error_message``, which is the
+# reconstructed-exception grade the Error Verification Policy refuses; no feature in
+# this tree carries the sentence, and UC-019 keeps its own module-local override of it.
+#
+# The pair of wire-message steps were prose pins on text that is now a function of the
+# error CODE through CODE_TABLE, so ``the response contains error code <CODE>`` already
+# grades everything a positive substring could. The ABSENCE direction is covered, and
+# strictly more widely, by ``the wire envelope should not carry the marker "<MARKER>"``
+# below — it scans the FULL envelope, including ``errors[0].details`` where
+# request-derived values now travel, rather than the message alone.
+
+
 # ── Error message content (specific) ───────────────────────────────────
 
 
 # ── Suggestion field ─────────────────────────────────────────────────
+
+
+@then(parsers.parse('the suggestion should contain "{text}"'))
+def then_suggestion_contains(ctx: dict, text: str) -> None:
+    """Assert the buyer-facing ``suggestion`` contains the given text.
+
+    Wire-first: ``_wire_suggestion`` reads the real envelope the dispatcher captured.
+    The no-wire branch is NOT a reconstructed fallback any more — ``_get_error_dict``
+    serves exactly two real sources (the wire object, and an ``adcp.types.Error`` out of
+    a successful response's ``errors[]`` advisory channel) and REFUSES anything rebuilt
+    test-side from a caught exception. So this step either grades what the buyer
+    received, grades a per-item advisory the pin declares, or raises the
+    RECONSTRUCTED-ERROR READ diagnosis; it cannot pass on a request the seller never
+    answered.
+
+    Kept rather than deleted with the prose-pinning message steps above because
+    ``suggestion`` is the one free-form field a scenario still names directly and a live
+    scenario binds this sentence (BR-UC-003 @T-UC-003-ext-t, "authorized"). When that
+    scenario is re-expressed against the CODE, this step goes with the seven unbound
+    ``the suggestion should advise ...`` steps below.
+    """
+    suggestion = _wire_suggestion(ctx)
+    if suggestion is None:
+        error = ctx.get("error")
+        assert error is not None, "No error recorded in ctx"
+        suggestion = _get_error_dict(error).get("suggestion")
+    assert suggestion, f"Expected a non-empty suggestion carrying {text!r}, got {suggestion!r}"
+    assert text.lower() in suggestion.lower(), f"Expected '{text}' in suggestion: {suggestion}"
 
 
 @then(parsers.parse("the HTTP status is {status:d}"))
@@ -908,7 +951,13 @@ def then_validation_error(ctx: dict) -> None:
     Wire-first via the sanctioned surface: when a wire envelope was captured,
     grade it through ``ctx['result'].assert_wire_error`` (VALIDATION_ERROR is a
     canonical pinned code, so this is the invariant-blessed check, not a
-    hand-rolled one). Only when no wire exists — the dispatch-exception path, where
+    hand-rolled one). Presence of that envelope is read through the single guarded
+    accessor ``wire_error_envelope_or_none`` (``_outcome_helpers.py``) rather than
+    a hand-rolled ``result.wire_error_envelope`` — it returns ``None`` both when no
+    ``TransportResult`` exists and when one exists without a real envelope, which is
+    exactly the pair of cases this step must route to the fallback (and is the form
+    ``assert_wire_error`` requires, since it reads the real envelope specifically).
+    Only when no wire exists — the dispatch-exception path, where
     ``dispatch_request`` never produced a ``TransportResult`` — fall back to the
     reconstructed ``ctx['error']``. The fallback stays because that path has no
     ``ctx['result']`` to assert against; it is not a second wire mechanism.
@@ -947,11 +996,14 @@ def then_real_validation_error(ctx: dict) -> None:
     anti-pattern the Error Verification Policy targets.
 
     As in ``then_validation_error``, envelope presence comes from the tolerant guarded
-    accessor ``wire_error_envelope_or_none`` (which subsumes the old ``result is not
-    None`` half) rather than a direct ``result.wire_error_envelope`` read. The wire
-    grade stays CONDITIONAL — tightening it to "there must be an envelope" would fail
-    every no-wire dispatch of this step — while the type check below is unconditional,
-    so the step always reaches a verdict.
+    accessor ``wire_error_envelope_or_none`` (``_outcome_helpers.py``) rather than a
+    hand-rolled ``result.wire_error_envelope`` read: it returns ``None`` both when no
+    ``TransportResult`` exists and when one carries no real envelope — the same pair of
+    cases the old presence guard covered, and the form ``assert_wire_error`` needs (it
+    reads the real envelope, not a synthesized one). The wire grade stays CONDITIONAL —
+    tightening it to "there must be an envelope" would fail every no-wire dispatch of
+    this step — while the type check below is unconditional, so the step always reaches
+    a verdict.
     """
     from pydantic import ValidationError
 
@@ -1158,12 +1210,30 @@ def then_wire_envelope_marker_absent(ctx: dict, marker: str) -> None:
     assert_no_marker_in_envelope(wire_error_dict(ctx), marker)
 
 
-@then(parsers.parse("the error details should include {key} {value}"))
+@then(parsers.parse("the error details should include {key:w} {value:S}"))
 def then_error_details_include_unquoted(ctx: dict, key: str, value: str) -> None:
     """Assert error.details contains a key with the given value (numeric/unquoted).
 
     Handles numeric coercion: if the expected value looks like a number,
     compare numerically. Otherwise compare as strings.
+
+    Field TYPES matter here, they are not decoration. Written as the bare
+    ``{key} {value}`` this sentence is ``.+? .+?`` anchored to the prefix, so it
+    swallows every PROSE continuation of "the error details should include ..."
+    too — "... policy_id and a non-empty reasons array", "... a policy_url where
+    the full policy can be reviewed", "... supported_versions as a non-empty
+    array". For those it binds nonsense (``key='policy_id'``,
+    ``value='and a non-empty reasons array'``) and can only ever fail, while
+    ALSO shadowing the domain step that does grade the obligation — the disease
+    ``tests/unit/test_architecture_bdd_no_shadowed_steps.py`` exists to remove
+    (GH #1941: one Gherkin sentence has exactly one meaning).
+
+    ``{key:w}`` (``\\w+``, one identifier) and ``{value:S}`` (one non-whitespace
+    token) pin the step to the shape it was written for — an identifier followed
+    by a single scalar, quoted or not. Every scalar site in ``tests/bdd/features``
+    still binds with identical arguments (``minimum_budget 500``,
+    ``current_version 1``, ``currency "USD"``, ``resource_id "mb-789"``); the
+    prose sentences no longer bind here, leaving each to its own domain step.
     """
     error = ctx.get("error")
     assert error is not None, "No error recorded in ctx"

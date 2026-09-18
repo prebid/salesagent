@@ -50,9 +50,11 @@ from adcp.server.mcp_tools import ADCP_TOOL_DEFINITIONS
 from adcp.types.generated_poc.enums.task_status import TaskStatus as LibraryTaskStatus
 from google.protobuf import json_format, struct_pb2
 
+from src.a2a_server.context_builder import EXCHANGE_STATE_KEY
 from src.core.domain_config import get_a2a_server_url
 from src.core.exceptions import AdcpFailure
 from src.core.resolved_identity import TransportProtocol
+from src.core.signing.capture import HttpExchange
 from src.core.tools._boundary import failure_response, serve
 from src.core.tools._wire import to_wire
 from src.core.tools.registry import TOOLS
@@ -195,6 +197,18 @@ class AdCPRequestHandler(RequestHandler):
         """
         return context.state["headers"]
 
+    def _exchange_of(self, context: ServerCallContext) -> HttpExchange | None:
+        """The captured HTTP message ``AdCPCallContextBuilder`` placed on the call context.
+
+        ``.get`` with a default, unlike the headers above, and the asymmetry is deliberate.
+        Headers absent means the context was not built from a request at all, which is a
+        wiring fault worth an INTERNAL_ERROR. A capture absent is an ordinary outcome —
+        nothing captures one outside an AdCP path — and it means "this request presented no
+        signature", which the resolver handles without a branch here.
+        """
+        exchange = context.state.get(EXCHANGE_STATE_KEY)
+        return exchange if isinstance(exchange, HttpExchange) else None
+
     async def on_message_send(
         self,
         params: SendMessageRequest,
@@ -206,6 +220,11 @@ class AdCPRequestHandler(RequestHandler):
         are recorded on the Task and route nothing.
         """
         logger.info("Handling SendMessage request: %s", params)
+
+        # Before anything runs, and for the same reason a two-skill message is refused whole:
+        # an envelope carrying something this agent will not honour is not a request it
+        # half-serves. See ``_refuse_envelope_push_config``.
+        self._refuse_envelope_push_config(params)
 
         text_parts: list[str] = []
         skill: str | None = None
@@ -255,6 +274,7 @@ class AdCPRequestHandler(RequestHandler):
             # The request HEADERS, not an identity: the boundary resolves the caller once and
             # reads the row's auth declaration itself. A2A holds no identity of its own.
             headers = self._headers_of(context)
+            exchange = self._exchange_of(context)
 
             # No ``except`` around this. A refused credential, a malformed payload and a failing
             # tool all leave ``serve`` as ``AdcpFailure``, which ``_dispatch_skill`` serializes
@@ -263,7 +283,7 @@ class AdCPRequestHandler(RequestHandler):
             # JSON-RPC layer. AuthChallengeResponder reads a refused credential off the artifact
             # (``adcp_error_code_in``, shape 4), so the 401 handshake needs no branch here keyed
             # on an error class.
-            result = await self._dispatch_skill(skill, parameters, headers)
+            result = await self._dispatch_skill(skill, parameters, headers, exchange)
 
             # Per AdCP spec, an async operation returns a Task with status=submitted and no
             # artifacts. The SAME read the final state uses, so the two cannot disagree.
@@ -441,6 +461,34 @@ class AdCPRequestHandler(RequestHandler):
         """Handle 'tasks/pushNotificationConfig/delete'. Declined: this agent advertises push_notifications=False."""
         raise PushNotificationNotSupportedError()
 
+    def _refuse_envelope_push_config(self, params: SendMessageRequest) -> None:
+        """The FIFTH entry point to the same declined capability. Here, beside the other four.
+
+        A2A lets a buyer attach a webhook to a skill invocation through
+        ``params.configuration.task_push_notification_config``. AdCP defines no such channel
+        — a webhook is a declared field of the AdCP request itself, ``push_notification_config``
+        on the tool's own schema, which on this transport travels in the DataPart like every
+        other request field. So the A2A push-notification capability is declined WHOLESALE:
+        the agent card advertises ``push_notifications=False`` (``create_agent_card``, :571)
+        and the four ``tasks/pushNotificationConfig/*`` methods above refuse.
+
+        This envelope field was the one entry point that did neither. ``on_message_send``
+        read ``params.message.parts`` and nothing else, so a registration sent here was
+        silently DROPPED: the buyer received 200 for a webhook that was never registered.
+        Worse, since the config never reached the validated request, neither the
+        security.mdx @ v3.1.1 :1464 log duty nor the :1465 signature escalation ran for a
+        payload carrying ``authentication`` — the two obligations the AdCP field triggers on
+        every transport, including this one. Dropping and declining are indistinguishable
+        from inside this agent and opposite from outside it.
+
+        REFUSING, not threading it into the skill's parameters. Merging it would build an
+        AdCP registration channel out of a transport-specific one, which is precisely what
+        declining the capability decided against; refusing says what the agent card already
+        said. A buyer that wants a webhook on this seller declares it in the AdCP request.
+        """
+        if params.HasField("configuration") and params.configuration.HasField("task_push_notification_config"):
+            raise PushNotificationNotSupportedError()
+
     async def on_get_extended_agent_card(
         self,
         params: GetExtendedAgentCardRequest,
@@ -449,7 +497,13 @@ class AdCPRequestHandler(RequestHandler):
         """Handle 'GetExtendedAgentCard' method."""
         raise UnsupportedOperationError(message="Extended agent card not supported")
 
-    async def _dispatch_skill(self, skill_name: str, parameters: Any, headers: Mapping[str, str]) -> dict[str, Any]:
+    async def _dispatch_skill(
+        self,
+        skill_name: str,
+        parameters: Any,
+        headers: Mapping[str, str],
+        exchange: HttpExchange | None = None,
+    ) -> dict[str, Any]:
         """Run one skill through ``serve`` and return the body the artifact DataPart carries.
 
         The whole of A2A's request path. A row with ``a2a=True`` IS dispatchable: the registry
@@ -466,7 +520,7 @@ class AdCPRequestHandler(RequestHandler):
             available_skills = [name for name, spec in TOOLS.items() if spec.a2a]
             raise MethodNotFoundError(message=f"Unknown skill '{skill_name}'. Available skills: {available_skills}")
         try:
-            response = await serve(skill_name, parameters, headers, TransportProtocol.A2A)
+            response = await serve(skill_name, parameters, headers, TransportProtocol.A2A, exchange)
         except AdcpFailure as failure:
             # A2A's wire failure marker is the Task STATE, set by the caller from the
             # response's own ``status``. This transport adds nothing to the BODY.

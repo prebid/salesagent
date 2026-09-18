@@ -48,6 +48,11 @@ select = ["TID251"]
 "src/core/signals_agent_registry.py" = ["TID251"]
 "src/services/protocol_webhook_service.py" = ["TID251"]
 "src/services/webhook_delivery_service.py" = ["TID251"]
+# Two outbound-body edges the RFC 9421 layer brought: the PUBLISHED trust-root documents
+# (JWKS, brand.json — a third party fetches them) and the activation-challenge body sent
+# to the buyer's webhook target. Mirrored in .ast-grep/rules/serialize-only-at-the-edges.yml.
+"src/core/signing/trust_root.py" = ["TID251"]
+"src/services/notification_proof_service.py" = ["TID251"]
 "src/core/webhooks/registration.py" = ["TID251"]
 "src/core/errors/issues.py" = ["TID251"]
 "src/core/errors/details.py" = ["TID251"]

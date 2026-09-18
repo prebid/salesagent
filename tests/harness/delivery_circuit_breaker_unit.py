@@ -10,6 +10,12 @@ and every assertion behind it was vacuous (gh-#1589). A refusal is now driven by
 naming a destination the real gate refuses, and whether delivery happened is
 read off the real origin (``delivery_attempts``), never off a transport mock.
 
+The origin is a loopback listener on an ephemeral port, so this env still needs
+neither PostgreSQL nor the network. It also carries the RFC 9421 signing arm for
+free: a signed delivery arrives at the origin with its real ``Signature`` /
+``Signature-Input`` headers, readable off ``last_delivery()`` rather than off a
+socket mock's ``call_args``.
+
 Usage::
 
     with CircuitBreakerEnv() as env:
@@ -29,6 +35,9 @@ Available mocks via env.mock:
     "random"    -- random.uniform mock
     "db"        -- get_db_session mock
     "logger"    -- module-level logger mock
+
+There is deliberately no "post" and no "ssrf" control here: the transport and the
+egress gate are both real (see above).
 """
 
 from __future__ import annotations
@@ -60,6 +69,12 @@ class CircuitBreakerEnv(CircuitBreakerMixin, BaseTestEnv):
 
     MODULE = "src.services.webhook_delivery_service"
     EXTERNAL_PATCHES = {
+        # Timing and jitter moved out of this module with the delivery seam
+        # (#1802): ``webhook_delivery_service`` no longer imports ``random`` at
+        # all, so the old ``{MODULE}.random.uniform`` target would now raise on
+        # patch — and ``{MODULE}.time.sleep`` would patch a name the retry
+        # ladder has stopped consulting, i.e. observe nothing. Patch where the
+        # schedule is actually decided.
         "sleep": "src.core.security.outbound_http.time.sleep",
         "random": "src.core.security.egress.attempts.random.uniform",
         "db": "src.core.database.database_session.get_db_session",
@@ -75,7 +90,9 @@ class CircuitBreakerEnv(CircuitBreakerMixin, BaseTestEnv):
         # random.uniform: return 0.0 for deterministic tests
         self.mock["random"].return_value = 0.0
 
-        # The origin answers 200 OK unless a test programs otherwise.
+        # The origin answers 200 OK unless a test programs otherwise. No socket
+        # is installed and no SSRF default is configured: both controls this env
+        # used to own are now real (see the module docstring).
         self.set_http_response(200)
 
         # DB session: return a mock session with one active webhook config
@@ -103,6 +120,7 @@ class CircuitBreakerEnv(CircuitBreakerMixin, BaseTestEnv):
         url: str | None = None,
         auth_type: str | None = None,
         auth_token: str | None = None,
+        secret: str | None = None,
         operation_id: str | None = "op_harness_0001",
         token: str | None = None,
     ) -> MagicMock:
@@ -111,19 +129,26 @@ class CircuitBreakerEnv(CircuitBreakerMixin, BaseTestEnv):
         ``url`` defaults to the running origin, so the configured endpoint is one
         that really answers.
 
-        No ``secret=`` and no ``webhook_secret`` attribute, mirroring the
-        integration twin (#1894). A MagicMock answers every
-        attribute, so leaving it set would let this mock keep feeding a column
-        production no longer reads -- the failure mode a mock-based harness is
-        worst at surfacing.
+        No ``webhook_secret`` attribute is ever set, mirroring the integration twin
+        (GH #1894). A MagicMock answers every attribute, so leaving that column set
+        would let this mock keep feeding a column production no longer reads -- the
+        failure mode a mock-based harness is worst at surfacing.
 
-        ``operation_id`` and ``token`` are set for the same reason, from the other
-        direction: the sender echoes both into the payload, and a MagicMock would hand
-        it a Mock object that the pinned envelope refuses -- so the delivery would fail
-        for a reason no production registration can produce. ``operation_id`` defaults to
-        a value because a conformant registration carries one and the envelope REQUIRES
-        it; pass ``None`` to model a buyer that sent none.
+        ``secret=`` survives as a CONVENIENCE, not as a second selector: it is folded
+        onto the spec's one ``authentication`` selector by
+        :meth:`CircuitBreakerMixin.webhook_auth_fields` (security.mdx @ v3.1.1 :1424),
+        so asking for an HMAC secret yields ``("HMAC-SHA256", secret)`` -- exactly the
+        row ``media_buy_create`` and the A2A push-config handler persist -- and never
+        the retired column.
+
+        ``operation_id`` and ``token`` are set for the mirror-image reason: the sender
+        echoes both into the payload, and a MagicMock would hand it a Mock object that
+        the pinned envelope refuses -- so the delivery would fail for a reason no
+        production registration can produce. ``operation_id`` defaults to a value
+        because a conformant registration carries one and the envelope REQUIRES it;
+        pass ``None`` to model a buyer that sent none.
         """
+        auth_type, auth_token = self.webhook_auth_fields(auth_type, auth_token, secret)
         config = MagicMock()
         config.url = url if url is not None else self.webhook_url
         config.authentication_type = auth_type

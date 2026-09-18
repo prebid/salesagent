@@ -133,18 +133,20 @@ ALLOWLIST_NOT_WIRE_DISPATCHED: frozenset[tuple[str, str]] = frozenset(
         # direction ("violation fixed, remove from allowlist"), not a re-classification.
         ("tests/harness/_mixins.py", "set_http_error"),
         ("tests/harness/_mixins.py", "set_http_response"),
-        # CircuitBreakerMixin.set_breaker_state seeds the state of a CircuitBreaker
-        # held in the in-process WebhookDeliveryService's ``_circuit_breakers`` dict.
-        # It belongs to the same class as set_http_response above and is dispatched
-        # the same way: call_send/call_deliver/call_impl invoke
-        # ``WebhookDeliveryService.send_delivery_webhook`` DIRECTLY, never through
-        # call_via/dispatch_request, so the breaker the scenario seeds is the breaker
-        # production consults in every parametrized "transport" row. Its unflagged
-        # siblings in that seam (seed_breaker_failures, elapse_breaker_timeout,
-        # drive_breaker_transition -- verbs the name regex does not match) say the
-        # same thing out loud: "under e2e_rest the breaker being consulted is the
-        # test process's, not the server's".
-        ("tests/harness/_mixins.py", "set_breaker_state"),
+        # CircuitBreakerMixin.set_breaker_state LEFT this bucket the same way, by
+        # being DECLARED: it now carries @realize_e2e(e2e_unsupported(...)), so it is
+        # excluded from this guard entirely (see _is_realize_e2e_decorated) and a row
+        # here would be stale. Its former reasoning -- "call_send/call_deliver invoke
+        # WebhookDeliveryService directly, so the seeded breaker is the one production
+        # consults" -- held only for the in-process legs. Once deliver_webhook became
+        # @realize_e2e, the e2e leg had the LIVE SERVER send, while the seed still poked
+        # the test process's ``_circuit_breakers``: two processes, two breakers. There
+        # is nothing to point the seed at, because the live server's delivery-report
+        # path (ProtocolWebhookService) has no breaker at all, so the whole family
+        # (seed_breaker_failures, elapse_breaker_timeout, drive_breaker_transition,
+        # breaker_snapshot -- verbs this name regex does not match) declares the same
+        # thing out loud instead. They are pinned in
+        # test_architecture_e2e_rest_escape_hatches.EXPECTED_UNSUPPORTED_DECLARATIONS.
     }
 )
 

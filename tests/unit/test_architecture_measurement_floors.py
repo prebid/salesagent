@@ -33,10 +33,11 @@ sys.path.insert(0, str(REPO_ROOT))
 # node ids by identity rather than by size.
 #
 # The set spans BOTH sources, deliberately. The literal `ENV_ROUTES` block holds
-# 23 wired rows; `ENV_ROUTES +=` appends 5 more from `_UC_BUCKET_ROUTES` at
-# import time. "How many wired rows are there" therefore has two answers (23 and
-# 28), and a floor that does not say which it means is itself an ambiguous
-# counter. This pins the runtime set — what actually routes scenarios.
+# 31 wired tags; `ENV_ROUTES +=` then appends the UC-010 dormancy rows (all
+# xfailing) and 6 more wired ones from `_UC_BUCKET_ROUTES` at import time. "How
+# many wired tags are there" therefore has two answers (31 and 37), and a floor
+# that does not say which it means is itself an ambiguous counter. This pins the
+# runtime set — what actually routes scenarios.
 #
 # Discipline, matching EXPECTED_LEDGER in test_storyboard_ledger_state.py:
 # graduating a placeholder to wired ADDS a tag here in the same change, as a
@@ -85,6 +86,11 @@ EXPECTED_WIRED_ROUTES: frozenset[str] = frozenset(
         "uc004-create",
         "uc004-poll",
         "uc006-creative-sync",
+        # UC-010's wired row, graduated on the signing branch: it builds a real
+        # `CapabilitiesEnv` (`_build_capabilities_env`) with `xfail_reason=None`
+        # and routes every tag in the UC-010 wired set. The UC's placeholder rows
+        # (`uc010-parked-*`, `uc010-not-wired`) stay unpinned, as placeholders
+        # must.
         "uc010-capabilities",
         "uc019-post-create-poll",
         "uc011-list",

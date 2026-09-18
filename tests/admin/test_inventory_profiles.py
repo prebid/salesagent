@@ -51,6 +51,10 @@ def test_tenant(integration_db):
             subdomain="inv-prof-test",
             ad_server="mock",
             is_active=True,
+            # A real virtual_host is required: Tenant.primary_domain no longer
+            # fabricates a placeholder domain, and the inventory-profiles create/edit
+            # routes refuse to proceed without a real one configured.
+            virtual_host="inv-prof-test.real-configured-domain.test",
         )
         session.add(tenant)
         session.commit()
@@ -260,7 +264,12 @@ class TestAddInventoryProfileDuplicateId:
         }
 
     def test_winner_and_loser_get_the_same_answer(self, client, factory_session):
-        tenant = TenantFactory()
+        # A real virtual_host is required to reach the write window at all:
+        # Tenant.primary_domain no longer fabricates a placeholder domain, and the
+        # add route refuses to proceed without one BEFORE it ever gets to the
+        # uq_inventory_profile write this test grades. Same reseeding the
+        # test_tenant fixture above needed.
+        tenant = TenantFactory(virtual_host="contested-profile.real-configured-domain.test")
         _auth_session(client, tenant.tenant_id)
 
         def post_add():

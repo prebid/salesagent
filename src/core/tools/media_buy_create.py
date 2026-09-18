@@ -16,7 +16,6 @@ from collections.abc import Sequence
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Literal, NoReturn, TypedDict, cast
-from urllib.parse import urlparse
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -69,35 +68,6 @@ class PackageAssignmentDict(TypedDict):
 
 logger = logging.getLogger(__name__)
 console = Console()
-
-
-def validate_agent_url(url: str | None) -> bool:
-    """Validate agent_url is a well-formed HTTP(S) URL per AdCP spec.
-
-    This validates format/structure only (scheme + netloc). It does NOT
-    perform DNS resolution or SSRF network checks because it is called
-    during approval processing against URLs that are already stored in
-    the database — not against live user-supplied input.
-
-    Egress policy for user-supplied agent URLs is enforced at the admin
-    ingestion boundary (src/admin/blueprints/signals_agents.py) via
-    src.admin.utils.url_policy, which applies the seam's validate_url —
-    address validation and DNS resolution belong to adcp.signing, reached
-    through src/core/security/outbound_http.py.
-
-    Args:
-        url: URL string to validate
-
-    Returns:
-        True if valid HTTP(S) URL with a non-empty netloc.
-    """
-    if not url or not isinstance(url, str):
-        return False
-    try:
-        result = urlparse(url)
-        return all([result.scheme in ("http", "https"), result.netloc])
-    except Exception:
-        return False
 
 
 # Tool-specific imports
@@ -1735,6 +1705,51 @@ def _validate_pricing_model_selection(
     return pricing_info_for(selected_option, bid_price=float(package.bid_price) if package.bid_price else None)
 
 
+def _build_registered_agent_urls(registered_agents: list[Any], tenant_id: str) -> set[str]:
+    """Normalize each registered agent's URL for registration-matching comparison.
+
+    A malformed PRE-EXISTING registered agent_url (admin-ingested data the buyer
+    never touched) is skipped with a warning rather than raised: it can never
+    legitimately equal a well-formed incoming agent_url, so excluding it changes
+    nothing for a correct match, but hard-failing here would let ONE unrelated
+    bad registration break every format_id validation in the request
+    (#1291).
+    """
+    from src.core.signing.canonical import TargetUriMalformedError
+
+    registered_agent_urls = set()
+    for agent in registered_agents:
+        try:
+            registered_agent_urls.add(canonical_agent_url(agent.agent_url))
+        except TargetUriMalformedError as e:
+            logger.warning(
+                f"Tenant {tenant_id}: registered creative agent_url {agent.agent_url!r} is malformed "
+                f"per RFC 9421 canonicalization ({e.reason}); excluded from registration matching."
+            )
+    return registered_agent_urls
+
+
+def _normalize_incoming_agent_url(agent_url: str, package_idx: int, idx: int) -> str:
+    """Normalize a buyer-supplied format_id.agent_url, or raise with the same
+    'Package N, format_ids[idx]' context every sibling validation in
+    ``_validate_and_convert_format_ids`` carries (#1291).
+    """
+    from src.core.signing.canonical import TargetUriMalformedError
+
+    try:
+        return canonical_agent_url(agent_url)
+    except TargetUriMalformedError as e:
+        # The refusal REASON is the signing layer's diagnostic, not buyer-facing text:
+        # post-ADR-010 the sentence is CODE_TABLE's property and the cause rides
+        # ``internal_detail``. What the buyer gets is the position and the offending
+        # value, in the same ``ValidationDetails`` shape every sibling rejection here uses.
+        raise AdCPValidationError(
+            field=f"packages[{package_idx}].format_ids[{idx}]",
+            details=ValidationDetails(package_index=package_idx, format_index=idx, rejected_value=str(agent_url)),
+            internal_detail=e,
+        ) from e
+
+
 async def _validate_and_convert_format_ids(
     format_ids: list[Any], tenant_id: str, package_idx: int
 ) -> list[dict[str, str]]:
@@ -1758,12 +1773,17 @@ async def _validate_and_convert_format_ids(
     Raises:
         ToolError: If any format_id is invalid, unregistered, or doesn't exist
     """
-    from src.core.creative_agent_registry import CreativeAgentRegistry
+    from src.core.creative_agent_registry import get_creative_agent_registry
 
     if not format_ids:
         return []
 
-    registry = CreativeAgentRegistry()
+    # The registry the DEPLOYMENT selected, never a hand-constructed one: which class
+    # answers an operator agent (live dial vs the checked-in reference catalog) is a
+    # composition decision `get_creative_agent_registry()` owns, and constructing
+    # `CreativeAgentRegistry()` here quietly opted this path out of it — the one call
+    # site in src/ still doing so after the settings refactor.
+    registry = get_creative_agent_registry()
     validated_format_ids = []
 
     # Get registered agents for this tenant.
@@ -1775,8 +1795,13 @@ async def _validate_and_convert_format_ids(
     # AUTHORIZATION outcome: an agent registered at `https://x.com` also authorized
     # `https://x.com/mcp`, and one host serving MCP at /mcp and A2A at /a2a read as a
     # single agent.
+    #
+    # The set is built through `_build_registered_agent_urls` rather than a bare
+    # comprehension so that ONE malformed pre-existing registration (admin-ingested data
+    # the buyer never touched) is skipped with a warning instead of failing every
+    # format_id in the request (#1291).
     registered_agents = registry._get_tenant_agents(tenant_id)
-    registered_agent_urls = {canonical_agent_url(agent.agent_url) for agent in registered_agents}
+    registered_agent_urls = _build_registered_agent_urls(registered_agents, tenant_id)
 
     for idx, fmt_id in enumerate(format_ids):
         # Every rejection here is per-package AND per-format, so the position and the
@@ -1797,7 +1822,11 @@ async def _validate_and_convert_format_ids(
             validated_fmt = FormatId.model_validate(fmt_id, from_attributes=True)
         except (ValueError, ValidationError) as e:
             raise AdCPValidationError(field=field, details=ValidationDetails(**where), internal_detail=e) from e
-        agent_url = canonical_agent_url(validated_fmt.agent_url)
+        # Canonicalized ONCE, here, and every later use (the registration check and the
+        # registry fetch) reads this value. A URL the canonicalization profile refuses
+        # outright — no host, bare IPv6, unclosed bracket — comes back as a positioned
+        # VALIDATION_ERROR rather than an uncaught ValueError (#1291).
+        agent_url = _normalize_incoming_agent_url(str(validated_fmt.agent_url), package_idx, idx)
         format_id = validated_fmt.id
 
         if not agent_url or not format_id:

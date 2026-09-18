@@ -71,6 +71,9 @@ class TestCircuitBreakerEnvContract:
         refuses, not by programming a verdict.
         """
         with CircuitBreakerEnv() as env:
+            # No "post" either: #1291 C1 made the outbound socket the only webhook
+            # transport, and #1802 then replaced that socket with a REAL local
+            # origin. Delivery is read off the origin, never off a patch target.
             assert set(env.mock) == {"sleep", "random", "db", "logger"}
 
     def test_make_webhook_config(self):
@@ -88,6 +91,26 @@ class TestCircuitBreakerEnvContract:
             assert config.url == env.webhook_url
             assert config.authentication_type == "Bearer"
             assert config.authentication_token == "tok123"
+
+    def test_make_webhook_config_puts_the_hmac_secret_on_the_spec_selector(self):
+        """``secret=`` seeds ``authentication``, not the retired webhook_secret column.
+
+        security.mdx @ v3.1.1 :1424 defines ONE selector for how a webhook is
+        authenticated; #1291 C1 collapsed the delivery service's second one
+        (``webhook_secret``, which production never wrote) onto it. The fold lives
+        in :meth:`CircuitBreakerMixin.webhook_auth_fields`, so this also pins the
+        ``secret=`` convenience the mixin still accepts.
+
+        The explicit ``url=`` is the other half: the default is the running local
+        origin (see the test above), so an override is the only thing that proves
+        a caller can still address an endpoint the origin does not serve.
+        """
+        with CircuitBreakerEnv() as env:
+            config = env.make_webhook_config(url="https://test.com/hook", secret="s3cret")
+
+            assert config.url == "https://test.com/hook"
+            assert config.authentication_type == "HMAC-SHA256"
+            assert config.authentication_token == "s3cret"
 
     def test_get_breaker_accepts_kwargs(self):
         """get_breaker passes keyword args to CircuitBreaker constructor."""

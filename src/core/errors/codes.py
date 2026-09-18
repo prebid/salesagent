@@ -60,6 +60,9 @@ from adcp import get_adcp_spec_version
 from adcp.types import ErrorCode
 from adcp.validation.version import resolve_bundle_key
 
+from src.core.errors._entry import CodeEntry, Recovery
+from src.core.errors.signature_codes import SIGNATURE_CODE_TABLE, SignatureErrorCode
+
 __all__ = [
     "CODE_BY_VALUE",
     "CODE_TABLE",
@@ -67,54 +70,8 @@ __all__ = [
     "CodeEntry",
     "ErrorCodeT",
     "Recovery",
+    "SignatureErrorCode",
 ]
-
-
-class Recovery(StrEnum):
-    """What a buyer can do about an error.
-
-    Closed at three values by the wire schema, and the one field a receiver is
-    required to read when it meets a code it does not know.
-    """
-
-    CORRECTABLE = "correctable"
-    TRANSIENT = "transient"
-    TERMINAL = "terminal"
-
-
-@dataclass(frozen=True)
-class CodeEntry:
-    """Everything a code resolves to. Frozen: the table is a fact, not state.
-
-    Refuses an empty ``suggestion`` or ``message`` at construction: every error
-    on the wire derives both from its table entry, so an empty string here would
-    put a blank buyer-facing field on every raise of that code. Checking it at
-    the one place entries are built — pinned-schema load and platform authorship
-    alike — means no test or raise site ever needs to re-check non-emptiness.
-
-    ``status`` is the HTTP status the failure is signalled with. It belongs to
-    the CODE, not to whichever exception class happened to raise it: the pinned
-    schema states the transport-level failure marker per code — ``HTTP 5xx`` for
-    CONFIGURATION_ERROR and GOVERNANCE_UNAVAILABLE, ``HTTP 4xx`` for
-    GOVERNANCE_DENIED and CREDENTIAL_IN_ARGS (``enums/error-code.json``,
-    ``enumDescriptions``, AdCP 3.1.1) — so a class that emitted a code with a
-    status from a different band would contradict the pin. The band is the
-    spec's; the exact number inside it is this seller's.
-    """
-
-    recovery: Recovery
-    suggestion: str
-    message: str
-    status: int
-
-    def __post_init__(self) -> None:
-        if not self.suggestion or not self.message:
-            raise ValueError(
-                f"CodeEntry requires non-empty suggestion and message, got "
-                f"suggestion={self.suggestion!r}, message={self.message!r}"
-            )
-        if not 100 <= self.status <= 599:
-            raise ValueError(f"CodeEntry.status must be an HTTP status code, got {self.status!r}")
 
 
 class AppErrorCode(StrEnum):
@@ -226,11 +183,13 @@ class AppErrorCode(StrEnum):
     )
 
 
-#: Any code this seller can emit: AdCP's published set plus this platform's own.
+#: Any code this seller can emit: AdCP's published set, this platform's own, and the
+#: RFC 9421 transport error taxonomy (:mod:`src.core.errors.signature_codes`, which
+#: explains why those are codes rather than a header-only vocabulary).
 #: A union rather than a subclass because a Python enum with members cannot be
 #: extended -- ``class AppErrorCode(ErrorCode)`` is a TypeError at class
 #: creation, not a design choice.
-ErrorCodeT = ErrorCode | AppErrorCode
+ErrorCodeT = ErrorCode | AppErrorCode | SignatureErrorCode
 
 
 # ---------------------------------------------------------------------------
@@ -453,6 +412,12 @@ def _build_code_table() -> dict[ErrorCodeT, CodeEntry]:
     # Each member carries its own entry, so there is nothing to reconcile: a code
     # without one cannot be declared.
     table.update({member: member.entry for member in AppErrorCode})
+
+    # The signature taxonomy, generated from the SDK's own request-family table rather
+    # than authored here -- see src/core/errors/signature_codes.py for why these codes
+    # travel in the envelope at all.
+    for signature_code, signature_entry in SIGNATURE_CODE_TABLE.items():
+        table[signature_code] = signature_entry
 
     return table
 

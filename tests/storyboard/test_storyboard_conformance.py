@@ -42,7 +42,8 @@ import pytest
 
 from scripts.audit import ledger, storyboard_spec
 from scripts.setup.init_database_ci import CI_TEST_SUBDOMAIN, CI_TEST_TOKEN
-from tests.storyboard import collected
+from scripts.setup.storyboard_signing import STORYBOARD_VIRTUAL_HOST
+from tests.storyboard import collected, corrected_vectors
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _RUNNER_DIR = Path(__file__).parent / "runner"
@@ -100,9 +101,15 @@ _PROTOCOLS: tuple[str, ...] = ("mcp", "a2a")
 # MCP takes its endpoint directly (`/mcp/`, trailing slash included — FastMCP mounts it
 # that way). A2A takes the BASE url: the SDK appends `/.well-known/...` verbatim, so a
 # `/a2a` suffix would ask for `/a2a/.well-known/agent-card.json`, which 404s.
+#
+# The ORIGIN is imported, not spelled here. `scripts/setup/storyboard_signing.py` writes it
+# onto the tenant as its `virtual_host`, which is what makes a BEARER-LESS signed vector
+# resolve a tenant at all — those probes carry no `x-adcp-tenant`, so `_detect_tenant` has
+# only the Host. Two literals of it is a posture nothing enforces and 20+ negative vectors
+# answered 200, with the two spellings looking identical in review.
 _DEFAULT_AGENT_URLS: dict[str, str] = {
-    "mcp": "https://storyboard.adcp.test:8443/mcp/",
-    "a2a": "https://storyboard.adcp.test:8443",
+    "mcp": f"https://{STORYBOARD_VIRTUAL_HOST}/mcp/",
+    "a2a": f"https://{STORYBOARD_VIRTUAL_HOST}",
 }
 
 # Env vars the storyboard-conformance job MAY set. The compliance/schema paths
@@ -412,6 +419,28 @@ def _bundle_path(env_name: str) -> str:
     return str((storyboard_spec.adcp_home(_REPO_ROOT) / _BUNDLE_SUBDIR[env_name]).resolve())
 
 
+def _graded_compliance_dir() -> str:
+    """The compliance tree the runner is pointed at: the pinned one, bodies corrected.
+
+    THE PINNED TREE IS NOT EDITED. This writes a sibling (``adcp-<version>-corrected/``,
+    covered by the runner directory's existing ``adcp-*/`` ignore) whose request-signing
+    vectors carry bodies an AdCP seller can parse, and hands the runner that. Every other
+    storyboard in the tree is copied through byte-for-byte, so pointing ``--compliance-dir``
+    here changes which BODIES the signed-requests vectors send and nothing else about the
+    run.
+
+    Why it is needed: a seller validates the payload before it authenticates the caller, so
+    the corpus's stub bodies (``{"plan_id":"plan_001"}``) are answered ``INVALID_REQUEST``
+    and the RFC 9421 checklist never runs — measured here as all 27 graded signed-requests
+    checks failing with ``got 200 (error="(none)")``. See
+    ``tests/storyboard/corrected_vectors.py`` and adcontextprotocol/adcp#7567; this is a
+    local stand-in until the corrected corpus lands upstream.
+    """
+    source = Path(_bundle_path(_COMPLIANCE_DIR_ENV))
+    dest = source.parent.parent / f"{source.parent.name}-corrected" / source.name
+    return str(corrected_vectors.corrected_compliance_tree(source, dest))
+
+
 def _webhook_receiver_args(protocol: str) -> tuple[list[str], dict[str, str]]:
     """CLI args + extra env that let the runner host a reachable webhook receiver.
 
@@ -478,7 +507,7 @@ def _run_storyboard_runner(protocol: str) -> dict[str, Any]:
         "--compliance-version",
         storyboard_spec.pinned_version(_REPO_ROOT),
         "--compliance-dir",
-        _bundle_path(_COMPLIANCE_DIR_ENV),
+        _graded_compliance_dir(),
         "--schema-root",
         _bundle_path(_SCHEMA_ROOT_ENV),
         "--timeout",
@@ -594,6 +623,36 @@ def _scoreboard(protocol: str, summary: dict[str, Any]) -> str:
     )
 
 
+def _drain_grading_replay_rows() -> None:
+    """Empty the replay cache of the conformance keyids before a protocol run.
+
+    THE TWO PROTOCOL RUNS SHARE ONE DEPLOYMENT AND ONE REPLAY STORE, and vector
+    ``020-rate-abuse`` deliberately drives ``test-ed25519-2026`` to its per-keyid cap. The
+    ``replay_ttl_overrides`` clamp drains those rows between VECTORS, which is what it was
+    sized for; it does not drain them between PROTOCOL RUNS, because the second run starts
+    seconds after the first ends rather than a TTL later.
+
+    Measured: with the a2a card grading for the first time, its first four signed vectors
+    were answered ``request_signature_rate_abuse`` — including ``positive/001`` and
+    ``negative/016``'s must-be-accepted first submission. That is the mcp run's cap bleeding
+    into the a2a run, not a verdict about either surface.
+
+    Deleting the rows rather than sleeping out the TTL: a sleep long enough to be safe is
+    longer than the run it protects, and an arithmetic relationship between two sleeps and a
+    clamp is the kind of thing that is right once and silently wrong after any of the three
+    moves.
+    """
+    from sqlalchemy import delete
+
+    from scripts.setup.storyboard_signing import counterparty_registry
+    from src.core.database.database_session import get_db_session
+    from src.core.database.models import ReplayNonce
+
+    with get_db_session() as session:
+        session.execute(delete(ReplayNonce).where(ReplayNonce.keyid.in_(sorted(counterparty_registry()))))
+        session.commit()
+
+
 def _collect_checks(protocol: str) -> list[dict[str, Any]]:
     """One entry per (protocol, track, storyboard_id, step_id): a failure or a skip.
 
@@ -602,6 +661,7 @@ def _collect_checks(protocol: str) -> list[dict[str, Any]]:
     passing check has no ledger identity to track; only failures and skips
     are gradeable per-check here.
     """
+    _drain_grading_replay_rows()
     summary = _run_storyboard_runner(protocol)
     _publish_summary(protocol, summary)
     print(_scoreboard(protocol, summary))

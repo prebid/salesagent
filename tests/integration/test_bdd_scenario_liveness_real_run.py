@@ -9,17 +9,24 @@ Shells out to two narrow, fast, real ``pytest tests/bdd`` slices (selected by th
 ``@storyboard-v3.1`` marker so the count of scenarios discovered matches what
 ``scripts/audit/storyboard_coverage_map.covered_storyboards`` claims as covered):
 
-* UC-006's ``uc006-storyboard-routing`` scenarios landed real
-  step definitions for all six (none are dormant/steps-unbound any more). Five
-  genuinely xfail with a ``ledgered`` reason citing a real production gap
-  (provenance validation, multi-format sync status); the sixth,
-  format-id-roundtrip-on-sync, genuinely passes. Proves the artifact distinguishes
-  ledgered-xfail from live-pass for scenarios that both have their steps bound —
-  not just the steps-bound/unbound axis.
-* UC-005's format-id-roundtrip scenarios, which pass for real on all three
-  in-process transports. Proves ``steps_bound=True`` and ``harness_wired=True`` for a
-  scenario that isn't dormant — a guard that only ever proves the negative case isn't
-  a guard.
+* UC-006's ``uc006-storyboard-routing`` scenarios, whose ``@storyboard-v3.1``
+  members all landed real step definitions and now all pass for real — the
+  multi-format-sync-status and the four provenance gaps that used to be ledgered
+  graduated once production emitted the per-creative ``status`` and the pin's
+  ``PROVENANCE_*`` codes. Proves ``steps_bound=True``/live-pass for a whole slice,
+  alongside the one member of it that IS still dormant (third test below).
+* UC-005's ``@storyboard-v3.1`` scenarios, which carry both sides of the axis:
+  the two format-id-roundtrip scenarios pass for real on all three in-process
+  transports, and baseline-format-id-object-shape is ledgered against upstream
+  adcp#7338. Proves the artifact distinguishes ledgered-xfail from live-pass for
+  scenarios that both have their steps bound — not just the steps-bound/unbound
+  axis — and proves ``steps_bound=True``/``harness_wired=True`` for a scenario
+  that isn't dormant, because a guard that only ever proves the negative case
+  isn't a guard.
+
+Which members are ledgered is never frozen into this file: both graders read the
+live ``_XFAIL_TAGS`` routing map (``_ledgered_reasons`` below), so a graduation
+moves the expectation in the same commit that removes the route.
 
 Needs a real Postgres reachable via ``DATABASE_URL`` (the harness these scenarios
 exercise creates tenants/principals/products for real) — skipped otherwise, same as
@@ -47,11 +54,12 @@ because neither is observable from the pure-logic unit tests:
 
 from __future__ import annotations
 
+import importlib
 import json
 import os
 import subprocess
 import sys
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 import pytest
@@ -86,6 +94,60 @@ def _slice_scenarios(feature: str, marker: str) -> list[storyboard_spec.TaggedSc
 
 def _identity_tags(scenarios: Sequence[storyboard_spec.TaggedScenario]) -> set[str]:
     return {s.identifier for s in scenarios}
+
+
+def _ledgered_reasons() -> Mapping[str, str]:
+    """The scenario-level xfail ledger, read LIVE from the routing contract that applies it.
+
+    ``tests/bdd/conftest.py:_XFAIL_TAGS`` is the map the collection hook iterates
+    to attach the marker, so reading the live module (the same way
+    ``tests/unit/test_architecture_bdd_no_stale_xfail_citations.py`` and
+    ``...stale_xfail_reason_text.py`` already do) makes a GRADUATION move this
+    grader's expectation in the commit that removes the route. A frozen id list
+    here did the opposite: five UC-006 storyboard scenarios graduated when
+    production started emitting the per-creative ``status`` and the pin's
+    ``PROVENANCE_*`` codes, and this file went on demanding their xfails.
+
+    Scenario-level only, which is all this module grades: the row-level maps
+    (``_SELECTIVE_XFAIL``) park individual Examples rows, and neither slice here
+    has one. A scenario re-ledgered through the function-local
+    ``_UC006_SPECGAP_XFAIL_TAGS`` map is invisible to this lookup — that direction
+    fails LOUDLY (the record says ledgered where the expectation says live)
+    rather than silently, which is the safe way round.
+    """
+    return dict(importlib.import_module("tests.bdd.conftest")._XFAIL_TAGS)
+
+
+def _assert_ledgered_or_live(scenarios: Mapping[str, dict], graded_ids: set[str]) -> None:
+    """Grade an EXACT partition of ``graded_ids`` into ledgered-xfail and live-pass.
+
+    Exact, not a relaxed "either live or ledgered" predicate: the latter would
+    satisfy the letter of the assertion while destroying its regression-detecting
+    power. Which side each id falls on comes from ``_ledgered_reasons()``, and a
+    ledgered record must carry that ledger's own reason VERBATIM — the artifact
+    is meant to publish the curated gap text, not merely the fact of an xfail.
+    """
+    ledger = _ledgered_reasons()
+    expected_ledgered = graded_ids & set(ledger)
+    for scenario_id in sorted(graded_ids):
+        record = scenarios[scenario_id]
+        # Every graded scenario has real steps bound — the dormant/unbound axis is
+        # graded separately, on the one member that genuinely is dormant.
+        assert record["steps_bound"] is True, f"{scenario_id} unexpectedly reports steps_bound=False"
+        assert record["unbound_steps"] == [], f"{scenario_id} unexpectedly reports unbound step text"
+        # Real transports actually ran (not silently zero, not silently one).
+        assert {o["transport"] for o in record["observations"]} == IN_PROCESS_TRANSPORTS
+        if scenario_id in expected_ledgered:
+            assert record["ledgered"] is True, f"{scenario_id} unexpectedly reports ledgered=False"
+            assert all(o["outcome"] == "xfailed" for o in record["observations"])
+            assert all(o["reason_category"] == "ledgered" for o in record["observations"])
+            assert all(o["reason"] == ledger[scenario_id] for o in record["observations"]), (
+                f"{scenario_id}'s recorded reason is not the ledger's own gap text"
+            )
+        else:
+            assert record["ledgered"] is False, f"{scenario_id} unexpectedly reports ledgered=True"
+            assert all(o["outcome"] == "passed" for o in record["observations"])
+            assert all(o["reason_category"] == "live" for o in record["observations"])
 
 
 def _run_bdd_slice(tmp_path: Path, test_file: str, marker_expr: str, *, extra_args: Sequence[str] = ()) -> dict:
@@ -148,11 +210,13 @@ def _run_bdd_slice(tmp_path: Path, test_file: str, marker_expr: str, *, extra_ar
 def test_real_run_records_uc006_storyboard_scenarios_as_ledgered_or_live(tmp_path: Path) -> None:
     """The UC-006 storyboard-routing slice is measured in full, and its
     ``@storyboard-v3.1``-tagged members have real, bound step definitions
-    — none are dormant/steps-unbound. Five genuinely xfail
-    with a real, ledgered production-gap reason (not StepDefinitionNotFoundError);
-    the sixth, format-id-roundtrip-on-sync, genuinely passes. Proves the artifact
-    tracks real state, not a frozen count, and distinguishes ledgered-xfail from
-    live-pass even though both have steps_bound=True."""
+    — none are dormant/steps-unbound — and each is recorded on the side of the
+    ledgered/live partition the routing map puts it on. All of them are live
+    today: the status gap closed when production began deriving the per-creative
+    ``status`` from the row's review state, and the four provenance gaps closed
+    when it began refusing a policy-violating creative with the pin's
+    ``PROVENANCE_*`` codes. Proves the artifact tracks real state, not a frozen
+    count."""
     data = _run_bdd_slice(tmp_path, UC006_FILE, UC006_MARKER)
     scenarios = {s["scenario_id"]: s for s in data["scenarios"]}
 
@@ -168,60 +232,40 @@ def test_real_run_records_uc006_storyboard_scenarios_as_ledgered_or_live(tmp_pat
     # The scenarios whose detailed ledgered/live behaviour this test pins — again
     # derived from the feature's own tags, not listed here.
     storyboard_tagged = {s.identifier for s in slice_scenarios if storyboard_spec.TAG in s.tags}
-    # An EXACT partition, not a relaxed "either live or ledgered" predicate: the
-    # latter would satisfy the letter of the assertion while destroying its
-    # regression-detecting power.
-    #
-    # TWO live members since the split of @T-UC-006-storyboard-multi-format-sync.
-    # Its ACTION obligations were dead code — the status gap's xfail aborted the
-    # scenario before they ran — so the split left them live here and moved the
-    # status obligations to their own ledgered scenario. A single live id was
-    # correct only while that scenario was wholly ledgered.
-    live_scenario_ids = {
-        "T-UC-006-storyboard-format-id-roundtrip-on-sync",
-        "T-UC-006-storyboard-multi-format-sync",
-    }
-    assert live_scenario_ids <= storyboard_tagged, (
-        f"expected live members missing from the slice: {sorted(live_scenario_ids - storyboard_tagged)}"
-    )
-
-    for scenario_id in sorted(storyboard_tagged):
-        record = scenarios[scenario_id]
-        # Every scenario has real steps bound now — the dormant/unbound axis is
-        # fully retired for this feature.
-        assert record["steps_bound"] is True, f"{scenario_id} unexpectedly reports steps_bound=False"
-        assert record["unbound_steps"] == [], f"{scenario_id} unexpectedly reports unbound step text"
-        if scenario_id in live_scenario_ids:
-            assert record["ledgered"] is False
-            assert all(o["outcome"] == "passed" for o in record["observations"])
-            assert all(o["reason_category"] == "live" for o in record["observations"])
-        else:
-            assert record["ledgered"] is True, f"{scenario_id} unexpectedly reports ledgered=False"
-            assert all(o["outcome"] == "xfailed" for o in record["observations"])
-            assert all(o["reason_category"] == "ledgered" for o in record["observations"])
-            assert all("SPEC-PRODUCTION GAP" in o["reason"] for o in record["observations"]), (
-                f"{scenario_id}'s xfail reason doesn't cite a real production gap"
-            )
-        # Real transports actually ran (not silently zero, not silently one).
-        assert {o["transport"] for o in record["observations"]} == {"mcp", "a2a", "rest"}
+    # Anti-vacuity: the slice really does have @storyboard-v3.1 members to grade,
+    # so a provenance retag of all of them fails here instead of passing over an
+    # empty loop.
+    assert storyboard_tagged, f"{UC006_MARKER} slice has no {storyboard_spec.TAG} member left to grade"
+    _assert_ledgered_or_live(scenarios, storyboard_tagged)
 
 
-def test_real_run_records_uc005_format_id_roundtrip_scenarios_as_live(tmp_path: Path) -> None:
-    """A scenario that is NOT dormant reports steps_bound=True/harness_wired=True — the
-    guard proves both directions, not only the failure case."""
+def test_real_run_records_uc005_scenarios_as_ledgered_or_live(tmp_path: Path) -> None:
+    """A scenario that is NOT dormant reports steps_bound=True/harness_wired=True, and the
+    artifact puts each member on the right side of the ledgered/live partition — the
+    guard proves both directions, not only the failure case.
+
+    This is where the ledgered-vs-live distinction is graded for scenarios whose
+    steps are all bound: the two format-id-roundtrip scenarios pass for real on
+    every in-process transport, and baseline-format-id-object-shape is ledgered
+    against upstream adcp#7338. Both halves are asserted non-empty below, so the
+    day one of them empties out this test says so instead of going quiet.
+    """
     data = _run_bdd_slice(tmp_path, UC005_FILE, "storyboard-v3.1")
     scenarios = {s["scenario_id"]: s for s in data["scenarios"]}
 
-    assert set(scenarios) == _identity_tags(
-        _slice_scenarios("BR-UC-005-discover-creative-formats.feature", "storyboard-v3.1")
+    graded = _identity_tags(_slice_scenarios("BR-UC-005-discover-creative-formats.feature", "storyboard-v3.1"))
+    assert set(scenarios) == graded
+    ledgered = graded & set(_ledgered_reasons())
+    assert ledgered, (
+        "the UC-005 storyboard slice no longer carries a ledgered member — "
+        "the ledgered half of this partition would be graded by nothing"
     )
+    assert graded - ledgered, "the UC-005 storyboard slice no longer carries a live member"
+
+    _assert_ledgered_or_live(scenarios, graded)
     for scenario_id, record in scenarios.items():
-        assert record["steps_bound"] is True, f"{scenario_id} unexpectedly reports steps_bound=False"
-        assert record["unbound_steps"] == []
-        assert record["harness_wired"] is True
-        assert record["ledgered"] is False
-        assert {o["transport"] for o in record["observations"]} == IN_PROCESS_TRANSPORTS
-        assert all(o["outcome"] == "passed" for o in record["observations"])
+        # Not dormant, and it RAN: the positive case the negative-only guard misses.
+        assert record["harness_wired"] is True, f"{scenario_id} executed no step body"
 
 
 # Measured 62.52s on an idle 40-core box against CI's --timeout=60. Same class
@@ -274,9 +318,20 @@ def test_provenance_tag_is_a_recorded_field_not_a_collection_filter(tmp_path: Pa
             # Dormancy, measured — this is what the collection filter used to hide.
             assert record["steps_bound"] is False
             assert unbound_given[scenario.identifier] in record["unbound_steps"]
-            assert record["harness_wired"] is None
             assert all(o["outcome"] == "xfailed" for o in record["observations"])
             assert all(o["reason_category"] == "no_steps_bound" for o in record["observations"])
+            # Dormancy is reported AS dormancy and never laundered into the
+            # curated-gap bucket: a scenario nobody wired has graded nothing, and
+            # "ledgered" would claim a production gap it never reached.
+            assert record["ledgered"] is False
+            # ``harness_wired`` answers "did a step body run", and the feature's
+            # Background steps ARE bound, so they run before pytest-bdd reaches
+            # this scenario's unbound Given — the same partly-dormant case
+            # tests/unit/test_architecture_bdd_scenario_liveness.py::
+            # test_harness_wired_follows_what_ran_not_the_category pins. The
+            # dormancy is carried by steps_bound/unbound_steps above, which is
+            # the field that cannot be confused by a Background.
+            assert record["harness_wired"] is True
         else:
             # Wired and running: the record says so, whatever its provenance tag.
             assert record["steps_bound"] is True

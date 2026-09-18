@@ -1533,6 +1533,63 @@ class TestDeliveryWebhookHappyPath:
         assert "next_expected_at" in payload
         assert payload["notification_type"] == "scheduled"
 
+    def test_hmac_sha256_signature_headers(self):
+        """UC-004-WH-07: webhook payload signed with HMAC-SHA256.
+
+        Spec: https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/dist/schemas/3.0.0-beta.3/core/reporting-webhook.json
+        CONFIRMED: authentication.schemes supports ['HMAC-SHA256'] for signature verification.
+
+        Graded on the WIRE rather than on a private helper (#1291 C1 deleted
+        ``_generate_hmac_signature``; the receiver's registration now selects the
+        mode at one boundary). The assertion is strictly stronger than the
+        determinism check it replaced: the signature must VERIFY, over the bytes
+        the receiver actually got, with the secret the buyer registered — which is
+        what a receiver does and what the old helper-level test could not observe
+        (#1441: a signature over a re-serialization is deterministic too).
+
+        The wire is a REAL local origin (``CircuitBreakerEnv``), not a stubbed
+        socket. #1802 moved delivery onto the SSRF-guarded egress seam, which
+        resolves and screens the destination itself before anything is sent; a
+        capture that only replaced the HTTP client left that seam live, so the
+        delivery to ``buyer.example.com`` was refused pre-flight and the test
+        reported "went out UNSIGNED" for a request that was never made. Running
+        against an origin the real policy admits keeps the seam graded and makes
+        the signature assertion an observation of bytes that crossed a socket.
+
+        Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-07
+        """
+        from tests.harness.delivery_circuit_breaker_unit import CircuitBreakerEnv
+        from tests.helpers import assert_signature_verifies_over_wire_body
+
+        secret = "a" * 44  # clears the legacy 32-char floor
+        start_time = datetime.now(UTC)
+
+        with CircuitBreakerEnv(tenant_id="tenant1", principal_id="principal1") as env:
+            env.set_http_response(200)
+            # Registered through the spec's ONE selector (security.mdx @ v3.1.1 :1424):
+            # authentication_type / authentication_token is the row ``media_buy_create``
+            # and the A2A push-config handler persist, so this IS a receiver registered
+            # as HMAC-SHA256 -- never the retired ``webhook_secret`` column (#1291 C1,
+            # GH #1894). Spelled out rather than routed through a ``secret=``
+            # convenience, so the registration the test claims is the registration the
+            # test writes.
+            env.set_db_webhooks([env.make_webhook_config(auth_type="HMAC-SHA256", auth_token=secret)])
+
+            delivered = env.call_send(
+                media_buy_id="mb_wh07",
+                reporting_period_start=start_time,
+                reporting_period_end=start_time,
+                impressions=1000,
+                spend=100.0,
+            )
+
+            assert delivered is True, "a receiver registered as HMAC-SHA256 was not delivered to"
+            assert env.delivery_attempts == 1, (
+                f"expected exactly one delivery to grade, saw {env.delivery_attempts} — "
+                f"a signature claim about zero deliveries is vacuous"
+            )
+            assert_signature_verifies_over_wire_body(env.last_delivery, secret)
+
     # UC-004-WH-09 (webhook excludes aggregated_totals) is RETIRED, not moved. It asserted
     # `"aggregated_totals" not in payload` against a dict this function builds key by key
     # from its own parameters -- a dict that has never had the key and structurally cannot
@@ -1541,7 +1598,9 @@ class TestDeliveryWebhookHappyPath:
     # -result.json sets `additionalProperties: true` and does not declare the field, so an
     # emitted `aggregated_totals` is schema-VALID. What replaced it is the shape assertion
     # one level up -- the POST body is the mcp-webhook-payload envelope, graded by the
-    # UC-004 webhook-compliance scenarios against the pinned schema.
+    # UC-004 webhook-compliance scenarios against the pinned schema. (The other side's copy
+    # also read `call_args[1]["delivery_payload"]`, a kwarg `_send_webhook_enhanced` no
+    # longer takes -- it is `result=` now, as WH-06 above reads.)
 
     def test_webhook_filters_requested_metrics(self):
         """UC-004-WH-10: webhook totals only include metrics actually provided.

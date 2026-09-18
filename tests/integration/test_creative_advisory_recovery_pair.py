@@ -115,13 +115,14 @@ from tests.harness.transport import Transport, TransportResult
 # Pydantic ``__eq__`` trap that decides whether ``_processing.py`` finds a
 # matching ``format_obj`` at all (a pre-built ``src.core.schemas.FormatId``
 # silently never matches), and that decision must have exactly one owner.
-from tests.integration.test_creative_agent_dial_refusal_recovery import _FORMAT_ID, _registered_format
+from tests.integration._egress_ingest_helpers import _FORMAT_ID, _registered_format
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
-# IMPL alongside the three wire transports, matching the sibling sync-advisory
-# suites: the advisory is built inside ``_impl`` and must reach the buyer
-# identically on every dispatch path.
+# The three wire transports, matching the sibling sync-advisory suites: the
+# advisory is built inside ``_impl`` and must reach the buyer identically on
+# every dispatch path. There is no IMPL member to add — #1721 deleted that
+# transport, so every row here crosses a real wire and ``_advisory`` reads it.
 _ALL_TRANSPORTS = [Transport.A2A, Transport.REST, Transport.MCP]
 
 # A generative format id (``output_format_ids`` non-empty via

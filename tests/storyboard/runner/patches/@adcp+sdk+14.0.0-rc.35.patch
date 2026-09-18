@@ -70,6 +70,508 @@ index 156d094..5d15e2b 100644
      });
      httpResult.status = res.status;
      httpResult.headers = res.headers;
+diff --git a/node_modules/@adcp/sdk/dist/lib/testing/storyboard/request-signing/builder.js b/node_modules/@adcp/sdk/dist/lib/testing/storyboard/request-signing/builder.js
+index 25bc151..5b27c40 100644
+--- a/node_modules/@adcp/sdk/dist/lib/testing/storyboard/request-signing/builder.js
++++ b/node_modules/@adcp/sdk/dist/lib/testing/storyboard/request-signing/builder.js
+@@ -257,8 +257,65 @@ function retargetUrl(vectorUrl, baseUrl) {
+   }
+   return v.toString();
+ }
++function a2aEndpoint(baseUrl) {
++  // The RPC endpoint is whatever the AGENT CARD names. The grader's `a2a` precondition
++  // resolves it and hands it down already resolved, so nothing is appended here and no
++  // mount is assumed: A2A is card-first, and scheme, host, port AND path all belong to
++  // the card. Deriving any of them here would be correct only against agents that happen
++  // to match the guess -- the same defect as hardcoding a version-selected payload key,
++  // one level up.
++  if (!baseUrl) {
++    throw new Error("transport: 'a2a' requires the card-resolved RPC endpoint as baseUrl");
++  }
++  return new URL(baseUrl).toString();
++}
++function wrapA2aEnvelope(operation, rawBody, idOverride) {
++  // The NATIVE 1.0 SendMessage frame, not the 0.3 `message/send` family: an agent that
++  // builds its JSON-RPC routes without the 0.3 compat adapter does not serve that family
++  // at all. Field names are proto JSON (`messageId`, `ROLE_USER`), because the dispatcher
++  // ParseDicts `params` back into its generated model.
++  //
++  // `input`, NOT `parameters`: the payload key is SELECTED BY THE DECLARED VERSION, which
++  // is why no call site may hardcode it. The SDK's own client does exactly this in
++  // protocols/a2a.ts -- `legacyWire ? { skill, parameters } : { skill, input }`, keyed on
++  // `client.protocolVersion`, which it read off the agent card. This frame declares
++  // `A2A-Version: 1.0`, so `input` is the only correct spelling for it. Written
++  // `parameters` first, and it graded green only because our own dispatcher accepts both
++  // (`data.get("input") or data.get("parameters", {})`) -- against a strict 1.0 agent
++  // every vector would have been rejected before its verifier saw a signature.
++  const args = rawBody && rawBody.length > 0 ? JSON.parse(rawBody) : {};
++  return JSON.stringify({
++    jsonrpc: "2.0",
++    id: idOverride ?? (0, import_crypto.randomUUID)(),
++    method: "SendMessage",
++    params: {
++      message: {
++        messageId: (0, import_crypto.randomUUID)(),
++        role: "ROLE_USER",
++        parts: [{ data: { skill: operation, input: args } }]
++      }
++    }
++  });
++}
+ function applyTransport(vector, options) {
+   const headers = { ...vector.request.headers };
++  if (options.transport === "a2a") {
++    if (!options.baseUrl) {
++      throw new Error(`transport: 'a2a' requires a baseUrl (the agent's base url, e.g. https://agent.example)`);
++    }
++    const operation = extractOperationFromVectorUrl(vector.request.url);
++    // MERGED BEFORE THE SIGNATURE IS COMPUTED, and that ordering is the whole point: the
++    // signature base covers the headers and Content-Digest covers the body, so a version
++    // header added after signing would be outside the base on a request the verifier
++    // reconstructs WITH it.
++    headers["A2A-Version"] = "1.0";
++    return {
++      method: vector.request.method,
++      url: a2aEndpoint(options.baseUrl),
++      headers,
++      body: wrapA2aEnvelope(operation, vector.request.body, options.mcpJsonRpcId)
++    };
++  }
+   if (options.transport === "mcp") {
+     if (!options.baseUrl) {
+       throw new Error(`transport: 'mcp' requires a baseUrl (the MCP endpoint, e.g. http://agent/mcp)`);
+diff --git a/node_modules/@adcp/sdk/dist/lib/testing/storyboard/request-signing/builder.mjs b/node_modules/@adcp/sdk/dist/lib/testing/storyboard/request-signing/builder.mjs
+index 5a98e85..979e373 100644
+--- a/node_modules/@adcp/sdk/dist/lib/testing/storyboard/request-signing/builder.mjs
++++ b/node_modules/@adcp/sdk/dist/lib/testing/storyboard/request-signing/builder.mjs
+@@ -239,8 +239,65 @@ function retargetUrl(vectorUrl, baseUrl) {
+   }
+   return v.toString();
+ }
++function a2aEndpoint(baseUrl) {
++  // The RPC endpoint is whatever the AGENT CARD names. The grader's `a2a` precondition
++  // resolves it and hands it down already resolved, so nothing is appended here and no
++  // mount is assumed: A2A is card-first, and scheme, host, port AND path all belong to
++  // the card. Deriving any of them here would be correct only against agents that happen
++  // to match the guess -- the same defect as hardcoding a version-selected payload key,
++  // one level up.
++  if (!baseUrl) {
++    throw new Error("transport: 'a2a' requires the card-resolved RPC endpoint as baseUrl");
++  }
++  return new URL(baseUrl).toString();
++}
++function wrapA2aEnvelope(operation, rawBody, idOverride) {
++  // The NATIVE 1.0 SendMessage frame, not the 0.3 `message/send` family: an agent that
++  // builds its JSON-RPC routes without the 0.3 compat adapter does not serve that family
++  // at all. Field names are proto JSON (`messageId`, `ROLE_USER`), because the dispatcher
++  // ParseDicts `params` back into its generated model.
++  //
++  // `input`, NOT `parameters`: the payload key is SELECTED BY THE DECLARED VERSION, which
++  // is why no call site may hardcode it. The SDK's own client does exactly this in
++  // protocols/a2a.ts -- `legacyWire ? { skill, parameters } : { skill, input }`, keyed on
++  // `client.protocolVersion`, which it read off the agent card. This frame declares
++  // `A2A-Version: 1.0`, so `input` is the only correct spelling for it. Written
++  // `parameters` first, and it graded green only because our own dispatcher accepts both
++  // (`data.get("input") or data.get("parameters", {})`) -- against a strict 1.0 agent
++  // every vector would have been rejected before its verifier saw a signature.
++  const args = rawBody && rawBody.length > 0 ? JSON.parse(rawBody) : {};
++  return JSON.stringify({
++    jsonrpc: "2.0",
++    id: idOverride ?? randomUUID(),
++    method: "SendMessage",
++    params: {
++      message: {
++        messageId: randomUUID(),
++        role: "ROLE_USER",
++        parts: [{ data: { skill: operation, input: args } }]
++      }
++    }
++  });
++}
+ function applyTransport(vector, options) {
+   const headers = { ...vector.request.headers };
++  if (options.transport === "a2a") {
++    if (!options.baseUrl) {
++      throw new Error(`transport: 'a2a' requires a baseUrl (the agent's base url, e.g. https://agent.example)`);
++    }
++    const operation = extractOperationFromVectorUrl(vector.request.url);
++    // MERGED BEFORE THE SIGNATURE IS COMPUTED, and that ordering is the whole point: the
++    // signature base covers the headers and Content-Digest covers the body, so a version
++    // header added after signing would be outside the base on a request the verifier
++    // reconstructs WITH it.
++    headers["A2A-Version"] = "1.0";
++    return {
++      method: vector.request.method,
++      url: a2aEndpoint(options.baseUrl),
++      headers,
++      body: wrapA2aEnvelope(operation, vector.request.body, options.mcpJsonRpcId)
++    };
++  }
+   if (options.transport === "mcp") {
+     if (!options.baseUrl) {
+       throw new Error(`transport: 'mcp' requires a baseUrl (the MCP endpoint, e.g. http://agent/mcp)`);
+diff --git a/node_modules/@adcp/sdk/dist/lib/testing/storyboard/request-signing/grader.js b/node_modules/@adcp/sdk/dist/lib/testing/storyboard/request-signing/grader.js
+index c23ec39..b6d0a4a 100644
+--- a/node_modules/@adcp/sdk/dist/lib/testing/storyboard/request-signing/grader.js
++++ b/node_modules/@adcp/sdk/dist/lib/testing/storyboard/request-signing/grader.js
+@@ -29,6 +29,44 @@ var import_vector_loader = require('./vector-loader.js');
+ var import_test_kit = require('./test-kit.js');
+ var import_signing = require('../../../signing/index.js');
+ var import_parser = require('../../../signing/parser.js');
++
++// ── A2A card-first endpoint resolution ──────────────────────────────────────
++// The A2A analogue of the MCP `initialize` precondition below: before any vector can be
++// framed, the run has to learn WHERE to send it, and for A2A that is the agent card's
++// business, not the grader's. `/.well-known/agent-card.json` names the interface --
++// url, protocolBinding, protocolVersion -- and `rawA2aAuthProbe` in the runner already
++// reads `supportedInterfaces[0].url` for the auth probes. Same read, same source.
++//
++// Memoized per agent url because the storyboard dispatch calls `gradeOneVector` once per
++// VECTOR; without this the run refetches the card ~40 times.
++const _a2aRpcEndpointCache = /* @__PURE__ */ new Map();
++async function resolveA2aRpcEndpoint(agentUrl, options) {
++  const cached = _a2aRpcEndpointCache.get(agentUrl);
++  if (cached) return cached;
++  const cardUrl = new URL("/.well-known/agent-card.json", agentUrl).toString();
++  const probes = require('../probes.js');
++  const card = await probes.fetchProbe(cardUrl, {
++    allowPrivateIp: options.allowPrivateIp === true,
++    timeoutMs: options.timeoutMs
++  });
++  if (card.error) {
++    throw new Error(`A2A card precondition failed: ${cardUrl}: ${card.error}`);
++  }
++  const iface = card.body?.supportedInterfaces?.find(
++    (i) => typeof i?.url === "string" && String(i.protocolBinding ?? "").toUpperCase() === "JSONRPC"
++  );
++  if (!iface) {
++    // NOT a fallback to a conventional mount. An agent whose card names no JSONRPC
++    // interface is an agent this transport cannot reach, and saying so is the honest
++    // outcome -- guessing produces a grade about a URL the agent never published.
++    throw new Error(
++      `A2A card precondition failed: ${cardUrl} names no supportedInterfaces entry with protocolBinding JSONRPC`
++    );
++  }
++  _a2aRpcEndpointCache.set(agentUrl, iface.url);
++  return iface.url;
++}
++
+ async function gradeRequestSigning(agentUrl, options = {}) {
+   const start = Date.now();
+   const loaded = (0, import_vector_loader.loadRequestSigningVectors)(options);
+@@ -58,7 +96,10 @@ async function gradeRequestSigning(agentUrl, options = {}) {
+     mcpSessionId,
+     mcpProtocolVersion: transport === "mcp" ? mcpProtocolVersion : void 0
+   };
+-  const buildOpts = { baseUrl: agentUrl, transport };
++  const buildOpts = {
++    baseUrl: transport === "a2a" ? await resolveA2aRpcEndpoint(agentUrl, options) : agentUrl,
++    transport
++  };
+   const positive = [];
+   for (const vector of loaded.positive) {
+     const skip = preflightSkip(vector, "positive", contract, options);
+@@ -162,7 +203,11 @@ function preflightSkip(vector, kind, contract, options) {
+   if (transportReason) {
+     return { ...base, skipped: true, skip_reason: "transport_ungradable", diagnostic: transportReason };
+   }
+-  if (kind === "positive" && (options.transport ?? "mcp") === "mcp" && MCP_FLATTENED_VECTORS.has(vector.id)) {
++  // BOTH ENVELOPED TRANSPORTS flatten these edges, not just mcp: a2a routes every vector to
++  // the one JSON-RPC endpoint exactly as mcp does, so the port/path/query/encoding the
++  // vector exists to grade never reaches the wire either way.
++  const envelopedTransport = (options.transport ?? "mcp") === "mcp" || (options.transport ?? "mcp") === "a2a";
++  if (kind === "positive" && envelopedTransport && MCP_FLATTENED_VECTORS.has(vector.id)) {
+     return {
+       ...base,
+       skipped: true,
+@@ -226,7 +271,10 @@ async function gradeOneVector(vectorId, kind, agentUrl, options = {}) {
+     mcpSessionId,
+     mcpProtocolVersion: transport === "mcp" ? mcpProtocolVersion : void 0
+   };
+-  const buildOpts = { baseUrl: agentUrl, transport };
++  const buildOpts = {
++    baseUrl: transport === "a2a" ? await resolveA2aRpcEndpoint(agentUrl, options) : agentUrl,
++    transport
++  };
+   if (kind === "positive") {
+     const signed = (0, import_builder.buildPositiveRequest)(vector, loaded.keys, buildOpts);
+     const probe = await (0, import_probe.probeSignedRequest)(signed, probeOpts);
+@@ -460,12 +508,35 @@ function contentDigestPolicyMismatch(vector, kind, agentPolicy) {
+   }
+   return contentDigestStructuralMismatch(vector, agentPolicy);
+ }
++// The two refusals that EXIST ONLY under a narrowed content-digest policy: one for a
++// signature that omits the digest (required), one for a signature that covers it
++// (forbidden). Everything else a digest vector can assert -- a 2xx, a digest MISMATCH, a
++// malformed digest header -- is a property of the verifier, not of the policy.
++const CONTENT_DIGEST_POLICY_REFUSALS = /* @__PURE__ */ new Set([
++  "request_signature_components_incomplete",
++  "request_signature_components_unexpected"
++]);
++function gradableUnderEither(vector, agentCap) {
++  // `either` is the WIDEST policy, not a third incompatible one: security.mdx defines it as
++  // "signer chooses; verifier accepts both covered and uncovered forms". An agent declaring
++  // it therefore grades every digest vector EXCEPT the two whose expected outcome is the
++  // narrowing itself -- there is no covers_content_digest value under which an `either`
++  // agent refuses a request for covering, or for not covering.
++  //
++  // Without this, comparing the vector's declared policy to the agent's excluded any vector
++  // that so much as MENTIONS content-digest, including `positive/002` (a covered digest that
++  // must be ACCEPTED) and `negative/010` (a FALSIFIED digest that must be rejected). Both
++  // were passing before the capability filter was wired and both stopped being graded by it
++  // -- a clean number bought by dropping the vectors that test the thing.
++  if (agentCap.covers_content_digest !== "either") return false;
++  return !CONTENT_DIGEST_POLICY_REFUSALS.has(vector.expected_error_code);
++}
+ function capabilityMismatch(vector, agentCap) {
+   const vectorCap = vector.verifier_capability;
+   if (vectorCap.supported !== agentCap.supported) {
+     return `Vector asserts supported=${vectorCap.supported} but agent declares supported=${agentCap.supported}. Verify the agent's request_signing capability block.`;
+   }
+-  if (vectorCap.covers_content_digest !== "either" && vectorCap.covers_content_digest !== agentCap.covers_content_digest) {
++  if (vectorCap.covers_content_digest !== "either" && vectorCap.covers_content_digest !== agentCap.covers_content_digest && !gradableUnderEither(vector, agentCap)) {
+     return `Vector asserts covers_content_digest='${vectorCap.covers_content_digest}' but agent declares '${agentCap.covers_content_digest}'. The vector can't grade against this profile \u2014 its expected verifier behavior doesn't match what the agent implements.`;
+   }
+   const structural = contentDigestStructuralMismatch(vector, agentCap.covers_content_digest);
+diff --git a/node_modules/@adcp/sdk/dist/lib/testing/storyboard/request-signing/grader.mjs b/node_modules/@adcp/sdk/dist/lib/testing/storyboard/request-signing/grader.mjs
+index 0563d6d..5970531 100644
+--- a/node_modules/@adcp/sdk/dist/lib/testing/storyboard/request-signing/grader.mjs
++++ b/node_modules/@adcp/sdk/dist/lib/testing/storyboard/request-signing/grader.mjs
+@@ -11,6 +11,44 @@ import {
+   verifyRequestSignature
+ } from "../../../signing/index.mjs";
+ import { parseSignatureInput } from "../../../signing/parser.mjs";
++
++// ── A2A card-first endpoint resolution ──────────────────────────────────────
++// The A2A analogue of the MCP `initialize` precondition below: before any vector can be
++// framed, the run has to learn WHERE to send it, and for A2A that is the agent card's
++// business, not the grader's. `/.well-known/agent-card.json` names the interface --
++// url, protocolBinding, protocolVersion -- and `rawA2aAuthProbe` in the runner already
++// reads `supportedInterfaces[0].url` for the auth probes. Same read, same source.
++//
++// Memoized per agent url because the storyboard dispatch calls `gradeOneVector` once per
++// VECTOR; without this the run refetches the card ~40 times.
++const _a2aRpcEndpointCache = /* @__PURE__ */ new Map();
++async function resolveA2aRpcEndpoint(agentUrl, options) {
++  const cached = _a2aRpcEndpointCache.get(agentUrl);
++  if (cached) return cached;
++  const cardUrl = new URL("/.well-known/agent-card.json", agentUrl).toString();
++  const probes = await import("../probes.mjs");
++  const card = await probes.fetchProbe(cardUrl, {
++    allowPrivateIp: options.allowPrivateIp === true,
++    timeoutMs: options.timeoutMs
++  });
++  if (card.error) {
++    throw new Error(`A2A card precondition failed: ${cardUrl}: ${card.error}`);
++  }
++  const iface = card.body?.supportedInterfaces?.find(
++    (i) => typeof i?.url === "string" && String(i.protocolBinding ?? "").toUpperCase() === "JSONRPC"
++  );
++  if (!iface) {
++    // NOT a fallback to a conventional mount. An agent whose card names no JSONRPC
++    // interface is an agent this transport cannot reach, and saying so is the honest
++    // outcome -- guessing produces a grade about a URL the agent never published.
++    throw new Error(
++      `A2A card precondition failed: ${cardUrl} names no supportedInterfaces entry with protocolBinding JSONRPC`
++    );
++  }
++  _a2aRpcEndpointCache.set(agentUrl, iface.url);
++  return iface.url;
++}
++
+ async function gradeRequestSigning(agentUrl, options = {}) {
+   const start = Date.now();
+   const loaded = loadRequestSigningVectors(options);
+@@ -40,7 +78,10 @@ async function gradeRequestSigning(agentUrl, options = {}) {
+     mcpSessionId,
+     mcpProtocolVersion: transport === "mcp" ? mcpProtocolVersion : void 0
+   };
+-  const buildOpts = { baseUrl: agentUrl, transport };
++  const buildOpts = {
++    baseUrl: transport === "a2a" ? await resolveA2aRpcEndpoint(agentUrl, options) : agentUrl,
++    transport
++  };
+   const positive = [];
+   for (const vector of loaded.positive) {
+     const skip = preflightSkip(vector, "positive", contract, options);
+@@ -144,7 +185,11 @@ function preflightSkip(vector, kind, contract, options) {
+   if (transportReason) {
+     return { ...base, skipped: true, skip_reason: "transport_ungradable", diagnostic: transportReason };
+   }
+-  if (kind === "positive" && (options.transport ?? "mcp") === "mcp" && MCP_FLATTENED_VECTORS.has(vector.id)) {
++  // BOTH ENVELOPED TRANSPORTS flatten these edges, not just mcp: a2a routes every vector to
++  // the one JSON-RPC endpoint exactly as mcp does, so the port/path/query/encoding the
++  // vector exists to grade never reaches the wire either way.
++  const envelopedTransport = (options.transport ?? "mcp") === "mcp" || (options.transport ?? "mcp") === "a2a";
++  if (kind === "positive" && envelopedTransport && MCP_FLATTENED_VECTORS.has(vector.id)) {
+     return {
+       ...base,
+       skipped: true,
+@@ -208,7 +253,10 @@ async function gradeOneVector(vectorId, kind, agentUrl, options = {}) {
+     mcpSessionId,
+     mcpProtocolVersion: transport === "mcp" ? mcpProtocolVersion : void 0
+   };
+-  const buildOpts = { baseUrl: agentUrl, transport };
++  const buildOpts = {
++    baseUrl: transport === "a2a" ? await resolveA2aRpcEndpoint(agentUrl, options) : agentUrl,
++    transport
++  };
+   if (kind === "positive") {
+     const signed = buildPositiveRequest(vector, loaded.keys, buildOpts);
+     const probe = await probeSignedRequest(signed, probeOpts);
+@@ -442,12 +490,35 @@ function contentDigestPolicyMismatch(vector, kind, agentPolicy) {
+   }
+   return contentDigestStructuralMismatch(vector, agentPolicy);
+ }
++// The two refusals that EXIST ONLY under a narrowed content-digest policy: one for a
++// signature that omits the digest (required), one for a signature that covers it
++// (forbidden). Everything else a digest vector can assert -- a 2xx, a digest MISMATCH, a
++// malformed digest header -- is a property of the verifier, not of the policy.
++const CONTENT_DIGEST_POLICY_REFUSALS = /* @__PURE__ */ new Set([
++  "request_signature_components_incomplete",
++  "request_signature_components_unexpected"
++]);
++function gradableUnderEither(vector, agentCap) {
++  // `either` is the WIDEST policy, not a third incompatible one: security.mdx defines it as
++  // "signer chooses; verifier accepts both covered and uncovered forms". An agent declaring
++  // it therefore grades every digest vector EXCEPT the two whose expected outcome is the
++  // narrowing itself -- there is no covers_content_digest value under which an `either`
++  // agent refuses a request for covering, or for not covering.
++  //
++  // Without this, comparing the vector's declared policy to the agent's excluded any vector
++  // that so much as MENTIONS content-digest, including `positive/002` (a covered digest that
++  // must be ACCEPTED) and `negative/010` (a FALSIFIED digest that must be rejected). Both
++  // were passing before the capability filter was wired and both stopped being graded by it
++  // -- a clean number bought by dropping the vectors that test the thing.
++  if (agentCap.covers_content_digest !== "either") return false;
++  return !CONTENT_DIGEST_POLICY_REFUSALS.has(vector.expected_error_code);
++}
+ function capabilityMismatch(vector, agentCap) {
+   const vectorCap = vector.verifier_capability;
+   if (vectorCap.supported !== agentCap.supported) {
+     return `Vector asserts supported=${vectorCap.supported} but agent declares supported=${agentCap.supported}. Verify the agent's request_signing capability block.`;
+   }
+-  if (vectorCap.covers_content_digest !== "either" && vectorCap.covers_content_digest !== agentCap.covers_content_digest) {
++  if (vectorCap.covers_content_digest !== "either" && vectorCap.covers_content_digest !== agentCap.covers_content_digest && !gradableUnderEither(vector, agentCap)) {
+     return `Vector asserts covers_content_digest='${vectorCap.covers_content_digest}' but agent declares '${agentCap.covers_content_digest}'. The vector can't grade against this profile \u2014 its expected verifier behavior doesn't match what the agent implements.`;
+   }
+   const structural = contentDigestStructuralMismatch(vector, agentCap.covers_content_digest);
+diff --git a/node_modules/@adcp/sdk/dist/lib/testing/storyboard/request-signing/probe-dispatch.js b/node_modules/@adcp/sdk/dist/lib/testing/storyboard/request-signing/probe-dispatch.js
+index 5357dd3..91b03c1 100644
+--- a/node_modules/@adcp/sdk/dist/lib/testing/storyboard/request-signing/probe-dispatch.js
++++ b/node_modules/@adcp/sdk/dist/lib/testing/storyboard/request-signing/probe-dispatch.js
+@@ -25,8 +25,13 @@ module.exports = __toCommonJS(probe_dispatch_exports);
+ var import_grader = require('./grader.js');
+ var import_synthesize = require('./synthesize.js');
+ var import_vector_loader = require('./vector-loader.js');
+-function resolveVectorTransport(rsOpts) {
+-  return rsOpts.transport ?? "mcp";
++function resolveVectorTransport(rsOpts, protocol) {
++  // The RUN's protocol, not a hard "mcp". Defaulting to mcp on the a2a card fires an MCP
++  // initialize at the A2A url, which an agent answers with its framework's 405 page, and
++  // every vector throws in the precondition before a single one is graded -- an entire
++  // surface reported as broken when nothing about it was exercised.
++  // `raw` stays the explicit opt-out for a per-operation HTTP surface.
++  return rsOpts.transport ?? (protocol === "a2a" ? "a2a" : "mcp");
+ }
+ async function probeRequestSigningVector(stepId, agentUrl, options) {
+   const parsed = (0, import_synthesize.parseRequestSigningStepId)(stepId);
+@@ -66,11 +71,18 @@ async function probeRequestSigningVector(stepId, agentUrl, options) {
+       onlyVectors: rsOpts.onlyVectors,
+       skipVectors: rsOpts.skipVectors,
+       skipRateAbuse: rsOpts.skipRateAbuse,
+-      transport: resolveVectorTransport(rsOpts),
++      transport: resolveVectorTransport(rsOpts, options.protocol),
+       // The auto-initialize handshake authenticates like any MCP client;
+       // agents commonly require auth on `initialize` (the signed vectors
+       // themselves stay bearer-less — the signature is their auth).
+       ...options.auth?.type === "bearer" && options.auth.token ? { initializeHeaders: { authorization: `Bearer ${options.auth.token}` } } : {},
++      // The agent's DECLARED request_signing block, so `capabilityMismatch` can do the job
++      // it already exists to do. Without it every vector is graded against the agent
++      // regardless of whether the agent implements the profile the vector asserts, and a
++      // vector written for a different profile FAILS instead of skipping -- which is not a
++      // verdict about the agent at all. `_profile.raw_capabilities` is the same object the
++      // `fetch_brand_jwks` task reads two branches away in the runner's step dispatcher.
++      agentCapability: options._profile?.raw_capabilities?.request_signing,
+       mcpSessionId: rsOpts.mcpSessionId,
+       mcpProtocolVersion: rsOpts.mcpProtocolVersion
+     });
+diff --git a/node_modules/@adcp/sdk/dist/lib/testing/storyboard/request-signing/probe-dispatch.mjs b/node_modules/@adcp/sdk/dist/lib/testing/storyboard/request-signing/probe-dispatch.mjs
+index e40744a..40e2106 100644
+--- a/node_modules/@adcp/sdk/dist/lib/testing/storyboard/request-signing/probe-dispatch.mjs
++++ b/node_modules/@adcp/sdk/dist/lib/testing/storyboard/request-signing/probe-dispatch.mjs
+@@ -1,8 +1,13 @@
+ import { gradeOneVector } from "./grader.mjs";
+ import { parseRequestSigningStepId } from "./synthesize.mjs";
+ import { loadRequestSigningVectors } from "./vector-loader.mjs";
+-function resolveVectorTransport(rsOpts) {
+-  return rsOpts.transport ?? "mcp";
++function resolveVectorTransport(rsOpts, protocol) {
++  // The RUN's protocol, not a hard "mcp". Defaulting to mcp on the a2a card fires an MCP
++  // initialize at the A2A url, which an agent answers with its framework's 405 page, and
++  // every vector throws in the precondition before a single one is graded -- an entire
++  // surface reported as broken when nothing about it was exercised.
++  // `raw` stays the explicit opt-out for a per-operation HTTP surface.
++  return rsOpts.transport ?? (protocol === "a2a" ? "a2a" : "mcp");
+ }
+ async function probeRequestSigningVector(stepId, agentUrl, options) {
+   const parsed = parseRequestSigningStepId(stepId);
+@@ -42,11 +47,18 @@ async function probeRequestSigningVector(stepId, agentUrl, options) {
+       onlyVectors: rsOpts.onlyVectors,
+       skipVectors: rsOpts.skipVectors,
+       skipRateAbuse: rsOpts.skipRateAbuse,
+-      transport: resolveVectorTransport(rsOpts),
++      transport: resolveVectorTransport(rsOpts, options.protocol),
+       // The auto-initialize handshake authenticates like any MCP client;
+       // agents commonly require auth on `initialize` (the signed vectors
+       // themselves stay bearer-less — the signature is their auth).
+       ...options.auth?.type === "bearer" && options.auth.token ? { initializeHeaders: { authorization: `Bearer ${options.auth.token}` } } : {},
++      // The agent's DECLARED request_signing block, so `capabilityMismatch` can do the job
++      // it already exists to do. Without it every vector is graded against the agent
++      // regardless of whether the agent implements the profile the vector asserts, and a
++      // vector written for a different profile FAILS instead of skipping -- which is not a
++      // verdict about the agent at all. `_profile.raw_capabilities` is the same object the
++      // `fetch_brand_jwks` task reads two branches away in the runner's step dispatcher.
++      agentCapability: options._profile?.raw_capabilities?.request_signing,
+       mcpSessionId: rsOpts.mcpSessionId,
+       mcpProtocolVersion: rsOpts.mcpProtocolVersion
+     });
+diff --git a/node_modules/@adcp/sdk/dist/lib/testing/storyboard/request-signing/synthesize.js b/node_modules/@adcp/sdk/dist/lib/testing/storyboard/request-signing/synthesize.js
+index 48ea68a..6369ad6 100644
+--- a/node_modules/@adcp/sdk/dist/lib/testing/storyboard/request-signing/synthesize.js
++++ b/node_modules/@adcp/sdk/dist/lib/testing/storyboard/request-signing/synthesize.js
+@@ -65,7 +65,12 @@ function synthesizeNegativeStep(vector) {
+     title: `Negative: ${vector.name}`,
+     task: REQUEST_SIGNING_PROBE_TASK,
+     narrative: `Build vector ${vector.id} with its documented mutation and send to the agent; expect 401 with WWW-Authenticate: Signature error="${vector.expected_error_code}".`,
+-    validations: [
++    // A vector carrying `jwks_override` is graded IN-LIBRARY by `gradeJwksOverrideNegative`
++    // -- it presents its own JWKS to the local verifier and never reaches the agent, so it
++    // reports `http_status: 0`. Synthesizing a 401 status validation for it asserts
++    // something that grading path cannot produce: the vector passes the grader and fails the
++    // step. Its verdict still lands, on the probe's `error` field like every other vector's.
++    validations: vector.jwks_override ? [] : [
+       {
+         check: "http_status",
+         value: 401,
+diff --git a/node_modules/@adcp/sdk/dist/lib/testing/storyboard/request-signing/synthesize.mjs b/node_modules/@adcp/sdk/dist/lib/testing/storyboard/request-signing/synthesize.mjs
+index 1e13c0a..c9f9330 100644
+--- a/node_modules/@adcp/sdk/dist/lib/testing/storyboard/request-signing/synthesize.mjs
++++ b/node_modules/@adcp/sdk/dist/lib/testing/storyboard/request-signing/synthesize.mjs
+@@ -38,7 +38,12 @@ function synthesizeNegativeStep(vector) {
+     title: `Negative: ${vector.name}`,
+     task: REQUEST_SIGNING_PROBE_TASK,
+     narrative: `Build vector ${vector.id} with its documented mutation and send to the agent; expect 401 with WWW-Authenticate: Signature error="${vector.expected_error_code}".`,
+-    validations: [
++    // A vector carrying `jwks_override` is graded IN-LIBRARY by `gradeJwksOverrideNegative`
++    // -- it presents its own JWKS to the local verifier and never reaches the agent, so it
++    // reports `http_status: 0`. Synthesizing a 401 status validation for it asserts
++    // something that grading path cannot produce: the vector passes the grader and fails the
++    // step. Its verdict still lands, on the probe's `error` field like every other vector's.
++    validations: vector.jwks_override ? [] : [
+       {
+         check: "http_status",
+         value: 401,
 diff --git a/node_modules/@adcp/sdk/dist/lib/testing/storyboard/runner.js b/node_modules/@adcp/sdk/dist/lib/testing/storyboard/runner.js
 index e9b14ed..91f477c 100644
 --- a/node_modules/@adcp/sdk/dist/lib/testing/storyboard/runner.js

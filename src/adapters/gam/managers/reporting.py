@@ -146,6 +146,12 @@ class GAMReportingManager:
         #     -> core.database.repositories -> repositories.account
         #     -> core.helpers -> core.helpers.adapter_helpers -> src.adapters
         #     -> adapters.gam.managers -> THIS MODULE -> webhook_delivery_service
+        # Outbound signing adds a SECOND edge that closes the same cycle by a
+        # different route — webhook_delivery_service -> src.core.signing, whose
+        # `provider` imports core.database.repositories.signing_key and so joins
+        # the tail above at `repositories`. webhook_delivery_service defers its
+        # own signing import for that reason; this one stays deferred either way,
+        # because the first edge is already enough on its own.
         # Whichever end is imported first, the other is only partially
         # initialized. Adapters sit below services, so an adapter must not bind
         # a service at import time — only at call time. This matches how every

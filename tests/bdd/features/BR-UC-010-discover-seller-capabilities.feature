@@ -84,6 +84,7 @@ Feature: BR-UC-010 Discover Seller Capabilities
     Given a tenant is resolvable from the request context
     And the tenant offers products in channels "display", "social", "ctv"
     And the tenant has registered publisher partnerships with domains "news.com", "sports.com"
+    And the tenant uses the mock adapter with full capabilities configured
     And the adapter provides targeting capabilities including geo
     And the tenant billing policy is configured as operator, agent
     And the tenant account is configured for sandbox: false in response (explicit production)
@@ -122,6 +123,11 @@ Feature: BR-UC-010 Discover Seller Capabilities
     # AdapterConfig.test_behavior write-through (get_adapter_channels_override) and the
     # channel list in the Given was quoted per-value instead of as one string. Its one
     # spec-blocked assert lives on in @T-UC-010-main-reporting-delivery (#1291).
+    # The pricing-model set is DECLARED by its own Given: production emits
+    # media_buy.supported_pricing_models only from adapter.get_supported_pricing_models(),
+    # and the env's default adapter reports none on purpose (honest absence is what the
+    # omit-don't-null contract grades), so a scenario asserting a non-empty array must say
+    # the seller has one rather than lean on a harness default.
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/protocol/get-adcp-capabilities-response.json pointer=/required
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/protocol/get-adcp-capabilities-response.json pointer=/properties/adcp/properties/idempotency/oneOf
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/core/media-buy-features.json pointer=/properties
@@ -133,6 +139,8 @@ Feature: BR-UC-010 Discover Seller Capabilities
   @T-UC-010-degradation-no-cascade @extension @degradation @partition @boundary
   Scenario: one adapter-derived section degrading does not take the others with it
     Given a tenant is resolvable from the request context
+    And the tenant has registered publisher partnerships with domains "degradation-fixture.com"
+    And the tenant uses the mock adapter with full capabilities configured
     And the adapter resolves but enumerating its channels fails
     When the Buyer Agent calls get_adcp_capabilities
     Then the response is compliant with the get_adcp_capabilities spec
@@ -151,6 +159,13 @@ Feature: BR-UC-010 Discover Seller Capabilities
     # from "one thing about it failed", so nothing else catches the cascade.
     # NOT-IN-SPEC: which sections degrade together is a production choice; the spec
     # only requires that what IS emitted is honest.
+    # Both surviving sections are DECLARED, not defaulted: a real publisher partnership is
+    # seeded (salesagent-piyo) so media_buy.portfolio is emitted at all — portfolio is
+    # omitted entirely, never fabricated, when no real publisher domain exists, and this
+    # row's concern is the channel degradation, not domain resolution — and the mock
+    # adapter's pricing-model set is declared because the env's default adapter reports
+    # none (honest absence), which would make "supported_pricing_models survived"
+    # unfalsifiable.
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/protocol/get-adcp-capabilities-response.json pointer=/properties/media_buy/properties/supported_pricing_models
 
   @T-UC-010-main-reporting-delivery @main-flow @post-s1 @partition @boundary
@@ -242,7 +257,7 @@ Feature: BR-UC-010 Discover Seller Capabilities
     # integer min/max (both minimum 0). Production does not emit audience_targeting yet (#1855).
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/protocol/get-adcp-capabilities-response.json pointer=/properties/media_buy/properties/audience_targeting/required
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/enums/uid-type.json pointer=/enum
-    # @source repo=adcp ref=v3.1.1 path=dist/docs/3.1.1/building/implementation/get_adcp_capabilities.mdx (L183: flag replaced by object presence)
+    # @source repo=adcp ref=v3.1.1 path=docs/protocol/get_adcp_capabilities.mdx (L183: flag replaced by object presence)
 
   @T-UC-010-conversion-caps @main-flow @post-s13
   Scenario: Capabilities response includes conversion tracking capabilities when supported
@@ -274,7 +289,7 @@ Feature: BR-UC-010 Discover Seller Capabilities
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/enums/uid-type.json pointer=/enum
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/enums/action-source.json pointer=/enum
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/core/duration.json pointer=/required
-    # @source repo=adcp ref=v3.1.1 path=dist/docs/3.1.1/building/implementation/get_adcp_capabilities.mdx (L184: flag replaced by object presence)
+    # @source repo=adcp ref=v3.1.1 path=docs/protocol/get_adcp_capabilities.mdx (L184: flag replaced by object presence)
 
   @T-UC-010-creative-caps @main-flow @post-s14
   Scenario: Capabilities response includes creative protocol when supported
@@ -351,7 +366,7 @@ Feature: BR-UC-010 Discover Seller Capabilities
     # INV-4: Unauthenticated and authenticated callers receive identical data — the response
     # is the seller's surface, not caller-scoped (get_adcp_capabilities.mdx L23).
     # Comparison excludes volatile fields (last_updated, context echo) to avoid flake.
-    # @source repo=adcp ref=v3.1.1 path=dist/docs/3.1.1/building/implementation/get_adcp_capabilities.mdx (L23)
+    # @source repo=adcp ref=v3.1.1 path=docs/protocol/get_adcp_capabilities.mdx (L23)
 
   @T-UC-010-ext-a @extension @ext-a @degradation @partition @boundary
   Scenario: no_tenant — tenant absent, minimal capabilities
@@ -422,18 +437,25 @@ Feature: BR-UC-010 Discover Seller Capabilities
     Then the response is compliant with the get_adcp_capabilities spec
     And the response should pass schema validation for get-adcp-capabilities-response
     And the wire response should not contain an adcp_error field
-    And the response should include media_buy.portfolio with primary_channels "display"
+    And media_buy.portfolio should be omitted, never a fabricated publisher domain
     # INV-5 (local): degrade-don't-error; the schema-validity half is the spec-hard invariant
     # (storyboard validation check: response_schema). Rewritten (salesagent-ytq6): the two
     # vague Thens ("no error should be propagated", "degradation warnings should be logged
     # internally") were replaced with wire-observable assertions — the envelope MUST NOT carry
-    # adcp_error for a non-failure (protocol-envelope), and the adapter-unavailable degradation
-    # path MUST still produce a valid response whose primary_channels fall back to the [display]
-    # default (consistency anchor: the adapter_and_db_fail row of the sibling ext-b-degradation
-    # outline). "degradation warnings logged internally" was intentionally NOT re-added: internal
-    # logs are not on the wire, so the degradation is instead graded by its observable output
-    # (primary_channels=[display]) rather than by an untestable internal-log side effect.
+    # adcp_error for a non-failure (protocol-envelope). "degradation warnings logged internally"
+    # was intentionally NOT re-added: internal logs are not on the wire, so the degradation is
+    # graded by its observable output rather than by an untestable internal-log side effect.
+    # Corrected (salesagent-piyo): this row combines adapter-unavailable AND
+    # database-query-fails, so no real publisher_domain data was read at all. It was pinned to
+    # "primary_channels falls back to [display]" via a fabricated placeholder portfolio, which
+    # was salesagent-piyo's bug — portfolio.publisher_domains is REQUIRED+minItems:1 (pinned
+    # v3.1.1 schema) whenever portfolio is present, and media_buy has no required fields, so the
+    # honest, schema-legal response with no real domain is to OMIT portfolio entirely (and
+    # primary_channels along with it, since it lives inside portfolio). Same correction as the
+    # adapter_and_db_fail row of the sibling ext-b-degradation outline. The [display] fallback
+    # itself is still graded, on a row that HAS a real domain: @T-UC-010-degradation-no-cascade.
     # @source repo=adcp ref=v3.1.1 path=dist/compliance/3.1.1/universal/capability-discovery.yaml pointer=/phases/0/steps/0/validations (check: response_schema)
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/protocol/get-adcp-capabilities-response.json pointer=/properties/media_buy/properties/portfolio/properties/publisher_domains (required, minItems 1)
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/core/protocol-envelope.json pointer=/properties/adcp_error (envelope error-signal for fatal failures — absent on a successful degraded response)
 
   @T-UC-010-degradation-account @extension @degradation @partition @boundary @post-s3
@@ -683,6 +705,7 @@ Feature: BR-UC-010 Discover Seller Capabilities
   @T-UC-010-channel-all-canonical @channel @boundary
   Scenario: All 20 canonical channels enum values are valid
     Given a tenant is resolvable from the request context
+    And the tenant has registered publisher partnerships with domains "verified-partner.com"
     And the tenant offers products spanning all 20 channels enum values
     When the Buyer Agent calls get_adcp_capabilities
     Then the response is compliant with the get_adcp_capabilities spec
@@ -698,6 +721,10 @@ Feature: BR-UC-010 Discover Seller Capabilities
     # scenario grades the mapping's COMPLETENESS, not a claim that a seller must
     # offer all 20 channels (a subset is conformant — primary_channels has no
     # minItems and the Given is what fixes the adapter's reported set).
+    # A real publisher partnership is seeded (salesagent-piyo) so media_buy.portfolio is
+    # emitted at all: portfolio is omitted entirely, never fabricated, when no real publisher
+    # domain exists, and primary_channels lives inside it. This scenario's concern is the
+    # channel enum, not domain resolution.
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/enums/channels.json pointer=/enum
 
   @T-UC-010-features @validation @post-s4

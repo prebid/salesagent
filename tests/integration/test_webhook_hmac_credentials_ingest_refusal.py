@@ -71,18 +71,24 @@ Conformance storyboard: UNGRADED — nothing in ``dist/compliance/3.1.1/`` grade
 a seller refusing an unservable webhook registration (same finding recorded for
 the sibling URL refusal, ``test_webhook_url_ingest_refusal.py``).
 
-Transport coverage is deliberately asymmetric, because the surfaces differ:
+Transport coverage is per-surface, and the surfaces no longer differ in
+MECHANISM the way they did when this module was written. Every transport now
+enters through ``src/core/tools/_boundary.py`` — MCP (``src/core/main.py``), A2A
+(``src/a2a_server/adcp_a2a_server.py``) and REST (``src/routes/api_v1.py``) each
+call ``serve()``, which runs ``validated_request()`` →
+``CreateMediaBuyRequest.model_validate(raw)``, and that DTO types the parameter
+as ``PushNotificationConfig | None``. So the invalid document is refused at
+schema conformance on all three, and there is no longer a transport that hands a
+raw dict to ``_impl`` untouched (the per-transport wrappers that did —
+``create_media_buy_raw`` and its siblings — are gone; tools are rows in
+``src/core/tools/registry.py``).
 
-* REST (``CreateMediaBuyBody.push_notification_config: dict[str, Any]``) and
-  A2A (the create skill forwards the raw dict — ``create_media_buy_raw``
-  ``model_dump``s only when it is already a ``PushNotificationConfig``) accept
-  the invalid document and hand it to ``_impl`` untouched. These are the
-  surfaces the gate exists for.
-* MCP types the parameter as ``adcp.PushNotificationConfig``, so FastMCP's
-  TypeAdapter rejects the document one layer earlier, on
-  ``authentication.credentials`` being required. Same buyer outcome, different
-  mechanism — graded separately below so nobody "simplifies" that annotation to
-  ``dict`` and silently opens a third hole.
+That symmetry is the reason every surface is STILL graded separately rather than
+collapsed into one case. What each class below pins is that its surface reaches
+the same buyer verdict; the equivalence is asserted directly in
+:class:`TestShortCredentialReachesOneVerdictOnEverySurface`. Relax the DTO field
+to ``dict`` for "forward compatibility" and one of these reddens instead of a
+hole opening silently.
 
 Buyer-visible change (named here as well as in the PR, not smuggled): a
 create_media_buy that TODAY succeeds with ``schemes: ["HMAC-SHA256"]`` and no
@@ -98,24 +104,32 @@ from tests.harness.media_buy_create import MediaBuyCreateEnv
 from tests.harness.transport import Transport
 from tests.helpers.adcp_factories import create_test_media_buy_request_dict
 from tests.helpers.envelope_assertions import assert_envelope_shape
+from tests.helpers.signing import inbound_verifier_disabled
 from tests.helpers.webhook_credential_refusal import SHORT_CREDENTIAL, assert_credentials_refusal_envelope
 
-# Two imports from sibling test modules, both for the same reason: the fact
-# already has an owner in the tree and a second copy would drift.
+# The persistence assertion for this exact table, already written for the
+# sibling URL refusal. Imported rather than re-implemented: "the repository
+# upsert is the single write funnel, so an empty active list IS 'the refusal
+# preceded the store'" is one fact about one table, and two copies of it would
+# drift the moment the funnel moves. Its home is the suite-local helper module,
+# not the sibling suite that used to own it, because a module whose job is to BE
+# a test must not also be a helper library
+# (``tests/unit/test_architecture_no_cross_test_module_imports.py``).
+from tests.integration._egress_ingest_helpers import _assert_no_push_config_persisted
+
+# ``declared_refusals`` — the spy that captures the typed refusals the admin
+# route declares. Under ADR-010 the flash carries CODE_TABLE's sentence for the
+# code and nothing else, so WHICH FIELD was refused travels on the channel the
+# route hands the whole error to (``record_admin_action_failure``); this is that
+# channel. At module level rather than inside the test because pytest resolves
+# fixtures from the module namespace at collection time.
 #
-# 1. ``declared_refusals`` — the spy that captures the typed refusals the admin
-#    route declares. Under ADR-010 the flash carries CODE_TABLE's sentence for
-#    the code and nothing else, so WHICH FIELD was refused travels on the
-#    channel the route hands the whole error to
-#    (``record_admin_action_failure``); this is that channel. At module level
-#    rather than inside the test because pytest resolves fixtures from the
-#    module namespace at collection time.
-# 2. ``_assert_no_push_config_persisted`` — the persistence assertion for this
-#    exact table: "the repository upsert is the single write funnel, so an
-#    empty active list IS 'the refusal preceded the store'" is one fact about
-#    one table, and two copies would drift the moment the funnel moves.
+# Still imported from the sibling SUITE because that is where the fixture lives
+# in this tree — ``tests/helpers/webhook_credential_refusal.py`` reaches the same
+# module for ``assert_webhook_registration_refused``. Moving both into
+# ``_egress_ingest_helpers`` is the guard-clean end state and is not this file's
+# to do.
 from tests.integration.test_admin_ingest_url_policy import declared_refusals  # noqa: F401
-from tests.integration.test_webhook_url_ingest_refusal import _assert_no_push_config_persisted
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -124,18 +138,24 @@ pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 # host the gate's own "allows public" case uses.
 _SAFE_URL = "https://buyer.example.com/hook"
 
-# Transports that carry the buyer's document through to ``_impl`` unvalidated.
-# A2A alone hands the raw ``push_notification_config`` dict to ``_impl``, so it
-# is the only transport whose refusal comes from the ingest GATE.
+# The A2A leg, graded on its own because it is the one that historically let the
+# document through.
 #
-# REST was originally listed here too, and that was wrong about production: the
-# REST request model validates ``push_notification_config`` against the AdCP
-# spec model, whose ``Authentication`` requires ``credentials``, so REST refuses
-# at schema conformance BEFORE the gate runs — the same mechanism as MCP. It is
-# graded in :class:`TestSchemaTypedTransportsRefuseTheSameDocument` below, where
-# the assertion matches the layer that actually refuses. Moved after observing
-# the real envelope, not to make a red test pass: REST already produced
-# INVALID_REQUEST / correctable / a field naming credentials.
+# This list is NAMED for what it once was: the transports that carried the
+# buyer's document to ``_impl`` unvalidated, where the refusal came from the
+# ingest GATE rather than from schema conformance. REST left it first (its
+# request model validated ``push_notification_config`` against the spec model),
+# and A2A left it when the per-transport wrappers were replaced by
+# ``serve()``/``validated_request()``, which validates every payload against
+# ``CreateMediaBuyRequest`` regardless of wire. So A2A now refuses by the same
+# MECHANISM as MCP and REST.
+#
+# It stays a separate case rather than folding into
+# :class:`TestSchemaTypedTransportsRefuseTheSameDocument` because the OUTCOME
+# this grades is the gate's contract — INVALID_REQUEST / correctable / a field
+# naming the credential, nothing persisted — and that contract must hold on A2A
+# whichever layer happens to enforce it. A future change that reintroduces an
+# untyped A2A payload path reddens here, which is the point.
 _UNTYPED_TRANSPORTS = [Transport.A2A]
 
 # Every spelling of "asked for HMAC-SHA256, supplied no secret" that can reach
@@ -180,6 +200,38 @@ def _create_kwargs(product, authentication: dict | None) -> dict:
         po_number="HMAC-CREDS-INGEST",
         push_notification_config={"url": _SAFE_URL, "authentication": authentication},
     )
+
+
+@pytest.fixture(autouse=True)
+def _not_a_verifying_agent(monkeypatch):
+    """This module's agent does not verify inbound signatures.
+
+    Every scenario here grades the INGEST gate's verdict on a webhook credential's
+    SHAPE, and every one of them registers ``push_notification_config.authentication``.
+    On an agent that CAN verify, that block forces a signature "regardless of
+    ``required_for`` membership" (security.mdx @ v3.1.1 :1462-1465,
+    ``src.core.signing.webhook_credentials.registers_webhook_credentials``, read at the
+    boundary by ``invoke_tool``), so the REST leg is refused with a bodyless 401
+    — no body, so no AdCP envelope, so the assertions fail with "no error envelope
+    captured" instead of on the obligation they exist to grade.
+
+    ``SigningSettings.verifier_enabled`` is the lever rather than a per-tenant
+    ``request_signing {supported: false}`` because the pin defines that field as an
+    AGENT-level fact and ``verify_inbound_signature`` runs inside ``_resolve_identity``
+    for every request this process serves; see
+    :func:`tests.helpers.signing.inbound_verifier_disabled`. It is sound HERE because
+    every transport this module dispatches on (MCP, REST, A2A) runs in THIS process.
+
+    The sibling BDD ``@egress`` scenarios use the declared-posture lever instead, and
+    must: they also run over ``e2e_rest``, whose server is a separate process this
+    patch cannot reach.
+
+    Autouse rather than a per-test seeding call — a per-test call is the line the next
+    case added here will forget, and forgetting it fails as "no error envelope
+    captured" rather than as a missing declaration.
+    """
+    with inbound_verifier_disabled(monkeypatch):
+        yield
 
 
 class TestCreateMediaBuyRefusesHmacRegistrationWithoutCredentials:
@@ -380,7 +432,14 @@ class TestShortCredentialReachesOneVerdictOnEverySurface:
         real form and reading the table back.
         """
         from tests.helpers.webhook_credential_refusal import assert_admin_flash_refuses_the_credential
-        from tests.integration.test_admin_ingest_url_policy import post_register_hmac_webhook
+        from tests.integration._egress_ingest_helpers import post_register_hmac_webhook
+
+        # ``set_flags`` is the INJECTED hatch (``inject_limits`` onto
+        # ``limits.adcp_outbound_allow_private``), not the retired
+        # ``ADCP_OUTBOUND_ALLOW_PRIVATE`` environ write: the seam reads
+        # ``get_settings().limits`` off a settings object built once and cached, so a
+        # ``setenv`` reaches it only if nothing has resolved settings yet — a hatch that
+        # silently stays shut and decides this case by accident.
         from tests.integration.test_outbound_http import set_flags
 
         set_flags(monkeypatch, private=True)

@@ -543,15 +543,14 @@ def _rest_transport_fault(envelope: dict[str, Any], raw_response: Any) -> Transp
     and a guess is not evidence of what the buyer received (see
     ``BaseTestEnv.parse_rest_error_envelope``).
     """
-    from src.core.errors.codes import AppErrorCode
-    from src.core.exceptions import AdCPSalesAgentError
+    from src.core.exceptions import AdCPInternalError
 
     return TransportResult(
         # The HTTP response was received; its body just carries no AdCP
         # envelope. Bytes crossed the wire, so has_wire is True.
         has_wire=True,
         envelope={**envelope, "status": derive_error_status(None)},
-        error=AdCPSalesAgentError(error_code=AppErrorCode.INTERNAL_ERROR),
+        error=AdCPInternalError(),
         raw_response=raw_response,
     )
 

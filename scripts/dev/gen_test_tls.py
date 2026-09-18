@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate the test stacks' private CA and server certificate (GH #1291).
+"""Generate the test stacks' private CA and server certificate (salesagent-tgzb, GH #1291).
 
 WHY THIS EXISTS. ``_get_protocol_for_domain`` (``src/core/domain_config.py``)
 publishes ``https`` only for a dotted, non-loopback host — deliberately, because
@@ -29,6 +29,10 @@ LIFECYCLE
 
 Run it directly, or via ``scripts/dev/ensure-test-tls.sh`` (which finds an
 interpreter that has ``cryptography``, a direct dependency of this project).
+It also runs inside the runner image (``dc run --rm --no-deps -T tests python
+scripts/dev/gen_test_tls.py``), so it stays on the standard library plus
+``cryptography`` and never imports the application. Every write happens inside
+a function reached from ``main()`` — importing this module touches no file.
 """
 
 from __future__ import annotations
@@ -54,23 +58,52 @@ CA_KEY = TLS_DIR / "ca.key"
 SERVER_CERT = TLS_DIR / "server.pem"
 SERVER_KEY = TLS_DIR / "server.key"
 _LOCK_FILE = TLS_DIR / ".gen-lock"
-# CA_CERT alone (private CA only) is deliberately what `--cacert` flags and
-# E2E_CA_BUNDLE use — a caller checking one of the new TLS fronts should trust
-# ONLY this stack's own leaf, not the whole public web. COMBINED_CERT below is
-# a DIFFERENT use: SSL_CERT_FILE (GH #1757) replaces the process's
-# entire default cafile, so anything else in that process needing REAL public
-# HTTPS (uv sync fetching from pypi.org, in particular — this broke a full
-# suite run before this file learned to produce it) needs the public roots
-# too. One file serving both trust anchors.
+
+# TWO TRUST ANCHORS, DELIBERATELY DIFFERENT FILES.
+#
+# CA_CERT alone (the private CA) is what ``--cacert`` flags and ``E2E_CA_BUNDLE``
+# use: a caller checking one of this stack's TLS fronts should trust ONLY this
+# stack's own leaf, not the whole public web.
+#
+# The CONCATENATED bundle below is a different job. It is what ``SSL_CERT_FILE``
+# points at, and ``SSL_CERT_FILE`` REPLACES the file half of the process's
+# default store rather than adding to it — so a CA-only file leaves the process
+# trusting our test CA and nothing else. Two consumers need the combination:
+#   * the server's OUTBOUND counterparty walk (salesagent-mp53.8) — the inbound
+#     verifier resolves an unknown signer by fetching capabilities/brand.json/
+#     JWKS over the stack's own TLS front, and the SDK builds that client with a
+#     bare ``ssl.create_default_context()``; ``trust_env=False`` on its httpx
+#     clients is an httpx-level flag and provably cannot reach it, so only the
+#     OpenSSL env vars do.
+#   * the GH #1802 egress seam and anything else in the same process that still
+#     needs REAL public HTTPS (``uv sync`` fetching from pypi.org in particular —
+#     this broke a full suite run before this file learned to emit public roots).
+#
+# (Note the honest limit of the CA-only failure mode: ``SSL_CERT_DIR`` is
+# honoured independently, so on an image with a populated /etc/ssl/certs the
+# system roots would still resolve — the concatenation is right because it is
+# correct under EVERY image, not because omitting it always breaks.)
+#
+# The same bytes are published under BOTH historical names because both are
+# wired in this tree: ``docker-compose.e2e.yml`` points one service's
+# ``SSL_CERT_FILE`` at ``ca-bundle.pem`` and others at ``combined-ca.pem``, the
+# structural guards read the literal ``ca-bundle.pem``, and tests read the
+# ``COMBINED_CERT`` attribute. One computation, two published names.
+CA_BUNDLE = TLS_DIR / "ca-bundle.pem"
 COMBINED_CERT = TLS_DIR / "combined-ca.pem"
+_TRUST_BUNDLES = (CA_BUNDLE, COMBINED_CERT)
+
 # Debian/Ubuntu's system bundle is first (confirmed present in
 # python:3.12-slim-bookworm, this project's base image — the same file
-# `ssl.get_default_verify_paths()` resolves to via /usr/lib/ssl/cert.pem when
-# SSL_CERT_FILE is unset). macOS (a developer's laptop, not a container) has no
-# such path — `certifi` (already in the tree transitively, via httpx) ships the
-# same public-root bundle cross-platform, so a local `make quality` run gets
-# real combined trust too, not just the CI box.
-_SYSTEM_CA_BUNDLE_CANDIDATES = ("/etc/ssl/certs/ca-certificates.crt",)
+# ``ssl.get_default_verify_paths()`` resolves to via /usr/lib/ssl/cert.pem when
+# SSL_CERT_FILE is unset). RHEL/Fedora and macOS/BSD paths follow, and
+# ``certifi`` is the cross-platform fallback so a developer's laptop running
+# ``make quality`` gets real combined trust too, not just the CI box.
+_SYSTEM_CA_BUNDLE_CANDIDATES = (
+    "/etc/ssl/certs/ca-certificates.crt",  # Debian/Ubuntu
+    "/etc/pki/tls/certs/ca-bundle.crt",  # RHEL/Fedora
+    "/etc/ssl/cert.pem",  # macOS/BSD
+)
 
 VALIDITY = dt.timedelta(days=30)
 RENEW_WITHIN = dt.timedelta(days=7)
@@ -79,13 +112,38 @@ CLOCK_SKEW = dt.timedelta(hours=1)
 # ``*.adcp.test`` is the whole per-worker mechanism: the bdd_e2e TLS sidecars are
 # named ``<compose-project>-tls-gwN.adcp.test`` and COMPOSE_PROJECT_NAME never
 # contains a dot, so every worker of every concurrent stack is exactly one label
-# under this wildcard. ``agent.localhost`` is the host-published name: RFC 6761
-# reserves ``.localhost`` for loopback, so it resolves with no DNS and no
-# /etc/hosts edit, and it has a dot — which is what makes the predicate answer
-# https for it without being told to.
+# under this wildcard. It equally covers the shared front's aliases —
+# ``proxy.adcp.test``, ``creative-agent.adcp.test``, ``webhooks.adcp.test``.
+# ``agent.localhost`` is the host-published name: RFC 6761 reserves
+# ``.localhost`` for loopback, so it resolves with no DNS and no /etc/hosts edit,
+# and it has a dot — which is what makes the predicate answer https for it
+# without being told to.
+# ``*.adcp-e2e.dev`` covers every e2e origin the SERVER dials OUTBOUND: the
+# webhook receiver (salesagent-mp53.9) and the counterparty identity origin
+# (salesagent-mp53.8). A wildcard rather than a growing literal list — each new
+# origin is one label under it and costs no certificate change.
+#
+# Neither can live under ``*.adcp.test``, and they are barred for DIFFERENT
+# reasons, which is worth writing down because the first one does not imply the
+# second:
+#   * the webhook receiver — AdCP 3.1.1 lists ``.test`` among the RFC 6761
+#     special-use names a seller MUST refuse, and the proof-of-control prover
+#     enforces that unconditionally (``notification_proof_service`` ->
+#     ``is_reserved_tld_host``) BEFORE the SSRF check. A receiver under ``.test``
+#     is refused before a socket opens — correct production behaviour, not
+#     something to relax.
+#   * the counterparty origin — that reserved-TLD rule does NOT reach the inbound
+#     walk (it is gated by IP arithmetic alone). ``.test`` fails there for an
+#     unrelated reason: Tier 3 brand authorization matches agent url to brand
+#     domain by eTLD+1, and ``.test`` is not in the public suffix list, so
+#     ``registrable_domain()`` returns None and the check refuses with
+#     ``brand_domain_invalid``.
+# Both names are deliberately UNREGISTERED and resolve only via the compose
+# network alias — nothing is ever published to real DNS.
 SAN_DNS_NAMES = (
     "adcp.test",
     "*.adcp.test",
+    "*.adcp-e2e.dev",
     "localhost",
     "agent.localhost",
     "*.localhost",
@@ -156,7 +214,7 @@ def _key_usage(**enabled: bool) -> x509.KeyUsage:
 def _write(path: Path, data: bytes, *, private: bool) -> None:
     """Write *data* to *path* atomically.
 
-    ``_refresh_combined_cert()`` rewrites ``COMBINED_CERT`` on every
+    ``_refresh_trust_bundles()`` rewrites the bundles on every
     ``ensure_test_tls()`` call, including the already-current fast path — under
     a parallel xdist run, many workers call it concurrently. A direct
     ``write_bytes`` lets a concurrent reader (an httpx client building its TLS
@@ -192,6 +250,11 @@ def _is_current() -> bool:
     "the file exists" quietly stands in for "the file works": it is missing or
     unreadable, it expires soon, or the SAN set drifted from what the stacks are
     reachable at (a name added to ``SAN_DNS_NAMES`` must actually reach a leaf).
+
+    The trust bundles are deliberately NOT part of this check: they are DERIVED
+    from ``CA_CERT`` and rebuilt on every call by ``_refresh_trust_bundles()``,
+    so a missing or stale one must not force an expensive regeneration that
+    disturbs stacks already serving the current leaf.
     """
     if not all(path.is_file() for path in (CA_CERT, CA_KEY, SERVER_CERT, SERVER_KEY)):
         return False
@@ -206,34 +269,50 @@ def _is_current() -> bool:
     return min(ca.not_valid_after_utc, leaf.not_valid_after_utc) > _now() + RENEW_WITHIN
 
 
-def _system_ca_bundle() -> Path | None:
-    """The public-root bundle to combine with our private CA, or ``None`` if none found."""
+def _public_roots() -> bytes:
+    """The public root store to concatenate our test CA onto.
+
+    Emitted HERE, at generation time, rather than assembled once by hand: a
+    bundle built by hand outlives the next certificate rotation and then quietly
+    pins a CA that no longer signs anything.
+
+    Prefers the system bundle, falls back to certifi, and FAILS LOUDLY if neither
+    is available. It must never silently emit a CA-only file — that would leave
+    the process trusting our test CA and nothing else, which fails as an opaque
+    handshake error on the first real outbound TLS call and looks nothing like a
+    missing-roots problem. Note that ``ensure-test-tls.sh``'s interpreter
+    contract is literally ``import cryptography``; its fallback interpreter can
+    have that and NOT certifi, which is exactly why the system paths are tried
+    first and why the failure is explicit rather than an empty prefix.
+    """
     for candidate in _SYSTEM_CA_BUNDLE_CANDIDATES:
         path = Path(candidate)
         if path.is_file():
-            return path
+            return path.read_bytes()
     try:
         import certifi
+    except ImportError as exc:
+        raise RuntimeError(
+            "cannot build .test-tls/ca-bundle.pem (nor .test-tls/combined-ca.pem): no system CA "
+            "bundle found and certifi is not importable. Refusing to emit a CA-only bundle — "
+            "SSL_CERT_FILE REPLACES the file half of the trust store, so that would leave the "
+            "process trusting the test CA alone. Install certifi or run where a system bundle exists."
+        ) from exc
+    return Path(certifi.where()).read_bytes()
 
-        return Path(certifi.where())
-    except ImportError:
-        return None
 
+def _refresh_trust_bundles() -> None:
+    """Rebuild every ``SSL_CERT_FILE`` bundle: the public roots + our private CA.
 
-def _refresh_combined_cert() -> None:
-    """Rebuild ``COMBINED_CERT`` = the system CA bundle + our private CA.
-
-    Cheap (a file read and concatenation, no crypto), so it runs every call
-    regardless of whether the CA/leaf themselves needed regenerating — it
-    must stay in sync with CA_CERT even on the "already current" fast path
-    (e.g. upgrading a ``.test-tls/`` directory written before this existed).
-    Silently skipped if no public-root bundle is found at all: SSL_CERT_FILE
-    callers still get private-CA trust, just not combined with public roots.
+    Cheap (two file reads and a concatenation, no crypto), so it runs on every
+    call regardless of whether the CA/leaf themselves needed regenerating — the
+    bundles must stay in step with ``CA_CERT`` even on the "already current"
+    fast path (e.g. upgrading a ``.test-tls/`` directory written before one of
+    these filenames existed). One computation, published under both names.
     """
-    bundle = _system_ca_bundle()
-    if bundle is None:
-        return
-    _write(COMBINED_CERT, bundle.read_bytes() + CA_CERT.read_bytes(), private=False)
+    bundle = _public_roots() + CA_CERT.read_bytes()
+    for path in _TRUST_BUNDLES:
+        _write(path, bundle, private=False)
 
 
 @contextlib.contextmanager
@@ -263,28 +342,31 @@ def _regeneration_lock():
 
 
 def ensure_test_tls(*, force: bool = False) -> Path:
-    """Make sure ``.test-tls/`` holds a usable CA + leaf; return the CA bundle path.
+    """Make sure ``.test-tls/`` holds a usable CA + leaf; return the CA path.
 
-    Idempotent: a run that finds current material writes nothing, so concurrent
-    stacks serving the existing leaf are never disturbed. The whole check +
+    Idempotent: a run that finds current material mints no new key material, so
+    concurrent stacks serving the existing leaf are never disturbed — it still
+    refreshes the DERIVED trust bundles, atomically. The whole check +
     (re)generate sequence runs under a process-wide file lock (see
     :func:`_regeneration_lock`) so concurrent xdist workers can never interleave
     a regeneration into a CA/leaf pair that no longer chain to each other.
     """
     if not force and _is_current():
-        _refresh_combined_cert()
+        _refresh_trust_bundles()
         return CA_CERT
 
     with _regeneration_lock():
         if not force and _is_current():
             # Another worker regenerated while we waited for the lock.
-            _refresh_combined_cert()
+            _refresh_trust_bundles()
             return CA_CERT
         return _regenerate()
 
 
 def _regenerate() -> Path:
-    """Generate a fresh CA + leaf and write them, plus the combined bundle. Caller holds the lock."""
+    """Generate a fresh CA + leaf and write them, plus the trust bundles. Caller holds the lock."""
+    TLS_DIR.mkdir(parents=True, exist_ok=True)
+
     ca_key = ec.generate_private_key(ec.SECP256R1())
     ca_cert = _sign(
         subject=_CA_SUBJECT,
@@ -321,7 +403,7 @@ def _regenerate() -> Path:
     # not need it, but a chain costs nothing and makes the file usable by tools
     # that do walk it.
     _write(SERVER_CERT, _pem_cert(leaf_cert) + _pem_cert(ca_cert), private=False)
-    _refresh_combined_cert()
+    _refresh_trust_bundles()
     return CA_CERT
 
 

@@ -23,13 +23,13 @@ config = context.config
 # disable_existing_loggers=False is load-bearing, not cosmetic. fileConfig defaults it
 # to True, which DISABLES every logger that already exists — including the whole
 # ``src.*`` tree — for the rest of the process. That is harmless for a standalone
-# `alembic upgrade`, but migrations also run IN-PROCESS during the test suite, and the
-# disable outlives the migration: any test that later asserts on application logs sees
-# zero records and fails with an empty list, while the code under test ran correctly.
-# It surfaces as an order-dependent failure (a module passes alone and in isolation,
-# then fails once an xdist worker happens to run a migration first), which is the most
-# expensive kind to diagnose. A migration runner has no business silencing the
-# application's loggers.
+# `alembic upgrade`, but migrations also run IN-PROCESS — at app startup and during the
+# test suite — and the disable outlives the migration: any test that later asserts on
+# application logs sees zero records and fails with an empty list, while the code under
+# test ran correctly. It surfaces as an order-dependent failure (a module passes alone
+# and in isolation, then fails once an xdist worker happens to run a migration first),
+# which is the most expensive kind to diagnose. A migration runner has no business
+# silencing the application's loggers.
 if config.config_file_name is not None:
     fileConfig(config.config_file_name, disable_existing_loggers=False)
 

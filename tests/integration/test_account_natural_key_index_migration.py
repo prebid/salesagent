@@ -126,6 +126,11 @@ class TestTheMigrationRefusesDirtyData:
 
         with pytest.raises(RuntimeError) as excinfo:
             run_alembic_upgrade(db_url, _REVISION)
+
+        message = str(excinfo.value)
+        assert "acc_dupe_a" in message and "acc_dupe_b" in message, (
+            f"the abort must name the colliding accounts so an operator can act on it: {message}"
+        )
         assert _index_def(engine) is None, "the index must not exist after an aborted upgrade"
 
         with engine.connect() as conn:

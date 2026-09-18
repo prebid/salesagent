@@ -314,8 +314,8 @@ def init_db_ci():
                         account_id=CI_TEST_ACCOUNT_ID,
                         name="CI Test Account",
                         status="active",
-                        operator="testbrand.com",
-                        brand=BrandReference(domain="testbrand.com"),
+                        operator="testbrand.example",
+                        brand=BrandReference(domain="testbrand.example"),
                     )
                 )
                 # Both parents must be ON the database before the association row: its FKs

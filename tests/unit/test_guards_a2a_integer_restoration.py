@@ -13,28 +13,107 @@ silently regressing:
    ``src/app.py``'s route wiring could easily drop the wrapper and silently
    reintroduce the float-widening bug on the real wire.
 
-Deleted 2026-08-31: a third test in this module asserted that ``struct_pb2.Value()``
-appears only in ``adcp_a2a_server.py``. It was removed rather than repaired.
+RFC 9421 MERGE NOTE. Invariant 1 was deleted on this branch 2026-08-31 and is restored
+here, because all three stated grounds for deleting it are answered rather than argued:
 
-- It graded a code LOCATION as a stand-in for the behaviour, which the two classes below
-  grade directly: the ASGI wrapper is exercised at the real HTTP boundary in
-  ``test_a2a_route_integer_restoration.py``, and every ``/a2a`` route is checked for the
-  wrapper here.
-- Its allowlist was the FILE, so a second construction site inside ``adcp_a2a_server.py``
-  -- the likeliest place for one to appear -- was exempt from the very check meant to
-  catch it.
-- Its meta-test wrote a real module into ``src/`` while the sibling test scanned ``src/``.
-  Under xdist those run on different workers and race: 1 in 3 local runs with ``-n 4``
-  failed, and it failed on the box for that reason. A test that mutates the source tree
-  can also break any OTHER src/-scanning guard that happens to run beside it, and this
-  repo has many.
+- "its meta-test wrote a real module into ``src/`` while the sibling test scanned
+  ``src/``, and under xdist those race" -- the incoming branch had already fixed exactly
+  that (e6f79e71): the specimen is planted in ``tmp_path``, and ``_struct_value_
+  construction_sites`` takes the root as a parameter so the meta-test can point the scan
+  at the sandbox. Nothing is written into the source tree.
+- "its allowlist was the FILE, so a second construction site inside
+  ``adcp_a2a_server.py`` was exempt from the check meant to catch it" -- the allowlist is
+  now the two ENCLOSING FUNCTIONS that build wire data (``_dict_to_value`` for a
+  ``Part.data``, ``_dict_to_struct`` for a ``Task.metadata``), so a third site anywhere
+  -- that file included -- is a violation.
+- "it graded a code LOCATION as a stand-in for the behaviour" -- the behaviour it stands
+  in for is not graded anywhere else. ``test_a2a_route_integer_restoration.py`` grades
+  the ASGI wrapper at the HTTP boundary, and the class below grades that every route
+  carries it; neither can see wire data built through a SECOND ``struct_pb2`` call that
+  never passes through ``restore_a2a_integer_types``. Deleting this left that ungraded.
 """
 
 from __future__ import annotations
 
+import ast
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+
+#: The construction sites the integer-restoration fix actually covers: ``_dict_to_value``
+#: builds a ``Part.data`` payload and ``_dict_to_struct`` a ``Task.metadata`` one, and both
+#: answers leave through ``restore_a2a_integer_types``. Named by ENCLOSING FUNCTION rather
+#: than by file, so a THIRD site added elsewhere in ``adcp_a2a_server.py`` -- the likeliest
+#: place for one to appear -- is a violation instead of being exempt, which is the hole the
+#: file-wide allowlist left.
+_ALLOWED_FILE = "src/a2a_server/adcp_a2a_server.py"
+_ALLOWED_FUNCS = ("_dict_to_value", "_dict_to_struct")
+
+
+def _struct_value_construction_sites(repo_root: Path = REPO_ROOT) -> list[str]:
+    """Every ``src/`` call to ``struct_pb2.Value(...)``/``Struct(...)``, as
+    ``path:lineno:enclosing_function``, found via AST so a reformatted call site cannot
+    slip past a regex.
+
+    *repo_root* is a parameter ONLY so the meta-test can point the scan at a sandbox. It
+    must not become a way to narrow the real scan.
+    """
+    sites: list[str] = []
+    for path in sorted((repo_root / "src").rglob("*.py")):
+        try:
+            tree = ast.parse(path.read_text(), filename=str(path))
+        except SyntaxError:
+            continue
+        enclosing: dict[int, str] = {}
+        for node in ast.walk(tree):
+            if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+                for line in range(node.lineno, (node.end_lineno or node.lineno) + 1):
+                    enclosing[line] = node.name
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+                continue
+            src_name = node.func.value
+            if node.func.attr in {"Value", "Struct"} and isinstance(src_name, ast.Name) and src_name.id == "struct_pb2":
+                where = enclosing.get(node.lineno, "<module>")
+                sites.append(f"{path.relative_to(repo_root)}:{node.lineno}:{where}")
+    return sites
+
+
+class TestOnlyOneStructValueConstructionSite:
+    def test_dict_to_value_is_the_only_struct_value_construction_site(self):
+        sites = _struct_value_construction_sites()
+        allowed = {f"{_ALLOWED_FILE}::{f}" for f in _ALLOWED_FUNCS}
+        stray = [
+            s
+            for s in sites
+            if f"{_ALLOWED_FILE}::{s.rsplit(':', 1)[1]}" not in allowed or not s.startswith(_ALLOWED_FILE)
+        ]
+        assert not stray, (
+            f"found a struct_pb2.Value/Struct() construction site outside {sorted(allowed)}: "
+            f"{stray}. A2A wire data must be built through _dict_to_value so integer-typed fields stay "
+            "covered by restore_a2a_integer_types -- a parallel construction site bypasses that fix."
+        )
+        assert sites, "expected at least the known _dict_to_value construction sites -- scan may be broken"
+
+    def test_scan_would_catch_a_stray_construction_site(self, tmp_path):
+        """Meta-test: prove the AST scan detects a stray site, not just that today's tree
+        happens to be clean.
+
+        PLANTED IN A SANDBOX, never in the real ``src/``: the unit suite runs under xdist,
+        and a specimen written into ``src/`` is found by whichever sibling worker happens
+        to be running the real scan at the time -- and by every OTHER ``src/``-scanning
+        guard in this repo, of which there are many.
+        """
+        planted = tmp_path / "src"
+        planted.mkdir()
+        (planted / "stray.py").write_text("from google.protobuf import struct_pb2\nv = struct_pb2.Value()\n")
+
+        sites = _struct_value_construction_sites(tmp_path)
+
+        assert any("stray.py" in s for s in sites), (
+            "the AST scan failed to detect a deliberately-planted stray "
+            "struct_pb2.Value() construction site -- the guard is vacuous"
+        )
 
 
 class TestA2ARoutesWrapWithIntegerRestoration:

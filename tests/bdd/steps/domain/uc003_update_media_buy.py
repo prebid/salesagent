@@ -1130,6 +1130,15 @@ def then_no_errors_field(ctx: dict) -> None:
     wire_absent(ctx, "errors")
 
 
+# Step 'the response should contain an "errors" array' is owned by
+# tests/bdd/steps/generic/then_media_buy.py, which grades the WIRE rejection
+# (``ctx["result"].assert_wire_error_is_schema_conformant()`` against pinned
+# core/error.json). The copy that lived here read ctx["error_response"] — a key
+# _promote_update_errors set from an in-process UpdateMediaBuyError that the test
+# process itself had reconstructed, so it could not fail when the wire envelope
+# regressed. Both the promoter and the key are gone; the generic step subsumes it.
+
+
 @then("the response should contain a task_id")
 def then_response_contains_task_id(ctx: dict) -> None:
     """Assert the submitted envelope carries a non-empty task_id on the real wire.
@@ -1157,7 +1166,21 @@ def _assert_a2a_submitted_task_has_no_artifacts(ctx: dict) -> None:
     """
     from tests.harness.transport import Transport
 
-    if ctx.get("transport") is not Transport.A2A:
+    # The A2A branch below is a LEGITIMATE transport-aware assertion (see the
+    # docstring): on A2A the wire-dict NOT-contain checks are vacuous, so the real
+    # Task is graded instead. What is NOT legitimate is reaching it with the
+    # transport unset — `None is not Transport.A2A` silently reads as "some other
+    # transport" and returns, grading nothing on the only transport this guard
+    # exists for. An unset transport is a wiring bug; report it (salesagent-n78j0.1.5).
+    transport = ctx.get("transport")
+    if transport is None:
+        raise AssertionError(
+            "A2A submitted-artifact guard reached with ctx['transport'] unset — the "
+            "check would silently downgrade to 'not A2A' and grade nothing. Dispatch "
+            "through dispatch_request (which raises on an unset transport) or set "
+            "ctx['transport'] explicitly."
+        )
+    if transport is not Transport.A2A:
         return
     if wire_dict(ctx).get("status") != "submitted":
         return
@@ -2414,19 +2437,28 @@ def given_request_revision(ctx: dict, revision: int) -> None:
 
 @given(parsers.parse('the request revision is set to "{revision}"'))
 def given_request_revision_wrong_type(ctx: dict, revision: str) -> None:
-    """Send *revision* as a STRING where the schema declares an integer.
+    """Send *revision* as a STRING — the wrong-type partition row.
 
-    A separate step from the `{revision:d}` parser above because that parser cannot
-    match a quoted value, and the `wrong_type` Examples row carries `"7"` precisely to
-    exercise the type boundary: 7 and "7" must NOT behave alike. The quotes are the
-    whole point, so the value is forwarded as `str` rather than coerced -- coercing it
-    here would grade nothing (it would re-run the `matches_current` row) and would let
-    a production regression that silently accepts a string read as green.
+    A separate step from the ``{revision:d}`` parser above for the same reason
+    ``<not provided>`` needs its own: the @T-UC-003-partition-revision Examples row
+    carries a QUOTED value (``"7"``), and an int parser cannot match it. ``parsers.parse``
+    rather than ``parsers.re`` so the match is anchored at BOTH ends, matching the sibling
+    ``{revision:d}`` step's form — an unanchored ``re`` pattern matches any line that
+    merely starts with this text.
 
-    Without this step the row raised StepDefinitionNotFoundError, and the resulting
-    xfail was recorded as a production/spec gap when the real cause was missing wiring
-    -- the dormancy-misclassified-as-gap pattern that
-    test_architecture_bdd_xfail_reason_tokens grades.
+    Without this step the row failed on StepDefinitionNotFoundError, and the strict-xfail
+    guard correctly refused to let that be recorded as a production/spec gap — it is test
+    wiring, and the guard named it: "MISCLASSIFIED strict-xfail ... this is DORMANCY
+    (test-wiring), not a graded production gap (R1-2 class)". That is the
+    dormancy-misclassified-as-gap pattern ``test_architecture_bdd_xfail_reason_tokens``
+    grades.
+
+    The string is passed through UNCONVERTED. That is the whole point of the row:
+    ``revision`` is typed as an integer, so 7 and ``"7"`` must NOT behave alike — the
+    request must be refused as INVALID_REQUEST. Coercing it here with ``int(revision)``
+    would send a well-typed 7 and grade the CONFLICT path instead (a re-run of the
+    ``matches_current`` row), so the row would pass while testing nothing it names, and a
+    production regression that silently accepts a string would read as green.
     """
     kwargs = _ensure_update_defaults(ctx)
     kwargs["revision"] = revision

@@ -236,6 +236,7 @@ from mcp.types import ToolAnnotations
 
 from src.core.resolved_identity import TransportProtocol
 from src.core.schemas._base import AdcpResponse
+from src.core.signing.capture import HttpExchange, captured_exchange
 from src.core.tools._announced_shape import sdk_grounding
 from src.core.tools._boundary import _response_model_for
 from src.core.tools.registry import TOOLS
@@ -335,6 +336,36 @@ def _register_tool(tool_name: str, spec: Any) -> None:
     )
 
 
+def _mcp_exchange() -> HttpExchange | None:
+    """The captured HTTP message for the MCP request in flight, or None outside one.
+
+    FastMCP exposes the headers (``get_http_headers``) and the Starlette ``Request``
+    (``get_http_request``), but NOT the raw body: by the time a tool runs, the streamable-HTTP
+    transport has already read the JSON-RPC message off the ASGI receive channel itself,
+    without going through that ``Request`` object — so ``await request.body()`` inside a tool
+    would call an exhausted channel rather than return a cache. Checked, because the design
+    note asked for it to be; the answer is that MCP needs the capture middleware and the other
+    two transports could in principle have got by without it.
+
+    What the middleware leaves behind is reachable from here, and that is the whole reason it
+    writes to ``scope["state"]``: ``app.mount("/mcp", mcp_app)`` is a Starlette ``Mount``,
+    which MUTATES the one scope dict rather than copying it, so the dict FastMCP hands back is
+    the dict the middleware wrote to.
+
+    ``RuntimeError`` is the SDK's own signal for "no active HTTP request" — an in-process
+    invocation, or a Docket worker replaying snapshotted headers — and is caught rather than
+    pre-tested because there is no non-raising predicate for it. The answer is None, which is
+    a request presenting no signature, which is what it is.
+    """
+    from fastmcp.server.dependencies import get_http_request
+
+    try:
+        request = get_http_request()
+    except RuntimeError:
+        return None
+    return captured_exchange(request.scope)
+
+
 # MCP registration is DERIVED from the registry: TOOLS decides which tools exist, and this
 # module only registers them. There is no list here to keep in step -- adding a row is
 # sufficient to register a tool, which is what makes TOOLS the single declaration rather than
@@ -376,7 +407,7 @@ class RegistryTool(Tool):
             # an HTTP request ``get_http_headers`` returns ``{}``, a request presenting
             # nothing, which the resolver answers AUTH_MISSING on a protected tool.
             headers = get_http_headers(include_all=True)
-            return mcp_result(await serve(self.name, arguments, headers, TransportProtocol.MCP))
+            return mcp_result(await serve(self.name, arguments, headers, TransportProtocol.MCP, _mcp_exchange()))
         except AdcpFailure as failure:
             response = failure.response
         except Exception as exc:

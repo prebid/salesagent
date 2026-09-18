@@ -111,6 +111,37 @@ def live_db_env(live_server: dict):
         engine.dispose()
 
 
+@contextmanager
+def live_repo_session(live_server: dict):
+    """Yield a harness-contract env over the live e2e database, WITHOUT factory binding.
+
+    For a caller that only needs a production REPOSITORY (``SigningKeyRepository``
+    and friends) — reading or mutating an EXISTING row — never a ``tests/factories``
+    call. :func:`live_db_env` binds ``tests/factories`` for the duration of its
+    ``yield`` and explicitly documents that a second call cannot nest inside it
+    (the binding is global class-attribute state on every factory) — a real
+    constraint one fixture already relies on (``provisioned_trust_root_tenant``'s
+    own docstring: "the session below stays bound for the whole yield: a caller
+    cannot open a second ``live_db_env`` from its test body"). This helper opens
+    an INDEPENDENT engine/session to the same database and touches no factory
+    state at all, so it is safe to call from inside a test body whose fixture
+    already holds a ``live_db_env`` open — the two connections never contend
+    (#1291 mp53.6, Phase D's grace-window backdate).
+    """
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import Session
+
+    from src.core.database.database_session import _pydantic_json_serializer
+
+    engine = create_engine(live_server["postgres"], json_serializer=_pydantic_json_serializer)
+    session = Session(engine)
+    try:
+        yield _LiveDBEnv(session)
+    finally:
+        session.close()
+        engine.dispose()
+
+
 def set_live_adapter_behavior(live_server: dict, *, tenant_subdomain: str = CI_TEST_SUBDOMAIN, **behavior):
     """Upsert adapter test-behavior on the live e2e DB via the shared factory helper.
 

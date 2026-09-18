@@ -70,7 +70,9 @@ class AgentAccountAccessFactory(factory.alchemy.SQLAlchemyModelFactory):
     account_id = LazyAttribute(lambda o: o.account.account_id)
 
 
-def seed_default_account(tenant_id: str, principal_id: str | None = None) -> str:
+def seed_default_account(
+    tenant_id: str, principal_id: str | None = None, *, account_id: str = DEFAULT_TEST_ACCOUNT_ID
+) -> str:
     """Get-or-create the tenant's default Account row, and optionally grant one principal access.
 
     The ONE implementation of "this tenant has the account the request payloads name".
@@ -87,6 +89,13 @@ def seed_default_account(tenant_id: str, principal_id: str | None = None) -> str
     Returns the account id. ``MediaBuyFactory`` calls this per buy; a fixture that seeds
     a tenant by hand calls it once. Both used to carry their own copy of the get-or-create,
     and three fixtures were missing it altogether.
+
+    *account_id* is a parameter and not a constant because the payload builders do not all
+    name the same account: the in-process helpers send ``acct_test`` while the e2e builder
+    sends ``ci-test-account`` (the id ``init_db()`` seeds beside ``ci-test-principal``). A
+    per-module e2e tenant therefore needs THIS row under THAT id, and the alternative --
+    a second get-or-create next to the e2e seeder -- is the copy this function exists to
+    prevent. The default keeps every existing caller unchanged.
     """
     from sqlalchemy import select
 
@@ -95,25 +104,18 @@ def seed_default_account(tenant_id: str, principal_id: str | None = None) -> str
         # ``.build()`` persists nothing, so there is no row for the FK to point at and
         # nothing to query. Return the id so the built object carries what a persisted
         # one would.
-        return DEFAULT_TEST_ACCOUNT_ID
-    if (
-        session.scalars(select(Account).filter_by(tenant_id=tenant_id, account_id=DEFAULT_TEST_ACCOUNT_ID)).first()
-        is None
-    ):
-        AccountFactory(tenant_id=tenant_id, account_id=DEFAULT_TEST_ACCOUNT_ID)
+        return account_id
+    if session.scalars(select(Account).filter_by(tenant_id=tenant_id, account_id=account_id)).first() is None:
+        AccountFactory(tenant_id=tenant_id, account_id=account_id)
         session.flush()
     if principal_id:
         already = session.scalars(
-            select(AgentAccountAccess).filter_by(
-                tenant_id=tenant_id, principal_id=principal_id, account_id=DEFAULT_TEST_ACCOUNT_ID
-            )
+            select(AgentAccountAccess).filter_by(tenant_id=tenant_id, principal_id=principal_id, account_id=account_id)
         ).first()
         if already is None:
-            AgentAccountAccessFactory(
-                tenant_id=tenant_id, principal_id=principal_id, account_id=DEFAULT_TEST_ACCOUNT_ID
-            )
+            AgentAccountAccessFactory(tenant_id=tenant_id, principal_id=principal_id, account_id=account_id)
             session.flush()
-    return DEFAULT_TEST_ACCOUNT_ID
+    return account_id
 
 
 class AddressFactory(factory.Factory):

@@ -31,16 +31,28 @@ the merged design:
   * an INSTANCE of every concrete ``AdCPSalesAgentError`` subclass — what the
     envelope builder reads — reports the pinned recovery for its code;
   * the derivation is LIVE at read time, not a literal frozen at construction;
-  * ``recovery`` cannot be reassigned onto an instance;
+  * ``recovery`` cannot be reassigned onto an instance, and is not a constructor
+    kwarg either — the two spellings of one contradiction;
   * the platform-only codes, which sit outside the pin and so escape the oracle
-    entirely, are a pinned roster rather than an open door.
+    entirely, are a pinned roster rather than an open door;
+  * ``assert_envelope_shape`` — the one helper every other suite asserts an error
+    through — derives its own expectation from this same pinned block, so no test
+    anywhere can grade a pair the spec contradicts.
+
+That last obligation belongs HERE rather than beside the helper: the grader's
+derivation and ``CODE_TABLE``'s derivation read the same normative block, and an
+oracle is worth only as much as the assertion helper the rest of the suite
+reaches it through.
 
 Dropped with the symbols they exercised, all deleted by ADR-010 as a second
 answer to a question ``CODE_TABLE`` already answers: ``ERROR_CODE_MAPPING`` /
 ``translate_error_code`` / ``WIRE_STANDARD_CODES`` (boundary translation — the
 AdCP code vocabulary is OPEN, codes reach the buyer verbatim),
 ``RECOVERY_BY_WIRE_CODE`` (a second load of this same block), ``synthesize``
-and ``wire_advisory``.
+and ``wire_advisory``. The oracle that graded ``synthesize(recovery=...)``
+went with it; the one that graded ``AdCPSalesAgentError(recovery=...)`` did not,
+because that constructor still exists and keeping a caller out of it is still a
+live obligation.
 
 Every expectation below is read from the pin through
 ``tests.helpers.pinned_schema.recovery_by_code()`` — the ONE test-side reader of
@@ -52,13 +64,22 @@ with it.
 from __future__ import annotations
 
 import dataclasses
+from typing import Any
 
 import pytest
+from adcp.signing.errors import REQUEST_TO_WEBHOOK_CODE
 
 from src.core import exceptions
-from src.core.errors.codes import CODE_TABLE, AppErrorCode
-from src.core.exceptions import AdCPSalesAgentError, AdCPValidationError
-from tests.helpers import pinned_schema
+from src.core.errors.codes import CODE_TABLE, AppErrorCode, SignatureErrorCode
+from src.core.exceptions import (
+    AdCPAdapterError,
+    AdCPRequestSignatureAlgNotAllowedError,
+    AdCPSalesAgentError,
+    AdCPValidationError,
+)
+from src.core.schemas._base import AdcpErrorResponse
+from src.core.tools._wire import to_wire
+from tests.helpers import assert_envelope_shape, pinned_schema
 
 _RECOVERY_BY_CODE = pinned_schema.recovery_by_code()
 
@@ -78,11 +99,54 @@ _KNOWN_PLATFORM_CODES = frozenset(
         "PARTIAL_FAILURE",
         "WORKFLOW_CREATION_FAILED",
     }
+    # The RFC 9421 transport error taxonomy. The 27 SDK-table rows are NOT listed here by
+    # hand: the roster reads the same ``adcp.signing.errors`` table
+    # ``src.core.errors.signature_codes`` generates its members from, so the two cannot
+    # drift and adding one of those is not a thing anybody can do here.
+    #
+    # They are outside the assertions below for the reason the roster exists -- the pinned
+    # error-code enum does not define them -- but they are not ungraded. The spec grades
+    # them directly, byte-for-byte, in the ``WWW-Authenticate: Signature error="<code>"``
+    # challenge (security.mdx @ v3.1.1 § Transport error taxonomy), and
+    # ``tests/unit/test_signature_challenge_string.py`` pins that string for every one of
+    # them against the SDK's own builder.
+    | frozenset(REQUEST_TO_WEBHOOK_CODE)
+    # The 28th, and the ONE code in this family that has to be named: production's
+    # ``_TAXONOMY`` is the SDK's retag table PLUS ``request_target_uri_malformed``, which
+    # ``REQUEST_TO_WEBHOOK_CODE`` omits at ``adcp==6.6.0`` (upstream fix: adcp-client-python
+    # PR #987). The verifier emits it from ``reject_malformed_target``
+    # (``src/core/signing/canonical.py``), so it reaches ``CODE_TABLE`` and the wire like the
+    # other 27, and the shipped conformance vectors grade it -- six ``reject: true``
+    # canonicalization cases expect exactly this string
+    # (``tests/unit/test_signing_conformance_canonicalization.py``).
+    #
+    # Written as a literal rather than imported from ``src``, for the reason the module
+    # docstring gives: this roster is an oracle, and importing production's own constant
+    # would restate ``_TAXONOMY``'s expression instead of grading it. The same literal
+    # stands, deliberately and for the same reason, in
+    # ``tests/unit/test_signing_challenge_vocabulary.py``. The union is idempotent, so when
+    # the pin advances past the upstream fix this line stops mattering on its own.
+    | frozenset({"request_target_uri_malformed"})
 )
 
 
 def _code_of(cls: type[AdCPSalesAgentError]) -> str:
-    return str(cls._code)
+    """The code a class IS, or ``""`` for an ABSTRACT one that declares none.
+
+    Two classes declare no ``_code`` and neither can be constructed:
+    :class:`AdCPSalesAgentError` and :class:`AdCPRequestSignatureError`. The second used to
+    be constructible and to name its code per raise site; it is now the abstract parent of
+    the 28 hand-written classes below it, one per member of the RFC 9421 transport
+    taxonomy, each declaring its own code like every other error class here.
+
+    Those 28 are outside THIS oracle, which grades a class against the PUBLISHED enum, and
+    the published enum does not define them (the wire vocabulary is open). They are not
+    ungraded: every one goes through ``CodeEntry``, whose constructor refuses an empty
+    message or suggestion and whose ``recovery`` is a :class:`Recovery` member, and the
+    challenge string they produce is pinned against the SDK in
+    ``tests/unit/test_signature_challenge_string.py``.
+    """
+    return str(getattr(cls, "_code", ""))
 
 
 _GRADED_CLASSES = sorted(
@@ -169,9 +233,10 @@ def test_platform_only_codes_are_the_pinned_roster() -> None:
         f"Either add it to the AdCP error-code enum (and advance the pin), or record it in "
         f"_KNOWN_PLATFORM_CODES here."
     )
-    assert unpinned == {str(member) for member in AppErrorCode}, (
-        "CODE_TABLE's non-spec codes must be exactly the AppErrorCode members — a published code "
-        "shadowed by a platform entry would take its recovery from the platform entry, not the pin."
+    assert unpinned == {str(member) for member in AppErrorCode} | {str(member) for member in SignatureErrorCode}, (
+        "CODE_TABLE's non-spec codes must be exactly the AppErrorCode members plus the "
+        "SignatureErrorCode ones — a published code shadowed by an entry from either enum would "
+        "take its recovery from that entry, not the pin."
     )
 
 
@@ -226,3 +291,165 @@ def test_recovery_cannot_be_reassigned_on_an_instance() -> None:
     with pytest.raises(AttributeError):
         exc.recovery = "terminal"  # type: ignore[misc]
     assert str(exc.recovery) == _RECOVERY_BY_CODE[str(AdCPValidationError._code)]
+
+
+# ---------------------------------------------------------------------------
+# raise-site mirror: recovery is DERIVED from the code, never named by a caller
+# ---------------------------------------------------------------------------
+# The reassignment oracle above closes the channel one statement AFTER
+# construction. This closes it AT construction, which is where a raise site would
+# reach for it: ``raise AdCPValidationError(recovery="terminal")`` is the same
+# contradiction spelled earlier, and nothing else in this file would see it —
+# the per-class oracles grade the CLASS's code, and an instance carrying a
+# hand-typed recovery is what the envelope builder would actually read.
+#
+# ``__init__`` is keyword-only and names no ``recovery`` parameter, so the refusal
+# is structural rather than scanned for. This grades that it stays structural:
+# "I want terminal" must remain expressible only by raising a terminal-coded
+# class, where possession of the class is the proof.
+
+
+_CONTRADICTING_KWARG_CASES = [
+    # (class, a recovery its own pinned code contradicts). AdCPValidationError emits
+    # VALIDATION_ERROR (pinned correctable); AdCPAdapterError emits SERVICE_UNAVAILABLE
+    # (pinned transient). Each pair is a contradiction a raise site would want to spell.
+    (AdCPValidationError, "terminal"),
+    (AdCPAdapterError, "correctable"),
+]
+
+
+@pytest.mark.parametrize(("cls", "requested"), _CONTRADICTING_KWARG_CASES, ids=lambda p: getattr(p, "__name__", p))
+def test_recovery_is_not_a_constructor_kwarg(cls: type[AdCPSalesAgentError], requested: str) -> None:
+    """``recovery=`` is not accepted at construction, and the pinned value survives."""
+    with pytest.raises(TypeError):
+        cls(recovery=requested)  # type: ignore[call-arg]
+
+    pinned = _RECOVERY_BY_CODE[str(cls._code)]
+    assert pinned != requested, (
+        f"this case no longer states a contradiction: the pin classifies {str(cls._code)!r} as "
+        f"{pinned!r}, which is what the rejected kwarg asked for. Pick another value."
+    )
+    assert str(cls().recovery) == pinned, (
+        f"{cls.__name__}().recovery is {str(cls().recovery)!r}, not the pinned {pinned!r} — a "
+        f"refused kwarg is only half the closure; the derivation must still answer."
+    )
+
+
+# ---------------------------------------------------------------------------
+# test-side mirror: the grader itself cannot grade a pin-contradicting pair
+# ---------------------------------------------------------------------------
+# ``assert_envelope_shape`` took ``recovery`` as a free caller literal and checked
+# only that the two envelope layers agreed WITH EACH OTHER, so it was blind to
+# wire<->spec drift: a shipped, green test asserted SERVICE_UNAVAILABLE+terminal,
+# a pair the normative enumMetadata contradicts. The helper now derives the
+# expected recovery from the same pinned block these oracles read. These tests are
+# what stops that derivation from being silently removed the next time it reddens
+# something — the failure mode being re-armed is "the grader agrees with the bug".
+#
+# Where an envelope can be real it is built by the production path
+# (``AdcpErrorResponse.of`` serialized through ``to_wire``), so the shapes graded
+# are the shapes the boundaries emit.
+
+
+def _envelope_for(exc: AdCPSalesAgentError) -> dict[str, Any]:
+    """The wire body a buyer receives for *exc*, built the way the boundary builds it."""
+    return to_wire(AdcpErrorResponse.of(exc))
+
+
+def _envelope_carrying(code: str, recovery: str, message: str = "x") -> dict[str, Any]:
+    """A two-layer envelope carrying *code* and *recovery*, built as a literal.
+
+    Deliberately NOT built from a real exception. The test below needs an envelope
+    whose pair CONTRADICTS the pin — that is the whole point of the helper it
+    grades — and no exception can carry such a pair any more: ``recovery`` is a
+    read-only property over ``CODE_TABLE`` and there is no constructor kwarg, so
+    production cannot express the contradiction. Building the dict directly keeps
+    the guard alive without reopening the channel ADR-010 closed. The shape mirrors
+    ``AdcpErrorResponse.of``'s output, which is all ``assert_envelope_shape`` reads.
+    """
+    return {
+        "adcp_error": {"code": code, "message": message, "recovery": recovery},
+        "errors": [{"code": code, "message": message, "recovery": recovery}],
+    }
+
+
+def test_assert_envelope_shape_refuses_a_pin_contradicting_pair() -> None:
+    """The F3 pair (``SERVICE_UNAVAILABLE`` + ``terminal``) must be ungradeable.
+
+    The pin classifies ``SERVICE_UNAVAILABLE`` as ``transient``. A test that pins
+    ``terminal`` for it is asserting that the wire may carry a pair the normative
+    enumMetadata forbids, so the helper must fail it — and say which value the pin
+    gives, because the fix is at the raise site (pick the class whose pinned
+    recovery IS the intent), not in the assertion.
+    """
+    pinned = _RECOVERY_BY_CODE["SERVICE_UNAVAILABLE"]
+    assert pinned == "transient", f"pin moved: SERVICE_UNAVAILABLE is now {pinned!r}"
+
+    envelope = _envelope_carrying("SERVICE_UNAVAILABLE", "terminal", "permanent failure")
+    assert envelope["adcp_error"]["recovery"] == "terminal", (
+        f"precondition: the envelope must actually carry the contradicting pair, got {envelope['adcp_error']!r}"
+    )
+
+    with pytest.raises(AssertionError) as exc_info:
+        assert_envelope_shape(envelope, "SERVICE_UNAVAILABLE", recovery="terminal")
+
+    detail = str(exc_info.value)
+    assert "enumMetadata" in detail and "'transient'" in detail, (
+        f"assert_envelope_shape rejected the pair but its message does not cite the pin "
+        f"or the value the pin gives: {detail!r}"
+    )
+
+
+def test_assert_envelope_shape_accepts_the_pinned_pair() -> None:
+    """Control: the pin-conformant pair, on a real production envelope, still passes.
+
+    Without this, the test above is satisfied by a helper that rejects every call,
+    which would grade nothing at all.
+    """
+    assert_envelope_shape(_envelope_for(AdCPAdapterError()), "SERVICE_UNAVAILABLE", recovery="transient")
+
+
+def test_assert_envelope_shape_keeps_the_caller_literal_for_unclassified_codes() -> None:
+    """A code the pin does not classify keeps the caller's literal as its only
+    expectation — the derivation ADDS a check, it does not replace the caller's.
+
+    The RFC 9421 transport codes are the live representatives of that path:
+    ``CODE_TABLE`` classifies all 27, the published error-code enum defines none of
+    them (the wire vocabulary is open), and they reach buyers in real refusals.
+    Turning "the pin is silent" into a failure would make every signature refusal
+    ungradeable through the one sanctioned envelope helper.
+
+    The expected recovery here is read from ``CODE_TABLE`` rather than from the pin
+    for the reason the test exists: for a code the pin does not define there IS no
+    test-side oracle. What is graded is the helper's branch, not the value —
+    ``test_platform_only_codes_are_the_pinned_roster`` above is what keeps this set
+    of ungraded codes from widening.
+    """
+    code = SignatureErrorCode.REQUEST_SIGNATURE_ALG_NOT_ALLOWED
+    assert str(code) not in _RECOVERY_BY_CODE, (
+        f"the pin now classifies {str(code)!r} — this test needs a code the pin is still silent on"
+    )
+
+    exc = AdCPRequestSignatureAlgNotAllowedError()
+    assert_envelope_shape(_envelope_for(exc), str(code), recovery=str(CODE_TABLE[code].recovery))
+
+
+def test_assert_envelope_shape_derives_from_the_test_side_pin_not_src(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The helper's expectation comes from ``pinned_schema.recovery_by_code()``.
+
+    Independence, made behavioral rather than left to inspection: point the shared
+    test-side accessor at a map that classifies ``SERVICE_UNAVAILABLE`` as
+    ``terminal`` and the helper's verdict must FOLLOW it. A helper that read
+    ``CODE_TABLE`` (or cached its own copy at import time) would keep rejecting,
+    which is the shape that makes the grader agree with the table it grades.
+    """
+    monkeypatch.setattr(pinned_schema, "recovery_by_code", lambda: {"SERVICE_UNAVAILABLE": "terminal"})
+
+    assert_envelope_shape(
+        _envelope_carrying("SERVICE_UNAVAILABLE", "terminal", "permanent failure"),
+        "SERVICE_UNAVAILABLE",
+        recovery="terminal",
+    )
+
+    with pytest.raises(AssertionError, match="enumMetadata"):
+        assert_envelope_shape(_envelope_for(AdCPAdapterError()), "SERVICE_UNAVAILABLE", recovery="transient")

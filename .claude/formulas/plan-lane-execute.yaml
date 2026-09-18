@@ -37,8 +37,8 @@ variables:
   TASK_IDS:
     description: "Space-separated lane task IDs (e.g. 'salesagent-prkv.4 salesagent-prkv.2'). Walk in the parent epic's dependency order."
     required: true
-  PLAN_DOC:
-    description: "Path to the frozen plan doc that is the scope authority (e.g. .claude/notes/pr1721-review-round3-remediation.md). Later ALTERATIONS sections win over earlier ones. MUST be git-tracked — an untracked plan is editable mid-run with no history and is absent from a fresh worktree, so 'frozen' would be honor-system only; the baseline atom records its SHA. Required (not optional): solution-review grades the design's FIDELITY to this doc, which is only non-vacuous when the referee lives OUTSIDE the bead the design was transcribed from."
+  PLAN_EPIC:
+    description: "Beads epic ID that holds the lane tasks and is the frozen scope authority (for example, salesagent-prkv). The epic body states the architectural roots and the boundary of the whole change; each child task states one lane's specification. Later CORRECTION or ALTERATIONS notes on a task win over its original body. Required, not optional: solution-review grades a design's fidelity to the epic, which is non-vacuous only when the referee reads the epic rather than the task the design was transcribed into. The baseline atom records the epic body's checksum and the child list, so 'frozen' is enforced rather than asserted. An epic replaces the plan file because a file under .claude/notes/ cannot be tracked — .gitignore excludes that directory — and beads carries the per-task history the file version had to promise."
     required: true
 
 labels:
@@ -57,13 +57,19 @@ setup:
       # when it reaches a terminal state, read test-results/<latest>/*.json
       ```
 
-      Record in the epic notes: the run id, the per-suite table, AND the frozen
-      plan's identity so "frozen" is enforced, not asserted:
+      Record the run id, the per-suite table, and the scope authority's identity
+      as a note on {PLAN_EPIC}, so "frozen" is enforced rather than asserted:
       ```bash
-      git ls-files --error-unmatch "{PLAN_DOC}" >/dev/null 2>&1 \
-        || { echo "GATE FAIL: PLAN_DOC is not git-tracked — an untracked plan is not a frozen authority"; exit 1; }
-      git rev-parse "HEAD:{PLAN_DOC}"   # record this blob SHA in the epic notes
+      bd show {PLAN_EPIC} >/dev/null 2>&1 \
+        || { echo "GATE FAIL: {PLAN_EPIC} does not resolve — the scope authority must exist before any lane runs"; exit 1; }
+      bd show {PLAN_EPIC} --json | sha256sum   # record this checksum as a note on the epic
+      bd children {PLAN_EPIC} --json           # record the child list: every lane, its formula label, and its status
       ```
+      Confirm that every child task carries exactly one `formula:` label and
+      names that same formula in its first prose line. A task whose label and
+      first line disagree routes to the wrong chain, so stop and reconcile it
+      before any lane runs.
+
       This table is the layer-5 baseline the final verify compares against
       (pass-count + xpass-IDENTITY, per the semantic-merge discipline).
 
@@ -79,12 +85,14 @@ setup:
       comparison — the host and the box fail different populations.
 
       ## Gate — HARD STOP
-      Two conditions, neither of them green:
-      - PLAN_DOC is untracked. Stop and commit it first; an untracked plan is
-        not a frozen authority.
+      Three conditions, none of them green:
+      - `{PLAN_EPIC}` does not resolve. Stop — the scope authority must exist
+        before any lane runs.
+      - A child task's `formula:` label and its first prose line disagree. Stop
+        and reconcile it; that task would otherwise route to the wrong chain.
       - The run produced no suite reports, or they are unreadable. A run that
         established no baseline cannot be compared against.
-    acceptance: "Baseline recorded (run id, per-suite counts, failing nodeid list) — green NOT required; PLAN_DOC confirmed git-tracked and its blob SHA recorded in epic notes."
+    acceptance: "Baseline recorded as a note on {PLAN_EPIC} (run id, per-suite counts, failing nodeid list) — green NOT required; epic body checksum and child list recorded; every child carries one formula: label matching its first prose line."
     labels: ["atom:baseline"]
 
 iterate:
@@ -105,15 +113,20 @@ iterate:
         ## Inputs (read in this order)
         1. `bd show {TASK_ID}` — the lane's own body AND every CORRECTION /
            ALTERATIONS note appended to it (those override the original text).
-        2. `{PLAN_DOC}` — find this lane's section. Later ALTERATIONS sections
-           WIN over earlier ones (the doc says so). Read the lane's §3.2
-           (delete), its lane steps (file:line), and §5 (what grades it).
+        2. `bd show {PLAN_EPIC}` — the architectural root this lane serves and
+           the boundary of the whole change. The epic states which root the lane
+           dissolves; the task states the file:line steps and what grades them.
+           Read the epic first, so you transcribe a lane of an architecture
+           rather than a list of edits.
         3. `.agent-index/` stubs for the symbols the plan names; `ast-grep` to
            confirm the cited file:line still match the current tree (post-merge
            drift is expected — reconcile the line, not the intent).
 
         ## Output — a bounded change-set in the bead
-        `bd update {TASK_ID} --design "..."` listing, per the plan:
+        `bd update {TASK_ID} --design "..."`, and append a note to {TASK_ID} headed
+        exactly `## Change-set (design atom)`. The next gate greps for that heading,
+        so a label on this atom does not satisfy it — atom labels never appear on the
+        lane bead. List, per the plan:
         - Each file + the exact edit (delete X at :line / add reader Y / invert
           meta-test Z), traceable to a plan clause.
         - The Core Invariant this lane preserves (one sentence, from the plan).
@@ -143,13 +156,16 @@ iterate:
 
         ## Precondition (gate hard-check)
         ```bash
-        bd show {TASK_ID} | grep -q "atom:design" || { echo "GATE FAIL: design atom not closed"; exit 1; }
+        bd show {TASK_ID} | grep -qE "^[[:space:]]*## Change-set \(design atom\)" || { echo "GATE FAIL: the design atom did not record a change-set on {TASK_ID}"; exit 1; }
         ```
 
         ## Inputs
-        `bd show {TASK_ID}` (the change-set + Core Invariant) and `{PLAN_DOC}`
-        (the lane's section, ALTERATIONS-latest-wins). The plan-lane is your
-        frozen GOAL.
+        `bd show {TASK_ID}` (the change-set and the Core Invariant) and
+        `bd show {PLAN_EPIC}` (the architectural root this lane serves, and the
+        boundary of the whole change). The task, as corrected by its latest
+        notes, is your frozen GOAL; the epic tells you which root it must
+        dissolve. Read the epic from outside the task, because grading a
+        transcription against itself proves nothing.
 
         ## What to grade — exactly two axes, no third
         Grade the change-set ONLY on these, against the plan:
@@ -268,7 +284,9 @@ iterate:
           the exact obligation.
         - Do NOT write production code here. Do NOT file tickets or scan the tree.
 
-        Record the RED evidence (test path + the FAILED/xfail line) in the bead.
+        Record the RED evidence (test path + the FAILED/xfail line) as a note on
+        {TASK_ID} headed exactly `## RED evidence (write-test atom)`. The implement
+        gate greps for that heading on the LANE bead, not for a label on this atom.
       acceptance: "The plan's grader for {TASK_ID} exists and is shown RED (captured FAILED/xfail output) before any production code; BDD-first, no new unit tests, no assertion weakened."
       depends_on: ["solution-review-{TASK_ID}"]
       labels: ["atom:write-test", "atom:gate"]
@@ -285,7 +303,7 @@ iterate:
 
         ## Precondition (gate hard-check)
         ```bash
-        bd show {TASK_ID} | grep -q "atom:write-test" || { echo "GATE FAIL: no RED grader authored"; exit 1; }
+        bd show {TASK_ID} | grep -qE "^[[:space:]]*## RED evidence \(write-test atom\)" || { echo "GATE FAIL: no RED evidence recorded on {TASK_ID}"; exit 1; }
         ```
 
         ## Rules
@@ -298,7 +316,9 @@ iterate:
         - Run the lane's own graders locally as you go (`cassini test <slice>` —
           name FILES, never a dir).
 
-        Record the resulting diff (files + net lines) in the bead.
+        Record the resulting diff (files + net lines) as a note on {TASK_ID} headed
+        exactly `## Implemented (implement atom)`. The diff-review gate greps for that
+        heading on the LANE bead, not for a label on this atom.
       acceptance: "Change-set implemented verbatim; the RED grader from write-test is now green; out-of-scope items parked, none acted on."
       depends_on: ["write-test-{TASK_ID}"]
       labels: ["atom:implement"]
@@ -326,9 +346,16 @@ iterate:
         this") use **`ast-grep`**, never a text `grep` sweep; `grep` only for
         plain strings.
 
+        If `ast-grep` is not installed — it is absent on this box, where
+        `/usr/bin/sg` is the setgid binary and not ast-grep — do not fall back to a
+        bare text sweep. Use Python's own `ast` module for the structural query, or
+        `grep` WITH A POSITIVE CONTROL: show the pattern matching a case you know is
+        present before reporting how many remain. An empty result and a broken
+        pattern are indistinguishable from the output alone.
+
         ## Precondition
         ```bash
-        bd show {TASK_ID} | grep -q "atom:implement" || { echo "GATE FAIL: implement not closed"; exit 1; }
+        bd show {TASK_ID} | grep -qE "^[[:space:]]*## Implemented \(implement atom\)" || { echo "GATE FAIL: the implement atom did not record its diff on {TASK_ID}"; exit 1; }
         ```
 
         ## What to grade (the lane diff ONLY)

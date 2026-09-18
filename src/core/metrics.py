@@ -17,6 +17,9 @@ Call sites must record AI-review metrics through :func:`record_ai_review` and
 :func:`record_ai_review_error` so the bounding logic lives in exactly one place.
 """
 
+from collections.abc import Container
+
+from adcp.signing.errors import REQUEST_TO_WEBHOOK_CODE
 from prometheus_client import REGISTRY, Counter, Gauge, Histogram, generate_latest
 
 from src.core.exceptions import (
@@ -46,6 +49,20 @@ POLICY_TRIGGERED_ALLOWLIST = frozenset(
         "other",
     }
 )
+
+
+#: What a label collapses to when its closed vocabulary does not admit the value.
+OTHER_LABEL = "other"
+
+
+def _bounded(value: str | None, vocabulary: Container[str]) -> str:
+    """Return *value* when the closed *vocabulary* admits it, else :data:`OTHER_LABEL`.
+
+    Every ``sanitize_*`` below is this one rule with a different vocabulary, so the rule is
+    written once. The NAMED wrappers are the contract -- each states which vocabulary bounds
+    which label -- and this is only their shared body.
+    """
+    return value if value is not None and value in vocabulary else OTHER_LABEL
 
 
 def categorize_error(error: BaseException) -> str:
@@ -141,10 +158,138 @@ webhook_queue_size = Gauge(
     ["tenant_id"],
 )
 
+# ---------------------------------------------------------------------------
+# RFC 9421 inbound request-signature outcomes (#1291 B1)
+# ---------------------------------------------------------------------------
+# The verifier is the ONLY layer that sees its own outcome before it is swallowed
+# (``warn_for``) or raised as an identity refusal, so these three counters are the whole
+# evidence base for the shadow-mode promotion ladder (supported_for -> warn_for ->
+# required_for). No ``tenant_id`` label: the posture is per-tenant but the series count
+# must not grow with the tenant list.
+request_signature_verified_total = Counter(
+    "adcp_request_signature_verified_total",
+    "Inbound RFC 9421 request signatures that passed the verifier checklist",
+    ["operation", "keyid"],
+)
+
+request_signature_failed_total = Counter(
+    "adcp_request_signature_failed_total",
+    "Inbound RFC 9421 request signatures rejected by the verifier checklist",
+    ["operation", "keyid", "code"],
+)
+
+request_unsigned_total = Counter(
+    "adcp_request_unsigned_total",
+    "Inbound AdCP requests the verifier did not grade (no signature, or posture ignores it)",
+    ["operation", "reason"],
+)
+
+# ---------------------------------------------------------------------------
+# Revocation availability — checklist step 9 (#1291 A5)
+# ---------------------------------------------------------------------------
+# The evidence base for flipping ``SigningConfig.require_revocation_list``: every
+# increment is a signed request served WITHOUT a revocation answer. No ``issuer`` label —
+# the issuer origin comes from a counterparty-supplied ``brand_json_url``, so labelling by
+# it would let a caller mint series at will. ``reason`` is the closed set of ways the
+# SDK's fetch can fail, and it stays in lockstep with the translation site's exception
+# tuple in ``src/core/signing/revocation.py``.
+request_revocation_unavailable_total = Counter(
+    "adcp_request_revocation_unavailable_total",
+    "Signed requests served without a revocation answer because the list could not be read",
+    ["reason"],
+)
+
+#: The 27 request-family signature rejection codes, taken from the SDK's own
+#: request->webhook translation table rather than re-listed here. The spec grades these
+#: byte-for-byte, so a hand-maintained copy would be a second source that can drift from
+#: the one the verifier actually raises.
+SIGNATURE_ERROR_CODES = frozenset(REQUEST_TO_WEBHOOK_CODE)
+
+#: ``keyid`` before the verifier resolved one (checklist step 7). Every rejection carries
+#: this: ``SignatureVerificationError`` does not expose the keyid, and a pre-resolution
+#: keyid is attacker-supplied and therefore unbounded.
+UNRESOLVED_KEYID = "unresolved"
+
+#: Why a request was not verified. Two values, both closed.
+UNSIGNED_REASONS = frozenset({"absent", "ignored"})
+
+#: Closed vocabulary for the revocation ``reason`` label — one member per member of the
+#: exception tuple in ``CounterpartyRevocationChecker.__call__``.
+REVOCATION_UNAVAILABLE_REASONS = frozenset({"fetch", "parse", "signature", "ssrf"})
+
+
+def sanitize_signature_code(code: str | None) -> str:
+    """Return ``code`` if it is a spec request-signature code, else ``"other"``."""
+    return _bounded(code, SIGNATURE_ERROR_CODES)
+
+
+def sanitize_operation(operation: str | None) -> str:
+    """Return ``operation`` if the registry names it, else ``"other"``.
+
+    The closed set comes from :func:`src.core.signing.vocabulary.operation_label_names`,
+    which DERIVES it from ``TOOLS`` plus the SDK's own definitions. Re-listing those names
+    here would create a second source of truth that silently demotes a newly added tool's
+    real traffic into the ``"other"`` bucket.
+
+    ``""`` is a MEMBER of that set, not a collapse: it is what a refusal raised before a
+    tool was named records, and keeping it distinct is what stops those from landing in
+    the bucket that exists to make an unrecognized name visible.
+    """
+    from src.core.signing.vocabulary import operation_label_names
+
+    return _bounded(operation, operation_label_names())
+
+
+def sanitize_unsigned_reason(reason: str | None) -> str:
+    """Return ``reason`` if it is an :data:`UNSIGNED_REASONS` member, else ``"other"``."""
+    return _bounded(reason, UNSIGNED_REASONS)
+
+
+def sanitize_revocation_unavailable_reason(reason: str | None) -> str:
+    """Return ``reason`` if it is a :data:`REVOCATION_UNAVAILABLE_REASONS` member."""
+    return _bounded(reason, REVOCATION_UNAVAILABLE_REASONS)
+
 
 # ---------------------------------------------------------------------------
 # Recording helpers — single source of truth for label bounding
 # ---------------------------------------------------------------------------
+def record_signature_verified(operation: str, keyid: str) -> None:
+    """Increment :data:`request_signature_verified_total` for a verified signer.
+
+    ``keyid`` is safe to record verbatim here and ONLY here: the verifier resolved it
+    against the counterparty's JWKS at checklist step 7, so the value is drawn from a key
+    set we already know.
+    """
+    request_signature_verified_total.labels(operation=sanitize_operation(operation), keyid=keyid).inc()
+
+
+def record_signature_failed(operation: str, code: str | None) -> None:
+    """Increment :data:`request_signature_failed_total` with bounded labels."""
+    request_signature_failed_total.labels(
+        operation=sanitize_operation(operation),
+        keyid=UNRESOLVED_KEYID,
+        code=sanitize_signature_code(code),
+    ).inc()
+
+
+def record_request_unsigned(operation: str, reason: str) -> None:
+    """Increment :data:`request_unsigned_total` with bounded labels.
+
+    ``reason="absent"`` — the request carried no signature headers.
+    ``reason="ignored"`` — headers were present but the tenant's posture puts this
+    operation in the ``none`` bucket, so no CHECKLIST ran.
+    """
+    request_unsigned_total.labels(
+        operation=sanitize_operation(operation),
+        reason=sanitize_unsigned_reason(reason),
+    ).inc()
+
+
+def record_signature_revocation_unavailable(reason: str) -> None:
+    """Increment :data:`request_revocation_unavailable_total` with a bounded ``reason``."""
+    request_revocation_unavailable_total.labels(reason=sanitize_revocation_unavailable_reason(reason)).inc()
+
+
 def record_ai_review(tenant_id: str, decision: str, policy_triggered: str | None) -> None:
     """Increment :data:`ai_review_total` with a bounded ``policy_triggered``."""
     ai_review_total.labels(

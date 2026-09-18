@@ -43,6 +43,14 @@ ignores:
   - "src/core/signals_agent_registry.py"
   - "src/services/protocol_webhook_service.py"
   - "src/services/webhook_delivery_service.py"
+  # The RFC 9421 layer brought two more OUTBOUND-BODY edges with it, each with one owner:
+  # trust_root.py composes the PUBLISHED JWKS and brand.json documents (a third party
+  # fetches them, so the dump IS the wire), and notification_proof_service.py composes the
+  # activation-challenge body it sends to the buyer's webhook target. Listed as edges
+  # rather than suppressed at the call site, which is what this rule requires, and mirrored
+  # in ruff-serialization.toml in the same change.
+  - "src/core/signing/trust_root.py"
+  - "src/services/notification_proof_service.py"
   - "src/core/webhooks/registration.py"
   - "src/core/errors/issues.py"
   - "src/core/errors/details.py"

@@ -22,6 +22,12 @@ any assertion about the stash would have to be rewritten by the change it is
 supposed to be guarding. What the buyer's endpoint receives is invariant across
 that rewrite — and it is also the only thing a buyer can act on.
 
+Why the registering calls are SIGNED: this seller verifies RFC 9421 signatures, and
+a request that hands it webhook credentials must carry one (security.mdx @ v3.1.1
+:1462-1465, enforced by ``src/core/signing/webhook_credentials.py``). That is a
+precondition of getting a registration accepted at all, not the property under test —
+see :func:`_register`.
+
 Why integration and not BDD: two of the three deliveries are fired by a
 workflow-step status change and the third by a task reaching a terminal state,
 both after the buyer's call has returned. There is no wire envelope for a
@@ -87,20 +93,72 @@ def _assert_delivered_signed(env: Any) -> None:
     assert_signature_verifies_over_wire_body(env.last_delivery, STRONG_SECRET)
 
 
+def _register(env: MediaBuyPushRegistrationEnv, what: str, **kwargs: Any) -> Any:
+    """Dispatch a registering call over MCP as a buyer that HANDS THIS SELLER CREDENTIALS.
+
+    *what* names the producer for the failure message only — the env selects the
+    tool from the request's own content (``MediaBuyDualEnv._is_update_request``).
+
+    Every call here carries an ``authentication`` block, and that is precisely the
+    request security.mdx @ v3.1.1 :1462-1465 makes un-refusable while unsigned: a
+    seller whose ``request_signing.supported`` is true MUST require the inbound
+    request to be RFC 9421-signed when ``push_notification_config.authentication``
+    is present, "regardless of ``required_for`` membership" (:1375), and this agent
+    enforces it in ``src/core/signing/webhook_credentials.py`` +
+    ``verifier._bucket_for``. An unsigned registration is answered
+    ``request_signature_required`` and never reaches the stash these cases grade.
+
+    So the buyer signs. Signing is a PRECONDITION of the registration, not the
+    property under test: what is graded is still what the buyer's endpoint receives
+    when the workflow step fires, and the reverse-TDD controls still damage only the
+    stash. ``enable_request_signing()`` is idempotent and is called here rather than
+    in each case, so no case can register through an unsigned dispatch by omission.
+
+    The dispatch is asserted to have SUCCEEDED: a refused registration writes no
+    stash at all, and a case that then found no delivery would report a signing
+    defect for a request the seller never accepted.
+    """
+    env.enable_request_signing()
+    result = env.call_via(Transport.MCP, signed=True, **kwargs)
+    assert result.is_success, (
+        f"the signed {what} registration was refused ({result.wire_error_envelope or result.error!r}); "
+        f"nothing was stashed, so there is no handoff left to grade"
+    )
+    return result.payload
+
+
 def _register_via_create(env: MediaBuyPushRegistrationEnv, *, with_push_config: bool) -> Any:
     """Run a real create_media_buy over MCP, optionally registering the webhook.
 
     ``with_push_config=False`` is how the update case gets a media buy to
     update without also registering anything — the update case must grade its
-    OWN producer, not one create already made correct.
+    OWN producer, not one create already made correct. That create hands the seller
+    no credentials, so nothing escalates it and it is dispatched UNSIGNED: the
+    escalation :func:`_register` describes fires on the ``authentication`` block
+    alone, not on the tool.
     """
     tenant, _principal, product, pricing_option = env.setup_media_buy_data()
     kwargs = env.minimal_create_kwargs(product, pricing_option)
-    if with_push_config:
-        kwargs["push_notification_config"] = PushNotificationConfigRequestFactory.payload(
-            url=env.webhook_url, authentication=_tool_auth_block()
-        )
-    return env.call_mcp(**kwargs)
+    if not with_push_config:
+        return env.call_mcp(**kwargs)
+    kwargs["push_notification_config"] = PushNotificationConfigRequestFactory.payload(
+        url=env.webhook_url, authentication=_tool_auth_block()
+    )
+    return _register(env, "create_media_buy", **kwargs)
+
+
+def _register_via_update(env: MediaBuyPushRegistrationEnv, media_buy_id: str) -> Any:
+    """Run a real update_media_buy over MCP that registers the HMAC webhook.
+
+    Written once for both update cases, for the reason :func:`_bare_update_req`
+    gives: they differ only in what they do to the stash afterwards.
+    """
+    return _register(
+        env,
+        "update_media_buy",
+        req=_bare_update_req(media_buy_id),
+        push_notification_config={"url": env.webhook_url, "authentication": _tool_auth_block()},
+    )
 
 
 def _bare_update_req(media_buy_id: str) -> Any:
@@ -186,13 +244,7 @@ class TestUpdateMediaBuyRegistrationDeliversSigned:
             env.register_delivery_target()
             env.set_http_status(200)
 
-            env.call_mcp(
-                req=_bare_update_req(created.media_buy_id),
-                push_notification_config={
-                    "url": env.webhook_url,
-                    "authentication": _tool_auth_block(),
-                },
-            )
+            _register_via_update(env, created.media_buy_id)
 
             env.complete_step(env.push_step("update_media_buy"))
 
@@ -205,13 +257,7 @@ class TestUpdateMediaBuyRegistrationDeliversSigned:
             env.register_delivery_target()
             env.set_http_status(200)
 
-            env.call_mcp(
-                req=_bare_update_req(created.media_buy_id),
-                push_notification_config={
-                    "url": env.webhook_url,
-                    "authentication": _tool_auth_block(),
-                },
-            )
+            _register_via_update(env, created.media_buy_id)
 
             step = env.push_step("update_media_buy")
             env.drop_stashed_credential_half(step)

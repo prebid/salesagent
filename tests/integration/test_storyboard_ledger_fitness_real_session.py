@@ -71,12 +71,13 @@ import pytest
 from scripts.audit import ledger
 from tests.helpers import storyboard_session as rig
 from tests.helpers.ledger import load_ledger_nodeids
-from tests.unit import test_storyboard_ledger_state as ledger_state
+from tests.helpers.storyboard_ledger_pin import EXPECTED_LEDGER, LEDGER_PATH
 
 pytestmark = [pytest.mark.integration]
 
-REPO_ROOT = rig.REPO_ROOT
-LEDGER = REPO_ROOT / "tests" / "storyboard" / "known_failures.txt"
+#: The production ledger, named by the pin module that fixes its contents, so the
+#: path and the ``EXPECTED_LEDGER`` it is graded against come from one place.
+LEDGER = LEDGER_PATH
 
 # The nested-session rig (which module is collected, the runner stub, the
 # outcome parser) lives in ``tests/helpers/storyboard_session.py``: the
@@ -149,9 +150,21 @@ def test_production_ledger_matches_its_pin() -> None:
     """The production ledger still agrees with ``EXPECTED_LEDGER``.
 
     The cases below no longer read that file, so nothing else in this module would
-    notice it drifting from its pin.
+    notice it drifting from its pin. Comparing sets, not lengths, so the failure names
+    the entries that moved instead of just the arithmetic. Both sides as NODEIDs:
+    ``LedgerCheckId.format()`` emits the bracket CONTENT (``mcp::core::…``), while
+    ``EXPECTED_LEDGER`` holds full pytest nodeids.
     """
-    assert load_ledger_nodeids(LEDGER) == ledger_state.EXPECTED_LEDGER
+    actual = load_ledger_nodeids(LEDGER)
+    only_ledger = sorted(actual - EXPECTED_LEDGER)
+    only_expected = sorted(EXPECTED_LEDGER - actual)
+    assert actual == EXPECTED_LEDGER, (
+        "the storyboard ledger disagrees with EXPECTED_LEDGER in "
+        "tests/helpers/storyboard_ledger_pin.py — re-seed both together. "
+        f"ledger={len(actual)} EXPECTED_LEDGER={len(EXPECTED_LEDGER)}\n"
+        f"  only in the ledger ({len(only_ledger)}): {only_ledger[:5]}\n"
+        f"  only in EXPECTED_LEDGER ({len(only_expected)}): {only_expected[:5]}"
+    )
 
 
 def _run_storyboard_session(

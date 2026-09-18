@@ -44,9 +44,16 @@ from adcp.webhook_auth import JwkSignerStrategy
 from src.core.exceptions import AdCPBlockedUrlError
 from src.core.security.outbound_http import CounterpartyUrl
 from tests.helpers import assert_backoff_schedule, assert_envelope_shape
+from tests.helpers.egress_backoff import (
+    _RATE_LIMITED_BODY,
+    fast_backoff,
+    pin_jitter,
+    rate_limited,
+    set_backoff_base,
+    set_flags,
+)
 from tests.helpers.envelope_assertions import envelope_for
 from tests.helpers.local_http_origin import hangs_up, responds, sends_chunked_body
-from tests.helpers.settings_injection import inject_limits
 
 # Both entry points get every case. Parametrising instead of duplicating the
 # module keeps the two paths literally the same test.
@@ -68,19 +75,6 @@ _CALLER_FIELD_PATH = "property_list.agent_url"
 # this file used to write. The comment that stood here said the tests "drive the seam's env
 # surface from outside, not through its privates" — but the seam HAS no env surface: no
 # production code reads the environment (``ruff-environment.toml``), only the settings
-# loader does, and the seam reads a named fact off the loaded object. Writing the variable
-# therefore drove the loader's string parsing and reached the seam only when nothing had
-# already built the settings, which is an ordering condition no call site could see. The
-# cases below inject the typed value instead (:mod:`tests.helpers.settings_injection`).
-BACKOFF_BASE_FIELD = "adcp_outbound_backoff_base_seconds"
-
-# Both logger names this file used to carry (SEAM_LOGGER, SCHEDULE_LOGGER) are gone with
-# the fallback-warning case they existed for: a malformed backoff base is refused at
-# settings load, so there is no warning line to grade and nothing left reads them.
-
-# A rate-limited answer, as the origin sends it. The body is asserted against in
-# the opacity cases, so it carries a marker rather than a plausible payload.
-_RATE_LIMITED_BODY = b'{"error": "slow down"}'
 
 # The spec bound on the value CARRIED to the buyer: ``core/error.json`` @3.1.1
 # declares ``retry_after`` top-level, ``"type": "number"``, ``minimum: 1``,
@@ -113,62 +107,6 @@ def call_seam(seam_call: str, url: str, **kwargs: Any):
     return asyncio.run(seam.asend(url, **kwargs))
 
 
-def set_flags(monkeypatch, *, private: bool = False) -> None:
-    """State the private-range escape hatch explicitly, as the fact the seam reads.
-
-    ``outbound_http._allow_private`` reads
-    ``get_settings().limits.adcp_outbound_allow_private``, so the hatch is INJECTED
-    (:func:`tests.helpers.settings_injection.inject_limits`) rather than written into the
-    environ. Both postures are always stated — a hatch the test leaves unsaid is a hatch
-    decided by whatever exported it into the shell, which is how a refusal case gets
-    silently disarmed.
-
-    It used to ``monkeypatch.setenv(ADCP_OUTBOUND_ALLOW_PRIVATE, ...)``. That only reached
-    the seam while nothing had yet built the settings, because the settings object is built
-    once and cached: every caller whose FIXTURES read settings first (a
-    ``CreativeAgentRegistry()`` reads ``integrations.creative_agent_url`` in ``__init__``)
-    got the default posture instead of the one it asked for — an opened hatch stayed shut,
-    and a refusal case was enforced by accident rather than by ``enforce_egress_policy``.
-    Injection has no such ordering condition. ``egress_hatch_env`` still owns the ENV
-    spelling for the two harness sites that hand the variable to another process.
-
-    There is no ``insecure`` parameter anymore (GH #1757): the scheme
-    gate is unconditional in production, so there is nothing left to relax —
-    a caller that used to pass ``insecure=True`` needed a real https origin
-    (see the ``local_origin_tls`` fixture) instead.
-    """
-    inject_limits(monkeypatch, adcp_outbound_allow_private=private)
-
-
-def pin_jitter(monkeypatch, value: float) -> list[tuple]:
-    """Freeze the seam's jitter draw and record how it was called.
-
-    BR-RULE-029's jitter is a real ``random.uniform(0, 1)`` draw, so any test
-    that asserts a delay's magnitude has to pin it — otherwise the assertion is
-    graded against a number the test does not know.
-
-    The patch target is the module attribute ``egress.attempts.random``, which
-    is also the string target the UC-004 circuit-breaker harness patches
-    (``tests/harness/delivery_circuit_breaker.py``) — the schedule moved there
-    with ``_backoff_seconds`` (GH #1802). Pinning it here for the same
-    obligation keeps the seam suite and the BDD suite grading one implementation:
-    a ``from random import uniform`` in ``egress.attempts`` would break both at
-    once, which is the point.
-
-    Returns the list of ``(args)`` tuples the seam passed to ``uniform``, so a
-    caller can grade the draw itself — one draw per sleep, with the literal
-    ``(0, 1)`` bounds the rule names.
-    """
-    calls: list[tuple] = []
-
-    def _pinned(*args):
-        calls.append(args)
-        return value
-
-    monkeypatch.setattr(_attempts_module().random, "uniform", _pinned)
-    return calls
-
-
 def record_sleeps(monkeypatch, seam_call: str) -> list[float]:
     """Capture the durations the seam actually sleeps, without waiting them out.
 
@@ -194,59 +132,6 @@ def record_sleeps(monkeypatch, seam_call: str) -> list[float]:
 
     monkeypatch.setattr(seam.asyncio, "sleep", _record)
     return durations
-
-
-def fast_backoff(monkeypatch) -> None:
-    """Make a retry test's real sleeps negligible without weakening what it grades.
-
-    For the retry tests that grade attempt COUNTS: they have to sleep between
-    attempts, but what they sleep is not their obligation — BR-RULE-029's
-    magnitudes are graded once, by the schedule section below.
-
-    BOTH halves are required. The base override alone does not make these tests
-    fast, because the jitter is an additive ``uniform(0, 1)`` draw independent of
-    the base: at a 1ms base each sleep would still average half a second.
-
-    The base is stated EXPLICITLY, exactly as ``set_flags`` states the hatch, so an
-    ambient value cannot change what these tests wait.
-    """
-    set_backoff_base(monkeypatch, 0.001)
-    pin_jitter(monkeypatch, 0.0)
-
-
-def set_backoff_base(monkeypatch, seconds: float | None = None) -> float:
-    """State the retry backoff base the seam will read. ``None`` = the shipped default.
-
-    A typed float onto ``limits.adcp_outbound_backoff_base_seconds``, which is the fact
-    ``egress.attempts._backoff_seconds`` reads. Writing
-    ``ADCP_OUTBOUND_BACKOFF_BASE_SECONDS`` instead — what every case here used to do —
-    graded the settings loader parsing a string on the way to the value, and only landed
-    at all while nothing had built the settings yet (see :func:`set_flags`).
-
-    ``None`` replaces the ``monkeypatch.delenv`` the default-schedule cases used: it
-    injects the SHIPPED default read off the field rather than trusting the environment to
-    be unset, so those cases cannot be knocked off BR-RULE-029's 1/2/4 by an ambient value.
-
-    Returns the base in effect, so a case that needs the number can assert against what it
-    injected without restating it.
-    """
-    from src.core.config import LimitSettings
-
-    base = LimitSettings.model_fields[BACKOFF_BASE_FIELD].default if seconds is None else seconds
-    inject_limits(monkeypatch, **{BACKOFF_BASE_FIELD: base})
-    return base
-
-
-def rate_limited(local_origin, retry_after: str | None = None) -> None:
-    """Program the origin to answer 429, optionally with a ``Retry-After`` header.
-
-    The header is sent by a server that really wrote it, not injected into a
-    mocked response object: "the seam honoured Retry-After" is a claim about
-    what it does with bytes off the wire, and a stubbed ``response.headers``
-    could only restate the number the test already chose.
-    """
-    headers = {"Retry-After": retry_after} if retry_after is not None else None
-    local_origin.respond_with(429, body=_RATE_LIMITED_BODY, headers=headers)
 
 
 def honoured_ceiling() -> float:
@@ -1965,19 +1850,6 @@ def _machine():
     from src.core.security.egress.attempts import Attempts
 
     return Attempts
-
-
-def _attempts_module():
-    """Import ``egress.attempts`` (the MODULE, not the class) lazily.
-
-    :func:`pin_jitter` needs the module object itself, to patch
-    ``random.uniform`` where ``_backoff_seconds`` now reads it — the same
-    lazy-import rationale as :func:`_machine`, which returns the ``Attempts``
-    class rather than this module.
-    """
-    from src.core.security.egress import attempts
-
-    return attempts
 
 
 def record_machine_run(monkeypatch, seam_call: str, *, base: float) -> tuple[list[float], list]:

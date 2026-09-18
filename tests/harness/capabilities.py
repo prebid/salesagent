@@ -1,8 +1,8 @@
 """CapabilitiesEnv — integration test environment for _get_adcp_capabilities_impl.
 
 Patches: adapter CLASS resolver + audit logger ONLY.
-Real: get_db_session, TenantConfigUoW (publisher partners), the full response
-builder (all hit real DB).
+Real: CapabilitiesUoW (publisher partners AND signing-key backing, in one
+session), the full response builder (all hit real DB).
 
 Production reads adapter default_channels/get_targeting_capabilities off a
 tenant-resolved adapter CLASS (get_adapter_class_for_tenant,
@@ -39,6 +39,8 @@ tickets: #1825 (#1592 / #1210)
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Collection
+from enum import Enum
 from typing import Any
 from unittest.mock import MagicMock, patch
 
@@ -52,13 +54,57 @@ from tests.harness._realize import e2e_unsupported, realize_e2e
 #: comment ("fixture seeds channels 'display, social, ctv' on the adapter").
 DEFAULT_ADAPTER_CHANNELS = ["display", "social", "ctv"]
 
-#: Default pricing models seeded on the adapter mock -- mirrors the REAL
-#: MockAdServerAdapter.get_supported_pricing_models() set (mock_ad_server.py),
-#: so the harness's MagicMock stand-in doesn't silently degrade to an empty
-#: iterator (MagicMock() auto-implements __iter__ -> iter([]) unless a
-#: return_value is set) for the one BDD scenario family (T-UC-010-pricing)
-#: that actually exercises this method.
-DEFAULT_ADAPTER_PRICING_MODELS = {"cpm", "vcpm", "cpcv", "cpp", "cpc", "cpv", "flat_rate"}
+#: The tenant's own host for every signing scenario, DOTTED on purpose — see
+#: :meth:`CapabilitiesEnv.declare_signing`. A single-label host derives ``http://``,
+#: which no conformant ``identity.brand_json_url`` can be built from.
+SIGNING_AGENT_HOST = "seller-capabilities.example.com"
+
+
+class IdentityMode(Enum):
+    """How :meth:`CapabilitiesEnv.declare_signing` treats the ``identity`` block.
+
+    A posture that names an operation bucket fires the pinned
+    ``identity.brand_json_url`` ``required_when``, so whether identity is DERIVED,
+    ABSENT or an empty object is the very thing the boundary rows grade. ``None``
+    is deliberately NOT overloaded to mean "omit": a caller passing
+    ``identity=None`` almost always means "I have no opinion", which is DERIVE.
+    """
+
+    #: Attach the derived ``brand_json_url`` iff the posture names a bucket (default).
+    DERIVE = "derive"
+    #: Declare the posture with NO identity block at all — the invalid boundary.
+    OMIT = "omit"
+
+
+DERIVE_IDENTITY = IdentityMode.DERIVE
+OMIT_IDENTITY = IdentityMode.OMIT
+
+#: docker-compose.e2e.yml's adcp-server service, whose environment names the ONE
+#: KEK the LIVE SERVER CONTAINER holds. e2e_rest scenarios resolve a provisioned
+#: key through THAT container, not through this test process, so the runner's KEK
+#: must match it exactly -- a hardcoded literal that drifts from compose is
+#: precisely the KEK mismatch salesagent-dn4i's fix now correctly detects and
+#: refuses to sign with (previously masked by the bug that fix closed).
+_COMPOSE_SERVICE = "adcp-server"
+
+
+def mock_adapter_pricing_models() -> set[str]:
+    """The pricing-model set the REAL ``MockAdServer`` adapter reports.
+
+    Read off the production class rather than duplicated as a literal, because
+    the value is load-bearing on BOTH sides of the transport boundary: in-process
+    it is what :meth:`CapabilitiesEnv.set_supported_pricing_models` injects, and
+    over e2e_rest it is what the live server's own adapter already returns. A
+    literal here would let those two silently diverge.
+    """
+    from src.adapters.mock_ad_server import MockAdServer
+
+    return set(MockAdServer.get_supported_pricing_models())
+
+
+def _resolve_pricing_models(models: Collection[str] | None) -> set[str]:
+    """Normalize a pricing-model argument; ``None`` means the mock adapter's own set."""
+    return mock_adapter_pricing_models() if models is None else set(models)
 
 
 def _full_targeting_capabilities() -> TargetingCapabilities:
@@ -72,9 +118,9 @@ class CapabilitiesEnv(IntegrationEnv):
     """Integration test environment for get_adcp_capabilities.
 
     Only mocks the adapter factory and the audit logger. Everything else is
-    real: real DB, real TenantConfigUoW (publisher partners), real transport
-    wrappers. Capabilities is a pure read — no adapter I/O beyond attribute
-    access on the mock.
+    real: real DB, real CapabilitiesUoW (publisher partners and signing-key
+    backing), real transport dispatch. Capabilities is a pure read — no adapter
+    I/O beyond attribute access on the mock.
 
     Transport routing:
     - call_impl(): direct _get_adcp_capabilities_impl (sync)
@@ -87,14 +133,21 @@ class CapabilitiesEnv(IntegrationEnv):
     - REST: POST /api/v1/capabilities, the tool's one route — the base's
       _run_rest_request POSTs build_rest_body(**kwargs), which is `{}` for the
       parameterless discovery call and the filter/context payload otherwise.
+
+    Capabilities assembly itself degrades gracefully (try/except around the
+    optional adapter lookup), so the adapter patch is here to make the reported
+    channels/targeting/pricing DETERMINISTIC and fault-injectable, not because
+    production needs a stand-in to run.
     """
 
-    # Dispatch declaration: the base owns call_mcp/call_a2a.
+    # Dispatch declaration: the base owns call_mcp/call_a2a. Declaring the tool,
+    # the skill and the parser is all this env owes the transport-generic client
+    # — no per-transport delegation method lives here.
     MCP_TOOL = "get_adcp_capabilities"
     A2A_SKILL = "get_adcp_capabilities"
     RESPONSE_MODEL = GetAdcpCapabilitiesResponse
 
-    EXTERNAL_PATCHES = {
+    EXTERNAL_PATCHES: dict[str, str] = {
         "adapter": "src.core.tools.capabilities.get_adapter_class_for_tenant",
         "audit_logger": "src.core.tools.capabilities.log_tool_activity",
     }
@@ -102,11 +155,25 @@ class CapabilitiesEnv(IntegrationEnv):
     REST_ENDPOINT = "/api/v1/capabilities"
 
     def _configure_mocks(self) -> None:
-        """Happy-path adapter: default channels + full targeting capabilities."""
+        """Happy-path adapter: default channels + full targeting capabilities.
+
+        ``supported_pricing_models`` is deliberately NOT among the defaults. It is the
+        one adapter-derived field production leaves UNSET when nothing is determined
+        (``resolved_models or None`` in capabilities.py -- honest absence, never an
+        invented default set), so pre-seeding it here would make the default env
+        incapable of grading the omit-don't-null contract
+        (tests/integration/test_wire_omission_matrix.py's ``get_adcp_capabilities``
+        row, which asserts ``media_buy.supported_pricing_models`` is ABSENT from the
+        wire). An empty ``return_value`` is required rather than left to the MagicMock
+        default: a bare attribute would auto-iterate to ``iter([])`` today but reads as
+        an accident, and the whole point is that emptiness here is a CHOICE. Scenarios
+        that need the field populated say so via
+        :meth:`set_supported_pricing_models`.
+        """
         adapter = MagicMock()
         adapter.default_channels = list(DEFAULT_ADAPTER_CHANNELS)
         adapter.get_targeting_capabilities.return_value = _full_targeting_capabilities()
-        adapter.get_supported_pricing_models.return_value = set(DEFAULT_ADAPTER_PRICING_MODELS)
+        adapter.get_supported_pricing_models.return_value = set()
         self.mock["adapter"].return_value = adapter
         self._adapter_mock = adapter
         self._capability_declarations: dict[str, Any] = {}
@@ -165,6 +232,165 @@ class CapabilitiesEnv(IntegrationEnv):
         for channel in channels:
             ProductFactory(tenant=tenant, channels=[channel])
         self._commit_factory_data()
+
+    def declare_signing(
+        self,
+        *,
+        request_signing: dict[str, Any] | None = None,
+        keyed_alg: str | None = None,
+        host: str = SIGNING_AGENT_HOST,
+        identity: dict[str, Any] | IdentityMode = DERIVE_IDENTITY,
+    ) -> None:
+        """Put this tenant in a state where a signing posture is real (#1291 D1).
+
+        ONE helper for every signing Given, because all of them need the same three
+        things and each one is load-bearing:
+
+        1. **A DOTTED ``virtual_host``.** ``canonical_agent_url`` derives the scheme from
+           the host, and ``_get_protocol_for_domain`` deliberately answers ``http`` for
+           localhost and single-label hosts — neither can present a publicly-trusted
+           certificate. The pin fixes ``identity.brand_json_url`` to ``^https://``, so on
+           the default integration host every declaration below would be REFUSED and the
+           scenario would grade the refusal path while reading like it graded the declared
+           one. This is the mechanism on the in-process transports, which have no host of
+           their own at all.
+        2. **A provisioned key, when the row needs a KEYED tenant.** ``webhook_signing``
+           is DERIVED platform state since D1 — ``_DERIVED_BLOCKS`` refuses a declaration
+           of it — so "the tenant declares webhook_signing supported=true with
+           algorithms=[X]" is realized by MINTING a key of algorithm X through production
+           (``provision_signing_key``), never by writing a declaration. The deployment KEK
+           is configured first because a ``db:`` mint refuses without it; both env writes
+           are registered with ``_guard``, so they are undone at teardown — including when
+           a later ``__enter__`` step raises.
+        3. **A DERIVED ``identity.brand_json_url``** whenever the posture names an
+           operation. A non-empty bucket fires the pinned ``required_when``, and the
+           capabilities read path cross-checks a declared pointer against the one it
+           actually serves — so the value has to come from
+           ``src.core.agent_identity.brand_json_url``, never a literal.
+
+        *identity* selects which of the three states load 3 realizes, because the
+        ``required_when`` boundary rows grade the pointer's ABSENCE as much as its
+        presence: :data:`DERIVE_IDENTITY` (default) keeps the derivation above,
+        :data:`OMIT_IDENTITY` declares the posture with no identity block, and a literal
+        dict (``{}`` for the empty-identity partition) is declared verbatim. The other
+        two loads stay in force in every mode — the rows that need identity absent still
+        need the dotted host and, where keyed, the minted key.
+
+        Not decorated with ``@realize_e2e``: every step is a real write (the ``tenants``
+        row, the ``signing_keys`` row) that a live server reads back through its own
+        session, so no test-only injection seam is needed and the e2e escape-hatch pin
+        does not grow. The KEK env vars are process-local, so an out-of-process e2e server
+        needs its own (``docker-compose.yml`` sets one).
+        """
+        from src.core.agent_identity import brand_json_url
+        from src.core.database.models import Tenant
+        from src.core.signing.posture import RequestSigningPosture, request_signing_buckets_declared
+
+        self.configure_tenant_field("virtual_host", host)
+        if keyed_alg is not None:
+            self._provision_signing_key(keyed_alg)
+        if request_signing is None:
+            return
+
+        blocks: dict[str, Any] = {"request_signing": request_signing}
+        if isinstance(identity, IdentityMode):
+            # The pointer is declared ONLY where the posture obliges one, so a row that
+            # declares `supported` and nothing else keeps grading the conservative default
+            # (which fires no required_when trigger) rather than a trust-root-bearing posture.
+            if identity is IdentityMode.DERIVE and request_signing_buckets_declared(
+                RequestSigningPosture(**request_signing)
+            ):
+                tenant = self.get_one(Tenant, tenant_id=self._tenant_id)
+                assert tenant is not None, "the tenants row must exist before its identity URLs are derived"
+                blocks["identity"] = {"brand_json_url": brand_json_url(tenant)}
+        else:
+            blocks["identity"] = dict(identity)
+        self.declare_capabilities(**blocks)
+
+    def _provision_signing_key(self, alg: str) -> None:
+        """Mint one ACTIVE signing key of *alg* through production, under the
+        SAME KEK docker-compose.e2e.yml gives the live server container.
+
+        ``provision_signing_key`` stamps ``not_before`` from the wall clock, so the key is
+        active by the time the When step calls ``get_adcp_capabilities``. Key PRESENCE is
+        then derived by production's ``signing_key_backed`` — this method never asserts a
+        posture, it only creates the platform state one is derived from.
+
+        The KEK is read straight out of compose (salesagent-dn4i) rather than a
+        hardcoded literal: in-process transports (mcp/a2a/rest) resolve the key in
+        THIS process, but e2e_rest resolves it in the LIVE SERVER CONTAINER, which
+        only ever holds compose's value. A runner-only literal that drifted from it
+        would mint a key the container can never open -- exactly the mismatch
+        salesagent-dn4i's production fix now correctly detects and refuses to sign
+        with, instead of the previous bug silently masking it.
+        """
+        import os
+        from pathlib import Path
+        from unittest.mock import patch
+
+        import yaml
+
+        from src.core.database.repositories.signing_key import SigningKeyRepository
+        from src.core.signing.keys import provision_signing_key
+
+        compose_path = Path(__file__).resolve().parents[2] / "docker-compose.e2e.yml"
+        service_env = yaml.safe_load(compose_path.read_text())["services"][_COMPOSE_SERVICE]["environment"]
+        kek_pointer = service_env["ADCP_SIGNING_KEY_PASSPHRASE_ENV"]
+        kek_value = service_env[kek_pointer]
+
+        for label, patcher in (
+            (
+                "kek_env",
+                patch.dict(os.environ, {"ADCP_SIGNING_KEY_PASSPHRASE_ENV": kek_pointer, kek_pointer: kek_value}),
+            ),
+            # The Settings object carrying `key_passphrase_env` is a process global
+            # (src.core.config._settings) and is already built by the time a Given runs, so
+            # it is dropped to make `get_settings()` re-read the environment just set above.
+            # The passphrase ITSELF needs no such reset: `SigningSettings.key_passphrase`
+            # resolves it through `secret_from_env` on every use.
+            ("settings_cache", patch("src.core.config._settings", None)),
+        ):
+            patcher.start()
+            self._guard(f"patch:signing_{label}", patcher.stop)
+
+        self._commit_factory_data()
+        provision_signing_key(
+            SigningKeyRepository(self.get_session(), self._tenant_id),
+            tenant_id=self._tenant_id,
+            alg=alg,
+            kid=f"{self._tenant_id}-{alg}-1",
+        )
+
+    def _realize_supported_pricing_models(self, models: Collection[str] | None = None) -> None:
+        """E2E realization: nothing to inject — assert the live server already agrees.
+
+        The e2e tenant runs the REAL ``MockAdServer`` adapter, so the set this Given
+        asks for is already the set the live server reports; the in-process branch
+        below only restores that parity for the MagicMock stand-in. Declaring this
+        ``e2e_unsupported`` would move @T-UC-010-pricing out of live grading for a
+        gap that does not exist (it is absent from
+        ``tests/bdd/e2e_rest_known_failures.txt`` precisely because it passes there).
+        The assert keeps that claim non-vacuous: a scenario asking for some OTHER set
+        would be silently unrealized over e2e, and fails loudly here instead.
+        """
+        requested = _resolve_pricing_models(models)
+        live = mock_adapter_pricing_models()
+        assert requested == live, (
+            "e2e realization only covers the live MockAdServer adapter's own pricing-model set "
+            f"({sorted(live)}); no server surface overrides it, so {sorted(requested)} cannot be realized."
+        )
+
+    @realize_e2e(_realize_supported_pricing_models)
+    def set_supported_pricing_models(self, models: Collection[str] | None = None) -> None:
+        """Configure the pricing-model set the adapter reports (default: the mock adapter's).
+
+        Production derives ``media_buy.supported_pricing_models`` from
+        ``adapter.get_supported_pricing_models()`` (capabilities.py, mirroring
+        products.py's per-product "supported" annotation), mapping an empty result to
+        an UNSET field. This is the ONLY way the env populates it — see
+        :meth:`_configure_mocks` for why the default is empty.
+        """
+        self._adapter_mock.get_supported_pricing_models.return_value = _resolve_pricing_models(models)
 
     def _realize_targeting_capabilities(self, **dims: bool) -> None:
         """E2E realization: persist targeting_capabilities into test_behavior."""
@@ -322,16 +548,18 @@ class CapabilitiesEnv(IntegrationEnv):
         e2e_unsupported("no production DB fault hook; TenantConfigUoW read failure cannot be injected over real HTTP")
     )
     def break_tenant_config_db(self) -> None:
-        """Make the publisher-partner DB read fail — production degrades to placeholder.
+        """Make the capabilities DB reads fail — production degrades to placeholder.
 
-        Patches TenantConfigUoW at the capabilities module seam. Registered
-        with ``_guard``, so it is stopped on ctx-independent env teardown along
-        with everything else — including when a later ``__enter__`` step raises.
+        Patches CapabilitiesUoW at the capabilities module seam, so BOTH reads it owns
+        fail: the publisher partners (placeholder domain) and, since #1291 D1, the
+        signing-key backing (keyless posture, no identity block). Registered with
+        ``_guard``, so it is stopped on ctx-independent env teardown along with
+        everything else — including when a later ``__enter__`` step raises.
         In-process only — no server-side DB-fault-injection surface exists (e2e branch
         declares E2EUnsupportedSetup).
         """
         patcher = patch(
-            "src.core.tools.capabilities.TenantConfigUoW",
+            "src.core.tools.capabilities.CapabilitiesUoW",
             side_effect=Exception("tenant config DB failure (harness)"),
         )
         self.mock["tenant_config_uow"] = patcher.start()
@@ -359,10 +587,10 @@ class CapabilitiesEnv(IntegrationEnv):
 
         self._commit_factory_data()
         identity = kwargs.pop("identity", self.identity)
-        req = kwargs.pop("req", None)
+        req: GetAdcpCapabilitiesRequest | None = kwargs.pop("req", None)
         if req is None and kwargs:
             req = self._build_request(**kwargs)
-        return _get_adcp_capabilities_impl(req, identity)
+        return _get_adcp_capabilities_impl(req=req, identity=identity)
 
     def build_rest_body(self, **kwargs: Any) -> dict[str, Any]:
         """Flat kwargs (protocols/context/adcp_version/adcp_major_version) map
@@ -371,6 +599,11 @@ class CapabilitiesEnv(IntegrationEnv):
         """
         return kwargs
 
+    # No _run_rest_request override: the registry binds get_adcp_capabilities to the single
+    # route RestBinding("POST", "/capabilities") (src/core/tools/registry.py), so there is no
+    # parameterless GET arm left to fork on and no ``signed`` keyword for an override to
+    # swallow into build_rest_body — the base's implementation, which owns the credential
+    # merge and the signed leg, is the whole dispatch.
     # parse_rest_response: the base's, which revives RESPONSE_MODEL.
 
     # -- Async variants for @pytest.mark.asyncio tests ------------------------

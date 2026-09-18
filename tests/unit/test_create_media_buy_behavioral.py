@@ -38,6 +38,7 @@ from __future__ import annotations
 import pytest
 
 from tests.helpers.create_media_buy_capture import capture_a2a_forwarded_pnc
+from tests.helpers.signing import verifier_disabled
 
 
 class TestA2AWrapperPncJsonSerialization:
@@ -62,7 +63,11 @@ class TestA2AWrapperPncJsonSerialization:
             "url": "https://buyer.example.com/webhook",
             "authentication": {"credentials": "a" * 32, "schemes": ["Bearer"]},
         }
-        forwarded = await capture_a2a_forwarded_pnc(pnc_dict)
+        # The ``authentication`` block is the SUBJECT here, and on a signing-capable seller it
+        # is also a trigger that makes the registration refusable unsigned (security.mdx @
+        # v3.1.1 :1465). That obligation has its own tests; this one grades coercion.
+        with verifier_disabled():
+            forwarded = await capture_a2a_forwarded_pnc(pnc_dict)
 
         from adcp import PushNotificationConfig
 

@@ -3,8 +3,8 @@
 Formalizes, as a Gherkin scenario graded across a2a/mcp/rest, the
 obligation that an untyped exception raised inside a dispatched skill's
 business logic never puts its own text on the buyer-facing wire.
-AdCP 3.1.1 dist/docs/3.1.1/building/implementation/transport-errors.mdx,
-Security Considerations MUST-NOT list.
+AdCP 3.1.1 v3.1.1:docs/building/operating/transport-errors.mdx,
+Security Considerations MUST-NOT list (L659-L670).
 
 Given: "a tenant is configured for product discovery" is reused from
     tests/bdd/steps/domain/uc_get_products_inventory.py (already registered

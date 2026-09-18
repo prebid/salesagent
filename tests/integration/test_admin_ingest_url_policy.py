@@ -45,7 +45,14 @@ from src.core.database.models import CreativeAgent, PushNotificationConfig, Sign
 from src.core.errors.codes import CODE_TABLE, Recovery
 from src.core.exceptions import AdCPSalesAgentError
 from tests.factories import PrincipalFactory
-from tests.helpers.webhook_credential_refusal import CREDENTIALS_FIELD_SUFFIX, SHORT_CREDENTIAL
+from tests.helpers.webhook_credential_refusal import SHORT_CREDENTIAL, assert_admin_flash_refuses_the_credential
+from tests.integration._egress_ingest_helpers import (
+    ADMITTED_URL,
+    PRINCIPAL_ID,
+    TENANT_ID,
+    flashes,
+    post_register_hmac_webhook,
+)
 from tests.integration.test_outbound_http import set_flags
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
@@ -63,7 +70,6 @@ INSECURE_PUBLIC_URL = "http://signals.example.com/agent"
 # response body would be the leak point 6 forbids.
 LEAKED_FRAGMENTS = ("169.254.169.254", "reserved", "resolve", "metadata")
 
-TENANT_ID = "ingest_url_policy"
 API_KEY = "sk-ingest-url-policy-test"
 
 
@@ -80,9 +86,6 @@ def seeded_tenant(integration_db):
     with IntegrationEnv() as env:
         TenantFactory(tenant_id=TENANT_ID, name="Ingest URL Policy", subdomain="ingesturlpolicy")
         yield env
-
-
-PRINCIPAL_ID = "ingest_url_policy_principal"
 
 
 @pytest.fixture
@@ -112,16 +115,6 @@ def management_api_client(seeded_tenant, monkeypatch):
     return app.test_client()
 
 
-def flashes(client) -> list[tuple[str, str]]:
-    """The (category, message) pairs queued for the next rendered page.
-
-    Read from the session rather than from rendered HTML: the flash is the
-    thing the handler produced, and the template is not under test here.
-    """
-    with client.session_transaction() as session:
-        return list(session.get("_flashes", []))
-
-
 def signals_agents_for(env) -> list[SignalsAgent]:
     """Every signals agent row for the test tenant, read fresh.
 
@@ -141,9 +134,6 @@ def post_signals_agent(client, url: str):
         data={"agent_url": url, "name": "Ingest Policy Agent", "enabled": "on", "timeout": "30"},
         follow_redirects=False,
     )
-
-
-ADMITTED_URL = "https://127.0.0.1:9999/agent"
 
 
 def create_agent_through_the_add_form(client, env, monkeypatch) -> SignalsAgent:
@@ -414,29 +404,6 @@ def post_register_webhook(client, url: str):
     )
 
 
-def post_register_hmac_webhook(
-    client, url: str, secret: str, *, tenant_id: str = TENANT_ID, principal_id: str = PRINCIPAL_ID
-):
-    """POST the principal-webhook registration form as an HMAC-SHA256 registration.
-
-    ``auth_type`` is the enum member rather than a literal: the form's option
-    values are rendered from ``AuthenticationScheme`` (webhook_management.html),
-    so this posts what a browser posts, and the non-canonical ``"hmac_sha256"``
-    spelling the gate refuses cannot creep back in through a test.
-
-    ``tenant_id`` / ``principal_id`` default to this module's fixtures and are
-    parameters only so the cross-surface equivalence pin in
-    ``test_webhook_hmac_credentials_ingest_refusal.py`` can drive this same form
-    against the tenant its own harness seeded, instead of spelling the route a
-    second time.
-    """
-    return client.post(
-        f"/tenant/{tenant_id}/principals/{principal_id}/webhooks/register",
-        data={"url": url, "auth_type": AuthenticationScheme.HMAC_SHA256, "hmac_secret": secret},
-        follow_redirects=False,
-    )
-
-
 def push_notification_configs_for(env) -> list[PushNotificationConfig]:
     """Every registered webhook for the test principal, read fresh."""
     session = env.get_session()
@@ -666,11 +633,7 @@ def test_register_webhook_refuses_a_secret_shorter_than_the_pinned_minimum(
       over refuses URLs, and an operator sent to fix a URL that is fine has been
       told the wrong thing. It is read off the declared refusal rather than out of
       the flash, because under ADR-010 the flash carries ``CODE_TABLE``'s sentence
-      for the code and nothing else. The suffix is imported from
-      ``tests.helpers.webhook_credential_refusal`` so this surface and the
-      protocol surfaces cannot drift on WHICH input a short credential blames;
-      the ``webhook.`` prefix is this route's own ``field_prefix`` (gh-#1895
-      unifies the prefixes, and deliberately not here);
+      for the code and nothing else;
     * the CODE, because the two gates answer with different ones —
       ``INVALID_REQUEST`` for a document that violates the pinned schema against
       ``VALIDATION_ERROR`` for a schema-valid URL a deny-list refuses — which is
@@ -678,19 +641,22 @@ def test_register_webhook_refuses_a_secret_shorter_than_the_pinned_minimum(
     * that the SECRET is not echoed, because the flash is rendered back into the
       page and a credential belongs in no operator-facing surface (the reason
       this route stopped rendering stored credentials at all).
+
+    The last three are asserted THROUGH
+    :func:`tests.helpers.webhook_credential_refusal.assert_admin_flash_refuses_the_credential`
+    rather than by spelling ``code`` / ``field`` / ``withheld`` here. That helper
+    owns the credential-specific BINDING of those three parameters — the same
+    binding the protocol surfaces' cross-surface equivalence pin asserts — and it
+    delegates the grading shape back to :func:`assert_webhook_registration_refused`
+    below. Restating the binding at this call site is how this surface and the
+    protocol surfaces drift on WHICH input a short credential blames.
     """
     set_flags(monkeypatch, private=True)
 
     response = post_register_hmac_webhook(authenticated_admin_client, ADMITTED_URL, SHORT_CREDENTIAL)
 
     assert response.status_code == 302
-    assert_webhook_registration_refused(
-        authenticated_admin_client,
-        declared_refusals,
-        code=ErrorCode.INVALID_REQUEST,
-        field=f"webhook.{CREDENTIALS_FIELD_SUFFIX}",
-        withheld=(SHORT_CREDENTIAL,),
-    )
+    assert_admin_flash_refuses_the_credential(authenticated_admin_client, declared_refusals, secret=SHORT_CREDENTIAL)
     assert push_notification_configs_for(seeded_principal) == []
 
 

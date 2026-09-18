@@ -8,9 +8,11 @@ seam (salesagent-4fya.11) — which is the whole reason they were repointed
 received and what production returned.
 """
 
+import os
 from unittest.mock import patch
 
 from tests.helpers.backoff_assertions import assert_backoff_schedule
+from tests.helpers.egress_hatches import ALLOW_PRIVATE_ENV
 from tests.helpers.local_http_origin import responds
 
 # Reserved (link-local cloud metadata). Production's URL policy refuses it even
@@ -248,14 +250,39 @@ class TestWebhookDelivery:
         cannot be localhost here: the harness must allow loopback for the test
         origin to be reachable at all, so a localhost assertion would grade the
         harness's allowance instead of production's policy.
+
+        The posture obligation the localhost case carried (salesagent-og9k.4/.8
+        — "it was green for the wrong reason") survives, RETARGETED at the seam,
+        because the knob it named no longer decides this path. Delivery runs
+        through ``webhook_egress.deliver_webhook`` →
+        ``EgressPolicy.resolve_for_dial``, which never reads ``ADCP_TESTING``;
+        that variable now feeds only the REGISTRATION verdict's
+        ``allow_loopback``, graded on both arms in
+        ``test_webhook_security.py::TestLocalhostAllowanceUnderTestingMode``,
+        while dial-time localhost refusal is graded in
+        ``test_protocol_webhook_ssrf.py::test_send_notification_rejects_localhost_without_post``.
+        Deleting ``ADCP_TESTING`` here would therefore assert nothing.
+
+        The posture that DOES decide this path is ``ADCP_OUTBOUND_ALLOW_PRIVATE``,
+        which ``LocalOriginMixin`` opens so the loopback origin is dialable.
+        Pinning it OPEN is the anti-vacuity check: the refusal below has to come
+        from the metadata/supplement check that sits outside every hatch, not
+        from a hatch that happened to be shut.
         """
         from tests.harness.delivery_webhook_unit import WebhookEnv
 
         with WebhookEnv() as env:
+            assert os.environ.get(ALLOW_PRIVATE_ENV) == "true", (
+                "the private-range hatch must be OPEN, or this refusal grades the hatch, not production policy"
+            )
+
             success, result = env.call_deliver(webhook_url=RESERVED_METADATA_URL, payload={"test": "data"})
 
             assert success is False
             assert "Invalid webhook URL" in result["error"]
+            # refused_destination: nothing was dialled, so attempts=0 is the honest
+            # count the seam reports — not a retry ladder that quietly exhausted.
+            assert result["attempts"] == 0
             assert env.delivery_attempts == 0
 
     @patch("src.core.webhook_delivery._create_delivery_record")

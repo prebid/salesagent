@@ -274,9 +274,19 @@ class TestHasWireIsDeclaredAtEveryConstructionSite:
     # (module, owner, ordinal-in-owner) -> (expected has_wire, why this SITE is what it is)
     EXPECTED_SITES: dict[tuple[str, str, int], tuple[bool, str]] = {
         # ── tests/harness/dispatchers.py — the per-transport dispatch entry points ──
-        ("dispatchers.py", "A2ADispatcher.dispatch", 0): (
+        # TWO sites, because the A2A leg moved out of the dispatcher method and into the
+        # module-level ``a2a_transport_result`` helper, which declares ``has_wire`` per
+        # construction site rather than once for the function: the success leg has the
+        # artifact DataPart in hand, the registration/refusal leg never reached the wire.
+        # Ordinals follow the SOURCE order in the current dispatchers.py (success at :201,
+        # registration at :210), not the order the pre-merge branch happened to write them.
+        ("dispatchers.py", "a2a_transport_result", 0): (
             True,
             "success, downstream of the A2A artifact DataPart capture",
+        ),
+        ("dispatchers.py", "a2a_transport_result", 1): (
+            False,
+            "registration/refusal leg — nothing was delivered, so no wire to claim",
         ),
         ("dispatchers.py", "McpDispatcher.dispatch", 0): (
             True,

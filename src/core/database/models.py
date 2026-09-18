@@ -28,12 +28,13 @@ from sqlalchemy import (
     ForeignKeyConstraint,
     Index,
     Integer,
+    LargeBinary,
     String,
     Text,
     UniqueConstraint,
     text,
 )
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+from sqlalchemy.orm import DeclarativeBase, Mapped, backref, mapped_column, relationship
 from sqlalchemy.sql import func
 
 from src.core.billing_policy import BILLING_PARTY_VALUES
@@ -47,6 +48,11 @@ from src.core.json_validators import JSONValidatorMixin
 # (src/core/schemas/notification.py): a stored row reads back as the same type the request
 # chain carries, so nothing downstream holds two spellings of the block.
 from src.core.schemas.notification import NotificationConfig
+from src.core.signing.algorithms import (
+    REQUEST_SIGNING,
+    signing_alg_check_clause,
+    signing_purpose_check_clause,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -241,8 +247,13 @@ class Tenant(Base, JSONValidatorMixin):
 
     @property
     def primary_domain(self) -> str | None:
-        """Get primary domain for this tenant (virtual_host or subdomain-based)."""
-        return self.virtual_host or (f"{self.subdomain}.example.com" if self.subdomain else None)
+        """Get primary domain for this tenant (virtual_host), or None if unconfigured.
+
+        Never fabricates a <subdomain>.example.com placeholder (salesagent-piyo) --
+        callers (e.g. admin/blueprints/inventory_profiles.py) rely on None to signal
+        "no real domain configured" and refuse to proceed.
+        """
+        return self.virtual_host
 
     @property
     def is_gam_tenant(self) -> bool:
@@ -432,32 +443,56 @@ class Product(Base, JSONValidatorMixin):
             return ensure_selection_type(self.properties)
         elif self.property_ids:
             # AdCP 2.0.0 by_id variant
-            # Get publisher_domain from tenant (use subdomain or virtual_host)
-            if hasattr(self, "tenant") and self.tenant:
-                publisher_domain = self.tenant.virtual_host or f"{self.tenant.subdomain}.example.com"
-            else:
-                publisher_domain = "unknown"
             return [
-                {"publisher_domain": publisher_domain, "property_ids": self.property_ids, "selection_type": "by_id"}
+                {
+                    "publisher_domain": self.publisher_domain,
+                    "property_ids": self.property_ids,
+                    "selection_type": "by_id",
+                }
             ]
         elif self.property_tags:
             # AdCP 2.0.0 by_tag variant
-            # Get publisher_domain from tenant (use subdomain or virtual_host)
-            if hasattr(self, "tenant") and self.tenant:
-                publisher_domain = self.tenant.virtual_host or f"{self.tenant.subdomain}.example.com"
-            else:
-                publisher_domain = "unknown"
             return [
-                {"publisher_domain": publisher_domain, "property_tags": self.property_tags, "selection_type": "by_tag"}
+                {
+                    "publisher_domain": self.publisher_domain,
+                    "property_tags": self.property_tags,
+                    "selection_type": "by_tag",
+                }
             ]
 
         # Default: Use "all" variant (all properties from this publisher)
         # This ensures products always have publisher_properties as required by AdCP spec
-        if hasattr(self, "tenant") and self.tenant:
-            publisher_domain = self.tenant.virtual_host or f"{self.tenant.subdomain}.example.com"
-        else:
-            publisher_domain = "unknown"
-        return [{"publisher_domain": publisher_domain, "selection_type": "all"}]
+        return [{"publisher_domain": self.publisher_domain, "selection_type": "all"}]
+
+    @property
+    def publisher_domain(self) -> str:
+        """The domain this product's inventory is published under.
+
+        A DOMAIN, with no port. ``virtual_host`` is the tenant's own HOST and may carry one
+        (an e2e or staging front rarely sits on 443), but every consumer of this value reads
+        it as a bare domain: the pinned ``publisher_properties`` schema fixes a domain
+        pattern that a colon fails, and a verifier resolves the publisher's adagents.json at
+        ``https://<publisher_domain>/.well-known/adagents.json``, where a port is not part of
+        the name either. So the port is dropped rather than propagated — the alternative is a
+        value no schema accepts and no fetch resolves.
+
+        Measured: a tenant whose ``virtual_host`` was ``storyboard.adcp.test:8443`` produced
+        ``publisher_domain`` values that failed the pattern, which knocked out the matching
+        member of the ``publisher_properties`` union and surfaced as an ``INTERNAL_ERROR``
+        from ``get_products`` — a 500-class answer to a well-formed request, three frames
+        from anything naming the port.
+
+        One derivation, where there were three copies of it inline above. They were already
+        identical, and a fix applied to one of them would have left the other two emitting
+        the unusable value.
+        """
+        if not (hasattr(self, "tenant") and self.tenant):
+            return "unknown"
+        host = self.tenant.virtual_host or f"{self.tenant.subdomain}.example.com"
+        # rpartition, not split: an IPv6 literal authority is bracketed (``[::1]:8443``) and
+        # splitting on the first colon would truncate the address itself.
+        domain, _, port = host.rpartition(":")
+        return domain if domain and port.isdigit() else host
 
     @property
     def effective_property_tags(self) -> list[str] | None:
@@ -660,6 +695,19 @@ class Principal(Base, JSONValidatorMixin):
     token_hash: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
     #: The displayable head of the token, so an operator can tell tokens apart.
     token_prefix: Mapped[str] = mapped_column(String(16), nullable=False)
+    # RFC 9421 (#1291 B1): the counterparty's own AdCP agent URL, from onboarding.
+    # This is the ONLY legitimate source for it — security.mdx @ v3.1.1 §"agent_url
+    # derivation" forbids taking the signer's agent URL from a header, a body field or any
+    # other self-assertion, because that would let the signer choose which brand.json (and
+    # therefore which key set) it is verified against. NULL means we cannot resolve a key
+    # for this counterparty, not that it is trusted.
+    #
+    # Indexed and unique PER TENANT because the resolver reads it in BOTH directions: from
+    # a bearer-resolved principal to its keys, and — when a signature verified with no
+    # bearer at all — from the verified signer's agent_url back to the principal it
+    # establishes (``_resolve_identity`` step 6). A second principal claiming one agent_url
+    # would make that second lookup ambiguous, which is a silent authentication defect.
+    agent_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
@@ -682,6 +730,7 @@ class Principal(Base, JSONValidatorMixin):
     __table_args__ = (
         Index("idx_principals_tenant", "tenant_id"),
         Index("idx_principals_token_hash", "token_hash"),
+        UniqueConstraint("tenant_id", "agent_url", name="uq_principals_tenant_agent_url"),
     )
 
     @classmethod
@@ -2697,3 +2746,151 @@ class WebhookDeliveryLog(Base):
         Index("idx_webhook_log_status", "status"),
         Index("idx_webhook_log_created_at", "created_at"),
     )
+
+
+class SigningKey(Base):
+    """An RFC 9421 signing key this tenant owns (#1291 A2, salesagent-z6nr.8).
+
+    Each tenant is a distinct seller identity with its own brand domain, so key
+    material is per-tenant. One row binds a unique ``kid`` to the public JWK we
+    publish AND to a reference the process resolves for the private half it never
+    stores — so the key we sign with, the key we publish, and the key material on
+    disk cannot silently disagree.
+
+    ``private_key_ref`` is a scheme-prefixed opaque reference (``db:<kid>``,
+    ``env:NAME``, ``file:/abs/path``), never key material. Which schemes resolve
+    is an agent-level posture (``SigningSettings.allowed_key_ref_schemes``), so a
+    deployment can forbid ``file:`` without touching tenant rows.
+
+    ``db:`` is the scheme this agent MINTS, and ``private_key_pem_encrypted`` is
+    where its private half lives: the PKCS#8 ``BEGIN ENCRYPTED PRIVATE KEY`` PEM
+    exactly as ``adcp.signing.generate_signing_keypair(passphrase=...)`` returned
+    it, encrypted under the deployment KEK
+    (``SigningSettings.key_passphrase_env``). No envelope format and no encryption
+    code of ours sits between the two — the ciphertext IS the PEM. The column is
+    nullable because ``env:``/``file:`` rows point at material this process did
+    not write and must not copy; provisioning refuses ``db:`` outright when no
+    KEK is configured, so a NULL here can never mean "plaintext key in the
+    database".
+
+    ``not_before`` / ``not_after`` are OURS, not the spec's — the published
+    ``agent-signing-key`` schema carries only ``revoked_at`` plus JWK members.
+    The window governs which key we SIGN with; PUBLICATION is governed by
+    ``revoked_at`` plus that schema's grace period. A publisher filtering the
+    JWKS by ``not_after`` would un-publish a key while signatures made under it
+    are still inside their verification window — the exact gap rotation overlap
+    exists to prevent.
+
+    ``not_after IS NULL`` means open-ended (+infinity). The current key is always
+    open-ended, so that is the common case, not an edge case.
+
+    N rows per ``(tenant, purpose)`` distinguished by ``kid`` serve BOTH rotation
+    overlap and the webhook blast-radius isolation security.mdx describes
+    ("isolation comes from the kid"). One mechanism, not two.
+    """
+
+    __tablename__ = "signing_keys"
+
+    id: Mapped[str] = mapped_column(String(50), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(50), nullable=False)
+    kid: Mapped[str] = mapped_column(String(255), nullable=False)
+    alg: Mapped[str] = mapped_column(String(50), nullable=False)
+    purpose: Mapped[str] = mapped_column(String(50), nullable=False, default=REQUEST_SIGNING)
+    public_jwk: Mapped[dict] = mapped_column(JSONType, nullable=False)
+    private_key_ref: Mapped[str] = mapped_column(Text, nullable=False)
+    private_key_pem_encrypted: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    not_before: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    not_after: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+    # Relationships
+    # passive_deletes=True defers to the database's ON DELETE CASCADE below.
+    # Without it, deleting a Tenant through the ORM makes SQLAlchemy load the
+    # children and NULL their tenant_id instead — which the NOT NULL column
+    # rejects, so an ORM tenant delete fails outright once the tenant owns a key.
+    tenant = relationship("Tenant", backref=backref("signing_keys", passive_deletes=True))
+
+    __table_args__ = (
+        ForeignKeyConstraint(["tenant_id"], ["tenants.tenant_id"], ondelete="CASCADE"),
+        # security.mdx: "Unique within the JWKS. MUST NOT collide with any other
+        # entry's kid regardless of adcp_use." One JWKS is published per tenant.
+        UniqueConstraint("tenant_id", "kid", name="uq_signing_keys_tenant_kid"),
+        # Both CHECK bodies are TAKEN WHOLE from src.core.signing.algorithms, never
+        # composed here (#1521, salesagent-n78j0.3). Asking for the clause rather than
+        # for the value-set is what removes the choice of column name, operator and
+        # rendering from this call site — the freedom that let this constraint and the
+        # one in migration e7a2c40b91d5 be assembled independently. Pinned by
+        # tests/unit/test_signing_alg_parity.py.
+        CheckConstraint(
+            signing_alg_check_clause(),
+            name="ck_signing_keys_alg",
+        ),
+        CheckConstraint(
+            signing_purpose_check_clause(),
+            name="ck_signing_keys_purpose",
+        ),
+        Index("idx_signing_keys_tenant_purpose_active", "tenant_id", "purpose", "not_after"),
+    )
+
+    def __repr__(self):
+        return (
+            f"<SigningKey("
+            f"id='{self.id}', "
+            f"tenant_id='{self.tenant_id}', "
+            f"kid='{self.kid}', "
+            f"alg='{self.alg}', "
+            f"purpose='{self.purpose}', "
+            f"private_key_ref='***', "
+            f"not_before={self.not_before}, "
+            f"not_after={self.not_after}, "
+            f"revoked_at={self.revoked_at}"
+            f")>"
+        )
+
+
+class ReplayNonce(Base):
+    """One live claim on an RFC 9421 ``(keyid, nonce)`` pair (#1291 A4).
+
+    A replay CACHE, not a permanent nonce ledger: every read filters ``expires_at > now()``,
+    so a dead row is indistinguishable from an absent one and the table is safe to sweep at
+    any time.
+
+    Schema translated from the DDL the SDK ships at ``adcp/signing/pg/replay_store.sql``,
+    table name included, so that file stays a valid reference for this table and a future
+    swap to the SDK's ``PgReplayStore`` needs no migration.
+
+    ``Text(collation="C")`` on both identifiers is security, not style: the SDK's SQL header
+    records that under some locales ``"Key-A"`` and ``"key-a"`` compare equal, which would
+    let an attacker collapse distinct kids or nonces into a single slot and replay against
+    it. ``"C"`` is byte-for-byte comparison.
+
+    **No ``tenant_id``, no FK — a decision, not an oversight.** The RFC 9421 signature base
+    covers ``@authority`` as a MANDATORY component (AdCP 3.1.1;
+    ``test-vectors/request-signing/negative/006-missing-covered-component.json`` is
+    literally "Covered components missing @authority"), so a nonce captured against tenant
+    A's virtual host cannot verify against tenant B's — cross-tenant replay dies at verifier
+    step 10, before this table is ever consulted. The consequence is that the store is
+    deployment-wide: it cannot use ``BaseUoW`` (which is ``(tenant_id)``-scoped) and its
+    reaper is deployment-wide too.
+    """
+
+    __tablename__ = "adcp_replay"
+
+    keyid: Mapped[str] = mapped_column(Text(collation="C"), primary_key=True)
+    nonce: Mapped[str] = mapped_column(Text(collation="C"), primary_key=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    __table_args__ = (
+        # Sweep support (the SDK's index, same name).
+        Index("adcp_replay_expires_idx", "expires_at"),
+        # at_capacity's predicate. A partial index on now() is impossible (not IMMUTABLE),
+        # so the composite carries the whole predicate.
+        Index("adcp_replay_keyid_expires_idx", "keyid", "expires_at"),
+    )
+
+    def __repr__(self):
+        return f"<ReplayNonce(keyid='{self.keyid}', nonce='{self.nonce}', expires_at={self.expires_at})>"

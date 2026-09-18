@@ -9,7 +9,6 @@ error as proof of the SPEC-PRODUCTION GAP.
 
 from __future__ import annotations
 
-import asyncio
 from typing import Any
 
 from pytest_bdd import given, parsers, when
@@ -185,12 +184,27 @@ def given_task_type_filter_boundary(ctx: dict, config: str) -> None:
 # ═══════════════════════════════════════════════════════════════════════
 
 
-def _dispatch_list_tasks(env: Any, **params: Any) -> Any:
-    """Dispatch list_tasks through the env, keeping production import in harness layer."""
-    from src.core.tools.task_management import list_tasks
+def _dispatch_list_tasks(ctx: dict, **params: Any) -> Any:
+    """Dispatch list_tasks through the TRANSPORT, and return what the buyer received.
 
-    env._commit_factory_data()
-    return asyncio.run(list_tasks(identity=env.identity, **params))
+    ``dispatch_request`` -> ``env.call_via`` -> ``ctx["transport"]``, never the ``_impl``.
+    It briefly did call ``_list_tasks_impl`` directly, and that is worse than the dangling
+    ``list_tasks`` name it replaced: a direct impl call runs the same code whatever
+    ``ctx["transport"]`` says, so every parametrized leg of these scenarios silently
+    collapsed onto one and the wire contract stopped being graded at all. That is exactly
+    what ``test_architecture_bdd_no_direct_call_impl`` exists to refuse, and it caught it.
+
+    ``list_tasks`` is MCP-only (``TaskManagementEnv.MCP_TOOL``; no A2A skill, no REST
+    route), so the transport set these scenarios run is narrow -- but narrow because the
+    SURFACE is narrow, which the env declares, not because the step reached past it.
+    """
+    from tests.bdd.steps.generic._dispatch import dispatch_request
+
+    ctx["env"]._commit_factory_data()
+    dispatch_request(ctx, **params)
+    if "error" in ctx:
+        raise ctx["error"] if isinstance(ctx["error"], BaseException) else AssertionError(ctx["error"])
+    return ctx["result"]
 
 
 def _dispatch_list_tasks_e2e(ctx: dict, **params: Any) -> dict:
@@ -261,7 +275,7 @@ def when_query_task_list(ctx: dict) -> None:
         if is_e2e(ctx):
             result = _dispatch_list_tasks_e2e(ctx, **params)
         else:
-            result = _dispatch_list_tasks(env, **params)
+            result = _dispatch_list_tasks(ctx, **params)
         ctx["task_list_result"] = result
     except (AdCPSalesAgentError, TypeError, Exception) as exc:
         ctx["error"] = exc

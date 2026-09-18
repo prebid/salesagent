@@ -13,21 +13,20 @@ Docker stack is needed.
 import os
 import re
 import subprocess
-from pathlib import Path
 
 import pytest
 
-_REPO_ROOT = Path(__file__).resolve().parents[2]
-_RUNNER = _REPO_ROOT / "run_all_tests.sh"
-_HOST_RUNNER = _REPO_ROOT / "run_all_tests_host.sh"
-_TOX_INI = _REPO_ROOT / "tox.ini"
+from tests.unit._run_all_tests_helpers import REPO_ROOT, RUNNER
+
+_HOST_RUNNER = REPO_ROOT / "run_all_tests_host.sh"
+_TOX_INI = REPO_ROOT / "tox.ini"
 _ALL_SUITES = "unit,integration,bdd,admin,e2e,ui,quality,storyboard"
 
 
 def _resolve(*args: str) -> str:
     proc = subprocess.run(
-        ["bash", str(_RUNNER), *args],
-        cwd=_REPO_ROOT,
+        ["bash", str(RUNNER), *args],
+        cwd=REPO_ROOT,
         env={**os.environ, "RUN_ALL_TESTS_RESOLVE_ONLY": "1"},
         capture_output=True,
         text=True,
@@ -62,7 +61,7 @@ def _tox_env_list() -> set[str]:
 
 
 def _runner_all_suites() -> set[str]:
-    m = re.search(r'ALL_SUITES="([^"]+)"', _RUNNER.read_text())
+    m = re.search(r'ALL_SUITES="([^"]+)"', RUNNER.read_text())
     assert m, "run_all_tests.sh has no ALL_SUITES"
     return {s.strip() for s in m.group(1).split(",") if s.strip()}
 

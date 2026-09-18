@@ -358,11 +358,17 @@ def canonical_agent_url(agent_url: object) -> str:
     ``format_id_identity``) and to key the creative-agent format cache
     (``CreativeAgentRegistry._cache_key``).
 
-    The algorithm is not reimplemented here. It comes from
-    ``src.vendor.adcp_canonical`` — adcp 7.0.2's implementation, copied verbatim,
-    which passes all 37 published conformance vectors. The version this repo pins
-    (6.6.0) fails 14 of them and is terminal on its line; that package's docstring
-    has the detail, and salesagent-3xcdk deletes it by migrating.
+    The algorithm is not reimplemented here. It comes from ``src.vendor.adcp_canonical``
+    — adcp 7.0.2's implementation, copied verbatim, which passes all 37 published
+    conformance vectors — reached through ``src.core.signing.canonical``, the ONE seam
+    over that package. The version this repo pins (6.6.0) fails 14 of them and is
+    terminal on its line; that package's docstring has the detail, and salesagent-3xcdk
+    deletes it by migrating.
+
+    ``producer_target_uri`` and not the seam's ``canonical_target_uri``: they differ on
+    url-canonicalization.mdx step 2, and this is the PRODUCER side. A raw non-ASCII host is
+    converted to its A-label here, where a verifier comparing a signature base must refuse
+    one rather than pick a UTS-46 outcome the signer may not have picked.
 
     **Spec step 5 is applied here, not there.** "If the path is empty AND an
     authority is present, substitute ``/``." 7.0.2 does this only when a query is
@@ -391,9 +397,9 @@ def canonical_agent_url(agent_url: object) -> str:
             zone id). A ``ValueError`` subclass, so existing callers that treat a
             bad URL as ``ValueError`` keep working.
     """
-    from src.vendor.adcp_canonical import canonicalize_target_uri
+    from src.core.signing.canonical import producer_target_uri
 
-    canonical = canonicalize_target_uri(str(agent_url))
+    canonical = producer_target_uri(str(agent_url))
     # Step 5, the half the vendored implementation applies only when a query is present.
     scheme, _, rest = canonical.partition("://")
     if rest and "/" not in rest and "?" not in rest:
@@ -693,7 +699,7 @@ class BuyerRequest:
         """
         if not isinstance(data, dict):
             return data
-        from src.core.config import is_production
+        from src.core.config import get_pydantic_extra_mode
         from src.core.errors.issues import ErrorIssue
         from src.core.exceptions import AdCPInvalidRequestError
         from src.core.schemas._accepted_shape import deep_strip_to_schema
@@ -702,7 +708,16 @@ class BuyerRequest:
         # ``cls`` is the DTO class: a BuyerRequest AND the pydantic model it is mixed into.
         # Python has no intersection type, so the cast states the half this call needs.
         accepted = deep_strip_to_schema(data, _announced_schema(cast("type[BaseModel]", cls)), rejected=rejected)
-        if rejected and not is_production():
+        # THE SAME ANSWER the ``extra=`` on every model above is configured from, asked the
+        # same way. This used to read ``is_production()`` while ``model_config`` read
+        # ``get_pydantic_extra_mode()`` — one policy with two sources, which agreed only
+        # because the second was a pure function of the first. It stopped agreeing the moment
+        # a deployment needed the forward-compatible boundary WITHOUT claiming production (the
+        # storyboard conformance agent, docker-compose.e2e.yml): the top-level ``extra``
+        # relaxed and this validator did not, so the five read tools rejected the
+        # ``idempotency_key`` AdCP 3.1 puts on every task request — measured as three
+        # ``read_tool_idempotency`` checks regressing with the wire mode reading ``ignore``.
+        if rejected and get_pydantic_extra_mode() == "forbid":
             raise AdCPInvalidRequestError(
                 issues=[ErrorIssue.of(pointer=p, keyword="additionalProperties") for p in rejected]
             )
@@ -1978,11 +1993,23 @@ class Principal(SalesAgentBaseModel):
     principal_id: str
     name: str
     platform_mappings: dict[str, Any]
+    #: The counterparty's own AdCP agent URL, from onboarding, or None when none was
+    #: recorded. It is the key-resolution input for RFC 9421 verification: security.mdx
+    #: @ v3.1.1 § "agent_url derivation" makes the publication coordinate the verifier
+    #: already controls the ONLY legitimate source, so a signer cannot assert its own and
+    #: choose which key set it is checked against. None means no key can be resolved for
+    #: this counterparty, not that it is trusted.
+    agent_url: str | None = None
 
     @classmethod
     def from_row(cls, row: Any) -> "Principal":
         """Build from the ``Principal`` ORM row, the one shape a principal is loaded from."""
-        return cls(principal_id=row.principal_id, name=row.name, platform_mappings=row.platform_mappings)
+        return cls(
+            principal_id=row.principal_id,
+            name=row.name,
+            platform_mappings=row.platform_mappings,
+            agent_url=row.agent_url,
+        )
 
     def get_adapter_id(self, adapter_name: str) -> str | None:
         """Get the adapter-specific ID for this principal."""

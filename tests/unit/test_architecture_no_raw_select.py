@@ -101,7 +101,7 @@ ALLOWLIST: set[tuple[str, str]] = {
     # entry follows the code rather than being deleted as "fixed". The raw select is
     # still there (src/admin/blueprints/test_auth.py:47).
     ("src/admin/blueprints/test_auth.py", "test_auth"),
-    ("src/admin/blueprints/authorized_properties.py", "_construct_agent_url"),
+    # _construct_agent_url removed — delegates to canonical_agent_url via TrustRootUoW
     ("src/admin/blueprints/authorized_properties.py", "_save_properties_batch"),
     ("src/admin/blueprints/authorized_properties.py", "create_property"),
     ("src/admin/blueprints/authorized_properties.py", "create_property_tag"),
@@ -161,8 +161,11 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/admin/blueprints/policy.py", "review_task"),
     ("src/admin/blueprints/policy.py", "update"),
     ("src/admin/blueprints/principals.py", "create_principal"),
+    # delete_principal removed — the lookup goes through PrincipalRepository.get()
     # delete_webhook / register_webhook / toggle_webhook removed — rewired onto
-    # PushNotificationConfigRepository via PushNotificationConfigUoW (salesagent-tayg)
+    # PushNotificationConfigRepository via PushNotificationConfigUoW (salesagent-tayg;
+    # both sides removed these independently). manage_webhooks below deliberately KEEPS
+    # its raw select — it must list INACTIVE rows, which list_active_by_principal cannot.
     ("src/admin/blueprints/principals.py", "edit_principal"),
     ("src/admin/blueprints/principals.py", "get_gam_advertisers"),
     ("src/admin/blueprints/principals.py", "list_principals"),
@@ -250,6 +253,10 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/core/config_loader.py", "get_tenant_by_id"),
     ("src/core/config_loader.py", "get_tenant_by_subdomain"),
     ("src/core/config_loader.py", "get_tenant_by_virtual_host"),
+    # add_message removed — now sa_update + jsonb_list_append, zero selects.
+    # _send_push_notifications removed — config lookup routes through
+    # PushNotificationConfigRepository. Each side removed one; the allowlist is
+    # the intersection, so neither survives.
     ("src/core/context_manager.py", "get_context"),
     ("src/core/context_manager.py", "get_context_status"),
     ("src/core/context_manager.py", "get_contexts_for_principal"),

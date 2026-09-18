@@ -820,33 +820,36 @@ class ContextManager(DatabaseManager):
                         # from the logs: an operator has to be able to list which
                         # buyers stopped receiving webhooks and why.
                         #
-                        # ``internal_detail``, NOT ``message``, and that distinction is
-                        # what makes the paragraph above true rather than aspirational.
-                        # Post-ADR-010 an ``AdCPSalesAgentError``'s ``message`` is a
-                        # read-only property over ``CODE_TABLE`` — a function of the CODE,
-                        # not of the raise site — because it is the text that reaches a
-                        # BUYER over the wire. It therefore reads "Request validation
-                        # failed" for every stash refusal alike, while ``from_stash``'s own
-                        # diagnostic, the one that NAMES THE SCHEME so the affected rows
-                        # are enumerable (``webhooks/registration.py``, "NAME THE SCHEME"),
-                        # moved to ``internal_detail``. Reading ``message`` here did not
-                        # soften the sentence; it deleted the only actionable fact in it.
+                        # The refusal's STRUCTURED facts, and neither ``message`` nor
+                        # ``internal_detail``. Post-ADR-010 an ``AdCPSalesAgentError``'s
+                        # ``message`` is a read-only property over ``CODE_TABLE`` — a
+                        # function of the CODE, not of the raise site — so it reads
+                        # "Request validation failed" for every stash refusal alike and
+                        # names nothing an operator can act on. ``internal_detail`` is
+                        # worse than useless HERE: ``from_stash`` puts pydantic's own
+                        # ``ValidationError`` there, whose text renders ``input_value=``
+                        # — the BUYER'S CREDENTIAL — into this log line whenever the
+                        # objection is about ``credentials``, and names no scheme at all
+                        # unless the objection happened to be about ``schemes``.
                         #
-                        # Operator-only, and checked rather than assumed: nothing on a
-                        # buyer-wire path reads ``internal_detail``.
-                        # ``AdcpErrorResponse.of`` composes the response from
-                        # error_code/message/recovery/field/suggestion/retry_after/
-                        # details/issues/context and never this — and in any case the
-                        # exception is swallowed two lines below, so it never reaches a
-                        # transport boundary at all.
+                        # The two facts that make the affected rows enumerable are
+                        # carried as VALUES by the refusal itself: ``field`` names the
+                        # sub-field at fault, and ``details.rejected_value`` holds the
+                        # stored scheme(s) — the pin's canonical rejection key, written
+                        # by ``from_stash``'s "NAME THE SCHEME" branch
+                        # (``webhooks/registration.py``) precisely so the name does not
+                        # have to ride buyer-facing text.
                         #
-                        # Defensive by the same idiom as ``operator_mcp._operator_cause``:
-                        # a detail may be absent or blank, and may be an exception rather
-                        # than a ``str``, so it is stringified and falls back to the table
-                        # sentence. A cause-less refusal still logs a whole sentence, and
-                        # nothing here can raise inside an error-handling path.
-                        detail = exc.internal_detail
-                        cause = (str(detail).strip() if detail is not None else "") or exc.message
+                        # ``getattr`` rather than a branch, by the same idiom as
+                        # ``operator_mcp._operator_cause``: a refusal may carry no details
+                        # at all (the missing-URL branch), and nothing here may raise
+                        # inside an error-handling path. A detail-less refusal still logs
+                        # a whole sentence naming its field.
+                        field = exc.field or "push_notification_config"
+                        stored_schemes = getattr(exc.details, "rejected_value", None)
+                        cause = f"{field} was refused" + (
+                            f"; stored scheme(s): {stored_schemes}" if stored_schemes else ""
+                        )
                         stash_context = getattr(step, "context", None)
                         logger.error(
                             "Stashed push notification config is not deliverable (%s); "

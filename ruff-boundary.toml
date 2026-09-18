@@ -50,6 +50,9 @@ select = ["TID251"]
 # The boundary owns the resolver and the stamped entry; the resolver's module defines it.
 "src/core/tools/_boundary.py" = ["TID251"]
 "src/core/resolved_identity.py" = ["TID251"]
+# The resolver's verifier: it reads the signature credential the resolver hands it and mints
+# the request-signature refusal, which is why it is the one other exemption for that class.
+"src/core/signing/verifier.py" = ["TID251"]
 # Defines get_principal_from_token, so it cannot be banned from naming it.
 "src/core/auth_utils.py" = ["TID251"]
 # The four repository modules that query the ORM Principal model. Nothing else under src/
@@ -132,6 +135,7 @@ select = ["TID251"]
 # Exempt: src/core/resolved_identity.py, which is where the assembling is SUPPOSED to happen,
 # and src/core/auth_utils.py, which defines one of them.
 "src.core.auth_utils.get_principal_from_token".msg = "Resolving a principal from a token is identity resolution, and it happens once, in src/core/resolved_identity._resolve_identity, called only from the tool boundary. A second caller is a second resolver -- which this codebase had, unnoticed, until it was deleted (salesagent-02rgd)."
+"src.core.auth_utils.get_principal_by_agent_url".msg = "Resolving a principal from a VERIFIED signer is identity resolution too, and it happens in the same one place. The lookup is only sound downstream of verification -- an unverified agent_url is a self-assertion -- so a second caller is both a second resolver and a trust bypass."
 "src.core.resolved_identity._detect_tenant".msg = "Detecting the tenant from request headers happens once, inside _resolve_identity. A caller that detects its own tenant is a second tenant resolver, and the two WILL disagree -- the deleted get_principal_from_context disagreed by reading x-adcp-tenant with different fallbacks (salesagent-02rgd)."
 
 # The ORM Principal model is repository-private. A request's principal is loaded once, by the
@@ -182,6 +186,19 @@ select = ["TID251"]
 # one that raises THESE is a second author of the refusal, and this is where it fails.
 "src.core.exceptions.AdCPAuthRequiredError".msg = "AUTH_MISSING is raised by the resolver (src/core/resolved_identity.py) alone. A tool that needs a caller declares identity: ResolvedIdentity and the boundary refuses the anonymous caller before it runs; do not re-check or hand-roll the refusal."
 "src.core.exceptions.AdCPAuthenticationError".msg = "AUTH_INVALID is raised by the resolver (src/core/resolved_identity.py) alone. A credential that was presented and rejected is decided where the credential is read; nothing downstream re-decides it."
+# The third refusal of a buyer's credential, and the same rule. A signature is a credential
+# the resolver reads (src/core/signing/verifier.py, called from _resolve_identity), so the
+# 28-code request-signature taxonomy is minted there and nowhere else. It is a direct
+# AdCPSalesAgentError subclass rather than an AdCPAuthenticationError one because the code
+# differs per refusal and an AUTH_INVALID parent would hand every class that one code
+# through the MRO -- which is exactly why the ban has to list it explicitly: the subsumption
+# that would otherwise have carried it does not exist.
+#
+# THE ABSTRACT PARENT is what the ban names, and it reaches all 28 children: TID251 matches
+# the imported NAME, and no module outside the resolver has business importing any of them by
+# name either. The string-to-class table is module-private (_SIGNATURE_ERROR_BY_CODE) and
+# reached only through adcp_error_for, which is generic and correctly unbanned.
+"src.core.exceptions.AdCPRequestSignatureError".msg = "The request-signature taxonomy is raised by the resolver's verifier (src/core/signing/verifier.py, reached from src/core/resolved_identity.py) alone. A signature is a credential; nothing downstream re-decides it."
 
 # The buyer's context object. Two modules have business with its TYPE: the schemas, which
 # declare the field on every request and response, and the boundary, which reads it once off

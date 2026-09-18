@@ -13,7 +13,6 @@ Usage::
 
 from __future__ import annotations
 
-import functools
 import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
@@ -23,30 +22,6 @@ from typing import Any
 from pydantic import BaseModel
 
 from src.core.resolved_identity import TransportProtocol
-from tests.helpers import pinned_schema
-
-
-@functools.lru_cache(maxsize=1)
-def _pinned_error_metadata() -> dict[str, dict[str, str]]:
-    """code -> {recovery, suggestion} from the installed SDK's error-code enum.
-
-    The SDK tree is the single source of truth for schema SHAPE
-    (``tests/helpers/pinned_schema.py``). Sourcing this enum from it rather than
-    from the vendored ``tests/fixtures/adcp_schemas_pinned/`` copy is a no-op on
-    every field any consumer reads: measured 2026-08-12, the two trees carry the
-    same 92 enum codes and 93 ``enumMetadata`` entries, with ZERO ``recovery``
-    and ZERO ``suggestion`` divergences. They are not byte-identical — the
-    ``$id`` differs, each naming its own tree — so the vendored copy is retained
-    deliberately as an INDEPENDENT pin (docs/adcp-spec-version.md "Pinned schema
-    sources"), not as a second source of shape.
-
-    Only ``recovery`` is read here (see ``assert_wire_error``);
-    ``extract_wire_suggestion`` below reads the WIRE's own suggestion text, not
-    this metadata. Consumers that grade ``suggestion`` CONTENT
-    (test_architecture_error_suggestion_enum_conformance.py) stay on the
-    vendored fixture — see docs/adcp-spec-version.md "Pinned schema sources".
-    """
-    return pinned_schema.load("error-code.json")["enumMetadata"]
 
 
 def is_pinned_error_code(code: str | None) -> bool:
@@ -582,9 +557,12 @@ class TransportResult:
         dispatcher captured for whatever transport produced this result, so the
         same call holds on a2a/mcp/rest. Recovery defaults to the PINNED AdCP
         enum's classification for ``code`` (pin-wins), making the assertion
-        non-vacuous without per-scenario duplication. This is the single
-        harness-provided way to verify an error on the wire — step definitions
-        must not hand-roll envelope parsing.
+        non-vacuous without per-scenario duplication. This is the SANCTIONED way
+        to verify an error on the wire, and new step definitions must not
+        hand-roll envelope parsing. It is not yet the ONLY way — call sites that
+        still read the envelope by hand are pre-existing debt being routed here
+        as they are touched (``uc010_capabilities`` was one, S1.2), so read this
+        as the target state plus a migration, not as a claim about today's tree.
 
         ``field`` pins ``errors[0].field``, the error.json pointer naming WHICH
         request field was rejected, ``details`` subset-checks
@@ -596,6 +574,12 @@ class TransportResult:
         has to decide which mechanism to reach for. All three forward to
         ``assert_envelope_shape``; this method adds only the CODE_TABLE recovery
         default and the no-envelope diagnosis, never a second shape check.
+
+        There is deliberately NO ``message_substr``. The buyer-facing sentence is
+        a function of the code through ``CODE_TABLE``, so pinning both grades the
+        table against itself; the request data a message used to be the only
+        carrier for now travels in ``details``/``field``/``issues``, which is what
+        these kwargs exist to grade (#1880).
         """
         from src.core.errors.codes import CODE_TABLE
         from tests.helpers import assert_envelope_shape
@@ -646,3 +630,89 @@ class TransportResult:
                     f"{layer} carries no buyer-facing suggestion for {code}; the spec places the "
                     f"hint at the top level of the error object: {envelope}"
                 )
+
+    def assert_signature_challenge(self, code: str) -> None:
+        """Assert the VERIFIER refused this dispatch with ``WWW-Authenticate: Signature error="<code>"``.
+
+        The signing counterpart of :meth:`assert_wire_error`, and the single
+        harness-provided way to grade a request-signature refusal — a step or test
+        must not read the challenge header itself, for the same reason it must not
+        hand-roll an error envelope.
+
+        WHAT IS GRADED, and what deliberately is NOT. The claim is the challenge
+        header BYTE-EXACTLY, read with :func:`tests.helpers.signing.rejection_code`
+        (reused, never re-parsed here: a reader that mishandles the label escaping
+        reports "no rejection", which looks exactly like the mechanism not running).
+        ``status_code == 401`` is NOT the assertion and never can be — a bare 401 is
+        equally produced by the auth middleware rejecting first, by a 404 wearing a
+        401, and by the malformed-header precheck
+        (``tests/e2e/test_request_signature_required_e2e.py``). The evidence that
+        this distinction is load-bearing is first-hand: in salesagent-n78j0.1.1 an
+        e2e leg was forced to dispatch UNSIGNED and ``is_success`` still passed, so
+        every status-shaped oracle on this path is vacuous by construction.
+
+        NON-VACUITY, the same contract ``assert_wire_error`` carries:
+
+        * an unknown ``code`` is refused up front against the request-family
+          vocabulary production itself reads
+          (:func:`tests.helpers.signing.request_signature_codes`, derived from
+          ``adcp.signing.errors.REQUEST_TO_WEBHOOK_CODE`` exactly as
+          ``src/core/metrics.py`` derives ``SIGNATURE_ERROR_CODES``), so a typo or
+          an invented code fails loudly instead of comparing equal to a ``None``
+          that never arrives. That vocabulary is WIDER than a prefix scan of
+          ``adcp.signing.errors``: the verifier also emits
+          ``request_target_uri_malformed``, which carries no
+          ``REQUEST_SIGNATURE_`` prefix, and a scan-derived veto made that refusal
+          ungradeable. The SDK table does not carry that row at ``adcp==6.6.0``
+          either — ``src/core/errors/signature_codes.py`` merges it in to reach the
+          28 :class:`~src.core.errors.signature_codes.SignatureErrorCode` members,
+          and that merged set is what this veto must resolve through;
+        * a result with NO raw HTTP response FAILS, naming the two things that
+          produce one — the env never called ``enable_request_signing()`` (so the
+          leg dispatched in-process, where there is no wire and no verifier), or a
+          dispatcher dropped the response. It never passes for want of evidence.
+        """
+        from tests.helpers.signing import rejection_code, request_signature_codes
+
+        canonical = request_signature_codes()
+        assert code in canonical, (
+            f"{code!r} is not a request-signature rejection code the verifier can emit "
+            f"(the request-family vocabulary, src.core.errors.signature_codes.SignatureErrorCode). "
+            f"Did you mean one of: "
+            f"{', '.join(sorted(c for c in canonical if code.split('_')[-1] in c)) or 'see tests.helpers.signing.request_signature_codes'}?"
+        )
+
+        response = self.raw_response
+
+        # Lead with the ACCEPTED case. A result that succeeded is not a missing wire —
+        # it is the finding: the seller waved through a request this scenario says it
+        # must refuse. Diagnosing that as "the env has no signing capability" sends the
+        # reader hunting a harness bug and past the defect, which is the failure mode
+        # this whole surface exists to end (SF-4 survived green CI for exactly that
+        # reason). Order matters: is_error is checkable on every transport, raw_response
+        # is not.
+        assert self.is_error, (
+            f"Expected the {code!r} signature challenge, but the request was ACCEPTED "
+            f"(is_error=False, payload={self.payload!r}). The seller did not refuse a request this "
+            "scenario requires it to refuse. If sibling transports DO refuse the same request, that "
+            "asymmetry is the finding — the operation never reached a graded posture bucket on this "
+            "one, so nothing forced a signature. Read it as a production defect until proven otherwise."
+        )
+
+        assert response is not None and hasattr(response, "status_code") and hasattr(response, "headers"), (
+            f"Expected the {code!r} signature challenge, and this result IS an error "
+            f"(error={self.error!r}) — but it carries no raw HTTP response to read WWW-Authenticate "
+            f"from (raw_response={response!r}). Either the env has no signing capability — call "
+            "env.enable_request_signing() so the leg dispatches over real HTTP instead of in-process — "
+            "or the dispatcher dropped the response. Refusing to grade the refusal on anything else."
+        )
+
+        actual = rejection_code(response)
+        assert actual == code, (
+            f"expected WWW-Authenticate: Signature error={code!r}, got {actual!r} "
+            f"(HTTP {response.status_code}, WWW-Authenticate="
+            f"{response.headers.get('WWW-Authenticate')!r}). None means the verifier did not refuse this "
+            "request at all: a non-401, or a 401 from somewhere else in the stack (auth middleware, a 404 "
+            "wearing a 401). A 2xx here usually means the operation never landed in a graded posture "
+            "bucket, so the request was waved through unverified."
+        )

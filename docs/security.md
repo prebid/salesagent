@@ -7,6 +7,7 @@ This document is the reference for the security architecture of the sales agent:
 - [Admin authentication architecture](#admin-authentication-architecture) — environment-first super-admin check with database fallback
 - [Tenant registration security](#tenant-registration-security) — subdomain assignment, branded URLs, ad server checks
 - [Access control patterns](#access-control-patterns) — super admins, tenant users, principal isolation, audit trail
+- [Message signing (RFC 9421)](#message-signing-rfc-9421) — agent-to-agent authentication, and where it is documented in full
 - [Outbound egress (SSRF)](#outbound-egress-ssrf) — the single gateway for outbound HTTP
 - [Security testing requirements](#security-testing-requirements)
 - [OAuth cross-domain authentication](#oauth-cross-domain-authentication) — why cross-domain login fails, and the workaround
@@ -89,6 +90,42 @@ Each advertiser (principal) has isolated access tokens. Tokens are scoped to a s
 ### Audit trail
 
 The system logs all admin actions to the `audit_logs` table, including the timestamp, user, action, and result. The audit trail supports compliance and security monitoring.
+
+## Message signing (RFC 9421)
+
+Everything above concerns **admin** authentication — who may log into the dashboard and
+what they may do. Protocol-level authentication between agents is a separate mechanism:
+RFC 9421 HTTP message signatures, covering both inbound requests we verify and outbound
+webhooks we sign.
+
+It is documented in full elsewhere; this section exists so a reader arriving here for
+"how do agents authenticate to each other" is not left at a dead end.
+
+- **[Signing posture and key discovery](signing/posture-and-discovery.md)** — what we
+  advertise, the `supported_for` / `warn_for` / `required_for` enforcement ladder, and the
+  brand.json walk a counterparty uses to find our public key. Includes the documented
+  trap: a bare `.well-known/jwks.json` lookup is **not** the discovery mechanism.
+- **[Verifying our outbound webhooks](signing/verifying-our-webhooks.md)** — the profile
+  tag, which document answers which question, and the deprecated HMAC-SHA256 path with its
+  AdCP 4.0 removal.
+- **[Signing key runbook](operations/signing-key-runbook.md)** — operator-facing:
+  provisioning, rotation, revocation, rollout and rollback.
+
+Four properties are security-relevant enough to state here rather than only in the
+runbook:
+
+- **No private key material is written to a filesystem.** A provisioned key's private PEM
+  is stored encrypted on its own database row under a deployment-wide key encryption key
+  (KEK), named by `settings.signing.key_passphrase_env`
+  (`ADCP_SIGNING_KEY_PASSPHRASE_ENV`).
+- **There is no plaintext fallback.** Minting refuses outright when no KEK is configured,
+  rather than degrading to storing the key unencrypted.
+- **Signing failures fail closed, not open.** A tenant with no usable signing key cannot
+  activate a notification subscriber, because the proof-of-control challenge must be
+  signed and we will not send an unsigned one.
+- **Rollback is a configuration change, never a deploy.** A per-tenant posture edit rolls
+  back one counterparty; `settings.signing.verifier_enabled` is the deployment-wide kill
+  switch. See the runbook for which to reach for — they differ in blast radius.
 
 ## Outbound egress (SSRF)
 

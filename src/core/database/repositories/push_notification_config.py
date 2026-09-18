@@ -25,6 +25,16 @@ from src.core.webhooks.registration import ValidatedWebhookRegistration
 # supply this field" (keep the existing row's value) from an explicit None
 # (clear it). Without it, migrating callers onto upsert() would silently null
 # a validation_token set through another path for the same config id.
+#
+# It covers the three SIDEBAND columns — the ones no single registration surface
+# knows all of. ``validation_token`` is written only by A2A
+# ``setTaskPushNotificationConfig``; ``webhook_secret`` only by admin
+# registration; ``session_id`` only by the session-scoped paths. Every one of
+# those callers omits the other two, so a plain ``None`` default makes each write
+# a silent erase of the others. The columns carried by the registration receipt
+# (url, auth pair, and the operation_id/token the seller must echo) are
+# deliberately NOT sentinel-defaulted: they are required, and the receipt always
+# has them.
 _UNSET: Any = object()
 
 
@@ -144,15 +154,21 @@ class PushNotificationConfigRepository:
         seam (``src.core.security.outbound_http``), which re-resolves and re-judges
         the URL when it is actually dialled.
 
-        The three kwargs are deliberately NOT value fields, and every one of them
-        is preserve-if-not-passed: omitting one keeps the existing row's value
-        (``None`` on insert), passing ``None`` explicitly clears it.
-        ``validation_token`` is sender-side ``X-Webhook-Token`` material, outside
-        the auth resolver; ``webhook_secret`` is the admin-registered HMAC secret.
+        The three SIDEBAND columns stay explicit kwargs rather than value fields,
+        because none of them is part of the registration a buyer submits:
+        ``validation_token`` is sender-side ``X-Webhook-Token`` material,
+        deliberately outside the auth resolver, and only the A2A
+        ``setTaskPushNotificationConfig`` path stores one; ``webhook_secret`` is
+        the admin-registered HMAC secret; ``session_id`` is set only on
+        session-scoped paths.
+
+        All three are preserve-if-not-passed: omitting one keeps the existing
+        row's value (``None`` on insert), passing ``None`` explicitly clears it.
         Callers share config ids across paths, so a caller that does not OWN a
-        field must not null it — an unconditional write would let the
-        create-media-buy path silently clear a ``validation_token`` another path
-        set.
+        field must not null it: a plain ``None`` default would make every caller
+        that knows one column silently erase the other two on the reactivation
+        branch below — letting, say, the create-media-buy path clear a
+        ``validation_token`` another path set.
 
         Returns:
             (config, created): ``created`` is True if a new row was inserted,
@@ -239,6 +255,13 @@ class PushNotificationConfigRepository:
         for the principal — whether the pre-check saw it or this call lost the
         insert race to a concurrent registration — and ``None`` when a config
         was created (or a soft-deleted one reactivated).
+
+        Takes the same receipt :meth:`upsert` does, for the same reason: the
+        admin route is one of the registration surfaces the gate covers, so
+        letting this method accept loose ``url`` / auth strings would reopen the
+        exact hole the receipt closes — a caller that never gated would be
+        indistinguishable from one that did, and this module must not forge the
+        receipt by re-running the gate itself.
         """
         url = registration.url
 

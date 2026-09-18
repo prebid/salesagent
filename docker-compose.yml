@@ -86,6 +86,15 @@ services:
       ADCP_SALES_PORT: "8080"
       # Enable test login mode for development
       ADCP_AUTH_TEST_MODE: "true"
+      # Development key encryption key for RFC 9421 signing keys (#1291).
+      # Provisioning REFUSES to mint a db: key with no KEK — there is no plaintext
+      # fallback — so without these two lines `docker compose up` gives an operator
+      # a signing-keys page that can only fail. key_passphrase_env NAMES the
+      # variable; the variable holds the passphrase. A real deployment supplies its
+      # own through .env or the orchestrator's secret store; this value is
+      # deliberately worthless and lives in a file that is already in git.
+      ADCP_SIGNING_KEY_PASSPHRASE_ENV: "ADCP_SIGNING_DEV_KEK"
+      ADCP_SIGNING_DEV_KEK: "dev-only-signing-kek-not-a-secret"
       # Development settings (venv at /opt/venv in image — see Dockerfile UV_PROJECT_ENVIRONMENT)
       PYTHONPATH: "/app"
       PYTHONUNBUFFERED: "1"

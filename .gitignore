@@ -19,6 +19,12 @@ credentials*.json
 # GCP Service Account Keys
 *-key.json
 adcp-manager-key.json
+# ...except the vendored AdCP schema fixtures, which are JSON Schema documents
+# named after the thing they describe (agent-signing-key.json, activation-key.json)
+# and carry no credentials. Without this the `$ref` closure a pinned-schema test
+# validates against is incomplete on any fresh checkout, and the failure surfaces
+# as an unresolvable `$ref` far from its cause.
+!tests/fixtures/adcp_schemas_pinned/**/*-key.json
 
 # Build artifacts
 *.egg-info/
@@ -176,3 +182,18 @@ manifest.json
 # already ignored by tests/storyboard/runner/.gitignore.
 tests/storyboard/runner/*.tgz
 tests/storyboard/runner/*.tgz.sha256
+
+# The RFC 9421 merge audit trail keeps its ledger, gate and manifest; the bulk
+# intermediates (per-parent node-id baselines, per-stage agent results) are
+# regenerable and stay out of the history.
+.claude/merge-review/baselines/
+.claude/merge-review/batches/
+.claude/merge-review/stage*_result.json
+.claude/merge-review/stage*_files.json
+.claude/merge-review/stage*_owed*
+.claude/merge-review/classification.json
+.claude/merge-review/unitgreen_result.json
+.claude/merge-review/conflicts.txt
+.claude/merge-review/full_theirs.txt
+.claude/merge-review/silent.txt
+.claude/merge-review/remaining_markers.txt

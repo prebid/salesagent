@@ -80,7 +80,7 @@ def dto(tool: str) -> type:
 from tests.factories.creative_asset import build_assets, image_spec
 from tests.factories.format import AGENT_URL, FormatIdFactory
 from tests.factories.mint import mint, mint_shared
-from tests.helpers.sample_account import SAMPLE_ACCOUNT
+from tests.helpers.sample_account import SAMPLE_ACCOUNT, SAMPLE_BRAND
 
 
 class _Omit:
@@ -288,7 +288,7 @@ class CreateMediaBuyRequestFactory(_RequestFactory):
 
     idempotency_key = factory.LazyFunction(fresh_idempotency_key)
     account = factory.LazyFunction(lambda: dict(SAMPLE_ACCOUNT))
-    brand = factory.LazyFunction(lambda: {"domain": "testbrand.com"})
+    brand = factory.LazyFunction(lambda: dict(SAMPLE_BRAND))
     start_time = factory.LazyFunction(lambda: _campaign_window()[0])
     end_time = factory.LazyFunction(lambda: _campaign_window()[1])
     packages = factory.LazyFunction(lambda: [PackageRequestFactory.payload()])
@@ -412,7 +412,7 @@ class GetProductsRequestFactory(_RequestFactory):
 
     buying_mode = "brief"
     brief = "display advertising for an outdoor apparel brand"
-    brand = factory.LazyFunction(lambda: {"domain": "testbrand.com"})
+    brand = factory.LazyFunction(lambda: dict(SAMPLE_BRAND))
 
 
 class UpdateMediaBuyRequestFactory(_RequestFactory):

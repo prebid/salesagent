@@ -1,0 +1,110 @@
+{% extends "base.html" %}
+{% block title %}Signing Keys - {{ tenant_id }}{% endblock %}
+{% block content %}
+<style>
+    .signing-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem; }
+    .signing-header h2 { margin: 0; color: #111827; }
+    .signing-table { width: 100%; border-collapse: collapse; }
+    .signing-table th { text-align: left; padding: 0.75rem 1rem; color: #6b7280; font-size: 0.85rem; border-bottom: 2px solid #e5e7eb; }
+    .signing-table td { padding: 0.75rem 1rem; border-bottom: 1px solid #f3f4f6; }
+    .signing-table tr:hover { background: #f9fafb; }
+    .kid { font-family: monospace; font-size: 0.85rem; }
+    .status-badge { display: inline-block; padding: 0.2rem 0.6rem; border-radius: 12px; font-size: 0.8rem; font-weight: 500; }
+    .status-active { background: #d1fae5; color: #065f46; }
+    .status-published { background: #e0e7ff; color: #3730a3; }
+    .status-revoked { background: #fee2e2; color: #991b1b; }
+    .provision-form { display: flex; gap: 0.75rem; align-items: flex-end; margin-bottom: 1.5rem; flex-wrap: wrap; }
+    .provision-form label { display: block; font-size: 0.8rem; color: #6b7280; margin-bottom: 0.25rem; }
+    .provision-form select, .provision-form input { padding: 0.4rem 0.8rem; border: 1px solid #d1d5db; border-radius: 6px; }
+    .empty-state { text-align: center; padding: 3rem; color: #6b7280; }
+    .explainer { color: #6b7280; font-size: 0.9rem; margin-bottom: 1.5rem; max-width: 60rem; }
+</style>
+
+<div class="signing-header">
+    <h2>Signing Keys</h2>
+</div>
+
+<p class="explainer">
+    These are the RFC 9421 keys this seller signs with. The public half of every key listed
+    below is served to counterparties at <code>/.well-known/jwks.json</code>. The private half
+    never touches a filesystem: it is stored on the key's own row, encrypted under this
+    deployment's key encryption key. Rotation is provision-new then revoke-old — revoked keys
+    stay published, carrying their revocation marker, until every verifier's cache has expired.
+</p>
+
+<form class="provision-form" method="POST"
+      action="{{ url_for('signing_keys.create_signing_key', tenant_id=tenant_id) }}">
+    <div>
+        <label for="alg">Algorithm</label>
+        <select id="alg" name="alg">
+            {% for algorithm in algorithms %}
+            <option value="{{ algorithm }}">{{ algorithm }}</option>
+            {% endfor %}
+        </select>
+    </div>
+    <div>
+        <label for="ref_scheme">Key storage</label>
+        <select id="ref_scheme" name="ref_scheme">
+            {% for scheme in ref_schemes %}
+            <option value="{{ scheme }}">{{ scheme }}</option>
+            {% endfor %}
+        </select>
+    </div>
+    <div>
+        <label for="env_var_name">Environment variable (env storage only)</label>
+        <input id="env_var_name" name="env_var_name" placeholder="ADCP_SIGNING_KEY_PEM">
+    </div>
+    <button type="submit" class="btn btn-primary">
+        <i class="fas fa-plus"></i> Provision Key
+    </button>
+</form>
+
+{% if keys %}
+<table class="signing-table">
+    <thead>
+        <tr>
+            <th>Key ID</th>
+            <th>Algorithm</th>
+            <th>Purpose</th>
+            <th>Storage</th>
+            <th>Status</th>
+            <th>Not before</th>
+            <th></th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for key in keys %}
+        <tr>
+            <td class="kid">{{ key.kid }}</td>
+            <td>{{ key.alg }}</td>
+            <td>{{ key.purpose }}</td>
+            <td>{{ key.private_key_ref.split(':')[0] }}</td>
+            <td>
+                {% if key.revoked_at %}
+                <span class="status-badge status-revoked">revoked {{ key.revoked_at }}</span>
+                {% elif key.kid == active_kid %}
+                <span class="status-badge status-active">signing</span>
+                {% else %}
+                <span class="status-badge status-published">published</span>
+                {% endif %}
+            </td>
+            <td>{{ key.not_before }}</td>
+            <td>
+                {% if not key.revoked_at %}
+                <form method="POST"
+                      action="{{ url_for('signing_keys.revoke_signing_key_route', tenant_id=tenant_id, kid=key.kid) }}"
+                      onsubmit="return confirm('Revoke {{ key.kid }}? Signatures made with it will stop being produced immediately.');">
+                    <button type="submit" class="btn btn-danger">Revoke</button>
+                </form>
+                {% endif %}
+            </td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% else %}
+<div class="empty-state">
+    <p>No signing keys. This seller publishes an empty JWKS and cannot sign outbound webhooks.</p>
+</div>
+{% endif %}
+{% endblock %}

@@ -570,23 +570,29 @@ def _synthetic_expressions(exprs: list[ast.expr]) -> Iterator[ast.stmt]:
 _DEFERRED_EXPR_NODES = (ast.Lambda, ast.GeneratorExp)
 
 
-def iter_statement_scoped_nodes(stmt: ast.stmt) -> Iterator[ast.AST]:
+def iter_statement_scoped_nodes(stmt: ast.stmt, *, skip_deferred: bool = False) -> Iterator[ast.AST]:
     """Yield the nodes of *stmt* WITHOUT descending into nested statements.
 
     ``ast.walk`` on a compound statement swallows its whole body, which silently
     unions everything a function does into one "statement". Callers want the
     header only -- ``If.test``, ``Return.value``, the right-hand side of an
-    assignment.
+    assignment -- so that, for example, two unrelated queries in one ``if``
+    block cannot compose a filter-key tuple neither of them checks.
 
-    Lambda bodies and generator expressions are not descended into either: they
-    are built where they are written but executed somewhere else, so treating
-    them as part of the statement reports a call that has not happened.
+    ``skip_deferred`` additionally stops at lambda bodies and generator
+    expressions. They are BUILT where they are written but RUN somewhere else,
+    so a guard reasoning about what executes here (``find_import_time_fs_io_violations``)
+    must not count them, while a guard reasoning about what the statement
+    lexically contains (the uniqueness pre-check guard, which has to see a
+    ``select(...)`` wherever it is spelled) must. Off by default: skipping is
+    the narrower, execution-semantics reading, and only the caller that needs
+    it asks for it.
     """
     stack: list[ast.AST] = [stmt]
     while stack:
         node = stack.pop()
         yield node
-        if isinstance(node, _DEFERRED_EXPR_NODES):
+        if skip_deferred and isinstance(node, _DEFERRED_EXPR_NODES):
             continue
         for child in ast.iter_child_nodes(node):
             if not isinstance(child, ast.stmt):
@@ -620,7 +626,7 @@ def find_import_time_fs_io_violations(tree: ast.Module) -> list[int]:
     """
     lines: list[int] = []
     for stmt in iter_import_time_statements(tree):
-        for node in iter_statement_scoped_nodes(stmt):
+        for node in iter_statement_scoped_nodes(stmt, skip_deferred=True):
             if isinstance(node, ast.Call) and call_callee_name(node) in _FS_MUTATING_CALLS:
                 lines.append(node.lineno)
     return sorted(lines)
@@ -639,6 +645,28 @@ def iter_call_expressions(tree: ast.AST, name: str | None = None) -> Iterator[as
             yield node
         elif isinstance(f, ast.Attribute) and f.attr == name:
             yield node
+
+
+def called_function_names(node: ast.AST) -> set[str]:
+    """Every function name called anywhere inside *node*, bare or dotted.
+
+    ``foo()`` contributes ``"foo"`` and ``obj.foo()`` contributes ``"foo"`` — the
+    ATTRIBUTE, not the receiver — because guards using this ask "was this policy
+    consulted?", and the same policy is reached both as a bare import and as a
+    classmethod on its owner.
+
+    Built on :func:`iter_call_expressions` rather than its own ``ast.walk``: two
+    guards independently grew this loop, which is what
+    ``test_architecture_no_handrolled_call_walk`` exists to prevent.
+    """
+    names: set[str] = set()
+    for call in iter_call_expressions(node):
+        func = call.func
+        if isinstance(func, ast.Name):
+            names.add(func.id)
+        elif isinstance(func, ast.Attribute):
+            names.add(func.attr)
+    return names
 
 
 def select_call_model_name(call: ast.Call) -> str | None:
@@ -1446,6 +1474,212 @@ def load_hook_module(name: str) -> Any:
         sys.path.insert(0, hooks_dir)
     spec.loader.exec_module(module)
     return module
+
+
+# ---------------------------------------------------------------------------
+# e2e stack wiring detectors — the compose file, the shared TLS front, the leaf
+# certificate. Shared by every guard that checks one origin's four wiring sites
+# (``test_architecture_e2e_webhook_capture_wiring.py``,
+# ``test_architecture_e2e_counterparty_origin_wiring.py``): each such origin is
+# the SAME four questions asked about a different hostname, so the detectors
+# live here and only the hostname/service/expectations belong to the guard.
+# ---------------------------------------------------------------------------
+
+#: The one TLS-terminating service every in-stack HTTPS origin is fronted by.
+#: Extending the EXISTING front is the requirement; a second front would mean two
+#: terminators, two certificates and two places to keep in step.
+TLS_FRONT_SERVICE = "tls-proxy"
+
+#: An nginx ``map $ssl_server_name <target> { ... }`` block.
+_SNI_MAP_RE = re.compile(r"map\s+\$ssl_server_name\s+\$\w+\s*\{(?P<body>[^}]*)\}", re.DOTALL)
+
+#: Rows of an SNI map that name a map DIRECTIVE rather than a hostname.
+_SNI_MAP_DIRECTIVES = frozenset({"default", "hostnames", "volatile"})
+
+
+def load_yaml(path: Path) -> dict:
+    """Parse a YAML file into a dict (empty file -> ``{}``)."""
+    return yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+
+
+def san_dns_names(source: str) -> tuple[str, ...]:
+    """The ``SAN_DNS_NAMES`` literal from ``gen_test_tls.py``, read without importing it.
+
+    AST rather than import: the generator pulls in ``cryptography`` and writes
+    into ``.test-tls/`` at module scope in some call paths — a guard must read
+    the declaration, not run the generator.
+    """
+    tree = ast.parse(source)
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assign):
+            continue
+        targets = [t.id for t in node.targets if isinstance(t, ast.Name)]
+        if "SAN_DNS_NAMES" not in targets:
+            continue
+        if not isinstance(node.value, ast.Tuple | ast.List):
+            continue
+        return tuple(e.value for e in node.value.elts if isinstance(e, ast.Constant) and isinstance(e.value, str))
+    return ()
+
+
+def san_covers(san_names: tuple[str, ...], hostname: str) -> bool:
+    """Whether *hostname* is covered by *san_names*, exactly or by a one-label wildcard.
+
+    Mirrors RFC 6125 wildcard matching as TLS clients apply it: ``*.example.com``
+    covers ``a.example.com`` and NOT ``a.b.example.com``.
+    """
+    for san in san_names:
+        if san == hostname:
+            return True
+        if san.startswith("*.") and hostname.endswith(san[1:]) and "." not in hostname[: -len(san[1:])]:
+            return True
+    return False
+
+
+def tls_front_aliases(compose: dict) -> list[str]:
+    """Every network alias declared on the shared TLS front service."""
+    service = compose.get("services", {}).get(TLS_FRONT_SERVICE) or {}
+    networks = service.get("networks") or {}
+    if not isinstance(networks, dict):
+        return []
+    aliases: list[str] = []
+    for network in networks.values():
+        if isinstance(network, dict):
+            aliases.extend(network.get("aliases") or [])
+    return aliases
+
+
+def sni_map_upstreams(template: str) -> dict[str, str]:
+    """``hostname -> upstream`` for every route in the template's SNI map block(s).
+
+    The upstream half matters as much as the key: a hostname routed to the WRONG
+    service is wired everywhere a guard would look and still reaches the wrong
+    origin, which on a signing path reads as an unresolvable counterparty rather
+    than as a compose typo.
+    """
+    routes: dict[str, str] = {}
+    for match in _SNI_MAP_RE.finditer(template):
+        for raw in match.group("body").splitlines():
+            line = raw.split("#", 1)[0].strip().rstrip(";")
+            if not line:
+                continue
+            fields = line.split()
+            if fields[0] in _SNI_MAP_DIRECTIVES:
+                continue
+            routes[fields[0]] = fields[1] if len(fields) > 1 else ""
+    return routes
+
+
+def sni_map_hostnames(template: str) -> list[str]:
+    """The SNI names routed by the template's ``map $ssl_server_name`` block(s)."""
+    return list(sni_map_upstreams(template))
+
+
+def compose_service(compose: dict, name: str) -> dict:
+    """One compose service's definition, or ``{}`` when it is not declared."""
+    service = compose.get("services", {}).get(name)
+    return service if isinstance(service, dict) else {}
+
+
+def compose_service_environment(compose: dict, name: str) -> dict[str, str]:
+    """A service's ``environment:`` as a mapping, accepting both compose spellings.
+
+    Compose allows a mapping AND a ``KEY=value`` list; a guard that reads only the
+    mapping form silently passes on the other, which is the shape of a guard that
+    grades nothing.
+    """
+    environment = compose_service(compose, name).get("environment") or {}
+    if isinstance(environment, dict):
+        return {str(key): "" if value is None else str(value) for key, value in environment.items()}
+    if isinstance(environment, list):
+        pairs = (str(entry).split("=", 1) for entry in environment)
+        return {parts[0]: parts[1] if len(parts) > 1 else "" for parts in pairs}
+    return {}
+
+
+# ---------------------------------------------------------------------------
+# BDD xfail-registration structures (tests/bdd/conftest.py)
+# ---------------------------------------------------------------------------
+
+BDD_CONFTEST_PATH = REPO_ROOT / "tests" / "bdd" / "conftest.py"
+
+
+def string_constant(node: ast.expr) -> str | None:
+    """The value of a ``str`` constant expression, or None for anything else."""
+    return node.value if isinstance(node, ast.Constant) and isinstance(node.value, str) else None
+
+
+def uc010_wired_tags() -> set[str]:
+    """Every ``T-UC-010-*`` tag string literal inside the ``_UC010_WIRED_TAGS``
+    set literal in conftest.py.
+
+    ``_UC010_WIRED_TAGS`` is a nested (function-local) set literal, not a
+    module-level assignment, so it is located by walking the whole AST for a
+    ``Name`` target called ``_UC010_WIRED_TAGS`` rather than via a module-level
+    lookup. Any T-UC-010 tag absent from it fast-xfails via the generic dormant
+    fallback independent of ``_XFAIL_TAGS``/``_SELECTIVE_XFAIL`` — so it can
+    never be "stale by graduation" and must count as active for the stale-
+    citation guard's purposes, and it must not claim a graded production gap
+    for the reason-text guard's purposes.
+    """
+    tree = ast.parse(BDD_CONFTEST_PATH.read_text(encoding="utf-8"))
+    wired: set[str] | None = None
+    for node in ast.walk(tree):
+        targets: list[ast.expr] = []
+        if isinstance(node, ast.Assign):
+            targets = node.targets
+        elif isinstance(node, ast.AnnAssign) and node.target is not None:
+            targets = [node.target]
+        else:
+            continue
+        for target in targets:
+            if isinstance(target, ast.Name) and target.id == "_UC010_WIRED_TAGS":
+                assert isinstance(node.value, ast.Set), "_UC010_WIRED_TAGS is not a set literal"
+                wired = {tag for elt in node.value.elts if (tag := string_constant(elt)) is not None}
+    assert wired is not None, "_UC010_WIRED_TAGS not found in conftest.py"
+    return wired
+
+
+#: The transport-wrapper inventory, shared by every guard that walks the wrappers.
+#: Lifted out of tests/unit/test_architecture_wrapper_typed_params.py, which owned it
+#: and was therefore IMPORTED BY a sibling guard -- a cross-test-module import that
+#: test_architecture_no_cross_test_module_imports.py had to allowlist. The constant is
+#: not that guard's subject, it is shared vocabulary, so it belongs here. Same move as
+#: string_constant/uc010_wired_tags above.
+# MCP wrapper functions to check (module_path, function_name)
+MCP_WRAPPERS = [
+    ("src.core.tools.products", "get_products"),
+    ("src.core.tools.media_buy_create", "create_media_buy"),
+    ("src.core.tools.media_buy_update", "update_media_buy"),
+    ("src.core.tools.media_buy_delivery", "get_media_buy_delivery"),
+    ("src.core.tools.media_buy_list", "get_media_buys"),
+    ("src.core.tools.creatives.sync_wrappers", "sync_creatives"),
+    ("src.core.tools.creatives.listing", "list_creatives"),
+    ("src.core.tools.properties", "list_authorized_properties"),
+    ("src.core.tools.accounts", "list_accounts"),
+    ("src.core.tools.accounts", "sync_accounts"),
+    ("src.core.tools.capabilities", "get_adcp_capabilities"),
+    ("src.core.tools.creative_formats", "list_creative_formats"),
+]
+
+# A2A raw wrapper functions to check (module_path, function_name)
+A2A_RAW_WRAPPERS = [
+    ("src.core.tools.products", "get_products_raw"),
+    ("src.core.tools.media_buy_create", "create_media_buy_raw"),
+    ("src.core.tools.media_buy_update", "update_media_buy_raw"),
+    ("src.core.tools.media_buy_delivery", "get_media_buy_delivery_raw"),
+    ("src.core.tools.media_buy_list", "get_media_buys_raw"),
+    ("src.core.tools.creatives.sync_wrappers", "sync_creatives_raw"),
+    ("src.core.tools.creatives.listing", "list_creatives_raw"),
+    ("src.core.tools.properties", "list_authorized_properties_raw"),
+    ("src.core.tools.accounts", "list_accounts_raw"),
+    ("src.core.tools.accounts", "sync_accounts_raw"),
+    ("src.core.tools.capabilities", "get_adcp_capabilities_raw"),
+    ("src.core.tools.creative_formats", "list_creative_formats_raw"),
+    ("src.core.tools.signals", "get_signals_raw"),
+    ("src.core.tools.signals", "activate_signal_raw"),
+    ("src.core.tools.performance", "update_performance_index_raw"),
+]
 
 
 # ---------------------------------------------------------------------------

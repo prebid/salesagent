@@ -14,6 +14,7 @@ import pytest
 from adcp.types import PushNotificationConfig
 
 from tests.helpers.create_media_buy_capture import capture_a2a_forwarded_pnc
+from tests.helpers.signing import verifier_disabled
 
 
 class TestMCPForwardsPushNotificationConfig:
@@ -30,7 +31,10 @@ class TestA2AForwardsPushNotificationConfig:
             "url": "https://example.com/webhook",
             "authentication": {"credentials": "a" * 32, "schemes": ["Bearer"]},
         }
-        forwarded = await capture_a2a_forwarded_pnc(pnc_dict)
+        # See test_create_media_buy_behavioral: the ``authentication`` block makes an
+        # unsigned registration refusable, and forwarding is what this grades.
+        with verifier_disabled():
+            forwarded = await capture_a2a_forwarded_pnc(pnc_dict)
 
         assert forwarded is not None, "A2A wrapper does not forward push_notification_config to _impl"
         assert isinstance(forwarded, PushNotificationConfig)

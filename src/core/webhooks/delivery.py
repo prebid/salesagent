@@ -116,6 +116,16 @@ class WebhookDeliveryOutcome:
         return cls(kind="exhausted", attempts=0, detail=f"delivery failed with an unexpected {exception_type}")
 
 
+#: The internal ``task_type`` labels that earn a ``webhook_delivery_log`` row, and the ONE
+#: place the pair is written down. Two senders answer about the same delivery under two
+#: names -- ``WebhookDeliveryService`` stamps ``delivery_report``, the live server's
+#: ``DeliveryWebhookScheduler`` stamps ``media_buy_delivery`` -- and this module has always
+#: admitted both. Naming it lets a reader of the log (a test asserting an outcome was
+#: recorded, say) be sender-AGNOSTIC by importing the same authority the writer consults,
+#: instead of restating one of the two literals and silently grading only that sender.
+DELIVERY_LOG_TASK_TYPES = ("delivery_report", "media_buy_delivery")
+
+
 @dataclass(frozen=True, slots=True)
 class WebhookTaskContext:
     """A delivery's task identity, constructed once and consumed identically
@@ -151,7 +161,7 @@ class WebhookTaskContext:
         failure/success branch) exactly once.
         """
         return (
-            self.task_type in ("delivery_report", "media_buy_delivery")
+            self.task_type in DELIVERY_LOG_TASK_TYPES
             and bool(self.media_buy_id)
             and bool(self.tenant_id)
             and bool(self.principal_id)

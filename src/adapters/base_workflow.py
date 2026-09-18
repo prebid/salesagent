@@ -215,15 +215,30 @@ class BaseWorkflowManager:
                 "ts": int(datetime.now(UTC).timestamp()),
             }
 
-            SlackNotifier(webhook_url=slack_webhook_url).send_message(
+            # This adapter does not dial out itself. SlackNotifier.send_message hands
+            # the payload to webhook_delivery.deliver_webhook_with_retry, which applies
+            # the SEND-time gate (reject_unsafe_outbound_webhook_url) before handing the
+            # single call to the egress seam — the gate this call site used to apply
+            # inline via deliver_json_to_allowed_destination. That gate matters here
+            # because the URL comes out of tenant config and was never judged at dial
+            # time; routing through the notifier keeps it, and adds the retry
+            # bookkeeping and delivery record the inline dial never had.
+            # max_retries=1 preserves the previous single-attempt behaviour.
+            delivered = SlackNotifier(webhook_url=slack_webhook_url).send_message(
                 text=notification["title"],
                 attachments=[attachment],
                 max_retries=1,
             )
 
-            self.log(f"Sent Slack notification for workflow step {step_id}")
-            if self.audit_logger:
-                self.audit_logger.log_success(f"Sent Slack notification for workflow step: {step_id}")
+            # send_message reports delivery as a bool — a refused URL or an exhausted
+            # retry budget returns False without raising. Claiming success (and writing
+            # a success audit record) on that return would be a quiet failure.
+            if delivered:
+                self.log(f"Sent Slack notification for workflow step {step_id}")
+                if self.audit_logger:
+                    self.audit_logger.log_success(f"Sent Slack notification for workflow step: {step_id}")
+            else:
+                self.log("[yellow]Slack notification was not delivered[/yellow]")
 
         except Exception as e:
             self.log(f"[yellow]Failed to send Slack notification: {str(e)}[/yellow]")

@@ -40,6 +40,19 @@ def e2e_host() -> str:
     return os.getenv("ADCP_TEST_HOST", "localhost")
 
 
+def e2e_in_network() -> bool:
+    """Whether this process runs INSIDE the compose network rather than on the host.
+
+    The in-network runner addresses the stack by service name (:func:`e2e_host` is a
+    compose alias); the host path reaches published ports on localhost and cannot
+    resolve a compose alias at all. Any claim that depends on compose DNS — reaching a
+    service that publishes NO host port, or resolving a network alias — is only
+    meaningful here. ``./run_all_tests.sh`` runs every suite in-network, so this is the
+    normal path and the host path is the developer convenience.
+    """
+    return e2e_host() not in {"localhost", "127.0.0.1"}
+
+
 def e2e_tls_host() -> str:
     """Host the stack's TLS listener answers at — DOTTED, and not loopback-literal.
 

@@ -35,6 +35,12 @@ The [Quickstart guide](quickstart.md) gets the agent running locally in 5 minute
 - **[Security](security.md)** — authentication and security best practices
 - **[Encryption](encryption.md)** — API key encryption with Fernet
 
+## Message signing (RFC 9421)
+
+- **[Signing posture and key discovery](signing/posture-and-discovery.md)** — for counterparties: what we advertise, the enforcement ladder, and the brand.json walk to our JWKS
+- **[Verifying our outbound webhooks](signing/verifying-our-webhooks.md)** — for counterparties: the profile tag, where to fetch the key, and the legacy HMAC removal
+- **[Signing key runbook](operations/signing-key-runbook.md)** — for operators: provisioning, rotation, revocation, rollout and rollback
+
 ## Development
 
 - **[Development overview](development/)** — contributing to the codebase, and the map of every development document

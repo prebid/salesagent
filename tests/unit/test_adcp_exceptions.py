@@ -55,7 +55,7 @@ import abc
 import pytest
 from adcp.types import ErrorCode
 
-from src.core.errors.codes import _HTTP_STATUS, _UNCLASSIFIED_STATUS
+from src.core.errors.codes import _HTTP_STATUS, _UNCLASSIFIED_STATUS, CODE_TABLE
 from src.core.exceptions import (
     AdCPProductNotFoundError,
     AdCPSalesAgentError,
@@ -167,10 +167,14 @@ class TestEveryEmittedCodeHasAnAuthoredStatus:
         ``BUDGET_CAP_REACHED`` is one: no class emits it, so it has no row. The
         default is not a judgement about that code — it is the floor that used to
         be the base exception's own class default.
-        """
-        exc = AdCPSalesAgentError(error_code=ErrorCode.BUDGET_CAP_REACHED)
 
-        assert exc.status_code == _UNCLASSIFIED_STATUS == 500
+        Read off ``CODE_TABLE`` rather than off a constructed error, and that is not a
+        weakening: an error naming a code no class declares is no longer CONSTRUCTIBLE.
+        ``error_code=`` is gone from the constructor, so the only way to hold that code is
+        to look it up — which is what the table's consumers do anyway (``status_code`` is
+        ``CODE_TABLE[self._error_code].status``, the same expression).
+        """
+        assert CODE_TABLE[ErrorCode.BUDGET_CAP_REACHED].status == _UNCLASSIFIED_STATUS == 500
 
 
 # ---------------------------------------------------------------------------

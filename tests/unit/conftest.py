@@ -39,7 +39,21 @@ def mock_all_external_dependencies():
     with patch("src.core.database.database_session.get_db_session") as mock_db:
         mock_db.return_value = mock_session
 
-        # Mock external services
+        # Mock external services. This is an egress GUARD, not a test double: it
+        # exists so a unit test cannot dial off this machine. Production egress no
+        # longer runs through ``requests`` at all — every outbound call goes through
+        # src/core/security/outbound_http.py (httpx) behind the SSRF gate — so what
+        # this catches now is a stray ``requests.post`` from a test or a third-party
+        # library, and a test asserting on it is asserting on nothing production does.
+        #
+        # Never grade a test against the canned response below. It answers 200 and
+        # captures nothing worth asserting on — no URL, no headers, no bytes — so a
+        # test leaning on it cannot tell a signed POST from an unsigned one
+        # (#1291). A test that needs to control or observe an outbound POST says so
+        # at its own site: capture_outbound_webhooks (tests/helpers/webhook_wire)
+        # patches over this stub — and over httpx.Client/AsyncClient, which is where
+        # the real delivery goes — for the duration of its block, and records the
+        # real wire bytes (salesagent-og9k.6).
         real_post = requests.post
 
         def _post(url, *args, **kwargs):

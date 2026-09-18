@@ -1,6 +1,6 @@
 """Lock test for the integration known-failures ledger.
 
-``tests/integration/known_failures.txt`` is a SHRINKING work-list: 48 integration tests
+``tests/integration/known_failures.txt`` is a SHRINKING work-list: 44 integration tests
 xfailed pending rewrite under epic salesagent-e30o7, one child issue per cluster. This
 test pins that state so the ledger cannot drift silently:
 
@@ -27,37 +27,45 @@ from tests.helpers.ledger import load_ledger_nodeids
 
 LEDGER = Path(__file__).parent.parent / "integration" / "known_failures.txt"
 
-#: The count the ledger was created with. A bound, never a target — see
-#: ``test_the_ledger_never_grows``.
+#: The high-water mark the ledger is held under. A bound, never a target — see
+#: ``test_the_ledger_never_grows``. Lowered 48 -> 45 when the three
+#: ``test_require_vendor_refuses_an_unconfigured_client`` entries graduated, and
+#: 45 -> 44 when the ``test_webhook_refusal_reaches_both_seats`` sub-32 entry did.
 #:
-#: 53, where a full box run measured 48. Both additions were mine to see and did not:
-#: cluster I (2) passes on the box because it has ``ADCP_AUTH_TEST_MODE`` on and fails
-#: wherever it is off, so a baseline measured in one environment does not transfer; and
-#: cluster J (3) I excluded by judgement as another PR's to fix, which conflated fixing
-#: with recording and left CI red for a reason no reader could find. A ledger created from
-#: a single run is a floor on its contents, and the number only falls from here.
+#: 44 -> 44 at the #1721 re-merge, MEASURED rather than spliced, which is the whole reason a
+#: ratchet is never content-merged. The two sides carried different lineages of this counter
+#: (ours 48 -> 44 by graduation, theirs 48 -> 51 by addition) and the merged ledger is neither
+#: number. Entry by entry: theirs added 5; two of ours came off because #1721 DELETED their
+#: subjects outright (TestCreativeIdsNotFound::test_creative_ids_not_found_raises_tool_error
+#: and TestProductNotFound::test_product_not_found_returns_error are gone from
+#: test_create_media_buy_behavioral.py); and one of theirs named
+#: test_real_run_records_uc005_format_id_roundtrip_scenarios_as_live, which THIS branch
+#: renamed, so it is repointed at the successor rather than left dangling. None of our four
+#: graduations crept back -- verified by set difference, not by the count happening to agree.
 #:
-#: 51 after the first two came off cluster B — deleted, not repaired, because
-#: test-results/bdd_scenario_liveness.json records @T-UC-002-ext-b and @T-UC-002-ext-o as
-#: bound, wired, unledgered and PASSING on all three in-process transports, grading the
-#: same two conditions and more of each. That is the shape the ledger's header asks for:
-#: a scenario replaces such a test, it does not port it.
-CEILING = 51
+#: 44 -> 42 when Cluster I (the two ``test_template_url_validation.py`` rows) graduated. They
+#: were never a testing-layer defect the ledger could wait out: the module built its admin app
+#: from the AMBIENT ENVIRONMENT, so whether the test-credential login blueprint was composed --
+#: and therefore whether ``url_for('test_auth.test_auth')`` resolved -- was an environment fact.
+#: A strict xfail on an environment fact is red exactly where it is enforced and green
+#: everywhere else. The module now composes that blueprint unconditionally, which is the
+#: STRICTER reading: every template branch is scanned, including the ones that render only
+#: under test mode. salesagent-091d8, which asks how a first admin reaches a fresh deployment
+#: before SSO exists, is a production composition question this scanner never graded and is
+#: NOT discharged by the graduation.
+CEILING = 42
 
 EXPECTED_LEDGER: frozenset[str] = frozenset(
     {
-        # Cluster A (salesagent-e30o7.1) — half-seeded tenant trips validate_setup_complete
         "tests/integration/test_create_media_buy_behavioral.py::TestExtensionObligations::test_currency_not_supported_by_gam",
         "tests/integration/test_create_media_buy_behavioral.py::TestPostconditionObligations::test_error_response_contains_recovery_guidance",
         "tests/integration/test_create_media_buy_behavioral.py::TestProposalBasedObligations::test_proposal_based_product_validation",
-        # Cluster B (salesagent-e30o7.2) — production refuses correctly, the test expects otherwise
         "tests/integration/test_create_media_buy_behavioral.py::TestExtensionObligations::test_product_with_no_pricing_options",
         "tests/integration/test_create_media_buy_behavioral.py::TestExtensionObligations::test_proposal_budget_amount_zero_rejected",
         "tests/integration/test_create_media_buy_behavioral.py::TestMaxDailySpendExceeded::test_max_daily_spend_exceeded",
         "tests/integration/test_create_media_buy_behavioral.py::TestMaxDailySpendExceeded::test_max_daily_spend_same_day_flight_uses_min_one_day",
         "tests/integration/test_create_media_buy_behavioral.py::TestPostconditionObligations::test_system_state_unchanged_on_failure",
         "tests/integration/test_idempotency_race.py::TestRaceLoserPayloadRules::test_different_payload_under_a_stored_key_conflicts",
-        # Cluster C (salesagent-e30o7.3) — the test holds a stale API
         "tests/integration/test_account_mcp_context_bypass.py::TestBDDTransportBypass::test_list_accounts_context_through_dispatch",
         "tests/integration/test_account_mcp_context_bypass.py::TestMCPContextThroughRealPipeline::test_mcp_pipeline_forwards_context_to_the_response",
         "tests/integration/test_creative_formats_validation_b.py::TestMultiFieldValidationErrors::test_multi_field_errors_formatted_with_per_field_messages",
@@ -66,28 +74,19 @@ EXPECTED_LEDGER: frozenset[str] = frozenset(
         "tests/integration/test_creative_sync_transport.py::TestGeminiKeyMissing::test_generative_no_gemini_key_fails[mcp]",
         "tests/integration/test_creative_sync_transport.py::TestGeminiKeyMissing::test_generative_no_gemini_key_fails[rest]",
         "tests/integration/test_tenant_utils.py::test_account_approval_mode_round_trips_through_tenant_context",
-        # Cluster D (salesagent-e30o7.4) — the test injects an identity through the wire
         "tests/integration/test_creative_formats_discovery.py::TestAuthOptionalForDiscovery::test_a2a_returns_formats_with_no_auth_token",
         "tests/integration/test_creative_formats_discovery.py::TestAuthOptionalForDiscovery::test_a2a_with_no_auth_token_via_call_via",
         "tests/integration/test_creative_formats_protocol.py::TestTenantContextFromA2AHeaders::test_a2a_different_tenants_get_different_catalogs",
         "tests/integration/test_creative_formats_protocol.py::TestTenantContextFromA2AHeaders::test_a2a_uses_tenant_from_identity",
-        # Cluster E (salesagent-e30o7.5) — fixture collisions hit real DB constraints
         "tests/integration/test_idempotency_race.py::TestDegradedFallbackScopeRules::test_degraded_path_conflicts_on_mutated_payload",
         "tests/integration/test_idempotency_race.py::TestDegradedFallbackScopeRules::test_post_ttl_retry_rejects_idempotency_expired",
         "tests/integration/test_idempotency_race.py::TestRaceSeamThroughEntrypoint::test_retry_after_lost_cache_row_fails_closed_via_backstop",
         "tests/integration/test_media_buy_v3.py::TestCreateMediaBuyPrincipalResolution::test_principal_not_found_returns_error",
-        # Cluster F (salesagent-e30o7.6) — the test asserts on a mock of our own code
         "tests/integration/test_create_media_buy_behavioral.py::TestCreativeUploadFailure::test_creative_upload_failure_raises_tool_error",
         "tests/integration/test_create_media_buy_behavioral.py::TestInlineCreativeObligations::test_inline_creatives_uploaded_and_assigned",
         "tests/integration/test_create_media_buy_behavioral.py::TestMainFlowObligations::test_auto_approval_determination",
-        # Cluster G (salesagent-e30o7.7) — vendor-client refusal for a dry-run adapter
         "tests/integration/test_vendor_egress.py::test_a_dry_run_adapter_holds_no_vendor_client[kevel]",
         "tests/integration/test_vendor_egress.py::test_a_dry_run_adapter_holds_no_vendor_client[triton]",
-        "tests/integration/test_vendor_egress.py::test_require_vendor_refuses_an_unconfigured_client[Kevel]",
-        "tests/integration/test_vendor_egress.py::test_require_vendor_refuses_an_unconfigured_client[Triton Digital]",
-        "tests/integration/test_vendor_egress.py::test_require_vendor_refuses_an_unconfigured_client[Xandr]",
-        "tests/integration/test_webhook_refusal_reaches_both_seats.py::TestSeatTwoTheStashPathRefusesWithoutAnOutcome::test_a_stored_legacy_row_stops_delivering_and_says_so[sub-32 credential-schemes1-sssssssssssssssssssssssssssssss-Bearer]",
-        # Cluster H (salesagent-e30o7.8) — wire and status expectations that drifted
         "tests/integration/test_admin_media_buy_reject_webhook.py::TestAdminMediaBuyRejectWebhook::test_approve_webhook_echoes_buyer_request_context",
         "tests/integration/test_bdd_dispatch_seam.py::TestCallViaForwardsReqWholeAndTheEnvUnpacksIt::test_a_format_ids_filter_still_reaches_the_tool[mcp]",
         "tests/integration/test_bdd_dispatch_seam.py::TestCallViaForwardsReqWholeAndTheEnvUnpacksIt::test_a_format_ids_filter_still_reaches_the_tool[rest]",
@@ -100,13 +99,6 @@ EXPECTED_LEDGER: frozenset[str] = frozenset(
         "tests/integration/test_list_accounts_auth_missing_wire.py::TestListAccountsNoTokenEmitsAuthMissing::test_no_token_rest_wire_emits_auth_missing",
         "tests/integration/test_mcp_client_util.py::TestExhaustedFailureReachesTheRegistryClassified::test_seam_failure_surfaces_as_the_mapped_envelope[connection-level]",
         "tests/integration/test_mcp_client_util.py::TestExhaustedFailureReachesTheRegistryClassified::test_seam_failure_surfaces_as_the_mapped_envelope[tool-level]",
-        # Cluster I (salesagent-091d8) — production composition depends on a test flag
-        "tests/integration/test_template_url_validation.py::TestTemplateUrlValidation::test_all_template_url_for_calls_resolve",
-        "tests/integration/test_template_url_validation.py::TestTemplateUrlValidation::test_form_actions_point_to_valid_endpoints",
-        # Cluster J (GH #2189) — these re-run a BDD slice and grade their own subrun
-        "tests/integration/test_bdd_scenario_liveness_real_run.py::test_real_run_records_uc006_storyboard_scenarios_as_ledgered_or_live",
-        "tests/integration/test_bdd_scenario_liveness_real_run.py::test_real_run_records_uc005_format_id_roundtrip_scenarios_as_live",
-        "tests/integration/test_bdd_scenario_liveness_real_run.py::test_provenance_tag_is_a_recorded_field_not_a_collection_filter",
     }
 )
 

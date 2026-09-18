@@ -1230,6 +1230,45 @@ class TestInlineCreativeObligations:
         assert exc_info.value.error_code == "VALIDATION_ERROR"
 
     @pytest.mark.asyncio
+    async def test_malformed_registered_agent_url_skipped_not_hard_failed(self, integration_db):
+        """A malformed PRE-EXISTING registered creative agent_url (admin-ingested
+        data the buyer never touched) is excluded from registration matching
+        with a log, rather than hard-failing every format_id in the request.
+
+        Covers #1291.
+        """
+        from src.core.tools.media_buy_create import _validate_and_convert_format_ids
+        from tests.factories import CreativeAgentFactory
+
+        with MediaBuyCreateEnv() as env:
+            tenant, _principal = env.setup_default_data()
+            # Well-formed registration the buyer's format_id should match.
+            CreativeAgentFactory(tenant=tenant, agent_url="https://creative.example.com", enabled=True)
+            # Malformed pre-existing registration -- bypasses admin-ingestion
+            # validation entirely by writing directly to the DB, which is
+            # exactly how such a row would already exist in production.
+            # NOT a U-label host: the merged canonicalizer IDNA-encodes "https://exämple.com"
+            # to https://xn--exmple-cua.com/ and returns normally, which left the
+            # TargetUriMalformedError arm in _build_registered_agent_urls unexecuted and this
+            # case grading nothing. An unparseable authority is refused for real.
+            CreativeAgentFactory(tenant=tenant, agent_url="https://[::1", enabled=True)
+
+            # No get_format mocking needed: ADCP_TESTING=true (autouse fixture)
+            # makes CreativeAgentRegistry serve the checked-in reference formats
+            # for any agent_url, so this exercises the real registry lookup.
+            result = await _validate_and_convert_format_ids(
+                format_ids=[{"agent_url": "https://creative.example.com", "id": "display_300x250_image"}],
+                tenant_id=tenant.tenant_id,
+                package_idx=0,
+            )
+
+        # Returned in CANONICAL form, trailing slash and all: the merged canonicalizer
+        # applies url-canonicalization step 5 ("empty path + authority -> /"), which the
+        # pre-merge one undid with a now-deleted rstrip("/"). Same obligation, spelled in
+        # the one canonical form both sides of the registration check now use.
+        assert result == [{"agent_url": "https://creative.example.com/", "id": "display_300x250_image"}]
+
+    @pytest.mark.asyncio
     async def test_unapproved_creatives_may_trigger_manual_approval(self):
         """Unapproved creatives may trigger manual approval path.
 
@@ -1486,10 +1525,13 @@ class TestExtensionObligations:
         """
         from src.core.tools.media_buy_create import _validate_and_convert_format_ids
 
-        with patch("src.core.creative_agent_registry.CreativeAgentRegistry") as mock_registry_cls:
+        # Patched at the ACCESSOR, not the class: production asks
+        # get_creative_agent_registry() for the registry the deployment selected, so
+        # replacing the constructor would leave the real (reference-formats) registry in play.
+        with patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_get_registry:
             mock_registry = MagicMock()
             mock_registry._get_tenant_agents.return_value = []  # No agents registered
-            mock_registry_cls.return_value = mock_registry
+            mock_get_registry.return_value = mock_registry
 
             from src.core.exceptions import AdCPAuthorizationError
 
@@ -1515,11 +1557,13 @@ class TestExtensionObligations:
         mock_agent = MagicMock()
         mock_agent.agent_url = "https://creative.example.com"
 
-        with patch("src.core.creative_agent_registry.CreativeAgentRegistry") as mock_registry_cls:
+        # Patched at the ACCESSOR, not the class -- see the note in
+        # test_unregistered_creative_agent_rejected.
+        with patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_get_registry:
             mock_registry = MagicMock()
             mock_registry._get_tenant_agents.return_value = [mock_agent]
             mock_registry.get_format = AsyncMock(return_value=None)  # Format not found
-            mock_registry_cls.return_value = mock_registry
+            mock_get_registry.return_value = mock_registry
 
             with pytest.raises(AdCPFormatNotFoundError) as exc_info:
                 await _validate_and_convert_format_ids(

@@ -534,7 +534,17 @@ class MockAdServer(AdServerAdapter):
         thread.start()
 
     def _send_completion_webhook(self, step_id: str, approved: bool, rejection_reason: str | None = None):
-        """Send webhook notification when async task completes."""
+        """Send webhook notification when async task completes.
+
+        FIXME(#1291): this POSTs to a URL the buyer registered, so it is an AdCP
+        webhook and must be authenticated by the mode that registration selects —
+        through ``src.core.signing.webhook_sender_factory``, like the three
+        production senders. It is not routed yet because the async-completion URL
+        arrives on the adapter config rather than as a ``PushNotificationConfig``
+        row, so which registration governs it is a decision, not a refactor
+        (tracked as salesagent-hop4). Allowlisted in
+        ``tests/unit/test_architecture_webhook_sender_boundary.py``.
+        """
         if not self.async_webhook_url:
             return
 

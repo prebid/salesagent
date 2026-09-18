@@ -14,13 +14,16 @@ Introduced by PR #1567.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from unittest.mock import MagicMock
 
 from src.core.schemas import UpdateMediaBuyRequest
 from tests.harness._mixins import make_adapter_update_side_effect
 from tests.harness.media_buy_create import OMIT_ACCOUNT, OMIT_IDEMPOTENCY_KEY, MediaBuyCreateEnv
 from tests.harness.transport import DeliverResult
+
+if TYPE_CHECKING:
+    from tests.helpers.signing import SignatureRealization
 
 _UPDATE_MODULE = "src.core.tools.media_buy_update"
 
@@ -117,7 +120,19 @@ class MediaBuyDualEnv(MediaBuyCreateEnv):
             return self._call_update_mcp(**kwargs)
         return super().deliver_mcp(**kwargs)
 
-    def _run_rest_request(self, endpoint: str, **kwargs: Any) -> Any:
+    def _run_rest_request(self, endpoint: str, *, signed: SignatureRealization = False, **kwargs: Any) -> Any:
+        # ``signed`` is DECLARED, never swallowed into ``**kwargs`` — the same
+        # discipline CapabilitiesEnv._run_rest_request states, and for the same
+        # reason. ``RestDispatcher`` passes ``signed=`` to EVERY
+        # ``_run_rest_request``; it is a dispatch-level fact (how the request is
+        # sent), not an AdCP request field. The create arm below was only ever
+        # safe because the BASE declares it, but the update arm never reaches the
+        # base — so an undeclared ``signed`` rode the kwargs into
+        # ``_build_update_rest_body`` and became a ``signed`` FIELD in the PUT
+        # body, which ``UpdateMediaBuyBody`` (extra="forbid", src/routes/api_v1.py)
+        # refuses as ``INVALID_REQUEST: Extra inputs are not permitted
+        # (field=signed)`` — masking whatever refusal the scenario was grading.
+        #
         # Set the update-vs-create routing flag and leave it set THROUGH the base
         # dispatch's subsequent parse_rest_response call: _base.py runs
         # _run_rest_request then parse_rest_response sequentially, so a finally-reset
@@ -127,8 +142,8 @@ class MediaBuyDualEnv(MediaBuyCreateEnv):
         # (unconditional assignment, so a create request clears a stale flag).
         self._active_update = _is_update_request(kwargs)
         if self._active_update:
-            return self._run_update_rest_request(**kwargs)
-        return super()._run_rest_request(endpoint, **kwargs)
+            return self._run_update_rest_request(signed=signed, **kwargs)
+        return super()._run_rest_request(endpoint, signed=signed, **kwargs)
 
     def build_rest_body(self, **kwargs: Any) -> dict[str, Any]:
         # The E2E dispatcher (RestE2EDispatcher) reads REST_ENDPOINT/REST_METHOD as
@@ -280,10 +295,14 @@ class MediaBuyDualEnv(MediaBuyCreateEnv):
         body.pop("media_buy_id", None)
         return body
 
-    def _run_update_rest_request(self, **kwargs: Any) -> Any:
+    def _run_update_rest_request(self, *, signed: SignatureRealization = False, **kwargs: Any) -> Any:
+        # ``signed`` is DECLARED here for the same reason ``_run_rest_request`` above
+        # declares it: this arm never reaches the base, so an undeclared keyword would
+        # ride the kwargs into ``_build_update_rest_body`` and become a body FIELD.
+        #
         # The credential rides the request headers, so a no-auth update scenario is
         # refused by the real resolver rather than let through by a test-mode override.
-        headers = self._pop_credential(kwargs)
+        credential = self._pop_credential(kwargs)
         self._commit_factory_data()
         client = self.get_rest_client()
 
@@ -298,14 +317,51 @@ class MediaBuyDualEnv(MediaBuyCreateEnv):
         req = kwargs.get("req")
         media_buy_id = getattr(req, "media_buy_id", None) or kwargs.get("media_buy_id") or self._seeded_media_buy_id
         endpoint = f"/api/v1/media-buys/{media_buy_id}"
-        return client.put(endpoint, json=body, headers=headers)
+        # Same signed/unsigned fork as the base POST dispatch, with the update's
+        # PUT verb: an env that cannot sign must REFUSE a signed dispatch (a
+        # silent unsigned send would let a signing scenario pass with no
+        # signature), and once it can sign, ``wire_request`` OWNS the request —
+        # it serializes once so the bytes signed are the bytes sent, and it emits
+        # the single ``Authorization`` identity plus this env's tenant hint
+        # itself. That is why ``credential`` is deliberately NOT merged into the
+        # signed leg: a second bearer would win the precedence race in
+        # ``resolved_identity._extract_auth_token`` and swap the acting
+        # principal, so signed and unsigned would differ by more than the
+        # signature.
+        #
+        # ``credentialed`` is read off the credential HEADERS because that is
+        # what "presented nothing" is under #1721 — ``credential={}`` and
+        # ``credential(token=None)`` both omit ``Authorization``
+        # (tests/helpers/credentials.py). It is the only way an in-process leg
+        # reaches the verifier's refusal branch at all: security.mdx :1269 makes
+        # an unsigned request carrying a valid bearer a spec-correct 200.
+        if not self.can_sign:
+            if signed:
+                self.signing  # raises, naming enable_request_signing()  # noqa: B018
+            return client.put(endpoint, json=body, headers=credential)
+        raw, wire_headers = self.wire_request(
+            path=endpoint,
+            body=body,
+            signed=signed,
+            credentialed="Authorization" in credential,
+            method="PUT",
+        )
+        return client.put(endpoint, content=raw, headers=wire_headers)
 
     def _parse_update_rest_response(self, data: dict[str, Any]) -> Any:
         """Rebuild an update_media_buy wire body as the branch the buyer received.
 
         ``UpdateMediaBuyResult.revive`` is production's own discrimination, so every
         transport hands steps the branch production would resolve rather than a
-        harness copy of that rule which can disagree with it.
+        harness copy of that rule which can disagree with it. It replaces a
+        hand-rolled submitted/success/error ladder that re-stated the same rule and
+        re-wrapped the branch in a ``UpdateMediaBuyResult(response=..., status=...)``
+        envelope; under #1721 ``UpdateMediaBuyResult`` IS the union root its three
+        branches inherit (``_BRANCH_ADAPTERS``, src/core/schemas/_base.py), so the
+        wrapper has no ``response`` field to fill and the ladder has nothing left to
+        decide. This serves the REST wire and the harness-synthesized A2A submitted
+        dict alike — production A2A has NO submitted reconstruction (Task
+        early-return; PR #1567 round-2 follow-up).
         """
         from src.core.schemas._base import UpdateMediaBuyResult
 
