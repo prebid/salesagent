@@ -43,10 +43,15 @@ _CREATIVE_AGENT_STACK = _REPO_ROOT / "scripts" / "creative-agent-stack.sh"
 # `_suite_reports.py` became their shared dependency, and the sandbox -- which
 # copies files rather than the tree -- kept handing the runner a scripts/ dir
 # that could not execute the checks it invokes.
+#
+# Paths are relative to scripts/, so a module in a subdirectory joins the same
+# list rather than earning a second mechanism beside it -- which is the staleness
+# this tuple was introduced to end.
 _RUNNER_REPORT_SCRIPTS = (
     "check_truncated_reports.py",
     "report_suite_failures.py",
     "_suite_reports.py",
+    "ci/report_worker_profile.py",
 )
 
 _DOCKER_STUB = """#!/usr/bin/env bash
@@ -118,8 +123,13 @@ def _run_with_stubbed_docker(tmp_path: Path) -> tuple[subprocess.CompletedProces
     # The runner shells out to these after collecting reports (main, PR #2091):
     # a truncated suite, or one whose only problem is a setup error, must not be
     # mistakable for a green one.
+    # The profile reporter is in this list for the same reason as the rest:
+    # `python3` on a path that does not exist exits nonzero, which the runner
+    # reads as a failed run.
     for name in _RUNNER_REPORT_SCRIPTS:
-        shutil.copy2(_REPO_ROOT / "scripts" / name, workdir / "scripts" / name)
+        destination = workdir / "scripts" / name
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(_REPO_ROOT / "scripts" / name, destination)
 
     stub_bin = tmp_path / "stub_bin"
     stub_bin.mkdir()

@@ -39,6 +39,15 @@ repos:
         language: system
         types: [python]
         pass_filenames: true
+        # Commit stage only. Without this the hook inherits
+        # default_install_hook_types and runs at pre-push too, where the file
+        # list is the whole pushed range rather than what you just wrote. A
+        # push that carries a merge then presents every file the other branch
+        # touched, and the hook asks you to fix citations you did not author:
+        # 272 of them across 110 files at the time this line was added. The
+        # rule is about what an author cites, so it belongs where authoring
+        # happens.
+        stages: [pre-commit]
 
       # Layer 2 — pre-push stage (medium cost; CI is authoritative for heavy checks)
       - id: check-docs-links
@@ -139,7 +148,13 @@ repos:
     hooks:
       - id: trailing-whitespace
       - id: end-of-file-fixer
-        exclude: ^\.claude/
+        # Tool-owned directories, not source. beads rewrites
+        # .beads/.migration-hint-ts without a trailing newline, so the fixer
+        # rewrites it on every run, leaves the tree dirty and aborts the push --
+        # while the file is tracked but inside a gitignored directory, so the
+        # change cannot even be committed without -f. Same reason .claude/ is
+        # here: our formatting rules do not govern another tool's data.
+        exclude: ^\.(claude|beads)/
       - id: check-yaml
       - id: check-added-large-files
         args: ['--maxkb=1000']
