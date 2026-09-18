@@ -55,12 +55,6 @@ def _auth_session(client, tenant_id: str, *, auth_method: str | None = None) -> 
             sess["auth_method"] = auth_method
 
 
-@pytest.fixture(autouse=True)
-def _enable_test_mode(monkeypatch):
-    """Enable global test auth so require_tenant_access accepts the test session."""
-    monkeypatch.setenv("ADCP_AUTH_TEST_MODE", "true")
-
-
 class TestListUsersPage:
     """GET /tenant/<id>/users — render the users list page."""
 

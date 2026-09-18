@@ -35,7 +35,7 @@ TESTS_DIR = REPO_ROOT / "tests"
 # Line 41 -> 42: pure drift. Same call, same method, same class; the class
 # docstring above it gained one wrapped line during the spec-gaps-1210 merge.
 ALLOWLIST: set[tuple[str, int]] = {
-    ("tests/integration/test_a2a_wire_integer_serialization.py", 42),
+    ("tests/integration/test_a2a_wire_integer_serialization.py", 50),
 }
 
 

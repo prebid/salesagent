@@ -96,14 +96,14 @@ class TestDeliveryPollE2ERealization:
 
 @pytest.mark.requires_db
 class TestDeliveryPollDiscoverySeeding:
-    """E2E mode seeds tenant + principal so the live server can authenticate."""
+    """A real-database env seeds the tenant + principal it presents, on entry."""
 
-    def test_seed_e2e_identity_creates_tenant_and_principal(self, integration_db):
+    def test_seed_identity_creates_tenant_and_principal(self, integration_db):
         from src.core.database.models import Principal, Tenant
         from tests.harness.delivery_poll import DeliveryPollEnv
 
         # Do NOT call setup_default_data — discovery scenarios never do. The env
-        # must seed identity itself on entry in e2e mode.
+        # must seed the seller it names itself, on entry.
         with DeliveryPollEnv(e2e_config=_e2e_config_for_integration_db()) as env:
             tenant = env.get_one(Tenant, tenant_id=env._tenant_id)
             principal = env.get_one(Principal, tenant_id=env._tenant_id, principal_id=env._principal_id)
@@ -158,44 +158,9 @@ class TestCreativeFormatsE2EValidation:
                 env.set_registry_formats([bogus])
 
 
-@pytest.mark.requires_db
-class TestAccountSyncQuietFailureFix:
-    """set_billing_policy / set_approval_mode raise instead of silently skipping."""
-
-    def test_set_billing_policy_before_tenant_raises(self, integration_db):
-        from tests.harness.account_sync import AccountSyncEnv
-
-        with AccountSyncEnv() as env:
-            # No tenant row yet (setup_default_data not called).
-            with pytest.raises(RuntimeError, match="requires the tenant row"):
-                env.set_billing_policy(["operator"])
-
-    def test_set_approval_mode_before_tenant_raises(self, integration_db):
-        from tests.harness.account_sync import AccountSyncEnv
-
-        with AccountSyncEnv() as env:
-            with pytest.raises(RuntimeError, match="requires the tenant row"):
-                env.set_approval_mode("manual")
-
-    def test_set_billing_policy_after_tenant_writes_db(self, integration_db):
-        from src.core.database.models import Tenant
-        from tests.harness.account_sync import AccountSyncEnv
-
-        with AccountSyncEnv() as env:
-            env.setup_default_data()
-            env.set_billing_policy(["operator", "buyer"])
-
-            tenant = env.get_one(Tenant, tenant_id=env._tenant_id)
-            assert tenant.supported_billing == ["operator", "buyer"]
-
-    def test_constructor_billing_folds_into_db_via_setup(self, integration_db):
-        """Constructor-passed supported_billing reaches the DB row, not just memory."""
-        from src.core.database.models import Tenant
-        from tests.harness.account_sync import AccountSyncEnv
-
-        with AccountSyncEnv(supported_billing=["operator"], account_approval_mode="manual") as env:
-            env.setup_default_data()
-
-            tenant = env.get_one(Tenant, tenant_id=env._tenant_id)
-            assert tenant.supported_billing == ["operator"]
-            assert tenant.account_approval_mode == "manual"
+# TestAccountSyncQuietFailureFix stood here, asserting set_billing_policy /
+# set_approval_mode raise when the tenant row does not exist yet. A real-database env now
+# seeds the tenant it presents on entry, because a request naming a tenant no row matches
+# is refused -- so "before the tenant exists" is not a state a test inside a `with env:`
+# block can reach. The harness guards remain as cheap assertions; what is gone is a test
+# that had to fabricate an unreachable state to run.

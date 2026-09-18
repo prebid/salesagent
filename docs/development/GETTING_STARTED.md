@@ -188,7 +188,6 @@ The `.env` file is created from `.env.template` during setup. Key variables:
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `ADCP_AUTH_TEST_MODE` | `true` | Enables test login (disable for production) |
 | `CREATE_DEMO_TENANT` | `false` | Creates sample data on first startup |
 | `ENVIRONMENT` | `development` | `development` = strict validation, `production` = lenient |
 | `CONDUCTOR_PORT` | `8000` | Nginx proxy port |

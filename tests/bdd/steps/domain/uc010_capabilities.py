@@ -335,7 +335,7 @@ def given_adapter_targeting_config(ctx: dict, config: str) -> None:
     # Native postal tokens (e.g. 'US=["zip"]', 'DE=["plz"]') -- the R4 native-map
     # scenario rows spell postal dimensions by (country, system), not by field
     # name; translate via the SAME table production uses (single source, DRY).
-    from src.core.tools.capabilities import _POSTAL_AREA_TABLE
+    from src.services.seller_capabilities import _POSTAL_AREA_TABLE
 
     postal_field_by_country_system = {(c, s): field for field, (c, s) in _POSTAL_AREA_TABLE.items()}
     for match in re.finditer(r'([A-Z]{2})=\["([a-z_]+)"\]', config):

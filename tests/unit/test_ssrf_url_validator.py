@@ -96,13 +96,11 @@ SAFE_PUBLIC_URL = "https://93.184.216.34/agent"
 def _make_signals_agent_client():
     """Create a Flask test client authenticated as super admin for signals agent endpoints."""
     from src.admin.app import create_app
+    from tests.helpers.admin_session import admin_auth_session
 
     app = create_app({"TESTING": True, "SECRET_KEY": "test-secret", "WTF_CSRF_ENABLED": False})
     client = app.test_client()
-    with client.session_transaction() as sess:
-        sess["test_user"] = "test_super_admin@example.com"
-        sess["test_user_role"] = "super_admin"
-        sess["authenticated"] = True
+    admin_auth_session(client, "default")
     return client
 
 
@@ -137,7 +135,7 @@ class TestSignalsAgentEndpointSSRFWiring:
 
         with patch("src.admin.blueprints.signals_agents.get_db_session") as mock_db:
             _mock_db_for_signals_add(mock_db)
-            with patch.dict(os.environ, {"ADCP_AUTH_TEST_MODE": "true"}):
+            with patch.dict(os.environ, {}):
                 response = client.post(
                     "/tenant/default/signals-agents/add",
                     data={
@@ -166,7 +164,7 @@ class TestSignalsAgentEndpointSSRFWiring:
             # Make session.add() and commit() no-ops
             mock_session.add = MagicMock()
             mock_session.commit = MagicMock()
-            with patch.dict(os.environ, {"ADCP_AUTH_TEST_MODE": "true"}):
+            with patch.dict(os.environ, {}):
                 response = client.post(
                     "/tenant/default/signals-agents/add",
                     data={
@@ -219,7 +217,7 @@ class TestSignalsAgentEndpointSSRFWiring:
         with patch("src.admin.blueprints.signals_agents.get_db_session") as mock_db:
             mock_db.return_value.__enter__ = MagicMock(return_value=mock_session)
             mock_db.return_value.__exit__ = MagicMock(return_value=False)
-            with patch.dict(os.environ, {"ADCP_AUTH_TEST_MODE": "true"}):
+            with patch.dict(os.environ, {}):
                 response = client.post(
                     "/tenant/default/signals-agents/1/edit",
                     data={

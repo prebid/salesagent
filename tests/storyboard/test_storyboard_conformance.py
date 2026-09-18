@@ -41,7 +41,7 @@ from typing import Any
 import pytest
 
 from scripts.audit import ledger, storyboard_spec
-from scripts.setup.init_database_ci import CI_TEST_SUBDOMAIN, CI_TEST_TOKEN
+from scripts.setup.seed_storyboard_tenant import STORYBOARD_SUBDOMAIN, STORYBOARD_TOKEN
 from tests.storyboard import collected
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -117,32 +117,37 @@ _SCHEMA_ROOT_ENV = "STORYBOARD_SCHEMA_ROOT"
 
 # WHICH SELLER the credential belongs to, as the `-H KEY=VALUE` the runner sends on every
 # request. Without it the credential is rejected: a token is only ever verified INSIDE the
-# tenant the request addresses, and nothing at this origin addresses one. `_detect_tenant`
-# (src/core/resolved_identity.py) tries the Host as a virtual_host and then its first label
-# as a subdomain; the stack seeds neither a virtual_host nor a `storyboard` subdomain
-# (scripts/setup/init_database_ci.py seeds `ci-test` and `iso-test`), and the
-# localhost-to-"default" fallback does not apply to a dotted alias. So no tenant was
-# identified, the token was looked up in none, and every credentialed step answered
-# AUTH_INVALID -> 401: 26 checks on run innet_140926_2318. (The A2A axis reports the same 26
-# steps failing one layer earlier, in the runner's own SSRF guard, so it is blocked on
-# something else as well; this is the whole of the MCP axis's credential failure.)
+# tenant the request addresses. `_detect_tenant` (src/core/resolved_identity.py) tries the
+# Host as a virtual_host, then its first label as a subdomain, then this header; with no
+# tenant identified the token was looked up in none and every credentialed step answered
+# AUTH_INVALID -> 401 (26 checks on run innet_140926_2318).
+#
+# The storyboard now has its OWN seeded tenant, and the header names it. It used to name the
+# CI tenant, and this comment used to say "not a second seeded tenant" — that was wrong, and
+# the agent card is what proved it. The card publishes a tenant's STORED host
+# (`canonical_agent_url`), so with the CI tenant's identity it advertised
+# `ci-test.<SALES_AGENT_DOMAIN>` — a name nothing on the compose network answers. A2A is
+# card-first: the runner fetched the card, followed that URL, and every check errored
+# `getaddrinfo ENOTFOUND` (0 passed, 64 failed, 25 of 72 storyboards executed, while MCP
+# kept 30/21/249 because it reads no card). The storyboard tenant declares
+# `virtual_host = STORYBOARD_VIRTUAL_HOST`, the front it is actually served on, so the card
+# it publishes is reachable.
 #
 # The value is the seeded SUBDOMAIN, not the tenant_id: the seeder mints the id as a fresh
 # uuid4 per database, so the subdomain is the only stable spelling, and `_detect_tenant`
-# tries the hint as a subdomain before taking it as an id. It is IMPORTED from the seeding
-# script rather than spelled again here -- that script is what makes the value true in the
-# database, and a second literal of it is a silent 401 the day either one moves. It names
-# the tenant whose principal holds `ci-test-token` above, the same tenant every other
-# in-network suite addresses (tests/e2e/utils.py, through tests/helpers/credentials.py).
+# tries the hint as a subdomain before taking it as an id. Both it and the token are
+# IMPORTED from the seeding script rather than spelled again here — that script is what
+# makes them true in the database, and a second literal is a silent 401 the day either
+# moves. They must move TOGETHER: a principal belongs to one tenant, so the storyboard's
+# token is only valid inside the storyboard's tenant.
 #
-# NOT a change of origin, and not a second seeded tenant. The pinned runner SDK carries this
-# for exactly this case: `-H, --header K=V  Extra HTTP header on every request ... Common
-# use: -H x-adcp-tenant=<id> for tenant routing behind a reverse proxy` (bin/adcp.js), and
-# its storyboard options type documents the header as "Forwarded into `AgentConfig.headers`,
-# so MCP and A2A transports both see them" — one spelling, both graded axes, one origin. It
-# softens no graded check: the pinned compliance tree says nothing about tenant routing, so
-# no storyboard step grades how a buyer selects a seller.
-_TENANT_ROUTING_HEADER = f"x-adcp-tenant={CI_TEST_SUBDOMAIN}"
+# The pinned runner SDK carries the header for exactly this case: `-H, --header K=V  Extra
+# HTTP header on every request ... Common use: -H x-adcp-tenant=<id> for tenant routing
+# behind a reverse proxy` (bin/adcp.js), and its storyboard options type documents it as
+# "Forwarded into `AgentConfig.headers`, so MCP and A2A transports both see them" — one
+# spelling, both graded axes. It softens no graded check: the pinned compliance tree says
+# nothing about tenant routing, so no storyboard step grades how a buyer selects a seller.
+_TENANT_ROUTING_HEADER = f"x-adcp-tenant={STORYBOARD_SUBDOMAIN}"
 
 # Where each lives INSIDE the extracted bundle. The bundle root comes from
 # storyboard_spec.adcp_home(); only the leaf differs, so neither the version nor
@@ -461,7 +466,7 @@ def _run_storyboard_runner(protocol: str) -> dict[str, Any]:
     protocol surfaces.
     """
     agent_url = os.environ.get(_agent_url_env(protocol), _DEFAULT_AGENT_URLS[protocol])
-    auth_token = os.environ.get(_AUTH_TOKEN_ENV, CI_TEST_TOKEN)
+    auth_token = os.environ.get(_AUTH_TOKEN_ENV, STORYBOARD_TOKEN)
     summary_path = _summary_path(protocol)
     cmd = [
         str(_ADCP_BIN),
@@ -532,6 +537,70 @@ def _graded_total(summary: dict[str, Any]) -> int:
     return sum(int(summary.get(key, 0)) for key in ("passed", "failed"))
 
 
+#: Per-protocol floor on the runner's own ``passed`` count, the one number no pytest
+#: outcome can carry. See :func:`_below_pass_floor`.
+_PASS_FLOOR_PATH = _REPO_ROOT / ".storyboard-pass-floor"
+
+
+def _pass_floor(protocol: str) -> int:
+    """The recorded floor for *protocol*, or 0 when none is recorded."""
+    if not _PASS_FLOOR_PATH.is_file():
+        return 0
+    return int(json.loads(_PASS_FLOOR_PATH.read_text(encoding="utf-8")).get(protocol, 0))
+
+
+def _below_pass_floor(protocol: str, summary: dict[str, Any]) -> dict[str, Any] | None:
+    """One synthetic FAILING check when *protocol* graded fewer passes than the floor.
+
+    THE HOLE THIS CLOSES. A parametrized item exists only for a FAILURE or a SKIP:
+    ``_collect_checks`` builds them from ``summary["failures"]`` and
+    ``summary["skip_causes"]``, because the runner publishes no per-check pass record,
+    so a passing check has no id to carry. The item count therefore moves INVERSELY
+    to health, and the pass count reaches pytest through nothing at all.
+
+    So a check that regresses from PASS to SKIP makes the suite greener: its failing
+    item never existed, its skip item does not fail, and the only trace is a number in
+    a JSON artifact. 30 passes could become 5 with every item still xfail-or-skip and
+    CI still green. ``agent_reachability`` catches only the total collapse to zero.
+
+    Only reached when the runner graded SOMETHING: a run that graded nothing is
+    ``agent_reachability``'s case, and reporting both would double-count one cause.
+
+    ONE-DIRECTIONAL, deliberately. A surplus does not fail; it prints in the
+    scoreboard so the floor gets raised on purpose. The mypy and duplication ratchets
+    fail on slack because their counts are deterministic -- this one is a live run
+    against a real stack, where one environment-dependent skip cause moves the number,
+    and a ratchet that manufactures a red for GOOD news teaches people to edit the
+    file without reading it.
+    """
+    # Only a session that actually DIALLED an agent has a pass count worth flooring.
+    # The ledger-fitness module drives this same collection through a stub runner
+    # (``stub://`` urls, a handful of synthetic checks) to grade the fitness join; a
+    # floor of 30 against a stub that grades 1 is not a regression, it is a category
+    # error, and it changed that module's expected outcome counts when this landed.
+    if not str(summary.get("agent_url", "")).startswith("http"):
+        return None
+    floor = _pass_floor(protocol)
+    passed = int(summary.get("passed", 0))
+    if passed >= floor:
+        return None
+    return {
+        "protocol": protocol,
+        "track": "_runner",
+        "storyboard_id": ledger.PASS_FLOOR_STORYBOARD_ID,
+        "step_id": ledger.PASS_FLOOR_STEP_ID,
+        "status": "fail",
+        "reason": (
+            f"graded {passed} passing checks against {summary.get('agent_url')}, "
+            f"below the recorded floor of {floor}. Either a check regressed (look at "
+            f"skip_causes: a pass that became a SKIP removes its own failing item and "
+            f"shows up nowhere else), or the floor in {_PASS_FLOOR_PATH.name} is stale "
+            f"and lowering it is a deliberate decision."
+        ),
+        "reason_kind": "below_pass_floor",
+    }
+
+
 def _no_graded_checks(protocol: str, summary: dict[str, Any]) -> dict[str, Any]:
     """The one synthetic FAILING check for a protocol the runner graded nothing on.
 
@@ -590,8 +659,21 @@ def _scoreboard(protocol: str, summary: dict[str, Any]) -> str:
         f"passed={summary.get('passed')} failed={summary.get('failed')} "
         f"skipped={summary.get('skipped')} not_selected={summary.get('not_selected_count')} "
         f"storyboards_executed={len(summary.get('storyboards_executed', []))} "
+        f"floor={_pass_floor(protocol)}{_surplus_note(protocol, summary)} "
         f"agent_url={summary.get('agent_url')}"
     )
+
+
+def _surplus_note(protocol: str, summary: dict[str, Any]) -> str:
+    """`` (+N, raise the floor)`` when this run beat the recorded floor.
+
+    The other half of the floor, and deliberately a PRINT rather than a failure: a
+    surplus is good news, and a ratchet that reds the build for good news gets its
+    file edited without being read. Named here so raising it is a decision someone
+    makes on seeing the number, not a thing nobody knows to do.
+    """
+    surplus = int(summary.get("passed", 0)) - _pass_floor(protocol)
+    return f" (+{surplus}, raise the floor)" if surplus > 0 else ""
 
 
 def _collect_checks(protocol: str) -> list[dict[str, Any]]:
@@ -636,7 +718,13 @@ def _collect_checks(protocol: str) -> list[dict[str, Any]]:
                 }
             )
     if _graded_total(summary) == 0:
+        # The total collapse. Reported by ``agent_reachability`` alone: the floor below
+        # would also fire here, and two failing checks for one cause reads as two
+        # problems. The floor covers "graded FEWER than before", which only means
+        # anything once the runner graded something at all.
         checks.append(_no_graded_checks(protocol, summary))
+    elif (breach := _below_pass_floor(protocol, summary)) is not None:
+        checks.append(breach)
     return checks
 
 

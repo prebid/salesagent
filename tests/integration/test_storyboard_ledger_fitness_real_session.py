@@ -81,7 +81,7 @@ LEDGER = REPO_ROOT / "tests" / "storyboard" / "known_failures.txt"
 # The nested-session rig (which module is collected, the runner stub, the
 # outcome parser) lives in ``tests/helpers/storyboard_session.py``: the
 # collection-gate grader
-# (``tests/integration/test_storyboard_collection_gate_real_session.py``) drives
+# (the collection-gate module, deleted -- see below) drove
 # the same sessions, and two copies of it would be two things to keep true.
 _SYNTHETIC_REASON = "synthetic failure injected by the ledger-fitness grader"
 

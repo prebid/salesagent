@@ -392,11 +392,11 @@ def list_creatives(tenant_id, **kwargs):
     return redirect(url_for("creatives.review_creatives", tenant_id=tenant_id))
 
 
-@creatives_bp.route("/add/ai", methods=["GET"])
-@require_tenant_access()
-def add_ai(tenant_id, **kwargs):
-    """Show AI-assisted creative format discovery form."""
-    return render_template("creative_format_ai.html", tenant_id=tenant_id)
+# add_ai was deleted: a GET route rendering creative_format_ai.html, a template that was
+# never written, so every request to it raised TemplateNotFound. Nothing linked the page and
+# nothing called it, so it cannot have served anyone. The `analyze` endpoint below — the AI
+# backend it would have posted to — is left in place; it works, and whether the feature gets
+# a front end is a product decision rather than a cleanup.
 
 
 @creatives_bp.route("/analyze", methods=["POST"])

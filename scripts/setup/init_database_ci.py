@@ -13,22 +13,29 @@ sys.path.insert(0, str(project_root))
 #: the E2E builders send this id and this script is what makes it resolvable.
 CI_TEST_ACCOUNT_ID = "ci-test-account"
 
-#: The subdomain the CI tenant is reachable at, and the value a caller puts in
-#: ``x-adcp-tenant`` to address it. Owned HERE, and imported by every test that names it
-#: (tests/e2e/utils.py, tests/integration/conftest_ci_seed.py,
-#: tests/storyboard/test_storyboard_conformance.py), because this script is what makes it
-#: true in the database: the tenant_id is a fresh uuid4 per seed, so the subdomain is the
-#: only stable spelling of "the CI tenant" and a second literal of it is a silent 401 the
-#: day one of them changes. The dependency runs tests -> scripts only; a script cannot
-#: import from tests/ (see scripts/ci/migration_helpers.py).
-CI_TEST_SUBDOMAIN = "ci-test"
+#: The CI tenant's id, and therefore the value a caller puts in ``x-adcp-tenant`` to
+#: address it. Owned HERE, and imported by every test that names it (tests/e2e/utils.py,
+#: tests/integration/conftest_ci_seed.py, tests/storyboard/test_storyboard_conformance.py),
+#: because this script is what makes it true in the database; a second literal of it is a
+#: silent 401 the day one of them changes. The dependency runs tests -> scripts only; a
+#: script cannot import from tests/ (see scripts/ci/migration_helpers.py).
+#:
+#: It is a literal rather than a per-seed uuid4 BECAUSE the header names a tenant_id. It
+#: used to name a subdomain, which ``_detect_tenant`` looked up as a third way to identify
+#: a tenant; that strategy is gone, so the stable spelling has to be
+#: the id itself.
+CI_TEST_TENANT_ID = "ci-test"
+
 
 #: The credential presented to that tenant: the plaintext token this script hashes into
 #: the CI principal's row. Owned here for the same reason as the subdomain above -- this
 #: script is what makes it resolvable -- and read by tests/integration/conftest_ci_seed.py
-#: and tests/storyboard/test_storyboard_conformance.py. ``tox.ini``'s
-#: ``STORYBOARD_AUTH_TOKEN`` default cannot import a Python constant and carries a literal
-#: that must be kept in step with this one; its comment says so.
+#: and the e2e clients.
+#:
+#: NOT the storyboard's credential. That suite has its own tenant, at the host it is
+#: actually served on, because the agent card publishes a tenant's STORED host and this
+#: tenant has none -- see scripts/setup/seed_storyboard_tenant.py, which owns
+#: STORYBOARD_TOKEN and is what tox.ini's STORYBOARD_AUTH_TOKEN default copies.
 CI_TEST_TOKEN = "ci-test-token"
 
 
@@ -43,6 +50,7 @@ def init_db_ci():
         from sqlalchemy import select
 
         from scripts.ops.migrate import run_migrations
+        from scripts.setup.seed_products import seed_product
         from src.core.credentials import hash_token
         from src.core.database.database_session import get_db_session
         from src.core.database.models import (
@@ -51,7 +59,6 @@ def init_db_ci():
             AuthorizedProperty,
             CurrencyLimit,
             GAMInventory,
-            PricingOption,
             Product,
             PropertyTag,
             Tenant,
@@ -69,7 +76,7 @@ def init_db_ci():
         with get_db_session() as session:
             # First, check if CI test tenant already exists
             # Note: In Docker Compose, both adcp-server and admin-ui may run this simultaneously
-            stmt = select(Tenant).filter_by(subdomain=CI_TEST_SUBDOMAIN)
+            stmt = select(Tenant).filter_by(tenant_id=CI_TEST_TENANT_ID)
             existing_tenant = session.scalars(stmt).first()
 
             if existing_tenant:
@@ -145,7 +152,7 @@ def init_db_ci():
 
                 session.commit()  # Commit before creating products to avoid autoflush
             else:
-                tenant_id = str(uuid.uuid4())
+                tenant_id = CI_TEST_TENANT_ID
                 principal_id = str(uuid.uuid4())
 
                 # CRITICAL: Create tenant FIRST in separate transaction to avoid rollback cascade
@@ -154,7 +161,7 @@ def init_db_ci():
                 tenant = Tenant(
                     tenant_id=tenant_id,
                     name="CI Test Tenant",
-                    subdomain=CI_TEST_SUBDOMAIN,
+                    subdomain=CI_TEST_TENANT_ID,
                     billing_plan="test",
                     ad_server="mock",
                     enable_axe_signals=True,
@@ -212,7 +219,7 @@ def init_db_ci():
                     # Handle race: another container created tenant already
                     session.rollback()
                     print(f"⚠️  Tenant already exists (race condition): {e}")
-                    stmt_tenant = select(Tenant).filter_by(subdomain=CI_TEST_SUBDOMAIN)
+                    stmt_tenant = select(Tenant).filter_by(tenant_id=CI_TEST_TENANT_ID)
                     existing_tenant = session.scalars(stmt_tenant).first()
                     if existing_tenant:
                         tenant_id = existing_tenant.tenant_id
@@ -397,44 +404,8 @@ def init_db_ci():
             ]
 
             for p in products_data:
-                # Check if product already exists
-                stmt = select(Product).filter_by(tenant_id=tenant_id, product_id=p["product_id"])
-                existing_product = session.scalars(stmt).first()
-
-                if not existing_product:
-                    product = Product(
-                        tenant_id=tenant_id,
-                        product_id=p["product_id"],
-                        name=p["name"],
-                        description=p["description"],
-                        format_ids=p["formats"],
-                        targeting_template=p["targeting_template"],
-                        delivery_type=p["delivery_type"],
-                        property_tags=["all_inventory"],  # Required per AdCP spec
-                        # Explicitly set all JSONB fields to None (SQL NULL) to satisfy constraints
-                        measurement=None,
-                        creative_policy=None,
-                        price_guidance=None,
-                        countries=None,
-                        implementation_config=None,
-                        properties=None,  # Using property_tags instead
-                    )
-                    session.add(product)
-                    print(f"  ✓ Created product: {p['name']} (property_tags=['all_inventory'])")
-
-                    # Create corresponding pricing_option (required for pricing display)
-                    pricing = p["pricing"]
-                    pricing_option = PricingOption.create(
-                        tenant_id=tenant_id,
-                        product_id=p["product_id"],
-                        pricing_model=pricing["model"],
-                        rate=pricing["rate"],
-                        currency="USD",
-                        is_fixed=pricing["is_fixed"],
-                        price_guidance=None,  # Not used for fixed price products
-                    )
-                    session.add(pricing_option)
-                    print(f"  ✓ Created pricing_option for: {p['name']}")
+                if seed_product(session, tenant_id, p):
+                    print(f"  ✓ Created product and pricing_option: {p['name']}")
                 else:
                     print(f"  ℹ️  Product already exists: {p['name']}")
 
@@ -673,40 +644,8 @@ def init_db_ci():
             ]
 
             for p in iso_products_data:
-                stmt_prod = select(Product).filter_by(tenant_id=iso_tenant_id, product_id=p["product_id"])
-                if not iso_session.scalars(stmt_prod).first():
-                    product = Product(
-                        tenant_id=iso_tenant_id,
-                        product_id=p["product_id"],
-                        name=p["name"],
-                        description=p["description"],
-                        format_ids=p["formats"],
-                        targeting_template=p["targeting_template"],
-                        delivery_type=p["delivery_type"],
-                        property_tags=["all_inventory"],
-                        measurement=None,
-                        creative_policy=None,
-                        price_guidance=None,
-                        countries=None,
-                        implementation_config=None,
-                        properties=None,
-                    )
-                    iso_session.add(product)
-                    print(f"  ✓ Created isolation product: {p['name']}")
-
-                    pricing = p["pricing"]
-                    iso_session.add(
-                        PricingOption.create(
-                            tenant_id=iso_tenant_id,
-                            product_id=p["product_id"],
-                            pricing_model=pricing["model"],
-                            rate=pricing["rate"],
-                            currency="USD",
-                            is_fixed=pricing["is_fixed"],
-                            price_guidance=None,
-                        )
-                    )
-                    print(f"  ✓ Created pricing_option for: {p['name']}")
+                if seed_product(iso_session, iso_tenant_id, p):
+                    print(f"  ✓ Created isolation product and pricing_option: {p['name']}")
                 else:
                     print(f"  ℹ️  Isolation product already exists: {p['name']}")
 

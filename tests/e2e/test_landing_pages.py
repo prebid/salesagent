@@ -13,7 +13,6 @@ Tests against live servers (local or production).
 """
 
 import os
-from urllib.parse import urlparse
 
 import pytest
 import requests
@@ -53,24 +52,35 @@ class TestLandingPages:
 
     @pytest.mark.integration
     def test_admin_login_page_shows_login_form(self, live_server):
-        """Admin login page should contain login form when following redirect."""
-        # Follow redirects to get to login page
+        """/admin/login lands the caller at authentication.
+
+        Two outcomes are both correct, and which one a deployment serves is a
+        property of that deployment, not of the admin: with no identity provider
+        configured the login page renders, and with one configured the admin hands
+        off to it (``login()`` has always redirected straight to the sole provider).
+
+        This asserts OUR response and does not follow the chain off-site. It used to
+        follow it, which passed only where no provider was configured: CI sets Google
+        credentials, so the chain ran on to accounts.google.com and the assertion
+        graded GOOGLE's 404 for the dummy client_id as though the admin had served it.
+        """
         response = requests.get(
-            f"{live_server['admin']}/",
-            headers={
-                "Host": "admin.sales-agent.example.com",
-            },
+            f"{live_server['admin']}/admin/login",
+            headers={"Host": "admin.sales-agent.example.com"},
             timeout=5,
-            allow_redirects=True,
+            allow_redirects=False,
         )
 
-        # Should arrive at login page with 200 OK (skip if server error - environment may not be fully configured)
-        if response.status_code >= 500:
-            pytest.skip(f"Server error {response.status_code} - environment may not be fully configured")
+        if response.status_code == 200:
+            assert "login" in response.text.lower(), "Rendered login page should contain a login form"
+            return
 
-        assert response.status_code == 200, f"Login page should return 200 OK, got {response.status_code}"
-        content = response.content.decode("utf-8").lower()
-        assert "login" in content, "Admin login page should contain login form"
+        assert response.status_code in (301, 302, 307, 308), (
+            f"Login should render or hand off to a provider, got {response.status_code}. "
+            f"Body starts: {response.text[:200]!r}"
+        )
+        location = response.headers.get("Location", "")
+        assert "/auth/" in location, f"Login should hand off to an identity provider, got Location={location!r}"
 
     @pytest.mark.integration
     def test_landing_page_contains_mcp_endpoint(self, live_server):
@@ -122,34 +132,6 @@ class TestLandingPages:
             assert has_a2a or is_pending, (
                 "Landing page should either show A2A endpoint or pending configuration message"
             )
-
-    @pytest.mark.integration
-    def test_approximated_header_precedence_for_admin(self, live_server):
-        """Apx-Incoming-Host header should take precedence over Host header for admin routing."""
-        # The backend Host header must name the SAME authority the request is sent
-        # to, so derive it from the URL instead of re-resolving a global that can
-        # disagree with it.
-        backend_host = urlparse(live_server["admin"]).netloc
-
-        # Send both headers - Apx-Incoming-Host should win
-        # Use admin domain as Apx-Incoming-Host since we know it exists
-        response = requests.get(
-            f"{live_server['admin']}/",
-            headers={
-                "Host": backend_host,  # Backend host
-                "Apx-Incoming-Host": "admin.sales-agent.example.com",  # Proxied admin host
-            },
-            timeout=5,
-            allow_redirects=False,
-        )
-
-        # Should route based on Apx-Incoming-Host (admin domain -> login redirect)
-        assert response.status_code == 302, (
-            f"Proxied admin domain should redirect to login (302), got {response.status_code}"
-        )
-
-        location = response.headers.get("Location", "")
-        assert "/admin/login" in location, f"Proxied admin domain should redirect to /admin/login, got {location}"
 
 
 class TestAuthOptionalEndpoints:

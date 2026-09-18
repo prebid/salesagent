@@ -44,12 +44,6 @@ def client():
         yield client
 
 
-@pytest.fixture(autouse=True)
-def _enable_test_mode(monkeypatch):
-    """Enable global test auth so require_auth accepts the test session."""
-    monkeypatch.setenv("ADCP_AUTH_TEST_MODE", "true")
-
-
 def _auth_session(client) -> None:
     """Populate a super-admin test-mode session."""
     with client.session_transaction() as sess:

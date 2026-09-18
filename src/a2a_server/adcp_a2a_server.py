@@ -50,13 +50,14 @@ from adcp.server.mcp_tools import ADCP_TOOL_DEFINITIONS
 from adcp.types.generated_poc.enums.task_status import TaskStatus as LibraryTaskStatus
 from google.protobuf import json_format, struct_pb2
 
-from src.core.domain_config import get_a2a_server_url
 from src.core.exceptions import AdcpFailure
+from src.core.helpers import enum_value
 from src.core.resolved_identity import TransportProtocol
 from src.core.tools._boundary import failure_response, serve
 from src.core.tools._wire import to_wire
 from src.core.tools.registry import TOOLS
 from src.core.version import get_version
+from src.services.seller_capabilities import SellerCapabilities
 
 logger = logging.getLogger(__name__)
 
@@ -501,43 +502,47 @@ def _derived_skills() -> list[AgentSkill]:
     ]
 
 
-def create_agent_card() -> AgentCard:
-    """Create the agent card describing capabilities.
+def render_agent_card(seller: SellerCapabilities) -> AgentCard:
+    """*seller* rendered as an A2A agent card.
 
-    Returns:
-        AgentCard with Prebid Sales Agent capabilities
+    A RENDERER: it decides shape, never content. Every claim a buyer could act on
+    comes off ``seller`` — the interface URL, the AdCP version, the protocols this
+    seller supports — which is the same object ``get_adcp_capabilities`` renders, so
+    the card and the tool cannot describe one seller two ways. Three literals that
+    used to sit here were exactly that kind of drift: ``protocols_supported`` was
+    hardcoded ``["media_buy"]`` while the capabilities tool derived the real set from
+    ``tenants.capability_declarations``, and ``documentation_url`` shipped a
+    ``your-org`` placeholder on the wire.
+
+    What IS declared here is declared honestly, because it describes this A2A server
+    rather than the seller: ``push_notifications=False`` is the same fact as the four
+    ``tasks/pushNotificationConfig/*`` handlers that decline, and the input/output
+    modes are A2A message framing. A tenant cannot change either, so neither belongs
+    to the seller description.
     """
-    # Use configured domain for agent card
-    # Note: This will be overridden dynamically in the endpoint handlers
-    # Fallback to localhost if SALES_AGENT_DOMAIN not configured
-    server_url = get_a2a_server_url() or "http://localhost:8091/a2a"
-
     from a2a.types import AgentCapabilities
     from adcp import get_adcp_spec_version
 
-    # Get sales agent version from package metadata or pyproject.toml
-    sales_agent_version = get_version()
-
-    # Create AdCP extension (AdCP 2.5 spec)
-    # As of adcp 2.12.1, get_adcp_spec_version() returns the protocol version (e.g., "2.5.0")
-    # Previously it returned the schema version (e.g., "v1"), but this was fixed upstream
-    protocol_version = get_adcp_spec_version()
     adcp_extension = AgentExtension(
-        uri=f"https://adcontextprotocol.org/schemas/{protocol_version}/protocols/adcp-extension.json",
+        uri=f"https://adcontextprotocol.org/schemas/{get_adcp_spec_version()}/protocols/adcp-extension.json",
         description="AdCP protocol version and supported domains",
         params=_dict_to_struct(
             {
-                "adcp_version": protocol_version,
-                "protocols_supported": ["media_buy"],  # Only media_buy protocol is currently supported
+                # The pin itself, which is the SOURCE the seller description's
+                # adcp.supported_versions is derived from (SUPPORTED_ADCP_VERSIONS ->
+                # the pinned SDK) -- so this is the same fact, not a second derivation.
+                # Read here rather than unwrapped from seller.adcp: those entries are
+                # optional root models, and defensive .root unwrapping is banned.
+                "adcp_version": get_adcp_spec_version(),
+                "protocols_supported": [enum_value(p) for p in seller.supported_protocols],
             }
         ),
     )
 
-    # Create the agent card with minimal required fields
-    agent_card = AgentCard(
+    return AgentCard(
         name="Prebid Sales Agent",
         description="AI agent for programmatic advertising campaigns via AdCP protocol",
-        version=sales_agent_version,
+        version=get_version(),
         supported_interfaces=[
             # protocol_binding is REQUIRED in practice, not decorative. An A2A 1.x client
             # selects its interface with `i.protocolBinding?.toUpperCase() === "JSONRPC"`
@@ -545,19 +550,13 @@ def create_agent_card() -> AgentCard:
             # client finds no usable interface and reports the agent UNREACHABLE, having
             # never sent a request. Measured against @adcp/sdk 14.0.0-rc.35, whose runner
             # graded 0 checks for exactly this reason.
-            AgentInterface(url=server_url, protocol_binding="JSONRPC", protocol_version="1.0"),
+            AgentInterface(url=seller.agent_url, protocol_binding="JSONRPC", protocol_version="1.0"),
         ],
-        capabilities=AgentCapabilities(
-            push_notifications=False,
-            extensions=[adcp_extension],
-        ),
+        capabilities=AgentCapabilities(push_notifications=False, extensions=[adcp_extension]),
         default_input_modes=["message"],
         default_output_modes=["message"],
         skills=_derived_skills(),
-        documentation_url="https://github.com/your-org/adcp-sales-agent",
     )
-
-    return agent_card
 
 
 # Standalone execution removed — A2A is now integrated into the unified

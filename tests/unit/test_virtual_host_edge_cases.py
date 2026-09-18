@@ -1,63 +1,27 @@
-"""Edge case and error handling tests for virtual host functionality."""
+"""Edge case and error handling tests for virtual host functionality.
+
+THREE HEADER TESTS WERE DELETED HERE (``test_malformed_headers``,
+``test_context_with_none_meta``, ``test_context_missing_meta_attribute``). Each built a
+``Mock(spec=Context)``, put a host value into it, read that value back out with a dict
+access written in the test body, and asserted the value was what the test had just set.
+No production code was called, so they could not fail — including when the header they
+were built around stopped being read at all.
+
+What they claimed to grade — that a malformed or absent host is handled rather than
+crashing — is graded where the host actually reaches production: ``requested_host`` in
+``tests/unit/test_request_host_headers.py``, and end to end by
+``tests/bdd/features/local-tenant-identification-routes.feature``.
+"""
 
 from unittest.mock import MagicMock, Mock, patch
 
 import pytest
-from fastmcp.server import Context
 
 from src.core.config_loader import get_tenant_by_virtual_host
 
 
 class TestVirtualHostEdgeCases:
     """Test edge cases and error handling for virtual host functionality."""
-
-    def test_malformed_headers(self):
-        """Test handling of malformed headers."""
-        malformed_cases = [
-            # Header value contains null bytes
-            {"apx-incoming-host": "test\x00.com"},
-            # Extremely long header value
-            {"apx-incoming-host": "a" * 10000 + ".com"},
-            # Header value with unicode characters
-            {"apx-incoming-host": "тест.example.com"},
-            # Header value with control characters
-            {"apx-incoming-host": "test\n\r.com"},
-        ]
-
-        for headers in malformed_cases:
-            context = Mock(spec=Context)
-            context.meta = {"headers": headers}
-
-            # Act - should handle gracefully
-            extracted_headers = context.meta.get("headers", {})
-            apx_host = extracted_headers.get("apx-incoming-host")
-
-            # Assert - should not crash
-            assert apx_host is not None
-
-    def test_context_with_none_meta(self):
-        """Test context where meta is None."""
-        context = Mock(spec=Context)
-        context.meta = None
-
-        # Act - should handle gracefully
-        headers = context.meta if context.meta else {}
-        apx_host = headers.get("apx-incoming-host") if headers else None
-
-        # Assert
-        assert apx_host is None
-
-    def test_context_missing_meta_attribute(self):
-        """Test context that doesn't have meta attribute."""
-        context = Mock(spec=Context)
-        delattr(context, "meta")
-
-        # Act - should handle gracefully
-        headers = getattr(context, "meta", {})
-        apx_host = headers.get("apx-incoming-host") if headers else None
-
-        # Assert
-        assert apx_host is None
 
     def test_extremely_long_virtual_host_validation(self):
         """Test validation of extremely long virtual host values."""

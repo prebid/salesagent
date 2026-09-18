@@ -86,9 +86,9 @@ Authentication is configured **per-tenant** via the Admin UI. No OAuth environme
 
 1. Deploy the application (Step 6 below)
 2. Access the Admin UI at `https://your-app-name.fly.dev/admin`
-3. Log in with test credentials (Setup Mode is enabled by default for new tenants):
-   - Email: `test_super_admin@example.com`
-   - Password: `test123`
+3. Log in with the deployment's own OAuth account (the address you put in
+   `SUPER_ADMIN_EMAILS`). Setup Mode, enabled by default for new tenants, lets you verify
+   a tenant's OIDC login before you enable it.
 4. Go to **Users & Access** and configure your SSO provider (Google, Microsoft, Okta, Auth0, Keycloak, or any OIDC provider)
 5. Copy the **Redirect URI** shown and add it to your provider: `https://your-app-name.fly.dev/auth/oidc/callback`
 6. **Add yourself**: Add your email as a user OR add your domain to Allowed Domains
@@ -207,9 +207,9 @@ fly ssh console --app your-app-name -C "cd /app && python scripts/ops/migrate.py
 
 ### Cannot access Admin UI
 
-1. **Using Setup Mode (recommended):** Log in with test credentials:
-   - Email: `test_super_admin@example.com`
-   - Password: `test123`
+1. **Check the deployment's own sign-in:** `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET`
+   (or the `OAUTH_*` variables) must be set, and your address must be in
+   `SUPER_ADMIN_EMAILS`.
 
    Then configure SSO in **Users & Access** and disable Setup Mode.
 

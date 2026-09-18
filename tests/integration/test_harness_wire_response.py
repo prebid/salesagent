@@ -86,6 +86,9 @@ class TestWireResponseIsRealWire:
         rather than a sentence some wrapper re-derived.
         """
         with CreativeFormatsEnv() as env:
+            # The request has to NAME a seller this deployment serves: one naming none is
+            # refused (CONFIGURATION_ERROR). This test creates no tenant of its own.
+            env.setup_default_data()
             result = env.call_via(Transport.REST)
             assert result.wire_response == result.raw_response.json()
             assert "formats" in result.wire_response
@@ -114,6 +117,9 @@ class TestWireResponseIsRealWire:
         one dispatch each, including ``message`` and the envelope defaults.
         """
         with CreativeFormatsEnv() as env:
+            # The request has to NAME a seller this deployment serves: one naming none is
+            # refused (CONFIGURATION_ERROR). This test creates no tenant of its own.
+            env.setup_default_data()
             bodies = {
                 transport: env.call_via(transport) for transport in (Transport.A2A, Transport.REST, Transport.MCP)
             }
@@ -151,6 +157,9 @@ class TestWireResponseIsRealWire:
         (the wire is a complete, valid instance of the response type).
         """
         with CreativeFormatsEnv() as env:
+            # The request has to NAME a seller this deployment serves: one naming none is
+            # refused (CONFIGURATION_ERROR). This test creates no tenant of its own.
+            env.setup_default_data()
             result = env.call_via(Transport.MCP)
             assert isinstance(result.wire_response, dict), "MCP: wire_response not a dict"
             assert result.payload is not None, "MCP: no typed payload captured"
@@ -170,6 +179,9 @@ class TestWireResponseIsRealWire:
         round-trip equality is the meaningful authenticity signal left post-fix.
         """
         with CreativeFormatsEnv() as env:
+            # The request has to NAME a seller this deployment serves: one naming none is
+            # refused (CONFIGURATION_ERROR). This test creates no tenant of its own.
+            env.setup_default_data()
             result = env.call_via(Transport.MCP)
         assert isinstance(result.wire_response, dict), "MCP: wire_response not a dict"
         assert "formats" in result.wire_response, "MCP: wire_response missing formats"
@@ -461,6 +473,9 @@ class TestDispatchersDeclareHasWireOnRealDispatch:
     @pytest.mark.parametrize("transport", [Transport.REST, Transport.A2A, Transport.MCP])
     def test_wire_transports_declare_a_wire_and_carry_one(self, transport, integration_db):
         with CreativeFormatsEnv() as env:
+            # The request has to NAME a seller this deployment serves: one naming none is
+            # refused (CONFIGURATION_ERROR). This test creates no tenant of its own.
+            env.setup_default_data()
             result = env.call_via(transport)
         assert result.has_wire is True, f"{transport}: success dispatch did not declare has_wire"
         assert result.wire_response is not None, (
@@ -493,6 +508,9 @@ class TestWireReadersBranchOnTheDeclaration:
         chosen ``has_wire`` declaration, which is the state under test.
         """
         with CreativeFormatsEnv() as env:
+            # The request has to NAME a seller this deployment serves: one naming none is
+            # refused (CONFIGURATION_ERROR). This test creates no tenant of its own.
+            env.setup_default_data()
             response = env.call_impl()
         assert response is not None
         return response
@@ -594,6 +612,9 @@ class TestBothDispatchSeamsStashTheTransportResult:
     @pytest.mark.parametrize("transport", ["rest", "a2a", "mcp"])
     def test_call_via_stashes_the_transport_result(self, transport, integration_db):
         with CreativeFormatsEnv() as env:
+            # The request has to NAME a seller this deployment serves: one naming none is
+            # refused (CONFIGURATION_ERROR). This test creates no tenant of its own.
+            env.setup_default_data()
             ctx: dict = {"env": env}
             _call_via(ctx, transport)
             assert "error" not in ctx, f"{transport}: dispatch failed: {ctx.get('error')!r}"

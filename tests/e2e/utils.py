@@ -10,7 +10,7 @@ from fastmcp.client import Client
 from fastmcp.client.transports import StreamableHttpTransport
 from sqlalchemy import select
 
-from scripts.setup.init_database_ci import CI_TEST_SUBDOMAIN
+from scripts.setup.init_database_ci import CI_TEST_TENANT_ID
 from tests.helpers.credentials import credential_headers
 
 
@@ -18,7 +18,7 @@ def make_mcp_client(
     live_server: dict,
     *,
     token: str | None = None,
-    tenant: str | None = CI_TEST_SUBDOMAIN,
+    tenant: str | None = CI_TEST_TENANT_ID,
     dry_run: bool = False,
     session_id: str | None = None,
     host: str | None = None,
@@ -111,7 +111,7 @@ def live_db_env(live_server: dict):
         engine.dispose()
 
 
-def set_live_adapter_behavior(live_server: dict, *, tenant_subdomain: str = CI_TEST_SUBDOMAIN, **behavior):
+def set_live_adapter_behavior(live_server: dict, *, tenant_id: str = CI_TEST_TENANT_ID, **behavior):
     """Upsert adapter test-behavior on the live e2e DB via the shared factory helper.
 
     Single e2e entry point for what used to be five copy-pasted psycopg2
@@ -125,13 +125,43 @@ def set_live_adapter_behavior(live_server: dict, *, tenant_subdomain: str = CI_T
     from tests.factories.core import set_adapter_test_behavior
 
     with live_db_env(live_server) as env:
-        tenant = env.get_session().scalars(select(Tenant).filter_by(subdomain=tenant_subdomain)).first()
+        tenant = env.get_session().scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
         if tenant is None:
             raise RuntimeError(
-                f"Tenant with subdomain {tenant_subdomain!r} not found in the live e2e DB — "
-                "did the stack's init_database_ci.py seed run?"
+                f"Tenant {tenant_id!r} not found in the live e2e DB — did the stack's init_database_ci.py seed run?"
             )
         return set_adapter_test_behavior(env, tenant.tenant_id, **behavior)
+
+
+def declare_tenant_front(live_server: dict, origin: str, *, tenant_id: str = CI_TEST_TENANT_ID) -> str:
+    """Point *tenant_id*'s ``virtual_host`` at *origin*, and return the host it stored.
+
+    A card fetch is DISCOVERY: the client has a hostname and nothing else, so the tenant
+    has to be resolvable from the Host alone, and a request naming no tenant is refused.
+    Which host this stack is served at is decided per session — in-network it is a compose
+    service name, on the host path a dynamically allocated TLS port — so it cannot be a
+    literal in a seeder. The test knows it, from ``live_server``, and states it here.
+
+    Idempotent, and scoped to this stack's own database through the same ``live_db_env``
+    every other e2e mutation goes through.
+    """
+    from urllib.parse import urlsplit
+
+    from sqlalchemy import select
+
+    from src.core.database.models import Tenant
+
+    front = urlsplit(origin).netloc or origin
+    with live_db_env(live_server) as env:
+        session = env.get_session()
+        tenant = session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
+        if tenant is None:
+            raise RuntimeError(
+                f"Tenant {tenant_id!r} not found in the live e2e DB — did the stack's init_database_ci.py seed run?"
+            )
+        tenant.virtual_host = front
+        session.commit()
+    return front
 
 
 def wait_until(predicate, timeout_seconds: float, poll_interval: float = 0.5) -> bool:

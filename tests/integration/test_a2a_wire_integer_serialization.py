@@ -39,6 +39,14 @@ class TestA2AHttpRouteIntegerRestoration:
     def test_real_a2a_get_adcp_capabilities_over_http_returns_integer_replay_ttl(self, integration_db):
         from src.app import app
 
+        # Inside the env because the request has to NAME a seller -- one naming none is
+        # refused (CONFIGURATION_ERROR) before any handler runs. The env seeds the tenant
+        # it presents, and `credential()` is how the request says which one it is for.
+        with CapabilitiesEnv() as env:
+            # A request must name a seller this deployment serves.
+            env.setup_default_data()
+            credential = env.credential()
+
         client = TestClient(app, raise_server_exceptions=False)
         response = client.post(
             "/a2a",
@@ -56,7 +64,7 @@ class TestA2AHttpRouteIntegerRestoration:
                     }
                 },
             },
-            headers={"A2A-Version": "1.0"},
+            headers={"A2A-Version": "1.0", **credential},
         )
         assert response.status_code == 200, response.text
         body = response.json()

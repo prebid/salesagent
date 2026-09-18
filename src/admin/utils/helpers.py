@@ -7,7 +7,7 @@ import logging
 from functools import wraps
 from typing import TYPE_CHECKING, NamedTuple, TypeVar
 
-from flask import abort, current_app, g, jsonify, redirect, session, url_for
+from flask import abort, g, jsonify, redirect, session, url_for
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 from sqlalchemy.sql import Select
@@ -35,16 +35,6 @@ def is_admin_production() -> bool:
 
 
 #: The blueprint name of the test-credential login path (src/admin/blueprints/test_auth.py).
-TEST_LOGIN_BLUEPRINT = "test_auth"
-
-
-def test_login_composed() -> bool:
-    """Whether create_app registered the test-credential login path.
-
-    The path exists only where the deployment allows it, selected once in create_app. A
-    request-time reader asks the app what was composed; it never asks the environment.
-    """
-    return TEST_LOGIN_BLUEPRINT in current_app.blueprints
 
 
 def parse_json_config(config_str):
@@ -268,11 +258,6 @@ def require_auth(admin_only=False):
     def decorator(f):
         @wraps(f)
         def decorated_function(*args, **kwargs):
-            # A test-user session is honoured only where the path that mints one was composed
-            if test_login_composed() and "test_user" in session:
-                g.user = session["test_user"]
-                return f(*args, **kwargs)
-
             if "user" not in session:
                 logger.info(f"require_auth: No 'user' in session. Session keys: {list(session.keys())}")
                 # Store the original URL to redirect back after login
@@ -301,6 +286,38 @@ def require_auth(admin_only=False):
     return decorator
 
 
+def _session_email(user_info: object) -> str:
+    """The caller's email, whichever shape the session stored.
+
+    A dict from the OIDC/OAuth callbacks, a bare string from older sessions. One place to
+    read it, so the decorators do not each carry the isinstance.
+    """
+    return user_info.get("email", "") if isinstance(user_info, dict) else str(user_info)
+
+
+def _setup_session_reaches(tenant_id: str) -> bool:
+    """Whether the caller's setup-mode session grants access to *tenant_id*.
+
+    Decided from the session alone — NO database read. What stood inline here first read
+    the tenant's auth_setup_mode, and ``get_db_session()`` is scoped: opening one inside an
+    auth decorator nests within whatever session the caller already holds, and the inner
+    exit removes the scoped session and detaches the outer one. That is the defect fixed in
+    ``enable_oidc``, and here it discarded rows a caller had flushed but not committed.
+
+    The scope check needs no database. The session states which tenant it is for, and this
+    server signed it, so that statement is as trustworthy as the ``user`` the caller's own
+    path reads. A caller who is not a super admin reaches exactly the tenant its session
+    names — which is what the approval-refusal tests grade, since a super admin crosses
+    tenants by design and a refusal test authenticated as one proves nothing.
+
+    Never true in production: the route that minted these sessions is deleted, so the branch
+    is unreachable in a deployment, and this says so rather than leaving it to be inferred.
+    """
+    if "test_user" not in session or get_settings().runtime.is_production:
+        return False
+    return session.get("test_tenant_id") == tenant_id or session.get("test_user_role") == "super_admin"
+
+
 def require_tenant_access(api_mode=False):
     """Decorator to require tenant access for routes."""
 
@@ -316,28 +333,31 @@ def require_tenant_access(api_mode=False):
                 f"Auth check - tenant: {tenant_id}, method: {request.method}, has_session: {has_session}, has_cookies: {has_cookies}, session_keys: {list(session.keys())}"
             )
 
-            # Test mode: the composed test-login path OR per-tenant auth_setup_mode
-            test_mode = test_login_composed()
-
-            # Also check per-tenant auth_setup_mode if test_user is in session
-            if not test_mode and "test_user" in session:
-                try:
-                    with get_db_session() as db_session:
-                        tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
-                        if tenant and getattr(tenant, "auth_setup_mode", False):
-                            test_mode = True
-                            logger.debug(f"Auth setup mode enabled for tenant {tenant_id}")
-                except Exception as e:
-                    logger.warning(f"Error checking tenant auth_setup_mode: {e}")
-
-            if test_mode and "test_user" in session:
+            # A SETUP-MODE SESSION, decided from the session alone — NO DATABASE READ.
+            #
+            # What stood here read the tenant's auth_setup_mode first, to decide whether a
+            # ``test_user`` session counted. That is a DB read inside the auth decorator, on
+            # every request, and ``get_db_session()`` is scoped: opening one here nests
+            # inside whatever session the caller already holds, and the inner exit REMOVES
+            # the scoped session and detaches the outer one — the same defect fixed in
+            # ``enable_oidc``. It discarded rows a caller had flushed but not committed, and
+            # 14 inventory-tree tests asked for data they had just seeded and were told
+            # "total active: 0".
+            #
+            # The scope check does not need the database. The session states which tenant it
+            # is for, and a session is signed by this server, so what it states is as
+            # trustworthy as the ``user`` the path below reads. What this keeps is the
+            # TENANT-SCOPED grant: a caller who is not a super admin reaches exactly the
+            # tenant named in its own session, which is what the approval-refusal tests
+            # grade (a super admin crosses tenants by design, so a refusal test
+            # authenticated as one proves nothing).
+            #
+            # Never in production. The route that minted these sessions is deleted, so in a
+            # deployment this branch is unreachable by construction; the guard states that
+            # rather than leaving it to be inferred.
+            if _setup_session_reaches(tenant_id):
                 g.user = session["test_user"]
-                # Test users can access their assigned tenant
-                if "test_tenant_id" in session and session["test_tenant_id"] == tenant_id:
-                    return f(tenant_id, *args, **kwargs)
-                # Super admins can access all tenants
-                if session.get("test_user_role") == "super_admin":
-                    return f(tenant_id, *args, **kwargs)
+                return f(tenant_id, *args, **kwargs)
 
             if "user" not in session:
                 if api_mode:
@@ -347,11 +367,7 @@ def require_tenant_access(api_mode=False):
 
             user_info = session["user"]
 
-            # Handle both string email and dict user info formats
-            if isinstance(user_info, dict):
-                email = user_info.get("email", "")
-            else:
-                email = str(user_info)
+            email = _session_email(user_info)
 
             # Check super admin status (is_super_admin handles env + db + session caching internally)
             if is_super_admin(email):

@@ -202,7 +202,7 @@ def _reset_principal_token_sequence(suffix: str) -> None:
     process's counter restarting at 0 collides with an EARLIER run's
     committed ``token_00000000`` row on ``principals_access_token_key`` — a
     collision that happens INSIDE ``BaseTestEnv.__enter__``'s e2e auto-seed
-    (``_seed_e2e_identity``), before any test-body code gets a chance to
+    (``_seed_identity``), before any test-body code gets a chance to
     intervene. *suffix* is already unique per test (the same one used for
     tenant_id), so reseeding the counter from it makes the collision
     astronomically unlikely without a destructive reset of the live

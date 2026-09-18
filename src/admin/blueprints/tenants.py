@@ -24,7 +24,6 @@ from src.core.config_loader import is_single_tenant_mode
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Tenant
 from src.core.database.repositories.principal import PrincipalRepository
-from src.core.domain_config import get_sales_agent_domain
 from src.services.setup_checklist_service import SetupChecklistService
 from src.services.slack_notifier import SlackNotifier
 
@@ -407,7 +406,6 @@ def tenant_settings(tenant_id, section=None):
                 admin_port=admin_port,
                 is_production=is_production,
                 script_name=script_name,
-                sales_agent_domain=get_sales_agent_domain(),
                 authorized_domains=authorized_domains,
                 authorized_emails=authorized_emails,
                 product_count=product_count,

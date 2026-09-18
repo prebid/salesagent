@@ -37,7 +37,6 @@ Auth setup mode allows test credentials to work per-tenant:
 # ---
 
 import os
-from unittest.mock import patch
 
 from src.core.database.models import Tenant
 
@@ -112,53 +111,7 @@ class TestDisableSetupModeEndpoint:
         mock_session.commit.assert_called()
 
 
-_TEST_MODE_ON = {"ADCP_AUTH_TEST_MODE": "true", "PRODUCTION": "", "ENVIRONMENT": ""}
-_TEST_MODE_OFF = {"ADCP_AUTH_TEST_MODE": "", "PRODUCTION": "", "ENVIRONMENT": ""}
 _CREDENTIALS = {"email": "test_super_admin@example.com", "password": "test123", "tenant_id": "default"}
-
-
-class TestTestAuthEndpoint:
-    """Endpoint-level tests for the /test/auth gate.
-
-    F-02 fix: test auth requires BOTH ADCP_AUTH_TEST_MODE=true AND the tenant's
-    auth_setup_mode=True. The global flag selects the test-credential blueprint when the
-    app is composed (src/admin/app.py), so it is set before the app is built through
-    make_auth_test_client's ``env``; the tenant's setup mode is checked by the route.
-    """
-
-    def test_test_auth_allowed_when_both_enabled(self, make_auth_test_client):
-        """POST /test/auth returns 302 when env var and tenant setup mode are both on."""
-        with make_auth_test_client(auth_setup_mode=True, env=_TEST_MODE_ON) as (client, _):
-            response = client.post("/test/auth", data=_CREDENTIALS)
-
-        assert response.status_code == 302
-
-    def test_test_auth_blocked_when_env_var_only(self, make_auth_test_client):
-        """POST /test/auth returns 404 when env var is set but tenant has disabled setup mode.
-
-        F-02 regression: this was the vulnerable case before the fix.
-        """
-        with make_auth_test_client(auth_setup_mode=False, env=_TEST_MODE_ON) as (client, _):
-            response = client.post("/test/auth", data=_CREDENTIALS)
-
-        assert response.status_code == 404
-
-    def test_test_auth_blocked_when_setup_mode_only(self, make_auth_test_client):
-        """POST /test/auth returns 404 when tenant is in setup mode but env var is not set.
-
-        The route is not composed at all: the blueprint is absent from the app.
-        """
-        with make_auth_test_client(auth_setup_mode=True, env=_TEST_MODE_OFF) as (client, _):
-            response = client.post("/test/auth", data=_CREDENTIALS)
-
-        assert response.status_code == 404
-
-    def test_test_auth_blocked_when_both_disabled(self, make_auth_test_client):
-        """POST /test/auth returns 404 when both env var and tenant setup mode are off."""
-        with make_auth_test_client(auth_setup_mode=False, env=_TEST_MODE_OFF) as (client, _):
-            response = client.post("/test/auth", data=_CREDENTIALS)
-
-        assert response.status_code == 404
 
 
 class TestMigration:
@@ -197,44 +150,6 @@ class TestEnableSetupModeEndpoint:
             response = client.post("/tenant/default/users/enable-setup-mode")
         assert response.status_code == 200
         assert response.get_json()["success"] is True
-
-
-class TestTenantLoginEndpoint:
-    """Endpoint-level tests for GET /tenant/<id>/login offering the test-credential form.
-
-    Each test calls the real Flask route and asserts on the rendered HTML so a
-    regression in auth.py causes a real failure. The 'Setup Mode' banner
-    (templates/login.html) is the HTML marker: it is rendered when the test-credential
-    login path was composed into the app, absent otherwise.
-
-    A tenant's auth_setup_mode alone no longer shows the banner: the form it showed
-    posted to a route that refused the tenant without the global flag (F-02), so the
-    test that graded it graded a form that could never succeed, and was deleted with
-    the banner (salesagent-3cs7o.9).
-    """
-
-    def test_login_env_var_enables_test_banner_regardless_of_setup_mode(self, make_auth_test_client):
-        """GET /login renders the Setup Mode banner when ADCP_AUTH_TEST_MODE=true,
-        even if the tenant has disabled auth_setup_mode."""
-        with make_auth_test_client(auth_setup_mode=False, env=_TEST_MODE_ON) as (client, _):
-            with (
-                patch("src.admin.blueprints.auth.get_oauth_config", return_value=("", "", "", "")),
-                patch("src.services.auth_config_service.get_oidc_config_for_auth", return_value=None),
-            ):
-                response = client.get("/tenant/default/login")
-        assert response.status_code == 200
-        assert b"Setup Mode" in response.data
-
-    def test_login_hides_test_banner_when_setup_mode_disabled(self, make_auth_test_client):
-        """GET /login omits the Setup Mode banner when auth_setup_mode=False and no env override."""
-        with make_auth_test_client(auth_setup_mode=False, env=_TEST_MODE_OFF) as (client, _):
-            with (
-                patch("src.admin.blueprints.auth.get_oauth_config", return_value=("", "", "", "")),
-                patch("src.services.auth_config_service.get_oidc_config_for_auth", return_value=None),
-            ):
-                response = client.get("/tenant/default/login")
-        assert response.status_code == 200
-        assert b"Setup Mode" not in response.data
 
 
 class TestListUsersEndpoint:

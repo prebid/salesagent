@@ -106,56 +106,11 @@ def fast_password_hashing():
 
 
 @pytest.fixture
-def make_auth_test_client(monkeypatch):
-    """Factory fixture: context manager yielding (client, mock_session) with auth DB patched.
-
-    The environment is read once when the app is composed (src/core/config.py), and the
-    test-credential login path is a blueprint create_app registers or omits from it. So
-    the environment a test wants is passed HERE, as ``env``: the factory sets it, drops the
-    cached settings object, and only then builds the app. A ``patch.dict(os.environ)``
-    around a request made through an already-built client changes nothing.
-
-    Usage::
-
-        with make_auth_test_client(auth_setup_mode=True, env={"ADCP_AUTH_TEST_MODE": "true"}) as (client, _):
-            response = client.post("/test/auth", ...)
-    """
-    from contextlib import contextmanager
-
-    import src.core.config as config_module
-    from src.admin.app import create_app
-
-    @contextmanager
-    def _factory(auth_setup_mode: bool = True, env: dict[str, str] | None = None):
-        for name, value in (env or {}).items():
-            monkeypatch.setenv(name, value)
-        monkeypatch.setattr(config_module, "_settings", None)
-        app = create_app({"TESTING": True, "SECRET_KEY": "test-secret", "WTF_CSRF_ENABLED": False})
-        client = app.test_client()
-        mock_tenant = MagicMock()
-        mock_tenant.auth_setup_mode = auth_setup_mode
-        mock_session = MagicMock()
-        mock_session.scalars.return_value.first.return_value = mock_tenant
-        # The login pages query the tenant through the auth blueprint; /test/auth through
-        # the test-credential blueprint. Both see the same mocked session.
-        with (
-            patch("src.admin.blueprints.auth.get_db_session") as mock_auth_db,
-            patch("src.admin.blueprints.test_auth.get_db_session") as mock_test_db,
-        ):
-            for mock_db in (mock_auth_db, mock_test_db):
-                mock_db.return_value.__enter__ = MagicMock(return_value=mock_session)
-                mock_db.return_value.__exit__ = MagicMock(return_value=False)
-            yield client, mock_session
-
-    return _factory
-
-
-@pytest.fixture
 def make_users_test_client():
     """Factory fixture: context manager yielding (client, mock_session) for users blueprint.
 
-    Sets up ADCP_AUTH_TEST_MODE=true + a super-admin test session so
-    @require_tenant_access() passes without a DB call. tenant_id used in routes is "default".
+    Establishes a super-admin session so @require_tenant_access() passes without a DB call.
+    tenant_id used in routes is "default".
 
     Usage::
 
@@ -194,11 +149,13 @@ def make_users_test_client():
         with patch("src.admin.blueprints.users.get_db_session") as mock_db:
             mock_db.return_value.__enter__ = MagicMock(return_value=mock_session)
             mock_db.return_value.__exit__ = MagicMock(return_value=False)
-            with client.session_transaction() as sess:
-                sess["test_user"] = "admin@test.com"
-                sess["test_tenant_id"] = "default"
-                sess["test_user_role"] = "super_admin"
-            with patch.dict(os.environ, {"ADCP_AUTH_TEST_MODE": "true"}):
+            # The session an authenticated super admin carries, from the one definition of
+            # it. It used to be three test_* keys, which the deleted test-credential route
+            # minted and which only authenticated while the global flag was set.
+            from tests.helpers.admin_session import admin_auth_session
+
+            admin_auth_session(client, "default")
+            with patch.dict(os.environ, {}):
                 yield client, mock_session
 
     return _factory

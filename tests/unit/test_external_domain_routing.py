@@ -1,79 +1,68 @@
-"""Test external domain routing via Approximated."""
+"""Test how the admin plane resolves a request's host to a tenant.
+
+The ``Host`` is the one host input here as on the buyer-facing plane, and these assert the
+lookup ARGUMENT rather than only the returned tenant — the two earlier tests mocked the
+session to answer ANY query with a tenant, so they could not tell WHICH host had been
+looked up, which is the only thing that distinguishes "the Host was used" from "some host
+was used".
+"""
 
 from unittest.mock import Mock, patch
 
 from src.admin.blueprints.core import get_tenant_from_hostname
 
 
+class TestGetTenantFromHostname:
+    """``core.get_tenant_from_hostname`` is the admin plane's one host -> tenant lookup."""
+
+    def test_the_tenant_is_looked_up_by_the_host(self):
+        """The ``Host`` is the lookup key, and the vendor header does not displace it."""
+        from src.admin.app import create_app
+
+        app = create_app()
+
+        with app.test_request_context("/", headers={"Host": "sales-agent.accuweather.com"}):
+            with patch("src.admin.blueprints.core.get_db_session"):
+                with patch("src.admin.blueprints.core.TenantLookupRepository") as mock_repo_cls:
+                    mock_tenant = Mock()
+                    mock_tenant.tenant_id = "accuweather"
+                    mock_tenant.virtual_host = "sales-agent.accuweather.com"
+                    lookup = mock_repo_cls.return_value.find_active_by_virtual_host
+                    lookup.return_value = mock_tenant
+
+                    result = get_tenant_from_hostname()
+
+                    lookup.assert_called_once_with("sales-agent.accuweather.com")
+                    assert result.tenant_id == "accuweather"
+
+    def test_a_host_no_tenant_claims_resolves_to_none(self):
+        from src.admin.app import create_app
+
+        app = create_app()
+
+        with app.test_request_context("/", headers={"Host": "unknown-domain.com"}):
+            with patch("src.admin.blueprints.core.get_db_session"):
+                with patch("src.admin.blueprints.core.TenantLookupRepository") as mock_repo_cls:
+                    lookup = mock_repo_cls.return_value.find_active_by_virtual_host
+                    lookup.return_value = None
+
+                    assert get_tenant_from_hostname() is None
+                    lookup.assert_called_once_with("unknown-domain.com")
+
+    def test_the_admin_domain_is_not_a_tenant_and_is_never_looked_up(self):
+        """A host under ``admin.`` names the admin domain itself."""
+        from src.admin.app import create_app
+
+        app = create_app()
+
+        with app.test_request_context("/", headers={"Host": "admin.sales-agent.example.com"}):
+            with patch("src.admin.blueprints.core.TenantLookupRepository") as mock_repo_cls:
+                assert get_tenant_from_hostname() is None
+                mock_repo_cls.return_value.find_active_by_virtual_host.assert_not_called()
+
+
 class TestExternalDomainRouting:
-    """Test that external domains (via Approximated) route to tenant home page instead of signup."""
-
-    def test_get_tenant_from_hostname_with_approximated_header(self):
-        """Test tenant lookup via Apx-Incoming-Host header."""
-        from src.admin.app import create_app
-
-        app = create_app()
-
-        with app.test_request_context(
-            "/",
-            headers={
-                "Host": "backend.example.com",
-                "Apx-Incoming-Host": "sales-agent.accuweather.com",
-            },
-        ):
-            with patch("src.admin.blueprints.core.get_db_session") as mock_db:
-                # Mock the database session
-                mock_session = Mock()
-                mock_db.return_value.__enter__.return_value = mock_session
-
-                # Mock tenant object
-                mock_tenant = Mock()
-                mock_tenant.tenant_id = "accuweather"
-                mock_tenant.name = "AccuWeather"
-                mock_tenant.subdomain = "accuweather"
-                mock_tenant.virtual_host = "sales-agent.accuweather.com"
-
-                # Mock the database query
-                mock_scalars = Mock()
-                mock_scalars.first.return_value = mock_tenant
-                mock_session.scalars.return_value = mock_scalars
-
-                # Call the function
-                result = get_tenant_from_hostname()
-
-                # Verify tenant was returned
-                assert result is not None
-                assert result.tenant_id == "accuweather"
-                assert result.virtual_host == "sales-agent.accuweather.com"
-
-    def test_get_tenant_from_hostname_no_tenant_configured(self):
-        """Test that None is returned when no tenant is configured for external domain."""
-        from src.admin.app import create_app
-
-        app = create_app()
-
-        with app.test_request_context(
-            "/",
-            headers={
-                "Host": "backend.example.com",
-                "Apx-Incoming-Host": "unknown-domain.com",
-            },
-        ):
-            with patch("src.admin.blueprints.core.get_db_session") as mock_db:
-                # Mock the database session
-                mock_session = Mock()
-                mock_db.return_value.__enter__.return_value = mock_session
-
-                # Mock the database query - no tenant found
-                mock_scalars = Mock()
-                mock_scalars.first.return_value = None
-                mock_session.scalars.return_value = mock_scalars
-
-                # Call the function
-                result = get_tenant_from_hostname()
-
-                # Verify None is returned
-                assert result is None
+    """Test that external domains route to tenant home page instead of signup."""
 
     def test_index_route_external_domain_with_tenant(self):
         """Test that external domain with configured tenant shows agent landing page."""
@@ -104,13 +93,7 @@ class TestExternalDomainRouting:
                         mock_landing.return_value = "<html><body>Agent Landing Page</body></html>"
 
                         # Make request with Approximated headers
-                        response = client.get(
-                            "/",
-                            headers={
-                                "Host": "backend.example.com",
-                                "Apx-Incoming-Host": "sales-agent.accuweather.com",
-                            },
-                        )
+                        response = client.get("/", headers={"Host": "sales-agent.accuweather.com"})
 
                         # Should show agent landing page (200) with MCP/A2A endpoints
                         assert response.status_code == 200
@@ -138,13 +121,7 @@ class TestExternalDomainRouting:
                     mock_route.return_value = RoutingResult("custom_domain", None, "unknown-domain.com")
 
                     # Make request with Approximated headers
-                    response = client.get(
-                        "/",
-                        headers={
-                            "Host": "backend.example.com",
-                            "Apx-Incoming-Host": "unknown-domain.com",
-                        },
-                    )
+                    response = client.get("/", headers={"Host": "unknown-domain.com"})
 
                     # Should redirect to signup landing page (302)
                     assert response.status_code == 302

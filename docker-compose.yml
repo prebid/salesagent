@@ -85,7 +85,7 @@ services:
       # Override .env ports to match nginx-development.conf expectations
       ADCP_SALES_PORT: "8080"
       # Enable test login mode for development
-      ADCP_AUTH_TEST_MODE: "true"
+      FLASK_SECRET_KEY: "${FLASK_SECRET_KEY:-adcp-test-stack-session-signing-key}"
       # Development settings (venv at /opt/venv in image — see Dockerfile UV_PROJECT_ENVIRONMENT)
       PYTHONPATH: "/app"
       PYTHONUNBUFFERED: "1"

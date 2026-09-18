@@ -34,10 +34,13 @@ repos:
         stages: [pre-push]
 
       - id: repo-invariants
-        name: Repo invariants (no-skip-tests, no-fn-calls)
+        name: Repo invariants (no-skip-tests, no-fn-calls, no-developer-paths)
         entry: uv run python .pre-commit-hooks/check_repo_invariants.py
         language: system
-        types: [python]
+        # types_or, not types: the developer-path check is not Python-specific —
+        # #2228 removed hardcoded homes from docs, formulas, a shell script and two
+        # tracked SYMLINKS. The Python-only checks guard their own scope internally.
+        types_or: [python, markdown, yaml, shell, symlink]
         pass_filenames: true
 
       # Layer 2 — pre-push stage (medium cost; CI is authoritative for heavy checks)

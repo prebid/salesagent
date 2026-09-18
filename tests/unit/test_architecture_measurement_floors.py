@@ -63,6 +63,11 @@ EXPECTED_WIRED_ROUTES: frozenset[str] = frozenset(
         "ctxecho-media-buys",
         "ctxecho-products",
         "predispatch",
+        # The two tenant-identification routes this deployment answers on (Host and
+        # x-adcp-tenant), graded through the public capabilities tool. Pinned in the
+        # change that registered the route: before it, NO test set a virtual_host, so
+        # the host branch had never executed anywhere.
+        "tenantid",
         # BR-PROTOCOL-001: inbound version negotiation, graded on a tool that is not
         # get_adcp_capabilities. Pinned in the same change that registered the route.
         "protocol-version-negotiation",

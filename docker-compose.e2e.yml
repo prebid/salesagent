@@ -89,7 +89,7 @@ services:
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       SUPER_ADMIN_EMAILS: ${SUPER_ADMIN_EMAILS:-}
       ADCP_TESTING: ${ADCP_TESTING:-true}
-      ADCP_AUTH_TEST_MODE: ${ADCP_AUTH_TEST_MODE:-true}
+      FLASK_SECRET_KEY: "${FLASK_SECRET_KEY:-adcp-test-stack-session-signing-key}"
       # ─── Outbound egress escape hatch — TEST STACK ONLY ─────────────────────
       # The seam (src/core/security/outbound_http.py) refuses non-https schemes
       # (unconditionally, no hatch — GH #1757) and reserved/private
@@ -572,7 +572,7 @@ services:
       # (the bare `-n auto` would otherwise spawn ~17 app-loading workers -> OOM).
       PYTEST_XDIST_AUTO_NUM_WORKERS: "${PYTEST_XDIST_AUTO_NUM_WORKERS:-1}"
       ADCP_TESTING: "true"
-      ADCP_AUTH_TEST_MODE: "true"
+      FLASK_SECRET_KEY: "${FLASK_SECRET_KEY:-adcp-test-stack-session-signing-key}"
       # ─── Outbound egress escape hatch — TEST STACK ONLY ─────────────────────
       # Same reason as the adcp-server entry above, for the calls the RUNNER
       # makes itself: http://proxy:8000 (E2E_BASE_URL, the e2e_rest transport)

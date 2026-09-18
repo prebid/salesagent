@@ -16,7 +16,6 @@ from src.core.config import get_settings
 from src.core.database.database_session import get_db_session
 from src.core.database.integrity import resolve_or_write
 from src.core.database.models import AuthorizedProperty, PropertyTag, Tenant
-from src.core.domain_config import get_tenant_url
 from src.core.schemas import (
     PROPERTY_ERROR_MESSAGES,
     PROPERTY_REQUIRED_FIELDS,
@@ -247,19 +246,14 @@ def _construct_agent_url(tenant_id: str, request: Any) -> str:
 
         logger.info(f"🏢 Tenant info - subdomain: '{subdomain}', virtual_host: '{virtual_host}'")
 
-        # In production, use the existing virtual host system
-        if runtime.is_production:
-            if virtual_host:
-                url = f"https://{virtual_host}"
-                logger.info(f"🌐 Production: using virtual_host -> {url}")
-                return url
-            else:
-                # Fallback to subdomain pattern
-                tenant_url = get_tenant_url(subdomain)
-                if tenant_url:
-                    logger.info(f"🌐 Production: using subdomain pattern -> {tenant_url}")
-                    return tenant_url
-                # If SALES_AGENT_DOMAIN not configured, fall through to development mode
+        # In production, the host the tenant declares it is served at. The fallback that
+        # used to sit here built one from the subdomain and SALES_AGENT_DOMAIN, and went
+        # with the subdomain strategy: a tenant that declares no host
+        # has no per-tenant URL to give, and inventing one produces a name nothing serves.
+        if runtime.is_production and virtual_host:
+            url = f"https://{virtual_host}"
+            logger.info(f"🌐 Production: using virtual_host -> {url}")
+            return url
 
         # For development, use MCP server port
         url = runtime.local_base_url
@@ -649,13 +643,11 @@ def sync_properties_from_adagents(tenant_id: str) -> Response:
                             )
                         )
 
-        # Compute agent_url for property resolution (handles property_ids, property_tags)
-        agent_url: str | None = None
-        if tenant:
-            if tenant.virtual_host:
-                agent_url = f"https://{tenant.virtual_host}"
-            else:
-                agent_url = get_tenant_url(tenant.subdomain)
+        # The host the tenant declares, or nothing. A URL built from the subdomain and
+        # SALES_AGENT_DOMAIN went with the subdomain strategy: a
+        # tenant that declares no host has no agent URL, and inventing one names a host
+        # nothing serves.
+        agent_url: str | None = f"https://{tenant.virtual_host}" if tenant and tenant.virtual_host else None
 
         # Get optional domain filter from form
         publisher_domains_str = request.form.get("publisher_domains", "").strip()

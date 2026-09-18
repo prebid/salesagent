@@ -200,9 +200,9 @@ class TestGetAdcpCapabilitiesWithTenant:
         mock_uow.tenant_config = mock_repo
 
         with (
-            patch("src.core.tools.capabilities.TenantConfigUoW", return_value=mock_uow),
+            patch("src.services.seller_capabilities.TenantConfigUoW", return_value=mock_uow),
             patch(
-                "src.core.tools.capabilities.get_adapter_class_for_tenant",
+                "src.services.seller_capabilities.get_adapter_class_for_tenant",
                 side_effect=Exception("adapter unavailable (test)"),
             ),
         ):
@@ -272,7 +272,7 @@ class TestGetAdcpCapabilitiesWithTenant:
         mock_uow.__exit__ = MagicMock(return_value=False)
         mock_uow.tenant_config = mock_repo
 
-        with patch("src.core.tools.capabilities.TenantConfigUoW", return_value=mock_uow):
+        with patch("src.services.seller_capabilities.TenantConfigUoW", return_value=mock_uow):
             from tests.factories import PrincipalFactory
 
             identity = PrincipalFactory.make_identity(
@@ -281,7 +281,7 @@ class TestGetAdcpCapabilitiesWithTenant:
                 tenant=mock_tenant,
             )
 
-            with patch("src.core.tools.capabilities.get_adapter_class_for_tenant") as mock_get_adapter_class:
+            with patch("src.services.seller_capabilities.get_adapter_class_for_tenant") as mock_get_adapter_class:
                 mock_get_adapter_class.return_value = mock_adapter
 
                 response = _get_adcp_capabilities_impl(None, identity)
@@ -388,7 +388,7 @@ def _patch_capabilities_deps(
     mock_uow.__enter__ = MagicMock(return_value=mock_uow)
     mock_uow.__exit__ = MagicMock(return_value=False)
     mock_uow.tenant_config = mock_repo
-    stack.enter_context(patch("src.core.tools.capabilities.TenantConfigUoW", return_value=mock_uow))
+    stack.enter_context(patch("src.services.seller_capabilities.TenantConfigUoW", return_value=mock_uow))
 
     # ProductUoW is imported inside _map_portfolio_channels, so it is patched on
     # its owning module rather than on capabilities.
@@ -404,11 +404,13 @@ def _patch_capabilities_deps(
     stack.enter_context(patch("src.core.tools.capabilities.log_tool_activity"))
 
     if adapter is not None:
-        stack.enter_context(patch("src.core.tools.capabilities.get_adapter_class_for_tenant", return_value=adapter))
+        stack.enter_context(
+            patch("src.services.seller_capabilities.get_adapter_class_for_tenant", return_value=adapter)
+        )
     else:
         stack.enter_context(
             patch(
-                "src.core.tools.capabilities.get_adapter_class_for_tenant",
+                "src.services.seller_capabilities.get_adapter_class_for_tenant",
                 side_effect=Exception("adapter unavailable (test)"),
             )
         )
@@ -516,10 +518,10 @@ class TestGracefulDegradation:
         mock_uow.tenant_config = mock_repo
 
         with (
-            patch("src.core.tools.capabilities.TenantConfigUoW", return_value=mock_uow),
+            patch("src.services.seller_capabilities.TenantConfigUoW", return_value=mock_uow),
             patch("src.core.tools.capabilities.log_tool_activity"),
             patch(
-                "src.core.tools.capabilities.get_adapter_class_for_tenant",
+                "src.services.seller_capabilities.get_adapter_class_for_tenant",
                 side_effect=Exception("Adapter init failed"),
             ),
         ):
@@ -538,10 +540,10 @@ class TestGracefulDegradation:
         )
 
         with (
-            patch("src.core.tools.capabilities.TenantConfigUoW", side_effect=Exception("DB down")),
+            patch("src.services.seller_capabilities.TenantConfigUoW", side_effect=Exception("DB down")),
             patch("src.core.tools.capabilities.log_tool_activity"),
             patch(
-                "src.core.tools.capabilities.get_adapter_class_for_tenant",
+                "src.services.seller_capabilities.get_adapter_class_for_tenant",
                 side_effect=Exception("adapter unavailable (test)"),
             ),
         ):

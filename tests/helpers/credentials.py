@@ -15,7 +15,9 @@ Enforced by ``.ast-grep/rules/test-credential-header-single-producer.yml``, whic
 from __future__ import annotations
 
 
-def credential_headers(*, token: str | None = None, tenant: str | None = None) -> dict[str, str]:
+def credential_headers(
+    *, token: str | None = None, tenant: str | None = None, host: str | None = None
+) -> dict[str, str]:
     """THE producer: the headers a test presents to this seller, from plain values.
 
     Every dispatcher, fixture, builder and per-test literal in ``tests/`` builds its
@@ -45,6 +47,20 @@ def credential_headers(*, token: str | None = None, tenant: str | None = None) -
     if token is not None:
         # ast-grep-ignore: test-credential-header-single-producer - this IS the one producer
         headers["Authorization"] = f"Bearer {token}"
-    if tenant:
+    if host:
+        # THE DEFAULT WAY a request names its seller, because it is how a DEPLOYMENT does
+        # it: production nginx derives ``x-adcp-tenant`` from the host
+        # (``nginx-multi-tenant.conf``: ``map $host $tenant``) and no caller sends it. A
+        # suite where every caller asserted the header instead graded a path no deployment
+        # runs, and left the virtual_host branches unexecuted — which is how a tenant host
+        # reached ``publisher_properties[].publisher_domain`` carrying a port, failing every
+        # product of that tenant with nothing to catch it.
+        #
+        # Sent INSTEAD of the header, not alongside it: ``_detect_tenant`` tries the Host
+        # first and the header second, so sending both would let the header silently rescue
+        # a Host that resolved nothing, and the suite would go on believing it had graded
+        # host resolution.
+        headers["Host"] = host
+    elif tenant:
         headers["x-adcp-tenant"] = tenant
     return headers

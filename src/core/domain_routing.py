@@ -1,12 +1,14 @@
-"""Shared domain routing logic for landing pages.
+"""Which landing page a host gets.
 
-Centralizes the logic for determining how to route requests based on domain:
-- Custom domains (virtual_host) → agent landing page
-- Subdomains (*.sales-agent.example.com) → agent landing page or login
-- Admin domains (admin.*) → admin login
-- Unknown domains → fallback
+- a host a tenant declares as its ``virtual_host`` → that tenant's agent page
+- an admin domain → admin login
+- anything else → the fallback page
 
-Used by MCP server, Admin UI, and A2A server to ensure consistent behavior.
+Subdomain routing is GONE. A deployment serving a tenant at
+``acme.example.com`` sets that tenant's ``virtual_host`` to it, which is the one
+lookup here; the second derivation it replaced needed a ``SALES_AGENT_DOMAIN``
+setting and disagreed with the first often enough to publish an agent card naming
+a host nothing served.
 """
 
 from dataclasses import dataclass
@@ -14,15 +16,9 @@ from typing import Literal
 
 # Import existing tenant lookup functions from config_loader
 # This ensures all servers (MCP, Admin, A2A) use the same lookup logic
-from src.core.config_loader import (
-    get_tenant_by_subdomain,
-    get_tenant_by_virtual_host,
-)
-from src.core.domain_config import (
-    extract_subdomain_from_host,
-    is_admin_domain,
-    is_sales_agent_domain,
-)
+from src.core.config_loader import get_tenant_by_virtual_host
+from src.core.domain_config import is_admin_domain
+from src.core.http_utils import requested_host
 
 
 @dataclass
@@ -30,12 +26,12 @@ class RoutingResult:
     """Result of domain routing decision.
 
     Attributes:
-        type: Type of routing decision (custom_domain, subdomain, admin, unknown)
+        type: Type of routing decision (custom_domain, admin, unknown)
         tenant: Tenant dict if found, None otherwise
         effective_host: The host used for routing decision
     """
 
-    type: Literal["custom_domain", "subdomain", "admin", "unknown"]
+    type: Literal["custom_domain", "admin", "unknown"]
     tenant: dict | None
     effective_host: str
 
@@ -56,37 +52,31 @@ def route_landing_page(request_headers: dict) -> RoutingResult:
         RoutingResult indicating routing decision and tenant if found
 
     Routing logic:
-    - Admin domains (admin.*) → type="admin"
-    - Custom domains (not sales-agent domain) with tenant → type="custom_domain"
-    - Sales-agent subdomains with tenant → type="subdomain"
-    - Everything else → type="unknown"
+    - Admin domain → type="admin"
+    - Any other host → type="custom_domain", carrying the tenant that declares that
+      host as its ``virtual_host``, or None when no tenant declares it
+    - No host at all → type="unknown"
 
     Examples:
         Admin domain routing:
         >>> route_landing_page({"Host": "admin.sales-agent.example.com"})
         RoutingResult(type="admin", tenant=None, effective_host="admin.sales-agent.example.com")
 
-        Custom domain with tenant:
+        A host some tenant declares:
         >>> route_landing_page({"Host": "sales-agent.publisher.com"})
         RoutingResult(type="custom_domain", tenant={...}, effective_host="sales-agent.publisher.com")
 
-        Subdomain with tenant:
-        >>> route_landing_page({"Host": "mytenant.sales-agent.example.com"})
-        RoutingResult(type="subdomain", tenant={...}, effective_host="mytenant.sales-agent.example.com")
+        A host no tenant declares:
+        >>> route_landing_page({"Host": "nobody.example.com"})
+        RoutingResult(type="custom_domain", tenant=None, effective_host="nobody.example.com")
 
-        Proxied request (Approximated header takes precedence):
-        >>> route_landing_page({
-        ...     "Host": "backend.internal.com",
-        ...     "Apx-Incoming-Host": "admin.sales-agent.example.com"
-        ... })
-        RoutingResult(type="admin", tenant=None, effective_host="admin.sales-agent.example.com")
+        A request that reached here through a proxy names its host the same way. Whatever
+        that proxy had to rewrite, it rewrote before the app, so this function reads one
+        thing.
     """
-    # Get host from headers (Approximated proxy or direct)
-    apx_host = request_headers.get("apx-incoming-host") or request_headers.get("Apx-Incoming-Host")
-    host_header = request_headers.get("host") or request_headers.get("Host")
-
-    # Use whichever host is available (proxy header takes precedence)
-    effective_host = apx_host or host_header
+    # The host this request is for. One owner (src/core/http_utils.py), so this module
+    # has no header name of its own to disagree with anyone about.
+    effective_host = requested_host(request_headers)
 
     if not effective_host:
         return RoutingResult("unknown", None, "")
@@ -98,15 +88,12 @@ def route_landing_page(request_headers: dict) -> RoutingResult:
     if is_admin_domain(effective_host):
         return RoutingResult("admin", None, effective_host)
 
-    # Custom domain check (non-sales-agent domain)
-    if not is_sales_agent_domain(effective_host):
-        tenant = get_tenant_by_virtual_host(effective_host)
-        # Return custom_domain type even if tenant not found - this allows the caller
-        # to distinguish between "external domain looking for tenant" (can show signup)
-        # vs "completely unknown request" (show generic fallback). Caller decides how to handle.
-        return RoutingResult("custom_domain", tenant, effective_host)
-
-    # Subdomain check (sales-agent domain with subdomain)
-    subdomain = extract_subdomain_from_host(effective_host)
-    tenant = get_tenant_by_subdomain(subdomain) if subdomain else None
-    return RoutingResult("subdomain", tenant, effective_host)
+    # ONE lookup: the host a tenant declares it is served at. The branch that used to sit
+    # in front of this asked whether the host was under SALES_AGENT_DOMAIN and, if so, took
+    # a different path entirely — a second derivation of the same fact, deleted with the
+    # subdomain strategy.
+    tenant = get_tenant_by_virtual_host(effective_host)
+    # ``custom_domain`` even when no tenant matched: the caller distinguishes "a host asking
+    # for a tenant we do not serve" (it can offer signup) from "no host at all" (the generic
+    # fallback above). Which of those to show is the caller's decision, not this function's.
+    return RoutingResult("custom_domain", tenant, effective_host)

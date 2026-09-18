@@ -344,6 +344,8 @@ def _create_unique_media_buy(
 # query and the status_filter="pending_start" row returns nothing. Pre-serving
 # states (pending_creatives/pending_start) are pre-flight; completed is
 # post-flight; everything else uses the factory's mid-flight default.
+# Applied in _ensure_media_buy_in_db, which every Given that seeds a buy goes through,
+# so no call site carries its own copy of this rule.
 _PRE_FLIGHT = ("2099-01-01", "2099-12-31")
 _POST_FLIGHT = ("2020-01-01", "2020-12-31")
 _STATUS_FLIGHT_WINDOW: dict[str, tuple[str, str]] = {
@@ -364,10 +366,7 @@ def given_multiple_buys_various_statuses(ctx: dict, owner: str) -> None:
     transports.
     """
     for status in ("active", "completed", "paused", "rejected", "canceled", "pending_creatives", "pending_start"):
-        window = _STATUS_FLIGHT_WINDOW.get(status, (None, None))
-        _create_unique_media_buy(
-            ctx, label=f"mb-{status}", owner=owner, status=status, start_date=window[0], end_date=window[1]
-        )
+        _create_unique_media_buy(ctx, label=f"mb-{status}", owner=owner, status=status)
 
 
 @given(parsers.parse('media buys owned by "{owner}"'))
@@ -3603,6 +3602,16 @@ def _ensure_media_buy_in_db(
             tenant=ctx["db_tenant"],
             principal_id=owner,
         )
+
+    # A seeded status only survives where its flight window agrees with it: the real
+    # status scheduler the app-backed transports run promotes a mid-flight
+    # ``pending_start`` buy to ``active``, so the Given's status is gone by the time the
+    # When polls. _STATUS_FLIGHT_WINDOW is derived HERE, for every Given, rather than at
+    # the call sites -- the multi-buy Given applied it and the single-buy ones did not,
+    # which is how a scheduler tick landing between seed and poll read as
+    # "Expected status 'pending_start', got 'active'" on e2e_rest.
+    if start_date is None and end_date is None:
+        start_date, end_date = _STATUS_FLIGHT_WINDOW.get(status, (None, None))
 
     # Create media buy
     mb_kwargs: dict[str, Any] = {

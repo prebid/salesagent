@@ -75,6 +75,9 @@ no-skip-tests:
 no-fn-calls:
   enforced_by: consolidated
   location: .pre-commit-hooks/check_repo_invariants.py
+no-developer-paths:
+  enforced_by: consolidated
+  location: .pre-commit-hooks/check_repo_invariants.py
 fixme-citation-no-regression:
   enforced_by: guard + pre-push + ci-step
   location: tests/unit/test_architecture_ratchet_enforcement.py + stages_prepush + Makefile::quality-ci

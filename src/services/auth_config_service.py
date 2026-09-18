@@ -12,7 +12,7 @@ from src.core.config import get_settings
 from src.core.database.database_session import get_db_session
 from src.core.database.integrity import resolve_or_write
 from src.core.database.models import Tenant, TenantAuthConfig
-from src.core.domain_config import get_sales_agent_domain, get_sales_agent_url
+from src.core.domain_config import get_sales_agent_url
 
 logger = logging.getLogger(__name__)
 
@@ -179,7 +179,8 @@ def enable_oidc(tenant_id: str) -> bool:
             logger.error(f"Cannot enable OIDC: no config for tenant {tenant_id}")
             return False
 
-        if not is_oidc_config_valid(tenant_id):
+        tenant = session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
+        if not _config_is_verified_for(config, tenant, tenant_id):
             logger.error(f"Cannot enable OIDC: config not verified for tenant {tenant_id}")
             return False
 
@@ -245,13 +246,14 @@ def get_tenant_redirect_uri(tenant: Tenant) -> str:
         Full redirect URI
     """
     if tenant.virtual_host:
-        # Custom domain takes highest priority
+        # The host this tenant is served at, and the only per-tenant answer. The branch
+        # that used to sit under this built one from the subdomain and SALES_AGENT_DOMAIN;
+        # it went with the subdomain strategy, because a redirect URI
+        # has to be a host the tenant is actually reachable at and only virtual_host says
+        # so. A tenant that declares none falls through to the deployment-wide answers.
         base = f"https://{tenant.virtual_host}"
-    elif tenant.subdomain and get_sales_agent_domain():
-        # Subdomain on main domain (multi-tenant mode with SALES_AGENT_DOMAIN set)
-        base = f"https://{tenant.subdomain}.{get_sales_agent_domain()}"
     elif main_url := get_sales_agent_url():
-        # Explicit SALES_AGENT_DOMAIN URL
+        # The deployment's own URL, for an install that serves one seller
         base = main_url
     elif fly_app := get_settings().runtime.fly_app_name:
         # Single-tenant mode on Fly.io - use the app's URL
@@ -261,6 +263,31 @@ def get_tenant_redirect_uri(tenant: Tenant) -> str:
         base = get_settings().runtime.local_base_url
 
     return f"{base}/admin/auth/oidc/callback"
+
+
+def _config_is_verified_for(config: TenantAuthConfig | None, tenant: Tenant | None, tenant_id: str) -> bool:
+    """Whether *config* is verified for *tenant*'s CURRENT redirect URI.
+
+    A predicate over rows the caller already has, so a caller inside a session asks it
+    without opening a second one. ``enable_oidc`` used to call the session-opening
+    :func:`is_oidc_config_valid` from inside its own session: the inner context's exit
+    removes the scoped session, which detaches the outer one, so the ``commit()`` after it
+    wrote NOTHING. The service logged "Enabled OIDC" and ``oidc_enabled`` stayed false --
+    a silent failure on the one step that turns a tenant's SSO on.
+    """
+    if not config or not tenant:
+        return False
+    if not config.oidc_verified_at or not config.oidc_verified_redirect_uri:
+        return False
+
+    current_uri = get_tenant_redirect_uri(tenant)
+    if config.oidc_verified_redirect_uri != current_uri:
+        logger.warning(
+            f"OIDC config invalid for tenant {tenant_id}: "
+            f"redirect URI changed from {config.oidc_verified_redirect_uri} to {current_uri}"
+        )
+        return False
+    return True
 
 
 def is_oidc_config_valid(tenant_id: str) -> bool:
@@ -278,33 +305,8 @@ def is_oidc_config_valid(tenant_id: str) -> bool:
     """
     with get_db_session() as session:
         config = session.scalars(select(TenantAuthConfig).filter_by(tenant_id=tenant_id)).first()
-
-        if not config:
-            return False
-
-        if not config.oidc_verified_at:
-            return False
-
-        if not config.oidc_verified_redirect_uri:
-            return False
-
-        # Get current redirect URI
         tenant = session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
-
-        if not tenant:
-            return False
-
-        current_uri = get_tenant_redirect_uri(tenant)
-
-        # Check if verified URI matches current
-        if config.oidc_verified_redirect_uri != current_uri:
-            logger.warning(
-                f"OIDC config invalid for tenant {tenant_id}: "
-                f"redirect URI changed from {config.oidc_verified_redirect_uri} to {current_uri}"
-            )
-            return False
-
-        return True
+        return _config_is_verified_for(config, tenant, tenant_id)
 
 
 def get_oidc_config_for_auth(tenant_id: str) -> dict | None:

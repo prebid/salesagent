@@ -25,9 +25,7 @@ flowchart TD
         SD -- yes --> Ten
         SD -- no --> XH{"x-adcp-tenant header set?"}
         XH -- yes --> Ten
-        XH -- no --> APX{"Apx-Incoming-Host matches a custom domain?"}
-        APX -- yes --> Ten
-        APX -- no --> Err["No tenant context error"]
+        XH -- no --> Err["No tenant context error"]
     end
 ```
 
@@ -107,7 +105,42 @@ APPROXIMATED_BACKEND_URL=sales-agent.yourdomain.com
 2. The system registers the domain with the Approximated proxy.
 3. The tenant adds a CNAME record: `sales.publisher.com → proxy.approximated.app`.
 4. Requests to `sales.publisher.com` are proxied to your deployment.
-5. The `Apx-Incoming-Host` header identifies which tenant.
+5. **nginx normalizes the vendor header away, and the app never sees it.**
+
+### Why step 5 exists
+
+Approximated forwards to `APPROXIMATED_BACKEND_URL`, so the `Host` it sends names *your
+backend* — the same value for every publisher — and the publisher's own domain arrives in
+`Apx-Incoming-Host`. That is the only reason the header exists: behind that proxy, `Host`
+identifies nobody.
+
+`config/nginx/nginx-multi-tenant.conf` folds it back into `Host` and drops the header on the
+way through, so a request arriving via Approximated is indistinguishable from one that named
+the tenant's host directly:
+
+| request nginx receives | what the app receives |
+|---|---|
+| `Host: adcp-sales-agent.fly.dev` + `Apx-Incoming-Host: sales.publisher.com` | `Host: sales.publisher.com` |
+| `Host: acme.example.com` | `Host: acme.example.com` |
+
+So the app has exactly two ways to name a tenant — `Host` → `tenants.virtual_host`, and an
+`x-adcp-tenant` the client sent — and no third spelling of the first one. That matters because
+a second spelling is not a harmless synonym: the app once carried two host ladders that
+disagreed about which header wins, so one request could resolve to two different tenants
+depending on which code asked.
+
+This is determinism, not a security control. A caller can set `Apx-Incoming-Host` on its own
+request, but nobody can set a header on somebody else's, and the most it yields is a tenant's
+public landing page — reachable by naming that tenant's real host anyway. Credentials are
+verified inside the tenant they were issued for, so claiming another tenant's host grants
+nothing.
+
+The application reads exactly two tenant inputs — `Host` and `x-adcp-tenant` — and no third
+spelling of the first. It does not read `Apx-Incoming-Host` at all: that header is edge
+config, and folding it into `Host` is the edge's job. So a deployment serving custom domains
+needs an edge that performs this normalization; reaching the app without one
+(`SKIP_NGINX=true`) means a proxied request arrives naming the backend, and resolves the
+backend's tenant or none.
 
 ### Admin UI configuration
 
@@ -184,7 +217,9 @@ In multi-tenant mode, the system resolves the tenant from request headers, in th
 
 1. **Host header**: The tenant's custom domain is checked first, then the subdomain - `acme.sales-agent.yourdomain.com` → tenant `acme`.
 2. **x-adcp-tenant header**: Explicit tenant override, matched as a subdomain first and then as a tenant ID (advanced).
-3. **Apx-Incoming-Host header**: For Approximated proxy requests, matched against the tenant's custom domain.
+
+There is no third input. A request proxied by Approximated is resolved by its `Host` like
+any other, because the edge has already folded `Apx-Incoming-Host` into it.
 
 Example MCP client configuration:
 
@@ -210,7 +245,9 @@ The [request lifecycle](../development/request-lifecycle.md) explains what else 
 
 - Verify the subdomain or domain is configured for a tenant.
 - Check that the Host header is being passed correctly.
-- For Approximated: verify the `Apx-Incoming-Host` header is present.
+- For Approximated: the app never reads `Apx-Incoming-Host`, so check the EDGE — that nginx
+  is in front and its `$tenant_host` map folded the vendor header into the `Host` the app
+  received. `/debug/tenant` reports the `Host` that arrived and the tenant it resolved.
 
 ### Custom domain not working
 

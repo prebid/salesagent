@@ -80,6 +80,21 @@ class TenantFactory(factory.alchemy.SQLAlchemyModelFactory):
     tenant_id = Sequence(lambda n: f"tenant_{n:04d}")
     name = LazyAttribute(lambda o: f"Test Publisher {o.tenant_id}")
     subdomain = LazyAttribute(lambda o: tenant_subdomain(o.tenant_id))
+    #: Its OWN column with its OWN sequence, not derived from tenant_id or subdomain.
+    #: This directory's guide says why: deriving one independent column from another
+    #: invents a shape constraint on the source and then needs normalization and rules to
+    #: hold it up — which is exactly the history ``tenant_subdomain`` above carries.
+    #:
+    #: Set BY DEFAULT so the suite resolves its tenant the way a DEPLOYMENT does: from the
+    #: ``Host``, against ``tenants.virtual_host``. Production nginx derives
+    #: ``x-adcp-tenant`` from the host (``nginx-multi-tenant.conf``: ``map $host $tenant``)
+    #: and no caller sends it, so a suite where every caller asserts the header itself
+    #: grades a path no deployment runs. It also left the virtual_host branches unexecuted
+    #: — which is how a tenant host reached ``publisher_properties[].publisher_domain``
+    #: with a port in it and failed every product, graded by nothing.
+    #:
+    #: A ``.example.com`` name, so the value is a domain wherever one is expected.
+    virtual_host = Sequence(lambda n: f"vhost-{n:04d}.example.com")
     is_active = True
     billing_plan = "standard"
     ad_server = "mock"

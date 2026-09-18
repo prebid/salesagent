@@ -173,9 +173,6 @@ def authenticated_admin_session(admin_client, integration_db):
         db_session.add(email_config)
         db_session.commit()
 
-    # Enable test mode for authentication
-    os.environ["ADCP_AUTH_TEST_MODE"] = "true"
-
     with admin_client.session_transaction() as sess:
         sess["authenticated"] = True
         sess["role"] = "super_admin"
@@ -190,8 +187,6 @@ def authenticated_admin_session(admin_client, integration_db):
     yield admin_client
 
     # Clean up test mode
-    if "ADCP_AUTH_TEST_MODE" in os.environ:
-        del os.environ["ADCP_AUTH_TEST_MODE"]
 
 
 @pytest.fixture
@@ -794,26 +789,20 @@ def test_admin_app(integration_db):
 @pytest.fixture
 def authenticated_admin_client(test_admin_app):
     """Provide authenticated admin client with database."""
-    # Enable test mode for authentication
-    os.environ["ADCP_AUTH_TEST_MODE"] = "true"
-
     client = test_admin_app.test_client()
 
-    with client.session_transaction() as sess:
-        sess["user"] = {"email": "admin@example.com", "name": "Admin User", "role": "super_admin"}
-        sess["authenticated"] = True
-        sess["role"] = "super_admin"
-        sess["email"] = "admin@example.com"
-        # Add test mode session keys for require_tenant_access() decorator
-        sess["test_user"] = "admin@example.com"
-        sess["test_user_role"] = "super_admin"
-        sess["test_user_name"] = "Admin User"
+    # The canonical admin session. It carries `is_super_admin` + `admin_email`, which
+    # `is_super_admin()` short-circuits on — so recognising this caller costs no database
+    # round trip. That matters here beyond speed: `get_db_session()` is scoped, so a read
+    # inside the auth decorator nests within whatever session the TEST holds and its exit
+    # detaches it, discarding rows the test flushed but had not committed.
+    from tests.helpers.admin_session import admin_auth_session
+
+    admin_auth_session(client, "default")
 
     yield client
 
     # Clean up test mode
-    if "ADCP_AUTH_TEST_MODE" in os.environ:
-        del os.environ["ADCP_AUTH_TEST_MODE"]
 
 
 # ``test_media_buy_workflow`` was here and is DELETED along with the dict

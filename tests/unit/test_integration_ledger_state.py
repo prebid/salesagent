@@ -31,7 +31,7 @@ LEDGER = Path(__file__).parent.parent / "integration" / "known_failures.txt"
 #: ``test_the_ledger_never_grows``.
 #:
 #: 53, where a full box run measured 48. Both additions were mine to see and did not:
-#: cluster I (2) passes on the box because it has ``ADCP_AUTH_TEST_MODE`` on and fails
+#: cluster I is GRADUATED: it passed on the box because it had ``ADCP_AUTH_TEST_MODE`` on and failed
 #: wherever it is off, so a baseline measured in one environment does not transfer; and
 #: cluster J (3) I excluded by judgement as another PR's to fix, which conflated fixing
 #: with recording and left CI red for a reason no reader could find. A ledger created from
@@ -96,13 +96,10 @@ EXPECTED_LEDGER: frozenset[str] = frozenset(
         "tests/integration/test_delivery_poll_behavioral.py::TestPrincipalNotFoundReturnsError::test_principal_not_found_returns_error_in_response",
         "tests/integration/test_delivery_poll_behavioral.py::TestSimulationReachesFinalThroughRealHook::test_mock_time_in_flight_reports_active_and_scheduled",
         "tests/integration/test_delivery_poll_behavioral.py::TestSimulationReachesFinalThroughRealHook::test_mock_time_past_flight_reaches_completed_and_final",
-        "tests/integration/test_harness_wire_response.py::TestWireResponseIsRealWire::test_rest_wire_response_is_the_http_body",
         "tests/integration/test_list_accounts_auth_missing_wire.py::TestListAccountsNoTokenEmitsAuthMissing::test_no_token_rest_wire_emits_auth_missing",
         "tests/integration/test_mcp_client_util.py::TestExhaustedFailureReachesTheRegistryClassified::test_seam_failure_surfaces_as_the_mapped_envelope[connection-level]",
         "tests/integration/test_mcp_client_util.py::TestExhaustedFailureReachesTheRegistryClassified::test_seam_failure_surfaces_as_the_mapped_envelope[tool-level]",
         # Cluster I (salesagent-091d8) — production composition depends on a test flag
-        "tests/integration/test_template_url_validation.py::TestTemplateUrlValidation::test_all_template_url_for_calls_resolve",
-        "tests/integration/test_template_url_validation.py::TestTemplateUrlValidation::test_form_actions_point_to_valid_endpoints",
         # Cluster J (GH #2189) — these re-run a BDD slice and grade their own subrun
         "tests/integration/test_bdd_scenario_liveness_real_run.py::test_real_run_records_uc006_storyboard_scenarios_as_ledgered_or_live",
         "tests/integration/test_bdd_scenario_liveness_real_run.py::test_real_run_records_uc005_format_id_roundtrip_scenarios_as_live",

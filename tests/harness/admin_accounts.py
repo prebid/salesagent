@@ -249,20 +249,17 @@ class AdminAccountEnv:
         admin_auth_session(self._flask_client, tenant_id)
 
     def _auth_e2e(self, tenant_id: str) -> None:
-        """Cookie-based auth via /test/auth endpoint on Docker stack."""
+        """Cookie-based auth against the Docker stack — the session is SIGNED, not requested.
+
+        This used to POST a default password to /test/auth, a login route composed only
+        under ADCP_AUTH_TEST_MODE. The session that route minted is the same one
+        ``admin_session_cookie`` signs here, so the test states the session it needs
+        instead of asking a composed-in password path to mint one.
+        """
+        from tests.helpers.admin_session import authenticate_http_session
+
         assert self._session is not None
-        resp = self._session.post(
-            f"{self._base_url}/test/auth",
-            data={
-                "email": "test_super_admin@example.com",
-                "password": "test123",
-                "tenant_id": tenant_id,
-            },
-            allow_redirects=False,
-        )
-        # /test/auth redirects on success (302) — session cookie is stored
-        if resp.status_code not in (200, 302):
-            raise RuntimeError(f"E2E auth failed: {resp.status_code} {resp.text[:200]}")
+        authenticate_http_session(self._session, self._base_url, tenant_id)
 
     def clear_auth(self) -> None:
         """Clear the authenticated session."""

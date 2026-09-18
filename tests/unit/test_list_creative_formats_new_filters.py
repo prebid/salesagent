@@ -5,7 +5,6 @@ that were added to match the AdCP spec.
 """
 
 from src.core.schemas import FormatId, ListCreativeFormatsRequest
-from tests.helpers.capture_wrapper_req import mcp_tool, registry_impl
 
 DEFAULT_AGENT_URL = "https://creative.adcontextprotocol.org"
 
@@ -114,33 +113,9 @@ class TestListCreativeFormatsNewFilters:
         assert req.name_search == "banner"
 
 
-class TestListCreativeFormatsMCPToolSignature:
-    """The MCP surface exposes AdCP types, so tools/list carries a real schema.
-
-    There is no hand-written list_creative_formats wrapper to inspect. One generated
-    callable serves every row and its advertised signature is derived from the DTO, so both
-    obligations below are about the DTO reaching the wire -- graded here through this tool.
-    """
-
-    async def test_mcp_tool_accepts_format_ids_as_typed_objects(self):
-        """FormatId objects, as MCP coerces them from JSON, survive to the impl."""
-        from adcp import FormatId
-
-        from src.core.schemas import ListCreativeFormatsResponse
-
-        format_ids = [
-            FormatId(agent_url="https://creative.adcontextprotocol.org", id="video_15s_hosted"),
-            FormatId(agent_url="https://creative.adcontextprotocol.org", id="display_300x250"),
-        ]
-        seen: dict = {}
-
-        def _impl(req, identity=None, **kwargs):
-            seen["req"] = req
-            return ListCreativeFormatsResponse(formats=[])
-
-        with registry_impl("list_creative_formats", _impl):
-            await mcp_tool("list_creative_formats")(format_ids=format_ids)
-
-        req = seen["req"]
-        assert req.format_ids is not None
-        assert [f.id for f in req.format_ids] == ["video_15s_hosted", "display_300x250"]
+# The MCP-signature class that stood here dispatched list_creative_formats with NO HEADERS
+# AT ALL, to watch typed FormatId objects reach the impl. Two reasons it is gone rather than
+# repaired: a request presenting no host and no tenant header is now REFUSED
+# (CONFIGURATION_ERROR), so its premise describes no request a buyer can make; and what it
+# graded is already graded harder by BR-UC-005, whose format_ids scenarios assert that the
+# filter SELECTS on the (agent_url, id) federation pair, on every transport including MCP.

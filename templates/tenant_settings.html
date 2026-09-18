@@ -2619,7 +2619,7 @@ Exclude any products that don't match the brand's tone.</pre>
                 <h3>MCP Server Endpoint</h3>
                 <div class="config-code">
                     <button class="copy-button" onclick="copyToClipboard(this)">Copy</button>
-                    <pre style="margin: 0;">{% if tenant.virtual_host %}https://{{ tenant.virtual_host }}/mcp/{% elif is_production %}https://{{ tenant.subdomain }}.{{ sales_agent_domain }}/mcp/{% else %}http://localhost:{{ mcp_port }}/mcp/{% endif %}</pre>
+                    <pre style="margin: 0;">{% if tenant.virtual_host %}https://{{ tenant.virtual_host }}/mcp/{% elif is_production %}(configure this agent's domain below){% else %}http://localhost:{{ mcp_port }}/mcp/{% endif %}</pre>
                 </div>
             </div>
 
@@ -2632,11 +2632,11 @@ from fastmcp.client.transports import StreamableHttpTransport
 
 headers = {
     "Authorization": "Bearer YOUR_ACCESS_TOKEN"{% if not tenant.virtual_host %},
-    "x-adcp-tenant": "{{ tenant.subdomain }}"{% endif %}
+    "x-adcp-tenant": "{{ tenant.tenant_id }}"{% endif %}
 
 }
 transport = StreamableHttpTransport(
-    url="{% if tenant.virtual_host %}https://{{ tenant.virtual_host }}/mcp/{% elif is_production %}https://{{ tenant.subdomain }}.{{ sales_agent_domain }}/mcp/{% else %}http://localhost:{{ mcp_port }}/mcp/{% endif %}",
+    url="{% if tenant.virtual_host %}https://{{ tenant.virtual_host }}/mcp/{% else %}http://localhost:{{ mcp_port }}/mcp/{% endif %}",
     headers=headers
 )
 client = Client(transport=transport)
@@ -2751,9 +2751,7 @@ result = await client.tools.get_products(brief="video ads")</pre>
      data-mcp-port="{{ mcp_port }}"
      data-is-production="{% if is_production %}true{% else %}false{% endif %}"
      data-virtual-host="{{ tenant.virtual_host if tenant.virtual_host else '' }}"
-     data-subdomain="{{ tenant.subdomain if tenant.subdomain else '' }}"
      data-tenant-ad-server="{{ tenant.ad_server if tenant.ad_server else '' }}"
-     data-sales-agent-domain="{{ sales_agent_domain if sales_agent_domain else 'sales-agent.example.com' }}"
      style="display: none;">
 </div>
 

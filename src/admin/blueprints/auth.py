@@ -20,16 +20,15 @@ from flask import Blueprint, abort, current_app, flash, redirect, render_templat
 from sqlalchemy import select
 
 from src.admin.auth_utils import extract_user_info
-from src.admin.utils import is_super_admin, test_login_composed
+from src.admin.blueprints.core import get_tenant_from_hostname
+from src.admin.utils import is_super_admin
 from src.core.config import get_settings
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Tenant
 from src.core.domain_config import (
-    extract_subdomain_from_host,
     get_oauth_redirect_uri,
     get_sales_agent_url,
     get_super_admin_domain,
-    is_sales_agent_domain,
 )
 from src.core.security.outbound_http import OutboundError
 from src.services.google_oauth_client import exchange_authorization_code
@@ -202,10 +201,10 @@ def login():
     client_id, client_secret, discovery_url, _ = get_oauth_config()
     oauth_configured = bool(client_id and client_secret and discovery_url)
 
-    # The test-credential form is offered only where create_app composed the path that
-    # serves it. A tenant's auth_setup_mode alone never shows it: /test/auth refuses a
-    # tenant in setup mode without the global flag, so the form it used to show was dead.
-    test_mode = test_login_composed()
+    # No test-credential form: the route that served it is gone, and with it the global
+    # flag that composed it. A deployment logs in through its identity provider; a tenant
+    # still setting one up uses Setup Mode, which lets OIDC run before it is enabled.
+    test_mode = False
 
     from src.core.config_loader import is_single_tenant_mode
 
@@ -215,34 +214,15 @@ def login():
     tenant_name = None
 
     # Extract tenant from headers FIRST (before any redirects)
-    # This is needed for multi-tenant subdomain routing
-    host = request.headers.get("Host", "")
-
-    # Check for Approximated routing headers first
-    approximated_host = request.headers.get("Apx-Incoming-Host")
-    if approximated_host:
-        with get_db_session() as db_session:
-            tenant = db_session.scalars(select(Tenant).filter_by(virtual_host=approximated_host)).first()
-            if tenant:
-                tenant_context = tenant.tenant_id
-                tenant_name = tenant.name
-                logger.info(
-                    f"Detected tenant context from Approximated headers: {approximated_host} -> {tenant_context}"
-                )
-
-    # Fallback to direct domain routing (subdomain detection)
-    if not tenant_context:
-        tenant_subdomain = None
-        if is_sales_agent_domain(host) and not host.startswith("admin."):
-            tenant_subdomain = extract_subdomain_from_host(host)
-
-        if tenant_subdomain:
-            with get_db_session() as db_session:
-                tenant = db_session.scalars(select(Tenant).filter_by(subdomain=tenant_subdomain)).first()
-                if tenant:
-                    tenant_context = tenant.tenant_id
-                    tenant_name = tenant.name
-                    logger.info(f"Detected tenant context from Host header: {tenant_subdomain} -> {tenant_context}")
+    # The admin plane's one host -> tenant lookup. The two copies that stood here read the
+    # proxy header and the Host through their own ladder and queried ``tenants`` directly,
+    # which is the duplication being removed; the log line below no longer names which
+    # header carried the host because ``requested_host`` is the one place that decides.
+    detected_tenant = get_tenant_from_hostname()
+    if detected_tenant:
+        tenant_context = detected_tenant.tenant_id
+        tenant_name = detected_tenant.name
+        logger.info(f"Detected tenant context from request host: {tenant_context}")
 
     # Check for tenant-specific OIDC configuration (multi-tenant or single-tenant)
     if tenant_context:
@@ -317,9 +297,8 @@ def tenant_login(tenant_id):
             abort(404)
         tenant_name = tenant.name
 
-        # The test-credential form is offered only where create_app composed the path that
-        # serves it; /test/auth then also requires this tenant to be in setup mode.
-        test_mode = test_login_composed()
+        # No test-credential form — see the note in ``login``.
+        test_mode = False
 
         # Check if tenant-specific OIDC is configured and enabled
         from src.services.auth_config_service import get_oidc_config_for_auth
@@ -455,13 +434,10 @@ def tenant_google_auth(tenant_id):
     # Store originating host and tenant context in session for OAuth callback
     session["oauth_originating_host"] = host
 
-    # Store external domain and tenant context in session for OAuth callback
-    # Note: This works for same-domain OAuth but has limitations for cross-domain scenarios
-    approximated_host = request.headers.get("Apx-Incoming-Host")
-
-    if approximated_host:
-        session["oauth_external_domain"] = approximated_host
-        logger.info(f"Stored external domain for OAuth redirect: {approximated_host}")
+    # NO oauth_external_domain. It was written here from the Approximated vendor header and
+    # read NOWHERE — grep the tree: nothing pops it, and the Google callback below redirects
+    # off `oauth_originating_host`. So it was a session key that only ever cost a cookie.
+    # Its GAM sibling IS read, and the note there says why the Host now carries the value.
 
     session["oauth_tenant_context"] = tenant_id
 
@@ -785,15 +761,18 @@ def gam_authorize(tenant_id):
             flash(f"GAM OAuth not properly configured: {str(config_error)}", "error")
             return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id))
 
-        # Store tenant context for callback
+        # Store tenant context for callback. The Host is the operator's own domain, so it
+        # is what the callback sends them back to.
+        #
+        # NO gam_oauth_external_domain alongside it. That key held the Approximated vendor
+        # header because, behind that proxy, the Host named this BACKEND (adcp-sales-agent
+        # .fly.dev, the same for every publisher) and redirecting an operator there would
+        # have bounced them off their own domain mid-OAuth. The edge now folds the vendor
+        # header into Host and drops it (config/nginx/nginx-multi-tenant.conf), so this
+        # single value carries the operator's domain on both the proxied and the direct
+        # path, and the callback's two-branch redirect collapses to one.
         session["gam_oauth_tenant_id"] = tenant_id
         session["gam_oauth_originating_host"] = request.headers.get("Host", "")
-
-        # Store external domain context if available
-        approximated_host = request.headers.get("Apx-Incoming-Host")
-        if approximated_host:
-            session["gam_oauth_external_domain"] = approximated_host
-            logger.info(f"Stored external domain for GAM OAuth redirect: {approximated_host}")
 
         # Determine callback URI
         if get_settings().runtime.is_production:
@@ -851,7 +830,6 @@ def gam_callback():
         # Get tenant context from session
         tenant_id = session.pop("gam_oauth_tenant_id", state)
         originating_host = session.pop("gam_oauth_originating_host", None)
-        external_domain = session.pop("gam_oauth_external_domain", None)
 
         if not tenant_id:
             flash("Invalid OAuth state - no tenant context", "error")
@@ -946,13 +924,13 @@ def gam_callback():
             logger.warning(f"Could not suggest auto-detect: {detect_error}")
 
         # Redirect back to tenant settings
+        # Back to the domain the operator started on. This was two branches — the vendor
+        # header's value, then the Host — which since the edge normalization carried the
+        # same string on the proxied path and only the Host on the direct one.
         is_production = get_settings().runtime.is_production
-        if external_domain and is_production:
-            return redirect(f"https://{external_domain}/admin/tenant/{tenant_id}/settings")
-        elif originating_host and is_production:
+        if originating_host and is_production:
             return redirect(f"https://{originating_host}/admin/tenant/{tenant_id}/settings")
-        else:
-            return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id))
+        return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id))
 
     except Exception as e:
         logger.error(f"Error in GAM OAuth callback: {e}", exc_info=True)

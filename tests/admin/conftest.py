@@ -4,7 +4,6 @@ Admin UI test specific fixtures.
 These fixtures are for testing the admin web interface.
 """
 
-import os
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -25,7 +24,6 @@ def admin_client(monkeypatch):
     test modules still build their own module-level app + client copies
     (pre-existing duplication debt); new modules must use this fixture.
     """
-    monkeypatch.setenv("ADCP_AUTH_TEST_MODE", "true")
     from src.admin.app import create_app
 
     app = create_app()
@@ -34,17 +32,6 @@ def admin_client(monkeypatch):
     app.config["SESSION_COOKIE_PATH"] = "/"
     with app.test_client() as client:
         yield client
-
-
-@pytest.fixture
-def ui_test_mode():
-    """Enable UI test authentication mode."""
-    os.environ["ADCP_AUTH_TEST_MODE"] = "true"
-
-    yield
-
-    # Cleanup
-    del os.environ["ADCP_AUTH_TEST_MODE"]
 
 
 @pytest.fixture
@@ -68,7 +55,7 @@ def test_users():
 
 
 @pytest.fixture
-def ui_client(ui_test_mode):
+def ui_client():
     """Provide Flask client configured for UI testing."""
     # Mock database before importing
     with patch("db_config.get_db_connection") as mock_db_conn:
@@ -94,16 +81,17 @@ def ui_client(ui_test_mode):
 
 
 @pytest.fixture
-def authenticated_ui_client(ui_client, test_users):
-    """Provide authenticated UI client."""
-    # Login as super admin
-    response = ui_client.post(
-        "/test/auth",
-        json={"email": test_users["super_admin"]["email"], "password": test_users["super_admin"]["password"]},
-    )
+def authenticated_ui_client(ui_client):
+    """Provide a UI client carrying a super-admin session.
 
-    assert response.status_code == 200
+    Writes the session directly, the way every other admin test does. It used to POST a
+    default password to /test/auth — a login route composed only under a flag, which made
+    the fixture's success depend on whether the flag was set rather than on anything the
+    test was about.
+    """
+    from tests.helpers.admin_session import admin_auth_session
 
+    admin_auth_session(ui_client, "test_tenant")
     yield ui_client
 
 

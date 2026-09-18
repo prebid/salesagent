@@ -2,7 +2,7 @@
 UI smoke test fixtures using Playwright.
 
 Requires a running Docker stack (docker compose up -d or ./scripts/test-stack.sh up).
-Auth uses test mode: ADCP_AUTH_TEST_MODE=true must be set on the server.
+Auth signs its own admin session cookie (tests/helpers/admin_session).
 """
 
 import os
@@ -39,7 +39,7 @@ def base_url():
 
 @pytest.fixture(scope="session", autouse=True)
 def _ensure_test_auth_enabled():
-    """Enable auth_setup_mode on the default tenant so /test/auth works.
+    """Enable auth_setup_mode on the default tenant, which is what gates a setup session.
 
     Seeds the SERVER's database (/adcp). In-network there is no published
     Postgres port, so honor the service-name URL the runner exports
@@ -96,26 +96,27 @@ def _ensure_test_auth_enabled():
 
 @pytest.fixture
 def authenticated_page(page, base_url):
-    """Log in via the test login page and return the authenticated page."""
-    page.goto(f"{base_url}/test/login")
+    """Return a page carrying an authenticated admin session.
+
+    The session is SIGNED here rather than obtained by driving a login form. The form this
+    used to drive was served by /test/login, a route composed only under
+    ADCP_AUTH_TEST_MODE and backed by a default password — so what it exercised was a login
+    path no deployment has, while making the app under test differ from the deployed one.
+
+    What this suite grades is the admin UI once you are in; arriving with a session states
+    that precondition instead of acting it out. A real login flow (OIDC / global OAuth) is
+    a different subject and needs an identity provider to grade against.
+    """
+    from urllib.parse import urlsplit
+
+    from tests.helpers.admin_session import admin_session_cookie
+
+    host = urlsplit(base_url).hostname or "localhost"
+    page.context.add_cookies(
+        [{"name": "session", "value": admin_session_cookie("default"), "domain": host, "path": "/"}]
+    )
+    page.goto(base_url)
     page.wait_for_load_state("domcontentloaded")
-
-    # Inject tenant_id into the last form (needed for multi-tenant e2e stacks)
-    page.evaluate("""() => {
-        const forms = document.querySelectorAll('form[action="/test/auth"]');
-        const form = forms[forms.length - 1];
-        if (form && !form.querySelector('input[name="tenant_id"]')) {
-            const input = document.createElement('input');
-            input.type = 'hidden';
-            input.name = 'tenant_id';
-            input.value = 'default';
-            form.appendChild(input);
-        }
-    }""")
-
-    buttons = page.locator('form[action="/test/auth"] button[type="submit"]')
-    buttons.last.click()
-    page.wait_for_load_state("networkidle")
 
     # Collect JS errors for assertions
     js_errors = []

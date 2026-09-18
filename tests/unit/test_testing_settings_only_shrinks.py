@@ -31,19 +31,13 @@ EXPECTED_TESTING_FIELDS: frozenset[str] = frozenset(
         # loopback check while a suite runs. Goes when the test environments' loopback
         # origins are reachable without it — the same work ADCP_OUTBOUND_ALLOW_PRIVATE needs.
         "adcp_testing",
-        # One reader: src/admin/app.py:350, deciding whether the test-credential login
-        # blueprint is COMPOSED. Goes when first-run admin setup has an answer that is not a
-        # test flag (salesagent-091d8). Today that blueprint is the only non-SSO path to a
-        # first admin session and the deployment docs tell operators to use it.
-        "adcp_auth_test_mode",
-        # Read at ONE site, test_auth.py:63,68,73, as that blueprint's credential table.
-        # These go with the blueprint, not before it.
-        "test_super_admin_email",
-        "test_super_admin_password",
-        "test_tenant_admin_email",
-        "test_tenant_admin_password",
-        "test_tenant_user_email",
-        "test_tenant_user_password",
+        # SEVEN FIELDS WERE REMOVED HERE, which is the direction this pin exists to allow.
+        # adcp_auth_test_mode decided whether create_app COMPOSED a test-credential login
+        # blueprint, and its six test_* credentials were that blueprint's password table.
+        # The blueprint is deleted: a test that needs an admin session signs one
+        # (tests/helpers/admin_session), and a deployment reaches its first admin through
+        # its identity provider, with per-tenant Setup Mode covering the interval before SSO
+        # is enabled.
     }
 )
 

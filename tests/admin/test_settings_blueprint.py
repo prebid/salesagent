@@ -55,12 +55,6 @@ def _auth_session(client, tenant_id: str) -> None:
         sess["test_tenant_id"] = tenant_id
 
 
-@pytest.fixture(autouse=True)
-def _enable_test_mode(monkeypatch):
-    """Enable global test auth so require_tenant_access accepts the test session."""
-    monkeypatch.setenv("ADCP_AUTH_TEST_MODE", "true")
-
-
 class TestAuthorizedDomainsAdd:
     """POST /tenant/<id>/settings/domains/add — appends to authorized_domains."""
 
@@ -372,6 +366,7 @@ class TestGeneralSettingsVirtualHostTaken:
 
     def test_winner_and_loser_get_the_same_answer(self, client, factory_session):
         tenant = TenantFactory()
+        own_host = tenant.virtual_host
         _auth_session(client, tenant.tenant_id)
 
         def commit_conflicting_row():
@@ -387,10 +382,11 @@ class TestGeneralSettingsVirtualHostTaken:
         assert loser == winner
 
         # The losing request must not have committed the virtual host it failed
-        # to claim, nor the other form fields it dirtied on the way there.
+        # to claim, nor the other form fields it dirtied on the way there: the tenant
+        # still holds the host it arrived with.
         factory_session.expire_all()
         refreshed = factory_session.get(Tenant, tenant.tenant_id)
-        assert refreshed.virtual_host is None
+        assert refreshed.virtual_host == own_host
 
 
 class TestApproximatedDomainTenantOwnership:

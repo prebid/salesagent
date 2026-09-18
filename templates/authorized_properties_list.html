@@ -1,0 +1,100 @@
+{% extends "base.html" %}
+
+{% block title %}Authorized Properties - {{ tenant.name }}{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+    <div class="row">
+        <div class="col-md-12">
+            <div class="d-flex justify-content-between align-items-center mb-4">
+                <div>
+                    <h2>Authorized Properties</h2>
+                    <p class="text-muted">Properties this publisher is authorized to sell</p>
+                </div>
+                <div>
+                    <a href="{{ url_for('authorized_properties.upload_authorized_properties', tenant_id=tenant.tenant_id) }}"
+                       class="btn btn-primary">
+                        <i class="fas fa-upload"></i> Upload Properties
+                    </a>
+                    <a href="{{ url_for('authorized_properties.list_property_tags', tenant_id=tenant.tenant_id) }}"
+                       class="btn btn-outline-secondary">
+                        <i class="fas fa-tags"></i> Property Tags
+                    </a>
+                </div>
+            </div>
+
+            <div class="row mb-4">
+                {% for label, key, style in [
+                    ('Total', 'total', 'secondary'),
+                    ('Verified', 'verified', 'success'),
+                    ('Pending', 'pending', 'warning'),
+                    ('Failed', 'failed', 'danger')
+                ] %}
+                <div class="col-md-3">
+                    <div class="card">
+                        <div class="card-body text-center">
+                            <h3 class="text-{{ style }} mb-0">{{ property_counts[key] }}</h3>
+                            <p class="text-muted mb-0">{{ label }}</p>
+                        </div>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+
+            <div class="card">
+                <div class="card-body">
+                    {% if properties %}
+                    <div class="table-responsive">
+                        <table class="table table-striped">
+                            <thead>
+                                <tr>
+                                    <th>Name</th>
+                                    <th>Type</th>
+                                    <th>Publisher Domain</th>
+                                    <th>Identifiers</th>
+                                    <th>Tags</th>
+                                    <th>Verification</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for property in properties %}
+                                <tr>
+                                    <td>{{ property.name }}</td>
+                                    <td>{{ property.property_type }}</td>
+                                    <td>{{ property.publisher_domain }}</td>
+                                    <td>
+                                        {% for identifier in property.identifiers or [] %}
+                                        <div><small class="text-muted">{{ identifier.type }}:</small> {{ identifier.value }}</div>
+                                        {% endfor %}
+                                    </td>
+                                    <td>
+                                        {% for tag in property.tags or [] %}
+                                        <span class="badge badge-secondary">{{ tag }}</span>
+                                        {% endfor %}
+                                    </td>
+                                    <td>
+                                        {% if property.verification_status == 'verified' %}
+                                        <span class="badge badge-success">Verified</span>
+                                        {% elif property.verification_status == 'failed' %}
+                                        <span class="badge badge-danger">Failed</span>
+                                        {% else %}
+                                        <span class="badge badge-warning">Pending</span>
+                                        {% endif %}
+                                    </td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                    {% else %}
+                    <p class="text-muted mb-0">
+                        No authorized properties yet. Upload a properties file, or sync them from a
+                        publisher's <code>adagents.json</code>.
+                    </p>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

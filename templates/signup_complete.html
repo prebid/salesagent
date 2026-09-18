@@ -30,23 +30,21 @@
                 </div>
 
                 <div>
-                    <strong style="color: #666;">Subdomain (auto-generated):</strong><br>
-                    <code style="background: white; padding: 0.25rem 0.5rem; border-radius: 4px; font-size: 0.9rem;">{{ tenant.subdomain }}.{{ sales_agent_domain }}</code>
-                    <br>
-                    <small style="color: #888; font-size: 0.8rem;">You can configure a custom domain in settings</small>
+                    <strong style="color: #666;">Agent Domain:</strong><br>
+                    {% if tenant.virtual_host %}
+                        <code style="background: white; padding: 0.25rem 0.5rem; border-radius: 4px; font-size: 0.9rem;">{{ tenant.virtual_host }}</code>
+                    {% else %}
+                        <code style="background: white; padding: 0.25rem 0.5rem; border-radius: 4px; font-size: 0.9rem;">not configured</code>
+                        <br>
+                        <small style="color: #888; font-size: 0.8rem;">Configure the domain this agent answers on in settings</small>
+                    {% endif %}
                 </div>
 
                 <div>
                     <strong style="color: #666;">Your Dashboard URL:</strong><br>
-                    {% if tenant.subdomain and tenant.subdomain != 'localhost' %}
-                        <a href="https://{{ tenant.subdomain }}.{{ sales_agent_domain }}/admin/" target="_blank" style="color: #4285F4; text-decoration: none; font-weight: 500;">
-                            https://{{ tenant.subdomain }}.{{ sales_agent_domain }}/admin/
-                        </a>
-                    {% else %}
-                        <a href="{{ request.script_root }}/tenant/{{ tenant.tenant_id }}" style="color: #4285F4; text-decoration: none; font-weight: 500;">
-                            View Your Dashboard
-                        </a>
-                    {% endif %}
+                    <a href="{{ request.script_root }}/tenant/{{ tenant.tenant_id }}" style="color: #4285F4; text-decoration: none; font-weight: 500;">
+                        View Your Dashboard
+                    </a>
                 </div>
 
                 <div>

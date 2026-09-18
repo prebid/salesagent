@@ -8,10 +8,7 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from src.core.config import get_settings
 from src.core.domain_config import (
-    extract_subdomain_from_host,
     get_sales_agent_url,
-    get_tenant_url,
-    is_sales_agent_domain,
 )
 from src.core.version import get_version
 
@@ -32,7 +29,7 @@ def _determine_base_url(virtual_host: str | None = None) -> str:
     """Determine the base URL for the current environment.
 
     Args:
-        virtual_host: Virtual host if provided (e.g., from request.host or Apx-Incoming-Host header)
+        virtual_host: Virtual host if provided (the request's ``Host``, or a tenant's stored one)
 
     Returns:
         Base URL for generating endpoint URLs
@@ -66,17 +63,12 @@ def _extract_tenant_subdomain(tenant_row: dict, virtual_host: str | None = None)
     Returns:
         Tenant subdomain if determinable
     """
-    # First try virtual host
-    if virtual_host:
-        # Extract subdomain from virtual host using domain config
-        subdomain = extract_subdomain_from_host(virtual_host)
-        if subdomain:
-            return subdomain
-        elif "." in virtual_host:
-            # Generic virtual host, use first part
-            return virtual_host.split(".")[0]
-
-    # Fallback to tenant subdomain field
+    # The tenant's own slug, which is what this is FOR: a label to show and to build a
+    # display URL from. It used to prefer a subdomain parsed out of the request's host —
+    # against SALES_AGENT_DOMAIN first, then a bare "first label before the dot" — so the
+    # page could name the tenant something the tenant never called itself, decided by
+    # whichever host the reader happened to arrive on. The parse went with the subdomain
+    # strategy; the column it fell back to was the answer all along.
     if tenant_row.get("subdomain"):
         return tenant_row["subdomain"]
 
@@ -205,7 +197,7 @@ def generate_tenant_landing_page(tenant_row: dict, virtual_host: str | None = No
 
     Args:
         tenant_row: Tenant data from database (``serialize_tenant_to_dict``): name, subdomain, etc.
-        virtual_host: Virtual host domain if applicable (e.g., from Apx-Incoming-Host)
+        virtual_host: Virtual host domain if applicable (the request's ``Host``)
 
     Returns:
         Complete HTML page as string
@@ -252,18 +244,13 @@ def generate_tenant_landing_page(tenant_row: dict, virtual_host: str | None = No
         agent_card_url = f"{single_tenant_base}/.well-known/agent.json"
         admin_url = f"{single_tenant_base}/admin/"
     else:
-        # Multi-tenant mode: For external domains, use subdomain; otherwise use current domain
-        is_external_domain = virtual_host and not is_sales_agent_domain(virtual_host)
-        if is_external_domain and tenant_subdomain:
-            # External domain: Point admin to tenant subdomain
-            if get_settings().runtime.is_production:
-                admin_url = f"{get_tenant_url(tenant_subdomain)}/admin/"
-            else:
-                # Local dev: Use localhost with subdomain simulation
-                admin_url = f"http://{tenant_subdomain}.localhost:8001/admin/"
-        else:
-            # Same domain or subdomain: Use base_url
-            admin_url = f"{base_url}/admin/"
+        # The admin lives where the reader already is. This used to ask whether the host was
+        # "external" — not under SALES_AGENT_DOMAIN — and, if so, point admin at a DIFFERENT
+        # origin built from the tenant's subdomain. There is no such second origin now: a
+        # tenant is served at the host it declares, and that is the host this page was
+        # fetched from. Sending a reader elsewhere could only send them
+        # to a name nothing serves, which is the class of bug that took the A2A axis to zero.
+        admin_url = f"{base_url}/admin/"
 
     # Prepare template context
     template_context = {

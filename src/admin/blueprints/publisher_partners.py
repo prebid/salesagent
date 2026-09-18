@@ -19,7 +19,6 @@ from src.core.config import get_settings
 from src.core.database.database_session import get_db_session
 from src.core.database.integrity import resolve_or_write
 from src.core.database.models import AuthorizedProperty, PropertyTag, PublisherPartner, Tenant
-from src.core.domain_config import get_tenant_url
 from src.services.adagents_error_messages import describe_adagents_error
 
 logger = logging.getLogger(__name__)
@@ -255,11 +254,9 @@ def sync_publisher_partners(tenant_id: str) -> Response | tuple[Response, int]:
 
                     discovery_service = get_property_discovery_service()
 
-                    # Compute agent_url for property resolution (handles property_ids, property_tags)
-                    if tenant.virtual_host:
-                        agent_url_for_sync: str | None = f"https://{tenant.virtual_host}"
-                    else:
-                        agent_url_for_sync = get_tenant_url(tenant.subdomain)
+                    # The host the tenant declares, or nothing — see the note below. A URL
+                    # built from the subdomain went with the subdomain strategy.
+                    agent_url_for_sync: str | None = f"https://{tenant.virtual_host}" if tenant.virtual_host else None
 
                     for domain in verified_domains:
                         # Try to fetch real properties from adagents.json
@@ -359,14 +356,13 @@ def sync_publisher_partners(tenant_id: str) -> Response | tuple[Response, int]:
                     }
                 )
 
-            # Get our agent URL - use virtual_host if configured, otherwise construct from subdomain
-            if tenant.virtual_host:
-                agent_url: str = f"https://{tenant.virtual_host}"
-            else:
-                maybe_url = get_tenant_url(tenant.subdomain)
-                if not maybe_url:
-                    return jsonify({"error": "Agent URL not configured (SALES_AGENT_DOMAIN not set)"}), 500
-                agent_url = maybe_url
+            # Our agent URL is the host the tenant declares it is served at. The fallback
+            # that constructed one from the subdomain and SALES_AGENT_DOMAIN went with the
+            # subdomain strategy — and it already refused when the
+            # setting was unset, so the refusal is not new, only its condition.
+            if not tenant.virtual_host:
+                return jsonify({"error": "Agent URL not configured (tenant has no virtual_host)"}), 500
+            agent_url: str = f"https://{tenant.virtual_host}"
 
             # Fetch authorization for each publisher (real verification for non-mock tenants)
             logger.info(f"Fetching authorizations for {len(partners)} publishers")
@@ -524,14 +520,13 @@ def get_publisher_properties(tenant_id: str, partner_id: int) -> Response | tupl
             if not partner:
                 return jsonify({"error": "Publisher not found"}), 404
 
-            # Get our agent URL - use virtual_host if configured, otherwise construct from subdomain
-            if tenant.virtual_host:
-                agent_url: str = f"https://{tenant.virtual_host}"
-            else:
-                maybe_url = get_tenant_url(tenant.subdomain)
-                if not maybe_url:
-                    return jsonify({"error": "Agent URL not configured (SALES_AGENT_DOMAIN not set)"}), 500
-                agent_url = maybe_url
+            # Our agent URL is the host the tenant declares it is served at. The fallback
+            # that constructed one from the subdomain and SALES_AGENT_DOMAIN went with the
+            # subdomain strategy — and it already refused when the
+            # setting was unset, so the refusal is not new, only its condition.
+            if not tenant.virtual_host:
+                return jsonify({"error": "Agent URL not configured (tenant has no virtual_host)"}), 500
+            agent_url: str = f"https://{tenant.virtual_host}"
 
             # Fetch fresh authorization context
             logger.info(f"Fetching properties for {partner.publisher_domain}")

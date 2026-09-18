@@ -172,47 +172,53 @@ def _extract_auth_token(headers: Mapping[str, str]) -> str | None:
 
 
 def _detect_tenant(headers: Mapping[str, str]) -> str | None:
-    """The tenant_id this request names, by four header strategies. NO row is loaded.
+    """The tenant_id this request NAMES, or ``None``. NO row is loaded.
 
     Identification only. The token check is scoped by tenant_id, so which tenant cannot be
     deferred; the row is loaded once by ``TenantContext.load`` after the tenant is known.
 
-    Every strategy used to call a ``get_tenant_by_*`` helper ending in
-    ``serialize_tenant_to_dict``, so identification loaded the entire row -- which
-    ``resolve_identity`` then discarded, re-querying it on first field access. One indexed
-    column per strategy instead.
+    TWO WAYS IN, and a request that uses neither names no seller:
 
-    Strategy order, unchanged:
-    1. Host header -> virtual host, then subdomain
-    2. x-adcp-tenant header -> subdomain, then the literal id
-    3. Apx-Incoming-Host -> virtual host
-    4. localhost -> the "default" tenant
+    1. ``Host`` -> ``tenants.virtual_host``. What a deployment resolves by, and what every
+       proxy in front of this app already forwards verbatim.
+    2. ``x-adcp-tenant`` -> the tenant_id, LITERALLY. For a caller addressing a tenant
+       explicitly rather than by the host it is served at: the test suites, the CLI, a
+       support tool. Unverified, as before — an id naming no tenant fails at the principal
+       lookup that is scoped by it.
+
+    TWO means two, and a second spelling of either is not a redundancy: two readers of one
+    fact disagree, and then one request resolves to two different tenants depending on which
+    one asked. A proxy that has to rewrite the host does it BEFORE the app, so that what
+    arrives here is the ``Host``.
+
+    ``None`` is a real answer, not a gap to fill. A protected tool then answers AUTH_MISSING
+    (no tenant means no principal lookup) and a public tool proceeds with no tenant, which
+    its implementation already branches on. This is what a multi-tenant front does with a
+    host it does not serve, and guessing instead is what the two deleted strategies did.
+
+    WHAT WAS DELETED, AND WHY. Nothing in the pinned spec asks for any
+    of this — a request is addressed to an agent's URL and the mapping to a tenant is the
+    seller's own business — so the four strategies were ours to keep or drop.
+
+    * ``Host`` -> first label as a SUBDOMAIN was subsumed by (1): a deployment serving
+      ``acme.example.com`` sets that tenant's ``virtual_host`` to it. What the strategy added
+      was permission to leave ``virtual_host`` unset, and it charged a second derivation of
+      one fact, a ``SALES_AGENT_DOMAIN`` setting existing only to support it, and
+      ``primary_domain``'s hardcoded ``{subdomain}.example.com`` — fiction on every real
+      deployment, and the string the CI tenant's agent card published, which took the A2A
+      conformance axis from 30 passing checks to 0.
+    * loopback -> the ``default`` tenant fired exactly when the request named nothing, and
+      answered with a tenant anyway. ``init_db`` creates that row on EVERY deployment
+      (``CREATE_DEMO_TENANT`` only picks its shape), and on a demo-seeded one it holds a
+      principal with a repository-constant token. GH #2259.
     """
     from src.core.config_loader import tenant_id_for
 
     host = _get_header_case_insensitive(headers, "host") or ""
-
-    tenant_id = tenant_id_for(virtual_host=host)
-    if not tenant_id and "." in host:
-        subdomain = host.split(".")[0]
-        if subdomain not in ["localhost", "adcp-sales-agent", "www", "admin"]:
-            tenant_id = tenant_id_for(subdomain=subdomain)
+    tenant_id = tenant_id_for(virtual_host=host) if host else None
 
     if not tenant_id:
-        hint = _get_header_case_insensitive(headers, "x-adcp-tenant")
-        if hint:
-            # The hint is a subdomain when one matches, and otherwise taken as the id
-            # itself -- unverified, exactly as before. An id that names no tenant fails
-            # later, at the principal lookup that is scoped by it.
-            tenant_id = tenant_id_for(subdomain=hint) or hint
-
-    if not tenant_id:
-        apx_host = _get_header_case_insensitive(headers, "apx-incoming-host")
-        if apx_host:
-            tenant_id = tenant_id_for(virtual_host=apx_host)
-
-    if not tenant_id and host.split(":")[0] in ["localhost", "127.0.0.1", "localhost.localdomain"]:
-        tenant_id = tenant_id_for(subdomain="default")
+        tenant_id = _get_header_case_insensitive(headers, "x-adcp-tenant")
 
     return tenant_id
 
@@ -363,8 +369,7 @@ def _resolve_identity(
     # Step 3: the seller this request addresses, identified from the host and loaded. The
     # tenant comes first because a principal is a row in a tenant: a credential is only
     # ever verified inside the tenant the request reached, never looked up across tenants.
-    tenant_id = _detect_tenant(headers)
-    tenant: TenantContext | None = TenantContext.load(tenant_id) if tenant_id else None
+    tenant = _addressed_tenant(headers)
 
     # Step 3b: the SELLER's policy. A public tool's row does not require a credential, but
     # the tenant it addresses may (brand_manifest_policy "require_auth" on get_products,
@@ -449,3 +454,66 @@ def identity_of(tenant_id: str, principal_id: str, account_id: str | None = None
         return ResolvedIdentity(principal=principal, tenant=tenant)
     account_ref = AccountReference(root=AccountReferenceById(account_id=account_id))
     return AccountIdentity(principal=principal, tenant=tenant, account=_load_account(account_ref, tenant_id, principal))
+
+
+def _addressed_tenant(headers: Mapping[str, str]) -> TenantContext:
+    """The seller this request addresses, or a refusal.
+
+    There are two ways to say which seller a request is for -- the ``Host`` the seller
+    declares it is served at, and an explicit ``x-adcp-tenant``. A request that does
+    neither, or that names something this deployment does not serve, is not a request with
+    a missing field: there is no seller to apply any rule of, including the rule that would
+    reject it. So it is refused here, at the point the question is asked, with the code the
+    pinned enum gives a seller-side deployment fault -- ``CONFIGURATION_ERROR``, which that
+    enum classifies ``terminal``: the buyer has no lever, and MUST NOT auto-retry.
+
+    The refusal carries what the request named, so the operator reading it can see which
+    host or tenant reached a deployment that serves neither.
+    """
+    from src.core.errors.details import ConfigurationDetails
+    from src.core.exceptions import AdCPConfigurationError
+
+    tenant_id = _detect_tenant(headers)
+    tenant = TenantContext.load(tenant_id) if tenant_id else None
+    if tenant is None:
+        named = _get_header_case_insensitive(headers, "x-adcp-tenant") or _get_header_case_insensitive(headers, "host")
+        raise AdCPConfigurationError(details=ConfigurationDetails(rejected_value=named))
+    return tenant
+
+
+def public_identity_for(headers: Mapping[str, str]) -> PublicIdentity:
+    """The tenant a request names, with no caller. For a root endpoint outside ``serve``.
+
+    The third sanctioned entry into this module's one resolution, after
+    ``_resolve_identity`` (a tool request) and ``identity_of`` (server-initiated work).
+    It exists for the A2A agent card, which is reachable at three ROOT paths that the A2A
+    specification fixes, answers before any AdCP exchange, and therefore cannot be a
+    registry row: it carries no AdCP envelope, and a row for it would advertise itself as
+    a skill on the card it serves. What it does need is the same answer to "which tenant
+    is this request for" that every tool gets -- so it asks here rather than deriving one
+    of its own.
+
+    That derivation used to be ``route_landing_page``, which reads the ``Host`` and NOT
+    ``x-adcp-tenant`` (it read a vendor proxy header too, since deleted). The consequence
+    was measurable: a
+    storyboard run sends ``x-adcp-tenant`` (a token only verifies inside a tenant), so
+    every tool call resolved the CI tenant while the card, on the same request, resolved
+    none and fell back to echoing the caller's Host. The agent disagreed with itself about
+    its own identity. ``ruff-boundary.toml`` already names this disease on
+    ``_detect_tenant``: "a caller that detects its own tenant is a second tenant resolver,
+    and the two WILL disagree".
+
+    NO CREDENTIAL IS READ, and that is deliberate rather than a simplification.
+    ``_resolve_identity`` raises ``AUTH_INVALID`` for a credential that was presented and
+    rejected, even where none is required. Routed through it, a client holding a stale
+    token would be answered 401 by the card -- the one document that tells it which
+    version to speak and where to send a request, i.e. how to authenticate at all. So
+    discovery stays anonymous: the returned identity's ``principal`` is always ``None``,
+    and a caller wanting the principal too is making a tool call and goes through
+    ``serve``.
+
+    A request naming no tenant this deployment serves is REFUSED, by the same
+    ``_addressed_tenant`` every tool goes through: the caller gets CONFIGURATION_ERROR
+    rather than a card describing nobody.
+    """
+    return PublicIdentity(principal=None, tenant=_addressed_tenant(headers))

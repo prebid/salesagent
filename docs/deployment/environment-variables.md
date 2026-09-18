@@ -53,10 +53,11 @@ See the [SSO setup guide](../user-guide/sso-setup.md) for detailed instructions.
 
 ### Setup Mode (per-tenant)
 
-New tenants start with `auth_setup_mode=true`, which enables test credentials:
-
-- Email: `test_super_admin@example.com`
-- Password: `test123`
+New tenants start with `auth_setup_mode=true`. Setup Mode lets a tenant complete an OIDC
+login *before* its SSO is enabled, so you can verify a provider before committing to it.
+It grants no credentials of its own — the first administrator signs in with the
+deployment's own OAuth (`GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` or the generic
+`OAUTH_*` variables) plus `SUPER_ADMIN_EMAILS`.
 
 Once SSO is configured and tested, disable Setup Mode from the Users & Access page. After that, only SSO authentication works for that tenant.
 
@@ -64,7 +65,6 @@ Once SSO is configured and tested, disable Setup Mode from the Users & Access pa
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `ADCP_AUTH_TEST_MODE` | `false` | Enable test authentication globally. **Deprecated - use per-tenant Setup Mode instead.** |
 
 ### Legacy: environment variable OAuth
 

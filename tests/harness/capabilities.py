@@ -95,7 +95,7 @@ class CapabilitiesEnv(IntegrationEnv):
     RESPONSE_MODEL = GetAdcpCapabilitiesResponse
 
     EXTERNAL_PATCHES = {
-        "adapter": "src.core.tools.capabilities.get_adapter_class_for_tenant",
+        "adapter": "src.services.seller_capabilities.get_adapter_class_for_tenant",
         "audit_logger": "src.core.tools.capabilities.log_tool_activity",
     }
 
@@ -331,7 +331,7 @@ class CapabilitiesEnv(IntegrationEnv):
         declares E2EUnsupportedSetup).
         """
         patcher = patch(
-            "src.core.tools.capabilities.TenantConfigUoW",
+            "src.services.seller_capabilities.TenantConfigUoW",
             side_effect=Exception("tenant config DB failure (harness)"),
         )
         self.mock["tenant_config_uow"] = patcher.start()

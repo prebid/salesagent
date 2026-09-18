@@ -5,15 +5,12 @@ Each test targets a specific beads issue to prevent regression.
 
 : Non-async receive lambda (ASGI protocol)
 : CORS origins configuration
-: Apx-Incoming-Host hostname validation
 : Debug endpoints gated behind ADCP_TESTING
 : format_resolver async event loop fix
 """
 
 import os
 from unittest.mock import MagicMock, patch
-
-from tests.helpers.agent_card import host_routes_to_no_tenant
 
 # ---------------------------------------------------------------------------
 # [P0]: Async receive callable in messageId middleware
@@ -132,102 +129,6 @@ class TestCORSConfiguration:
         assert acao == allowed_origin, (
             f"Allowed origin '{allowed_origin}' should get matching CORS header, got '{acao}'"
         )
-
-
-# ---------------------------------------------------------------------------
-# [P0]: Apx-Incoming-Host hostname validation
-# ---------------------------------------------------------------------------
-
-
-class TestHostnameValidation:
-    """Apx-Incoming-Host header must be validated before use in URLs."""
-
-    def test_valid_hostnames_accepted(self):
-        """Standard hostnames pass validation."""
-        from src.app import _is_valid_hostname
-
-        assert _is_valid_hostname("example.com")
-        assert _is_valid_hostname("sub.example.com")
-        assert _is_valid_hostname("localhost")
-        assert _is_valid_hostname("localhost:8000")
-        assert _is_valid_hostname("my-host.example.com:443")
-        assert _is_valid_hostname("192.168.1.1")
-        assert _is_valid_hostname("192.168.1.1:8080")
-
-    def test_path_traversal_rejected(self):
-        """Hostnames with path components are rejected."""
-        from src.app import _is_valid_hostname
-
-        assert not _is_valid_hostname("example.com/../../etc/passwd")
-        assert not _is_valid_hostname("example.com/admin")
-        assert not _is_valid_hostname("host/path")
-
-    def test_injection_characters_rejected(self):
-        """Hostnames with injection characters are rejected."""
-        from src.app import _is_valid_hostname
-
-        assert not _is_valid_hostname("example.com\r\nX-Injected: true")
-        assert not _is_valid_hostname("example.com<script>")
-        assert not _is_valid_hostname("example.com; rm -rf /")
-        assert not _is_valid_hostname("example.com' OR '1'='1")
-
-    def test_empty_and_none_rejected(self):
-        """Empty strings are rejected."""
-        from src.app import _is_valid_hostname
-
-        assert not _is_valid_hostname("")
-
-    def test_overly_long_hostname_rejected(self):
-        """Hostnames longer than 253 characters are rejected (DNS limit)."""
-        from src.app import _is_valid_hostname
-
-        long_host = "a" * 254
-        assert not _is_valid_hostname(long_host)
-
-    def test_agent_card_ignores_invalid_header(self):
-        """Agent card falls back to Host header when Apx-Incoming-Host is invalid."""
-        from starlette.testclient import TestClient
-
-        from src.app import app
-
-        client = TestClient(app)
-
-        with host_routes_to_no_tenant("localhost:8000"):
-            response = client.get(
-                "/.well-known/agent-card.json",
-                headers={
-                    "Apx-Incoming-Host": "evil.com/../../etc/passwd",
-                    "Host": "localhost:8000",
-                },
-            )
-
-        assert response.status_code == 200
-        card = response.json()
-        # URL should NOT contain the injected path
-        assert "passwd" not in card.get("url", "")
-        assert "../../" not in card.get("url", "")
-
-    def test_agent_card_ignores_invalid_host_header(self):
-        """Agent card falls back to default URL when Host header is invalid ."""
-        from starlette.testclient import TestClient
-
-        from src.app import app
-
-        client = TestClient(app)
-
-        with host_routes_to_no_tenant():
-            response = client.get(
-                "/.well-known/agent-card.json",
-                headers={
-                    "Host": "evil.com/../../etc/passwd",
-                },
-            )
-
-        assert response.status_code == 200
-        card = response.json()
-        # URL should NOT contain the injected path
-        assert "passwd" not in card.get("url", "")
-        assert "../../" not in card.get("url", "")
 
 
 # ---------------------------------------------------------------------------

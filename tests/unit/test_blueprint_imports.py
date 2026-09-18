@@ -47,7 +47,10 @@ class TestBlueprintSQLAlchemyImports:
         """Validate public.py has required SQLAlchemy imports."""
         from src.admin.blueprints import public
 
-        assert hasattr(public, "or_"), "Missing required import: or_ from sqlalchemy"
+        # or_() left public.py when its tenant-uniqueness check moved into
+        # TenantLookupRepository.find_by_id_or_subdomain; select is the one SQLAlchemy
+        # name the module still calls.
+        assert hasattr(public, "select"), "Missing required import: select from sqlalchemy"
 
 
 class TestBlueprintBasicImports:
@@ -179,12 +182,32 @@ class TestImportRegressionPrevention:
         assert func is SQLAlchemyFunc, "func import is not the correct SQLAlchemy module"
 
     def test_other_blueprints_with_or_operator(self):
-        """Ensure other blueprints using or_ have it properly imported."""
-        # creatives.py no longer uses or_ after CreativeFormat table was dropped
+        """Every blueprint that CALLS or_ imports it — whichever blueprints those are.
 
-        # public.py uses or_
+        The subject is derived from the tree rather than named here. It was named:
+        creatives.py, then public.py, and each stopped calling ``or_`` in turn (creatives
+        when CreativeFormat was dropped, public when its tenant-uniqueness check moved into
+        ``TenantLookupRepository``), leaving the test asserting an import that was correctly
+        absent. A declared subject goes stale; a derived one cannot.
+        """
+        import ast
+        import importlib
+        from pathlib import Path
+
         from sqlalchemy import or_ as SQLAlchemyOr
 
-        from src.admin.blueprints.public import or_ as public_or
+        blueprints = Path("src/admin/blueprints")
+        callers = []
+        for path in sorted(blueprints.glob("*.py")):
+            tree = ast.parse(path.read_text())
+            calls_or = any(
+                isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "or_"
+                for node in ast.walk(tree)
+            )
+            if calls_or:
+                callers.append(path.stem)
 
-        assert public_or is SQLAlchemyOr
+        assert callers, "No admin blueprint calls or_ — this check has no subject left; delete it"
+        for name in callers:
+            module = importlib.import_module(f"src.admin.blueprints.{name}")
+            assert getattr(module, "or_", None) is SQLAlchemyOr, f"{name}.py calls or_ without importing it"

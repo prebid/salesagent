@@ -105,15 +105,11 @@ class TestMockAdapterPublisherSync:
 
         with app.test_request_context():
             with patch.object(type(get_settings()), "publisher_auto_verify_allowed", property(lambda _self: True)):
-                with patch(
-                    "src.admin.blueprints.publisher_partners.get_tenant_url",
-                    return_value="http://test.example.com",
-                ):
-                    response = sync_publisher_partners(mock_tenant)
-                    data = response.get_json()
+                response = sync_publisher_partners(mock_tenant)
+                data = response.get_json()
 
-                    assert data["verified"] == 1
-                    assert data.get("tags_created", 0) >= 0  # May be 0 if tag already exists
+                assert data["verified"] == 1
+                assert data.get("tags_created", 0) >= 0  # May be 0 if tag already exists
 
         # Verify PropertyTag was created
         with get_db_session() as session:
@@ -136,15 +132,11 @@ class TestMockAdapterPublisherSync:
 
         with app.test_request_context():
             with patch.object(type(get_settings()), "publisher_auto_verify_allowed", property(lambda _self: True)):
-                with patch(
-                    "src.admin.blueprints.publisher_partners.get_tenant_url",
-                    return_value="http://test.example.com",
-                ):
-                    response = sync_publisher_partners(mock_tenant)
-                    data = response.get_json()
+                response = sync_publisher_partners(mock_tenant)
+                data = response.get_json()
 
-                    assert data["verified"] == 1
-                    assert data.get("properties_created", 0) >= 1
+                assert data["verified"] == 1
+                assert data.get("properties_created", 0) >= 1
 
         # Verify AuthorizedProperty was created
         with get_db_session() as session:
@@ -175,11 +167,7 @@ class TestMockAdapterPublisherSync:
 
         with app.test_request_context():
             with patch.object(type(get_settings()), "publisher_auto_verify_allowed", property(lambda _self: True)):
-                with patch(
-                    "src.admin.blueprints.publisher_partners.get_tenant_url",
-                    return_value="http://test.example.com",
-                ):
-                    sync_publisher_partners(mock_tenant)
+                sync_publisher_partners(mock_tenant)
 
         # Verify all properties have verified status
         with get_db_session() as session:
@@ -204,12 +192,8 @@ class TestMockAdapterPublisherSync:
         # Run sync twice
         with app.test_request_context():
             with patch.object(type(get_settings()), "publisher_auto_verify_allowed", property(lambda _self: True)):
-                with patch(
-                    "src.admin.blueprints.publisher_partners.get_tenant_url",
-                    return_value="http://test.example.com",
-                ):
-                    sync_publisher_partners(mock_tenant)
-                    sync_publisher_partners(mock_tenant)
+                sync_publisher_partners(mock_tenant)
+                sync_publisher_partners(mock_tenant)
 
         # Verify no duplicates
         with get_db_session() as session:

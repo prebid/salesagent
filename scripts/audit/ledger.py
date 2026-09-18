@@ -146,6 +146,21 @@ RUNNER_SYNTHETIC_STORYBOARD_ID = "agent_reachability"
 RUNNER_SYNTHETIC_STEP_ID = "graded_checks_produced"
 RUNNER_SYNTHETIC_KEY = (RUNNER_SYNTHETIC_STORYBOARD_ID, RUNNER_SYNTHETIC_STEP_ID)
 
+#: The other synthetic check a run can produce: the protocol graded FEWER checks than
+#: the floor this repo has recorded. ``agent_reachability`` above catches a run that
+#: graded NOTHING; this catches the one that graded less than it used to, which no
+#: pytest outcome can otherwise express -- a check that regresses from pass to SKIP
+#: removes its own failing item, so the suite gets greener as the agent gets worse.
+#
+#: Deliberately NOT added to ``storyboard_check_index``'s ``known_step_keys``, unlike
+#: ``RUNNER_SYNTHETIC_KEY`` above. That exemption is what lets a row naming a synthetic
+#: live in the ledger without reading as an orphan -- and a floor breach that could be
+#: ledgered is a floor that can be switched off in one line. Leaving the key out means
+#: such a row fails the orphan join instead, so lowering the floor has to happen in
+#: ``.storyboard-pass-floor``, where the number is visible and the diff says what it was.
+PASS_FLOOR_STORYBOARD_ID = "pass_floor"
+PASS_FLOOR_STEP_ID = "floor_met"
+
 # The storyboard whose steps the runner generates from conformance fixtures
 # rather than from `check:` lines, and where those fixtures live inside the
 # pinned tree. See `vector_step_keys`.

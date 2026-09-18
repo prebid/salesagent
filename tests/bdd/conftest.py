@@ -92,6 +92,7 @@ pytest_plugins = [
     "tests.bdd.steps.domain.egress_ssrf",
     "tests.bdd.steps.domain.local_constraint_relaxations",
     "tests.bdd.steps.domain.local_context_echo",
+    "tests.bdd.steps.domain.tenant_identification",
     "tests.bdd.steps.domain.pre_dispatch_refusals",
     "tests.bdd.steps.domain.codes_open_vocabulary",
     "tests.bdd.steps.domain.security_wire_safety",
@@ -1209,22 +1210,18 @@ _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
     ),
     # Wired non-dormant + strengthened: degradation-partitions rows that
     # production satisfies (adapter_fail, db_fail, adapter_and_db_fail, *_absent) pass; the
-    # gap rows fail — no_tenant needs adcp.supported_versions (not emitted), and no_principal
-    # expects [display] but INV-4 keeps the adapter principal-free so channels are NOT degraded
-    # by a missing principal. full_response GRADUATED: the account block is
-    # now emitted with non-empty supported_billing and adcp.idempotency is already present.
-    # account_degraded stays xfailed — a separate, still-ungraded gap (needs investigation).
+    # gap rows fail — no_principal expects [display] but INV-4 keeps the adapter
+    # principal-free so channels are NOT degraded by a missing principal. full_response
+    # GRADUATED: the account block is now emitted with non-empty supported_billing and
+    # adcp.idempotency is already present. account_degraded stays xfailed — a separate,
+    # still-ungraded gap (needs investigation).
+    #
+    # no_tenant is GONE from this set because the ROW is gone: a request that names no
+    # seller is now refused rather than answered with a minimal document, so there is no
+    # degraded response shape to grade. The refusal is graded by @T-UC-010-ext-a.
     (
         "T-UC-010-degradation-partitions",
-        {"no_tenant", "no_principal", "account_degraded"},
-        # _build_adcp_block(None) always emits supported_versions, so that is not
-        # the no_tenant gap. The real no_tenant gap is extra top-level keys:
-        # _deg_no_tenant asserts wire keys are a SUBSET of {adcp,
-        # supported_protocols}, but the no-tenant response also includes
-        # specialisms/webhook_signing/request_signing, which are non-null and
-        # therefore present on the wire.
-        "no_tenant top-level response carries extra keys (specialisms, webhook_signing, "
-        "request_signing) beyond the minimal {adcp, supported_protocols} contract; "
+        {"no_principal", "account_degraded"},
         "INV-4 keeps adapter channels principal-free so no_principal does not degrade to "
         "[display]; account_degraded expects a supported_billing-only account block but "
         "_build_account_block always emits require_operator_auth/sandbox as real values "
@@ -5422,6 +5419,23 @@ ENV_ROUTES: list[EnvRoute] = [
         tag="ctxecho-media-buys",
         when=lambda m: "ctxecho-media-buys" in m,
         env_builder=_build_media_buy_list_env,
+        seed=_seed_tenant_and_principal,
+    ),
+    # ── @tenantid (local tenant-identification-routes feature) ──────────────
+    # An UNSCOPED `when` row for the same reason as the rows above and below: the
+    # scenarios carry a @tenantid tag rather than a T-UC-<n> identity, so
+    # storyboard_spec.detect_uc returns None and no coarse bucket claims them.
+    #
+    # The capabilities env, because get_adcp_capabilities is what these dispatch: the
+    # tool is chosen by the ENV, not by the step. It is a public read, so no credential
+    # confuses the question of which tenant answered. The seed is the point rather than an
+    # incidental: a tenant with its own virtual_host is exactly the state being
+    # graded, and _seed_tenant_and_principal builds it through TenantFactory, which
+    # now sets one by default.
+    EnvRoute(
+        tag="tenantid",
+        when=lambda m: "tenantid" in m,
+        env_builder=_build_capabilities_env,
         seed=_seed_tenant_and_principal,
     ),
     # ── @predispatch (local pre-dispatch-refusals feature) ──────────────────

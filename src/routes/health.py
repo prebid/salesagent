@@ -11,12 +11,12 @@ from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from sqlalchemy import select
 
-from src.core.config_loader import get_tenant_by_virtual_host, tenant_id_for
+from src.core.config_loader import get_tenant_by_virtual_host
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Product as ModelProduct
-from src.core.database.models import Tenant
+from src.core.database.models import Tenant as ModelTenant
 from src.core.database.repositories.principal import PrincipalRepository
-from src.core.domain_config import extract_subdomain_from_host, is_sales_agent_domain
+from src.core.http_utils import requested_host
 from src.landing import generate_tenant_landing_page
 
 logger = logging.getLogger(__name__)
@@ -71,11 +71,17 @@ async def debug_db_state(request: Request):
             product_stmt = select(ModelProduct)
             all_products = session.scalars(product_stmt).all()
 
-            # The CI seed is identified the way the resolver identifies a caller: tenant
-            # first, by its stable subdomain, then the principal inside it. No token is
+            # The CI seed, by its stable slug, then the principal inside it. No token is
             # turned into a principal here; the seed tenant holds exactly one principal,
             # and this route only reports whether the seed exists.
-            seed_tenant_id = tenant_id_for(subdomain="ci-test")
+            #
+            # A direct read of a KNOWN row's id -- this is a debug report about the CI seed,
+            # not a request identifying its seller. The id is the seed's stable spelling
+            # (scripts/setup/init_database_ci.py CI_TEST_TENANT_ID); src/ does not import
+            # from scripts/, so the literal is repeated rather than shared.
+            seed_tenant_id = session.scalars(
+                select(ModelTenant.tenant_id).filter_by(tenant_id="ci-test", is_active=True)
+            ).first()
             principal = (
                 next(iter(PrincipalRepository(session, seed_tenant_id).list_all()), None) if seed_tenant_id else None
             )
@@ -90,7 +96,7 @@ async def debug_db_state(request: Request):
                     "tenant_id": principal.tenant_id,
                 }
 
-                tenant_stmt = select(Tenant).filter_by(tenant_id=principal.tenant_id)
+                tenant_stmt = select(ModelTenant).filter_by(tenant_id=principal.tenant_id)
                 tenant = session.scalars(tenant_stmt).first()
                 if tenant:
                     tenant_info = {
@@ -121,31 +127,28 @@ async def debug_tenant(request: Request):
     """Debug endpoint to check tenant detection from headers."""
     headers = dict(request.headers)
 
-    apx_host = headers.get("apx-incoming-host") or headers.get("Apx-Incoming-Host")
-    host_header = headers.get("host") or headers.get("Host")
+    host_header = requested_host(headers)
 
     tenant_id = None
     tenant_name = None
     detection_method = None
 
-    if apx_host:
-        tenant_row = get_tenant_by_virtual_host(apx_host)
+    if host_header:
+        # The Host, against virtual_host — the same lookup the resolver does, and the only
+        # one. Other detection methods have been reported here and then deleted, most
+        # recently "host-subdomain", which guessed the tenant_id from the host's first
+        # label without consulting any row. A debug endpoint claiming a detection method
+        # production does not have is worse than no endpoint.
+        tenant_row = get_tenant_by_virtual_host(host_header)
         if tenant_row:
             tenant_id = tenant_row.get("tenant_id")
             tenant_name = tenant_row.get("name")
-            detection_method = "apx-incoming-host"
-
-    if not tenant_id and host_header:
-        subdomain = host_header.split(".")[0] if "." in host_header else None
-        if subdomain and subdomain not in ["localhost", "adcp-sales-agent", "www", "sales-agent"]:
-            tenant_id = subdomain
-            detection_method = "host-subdomain"
+            detection_method = "host"
 
     response_data = {
         "tenant_id": tenant_id,
         "tenant_name": tenant_name,
         "detection_method": detection_method,
-        "apx_incoming_host": apx_host,
         "host": host_header,
     }
 
@@ -161,17 +164,15 @@ async def debug_root(request: Request):
     """Debug endpoint to test root route logic without redirects."""
     headers = dict(request.headers)
 
-    apx_host = headers.get("apx-incoming-host") or headers.get("Apx-Incoming-Host")
-    host_header = headers.get("host") or headers.get("Host")
-
-    virtual_host = apx_host or host_header
+    virtual_host = requested_host(headers)
 
     tenant_row = get_tenant_by_virtual_host(virtual_host) if virtual_host else None
 
+    # ``all_headers`` still carries whatever arrived, so an operator debugging a proxy can
+    # see every header verbatim; what is gone is this route naming one of them as a tenant
+    # input of its own.
     debug_info = {
         "all_headers": headers,
-        "apx_host": apx_host,
-        "host_header": host_header,
         "virtual_host": virtual_host,
         "tenant_found": tenant_row is not None,
         "tenant_id": tenant_row.get("tenant_id") if tenant_row else None,
@@ -195,9 +196,7 @@ async def debug_landing(request: Request):
     """Debug endpoint to test landing page generation directly."""
     headers = dict(request.headers)
 
-    apx_host = headers.get("apx-incoming-host") or headers.get("Apx-Incoming-Host")
-    host_header = headers.get("host") or headers.get("Host")
-    virtual_host = apx_host or host_header
+    virtual_host = requested_host(headers)
 
     if virtual_host:
         tenant_row = get_tenant_by_virtual_host(virtual_host)
@@ -216,15 +215,11 @@ async def debug_root_logic(request: Request):
     """Debug endpoint that exactly mimics the root route logic for testing."""
     headers = dict(request.headers)
 
-    apx_host = headers.get("apx-incoming-host") or headers.get("Apx-Incoming-Host")
-    host_header = headers.get("host") or headers.get("Host")
-    virtual_host = apx_host or host_header
+    virtual_host = requested_host(headers)
 
     debug_info: dict[str, Any] = {
         "step": "initial",
         "virtual_host": virtual_host,
-        "apx_host": apx_host,
-        "host_header": host_header,
     }
 
     if virtual_host:
@@ -233,21 +228,8 @@ async def debug_root_logic(request: Request):
         tenant_row = get_tenant_by_virtual_host(virtual_host)
         debug_info["exact_tenant_lookup"] = tenant_row is not None
 
-        if not tenant_row and is_sales_agent_domain(virtual_host) and not virtual_host.startswith("admin."):
-            debug_info["step"] = "subdomain_fallback"
-            subdomain = extract_subdomain_from_host(virtual_host)
-            debug_info["extracted_subdomain"] = subdomain
-
-            try:
-                with get_db_session() as db_session:
-                    stmt = select(Tenant).filter_by(subdomain=subdomain, is_active=True)
-                    tenant_obj = db_session.scalars(stmt).first()
-                    if tenant_obj:
-                        debug_info["subdomain_tenant_found"] = True
-                    else:
-                        debug_info["subdomain_tenant_found"] = False
-            except Exception as e:
-                debug_info["subdomain_error"] = str(e)
+        # No subdomain fallback to report: tenant detection has one host lookup
+        # , so an exact virtual_host miss IS the answer.
 
         if tenant_row:
             debug_info["step"] = "tenant_found"

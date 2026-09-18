@@ -25,10 +25,7 @@ from src.core.database.database_session import get_db_session
 from src.core.database.integrity import resolve_or_write
 from src.core.database.models import Tenant
 from src.core.database.repositories import TenantLookupRepository
-from src.core.domain_config import (
-    extract_subdomain_from_host,
-    is_sales_agent_domain,
-)
+from src.core.http_utils import requested_host
 
 logger = logging.getLogger(__name__)
 
@@ -37,25 +34,28 @@ core_bp = Blueprint("core", __name__)
 
 
 def get_tenant_from_hostname():
-    """Extract tenant from hostname for tenant-specific subdomains."""
-    host = request.headers.get("Host", "")
+    """The tenant this admin request's host names, or None.
 
-    # Check for Approximated routing headers first
-    # Approximated sends Apx-Incoming-Host with the original requested domain
-    approximated_host = request.headers.get("Apx-Incoming-Host")
-    if approximated_host and not approximated_host.startswith("admin."):
-        # Approximated handles all external routing - look up tenant by virtual_host
-        with get_db_session() as db_session:
-            tenant = db_session.scalars(select(Tenant).filter_by(virtual_host=approximated_host)).first()
-            return tenant
+    The ONE host -> tenant lookup in the admin plane: ``public.landing`` and
+    ``auth.login`` call this rather than each rebuilding it. What they rebuilt was a
+    per-blueprint copy of the same two steps — read the host out of a two-header ladder,
+    then query ``tenants`` by ``virtual_host`` — and the copies differed in which branch
+    got the ``admin.`` guard.
 
-    # Fallback to direct domain routing
-    if is_sales_agent_domain(host) and not host.startswith("admin."):
-        tenant_subdomain = extract_subdomain_from_host(host)
-        with get_db_session() as db_session:
-            tenant = db_session.scalars(select(Tenant).filter_by(subdomain=tenant_subdomain)).first()
-            return tenant
-    return None
+    Both steps now have one owner: ``requested_host`` spells the header names
+    (``src/core/http_utils.py``) and ``TenantLookupRepository`` issues the query, the same
+    one ``config_loader`` routes buyer traffic with. That last part is a change in kind:
+    the hand-rolled copies matched ``virtual_host`` as an exact string and ignored
+    ``is_active``, so a deactivated tenant's host still resolved and a host naming the
+    same origin with a port did not. Routing is routing on both planes.
+
+    A host under ``admin.`` names the admin domain itself, not a tenant.
+    """
+    host = requested_host(request.headers)
+    if not host or host.startswith("admin."):
+        return None
+    with get_db_session() as db_session:
+        return TenantLookupRepository(db_session).find_active_by_virtual_host(host)
 
 
 def render_super_admin_index():
@@ -346,7 +346,6 @@ def debug_headers():
         ),
         "routing_analysis": {
             "host_header": request.headers.get("Host"),
-            "apx_incoming_host": request.headers.get("Apx-Incoming-Host"),
             "x_forwarded_host": request.headers.get("X-Forwarded-Host"),
             "x_original_host": request.headers.get("X-Original-Host"),
             "x_forwarded_for": request.headers.get("X-Forwarded-For"),

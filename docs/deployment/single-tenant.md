@@ -153,10 +153,11 @@ docker compose exec adcp-server alembic revision -m "description"
 
 ## First-time setup
 
-On first startup, the system creates an empty default tenant with **Setup Mode** enabled. This lets you log in with test credentials to configure SSO:
+On first startup, the system creates an empty default tenant with **Setup Mode** enabled,
+which lets you complete an OIDC login for it before its SSO is switched on.
 
-- Email: `test_super_admin@example.com`
-- Password: `test123`
+Sign in with the deployment's own OAuth — set `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET`
+(or the generic `OAUTH_*` variables) and put your address in `SUPER_ADMIN_EMAILS`.
 
 **To complete setup:**
 

@@ -133,7 +133,7 @@ class TestingSettings(BaseSettings):
     it may only lose fields, which ``tests/unit/test_testing_settings_only_shrinks.py``
     pins. Nothing may be added.
 
-    Each field's production readers, and what has to happen before it can go:
+    The remaining field's production readers, and what has to happen before it can go:
 
     * ``adcp_testing`` -- one decision, ``webhook_validator.py:196``, which loosens
       ``EgressPolicy.check_registration``'s loopback check while a suite runs. The
@@ -144,13 +144,17 @@ class TestingSettings(BaseSettings):
       disable the address gate, so naming it in prose would quietly widen its pin. The
       seven properties on this class that used to fork on ``adcp_testing`` are already
       pinned shrink-only (GH #2255).
-    * ``adcp_auth_test_mode`` -- one reader, ``src/admin/app.py:350``, deciding whether
-      the test-credential login blueprint is COMPOSED. It goes when first-run admin setup
-      has an answer that is not a test flag (salesagent-091d8): today that blueprint is
-      the only non-SSO path to a first admin session, and the deployment docs instruct
-      operators to use it.
-    * the six ``test_*`` credentials -- read at ONE site, ``test_auth.py:63,68,73``, as
-      that blueprint's credential table. They go with the blueprint.
+
+    SEVEN FIELDS WENT, and they are the shape of what "removing a test flag" means.
+    ``adcp_auth_test_mode`` decided whether ``create_app`` COMPOSED a test-credential login
+    blueprint, so the app under test differed from the deployed one at composition -- a
+    frame above the request paths this rule usually polices. Its six ``test_*`` credentials
+    were that blueprint's password table. A suite's verdict could turn on whether the flag
+    happened to be set: two template tests passed on the CI box, which set it, and failed on
+    a laptop, which did not. The route is deleted; a test that needs an admin session signs
+    one (``tests/helpers/admin_session.py``), and a deployment reaches its first admin
+    through its identity provider, with per-tenant Setup Mode covering the interval before
+    SSO is switched on.
 
     Provisioning facts a deployment legitimately sets -- seed a demo tenant, seed sample
     data, skip migrations -- are NOT here; they are :class:`ProvisioningSettings`. They sat
@@ -162,13 +166,6 @@ class TestingSettings(BaseSettings):
     model_config = _ENV
 
     adcp_testing: bool = False
-    adcp_auth_test_mode: bool = False
-    test_super_admin_email: str = "test_super_admin@example.com"
-    test_super_admin_password: str = "test123"
-    test_tenant_admin_email: str = "test_tenant_admin@example.com"
-    test_tenant_admin_password: str = "test123"
-    test_tenant_user_email: str = "test_tenant_user@example.com"
-    test_tenant_user_password: str = "test123"
 
 
 class ProvisioningSettings(BaseSettings):

@@ -158,8 +158,8 @@ which graded zero checks for that reason.
 
 A dynamic route serves the card at `/.well-known/agent-card.json` and
 advertises the tenant's **stored** host, resolved from the request `Host` header
-(`src/app.py:416`, `:435`). It deliberately does not build the URL from
-`Host` / `Apx-Incoming-Host` / `X-Forwarded-Proto`: the signed-request check
+(`src/app.py:416`, `:435`). It deliberately does not build the URL from the
+request's own headers: the signed-request check
 compares the URL a counterparty invoked against the published URL, and two
 derivations mean two chances to disagree about a scheme, a port, or a trailing
 slash.

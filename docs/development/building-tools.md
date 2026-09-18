@@ -1039,10 +1039,11 @@ audit logger reads its log directory the same way.
 Business code never reads `ADCP_TESTING`. Each allowance it implies has its own name,
 such as `debug_routes_enabled`, `reference_formats_only`, and `loopback_webhooks_allowed`.
 Where an allowance selects a component, the selection happens at composition. The debug
-router is mounted or absent, the creative registry is the reference-formats registry or the
-live one, and the admin UI's test-credential login blueprint is registered or absent
-(`src/admin/blueprints/test_auth.py`; a request-time reader asks the app whether it was
-composed, through `test_login_composed()`). Where an allowance gates one predicate inside one
+router is mounted or absent, and the creative registry is the reference-formats registry or
+the live one. (The admin UI's test-credential login blueprint used to be a third example.
+It is deleted: a flag that decides whether a blueprint is COMPOSED makes the app under test
+a different app from the deployed one, which is the defect this section describes rather
+than an illustration of doing it well.) Where an allowance gates one predicate inside one
 function, such as `loopback_webhooks_allowed` or `relaxed_brand_validation`, that function
 reads it off the settings object per call: a swapped component carries only that bool.
 

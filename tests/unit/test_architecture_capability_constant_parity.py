@@ -130,7 +130,7 @@ class TestDerivationOnlyMatcherModelsTheForm:
         assert _declaration_reads_in_builders(src)
 
     def test_declaration_read_outside_those_builders_is_ignored(self):
-        src = "def _get_adcp_capabilities_impl(tenant):\n    return tenant.get('capability_declarations')\n"
+        src = "def describe_seller(tenant):\n    return tenant.get('capability_declarations')\n"
         assert not _declaration_reads_in_builders(src)
 
     def test_attribute_access_form_is_also_flagged(self):
@@ -182,7 +182,12 @@ _DECLARATION_DRIVEN_FIELDS = {"supported_protocols", "specialisms"}
 # The impl whose tenant-resolved response construction is in scope. The NO-TENANT
 # response is deliberately excluded: it has no tenant, so it cannot read a
 # tenant-scoped declaration, and it must keep emitting the defaults byte-for-byte.
-_TENANT_RESPONSE_IMPL = "_get_adcp_capabilities_impl"
+#: The function that DERIVES the tenant-path capability values. It used to be
+#: ``_get_adcp_capabilities_impl``; the derivation moved to the seller-capabilities
+#: service when the agent card became a second consumer of it, and this guard follows
+#: the derivation rather than the old address. Keying a guard on where a thing lived
+#: is how a guard survives an extraction while grading nothing.
+_TENANT_RESPONSE_IMPL = "describe_seller"
 
 
 def _fields_never_declaration_driven(source: str) -> list[str]:
@@ -196,7 +201,7 @@ def _fields_never_declaration_driven(source: str) -> list[str]:
     So "every emission reads the store" would be false for correct code.
 
     The enforceable invariant is therefore: for each field, AT LEAST ONE emission
-    in the impl reads the declarations. That catches the regression that actually
+    in the derivation reads the declarations. That catches the regression that actually
     matters -- the store silently stops reaching the wire -- while leaving the
     tenant-less path alone. It does NOT catch a partial regression where one of
     several tenant-path emissions is reverted; the BDD accept scenarios
@@ -240,7 +245,8 @@ def test_declaration_driven_fields_are_not_literal():
             continue
     assert not offenders, (
         "supported_protocols/specialisms must be built from the capability declaration "
-        f"store somewhere in {_TENANT_RESPONSE_IMPL}, not emitted only as literals, at: {offenders}"
+        f"store somewhere in {_TENANT_RESPONSE_IMPL}() (src/services/seller_capabilities.py), "
+        f"not emitted only as literals, at: {offenders}"
     )
 
 
@@ -256,7 +262,7 @@ class TestDeclarationDrivenMatcherModelsTheForm:
     )
 
     def _impl(self, tenant_path: str) -> str:
-        return "def _get_adcp_capabilities_impl(req):\n" + self._NO_TENANT + tenant_path
+        return "def describe_seller(identity):\n" + self._NO_TENANT + tenant_path
 
     def test_store_driven_tenant_path_passes(self):
         """Both emissions present; the tenant one reads the store -> clean."""
@@ -295,11 +301,11 @@ class TestDeclarationDrivenMatcherModelsTheForm:
         """WOULD-BE-MISSED inverse: a function with ONLY the tenant-less emission
         (no tenant path at all) must not be flagged -- otherwise the guard would
         demand a store read where there is no tenant to read one from."""
-        src = "def _get_adcp_capabilities_impl(req):\n" + self._NO_TENANT
+        src = "def describe_seller(identity):\n" + self._NO_TENANT
         assert sorted(_fields_never_declaration_driven(src)) == ["specialisms", "supported_protocols"]
 
     def test_unrelated_field_ignored(self):
-        src = "def _get_adcp_capabilities_impl(req):\n    return Response(last_updated=now())\n"
+        src = "def describe_seller(identity):\n    return Response(last_updated=now())\n"
         assert not _fields_never_declaration_driven(src)
 
 
@@ -341,7 +347,9 @@ def test_account_posture_derives_from_the_policy_module():
     every unconfigured tenant advertise a capability it never opted into (#1721).
     Both sides now call ``src/core/billing_policy.py``; this keeps them there.
     """
-    source = (REPO_ROOT / "src/core/tools/capabilities.py").read_text()
+    # _build_account_block moved with the rest of the derivation when the agent card
+    # became a second consumer of it. The guard follows the function, not its old file.
+    source = (REPO_ROOT / "src/services/seller_capabilities.py").read_text()
     inline = _inline_policy_reads_in_account_block(source)
     assert not inline, (
         f"_build_account_block reads policy-owned tenant key(s) inline: {inline}. "
@@ -351,7 +359,7 @@ def test_account_posture_derives_from_the_policy_module():
     )
     for resolver in _ACCOUNT_POLICY_RESOLVERS:
         assert resolver in source, (
-            f"capabilities.py no longer calls {resolver} — the account block would be free to "
+            f"seller_capabilities.py no longer calls {resolver} — the account block would be free to "
             "re-derive posture on its own, which is the divergence this guard exists to prevent."
         )
 

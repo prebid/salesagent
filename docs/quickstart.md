@@ -80,17 +80,25 @@ This demo data lets you explore features without configuring Google Ad Manager o
 
 All services are accessible through port 8000:
 
-| Service | URL |
-|---------|-----|
-| Admin UI | http://localhost:8000/ |
-| Admin UI (alternate) | http://localhost:8000/admin |
-| MCP Server | http://localhost:8000/mcp/ |
-| A2A Server | http://localhost:8000/a2a |
-| Health Check | http://localhost:8000/health |
+| Service | URL | Names a tenant how |
+|---------|-----|---|
+| Admin UI | http://localhost:8000/ | its own session |
+| Admin UI (alternate) | http://localhost:8000/admin | its own session |
+| MCP Server | http://localhost:8000/mcp/ | `x-adcp-tenant` header |
+| A2A Server | http://localhost:8000/a2a | `x-adcp-tenant` header |
+| Health Check | http://localhost:8000/health | no tenant needed |
 
 ## Connecting an AI Agent
 
 Once running, AI agents can connect via MCP:
+
+A request has to say WHICH seller it is for. Normally the `Host` does that — a tenant is
+served at the host it declares in `virtual_host` — but `localhost` declares no tenant, so a
+local call names the tenant explicitly with `x-adcp-tenant`. That is the same header the
+test suites use, so the local stack exercises the resolution path a deployment uses rather
+than a fourth one nothing else runs. A request naming no tenant is refused with
+`CONFIGURATION_ERROR`: the deployment cannot tell which seller it is for, and guessing one
+is how a caller ends up served another tenant's catalogue.
 
 ```python
 from fastmcp.client import Client, StreamableHttpTransport
@@ -98,7 +106,10 @@ from fastmcp.client import Client, StreamableHttpTransport
 # Get your token from Admin UI > Advertisers > View Token
 transport = StreamableHttpTransport(
     url="http://localhost:8000/mcp/",
-    headers={"Authorization": "Bearer your-principal-token"}
+    headers={
+        "Authorization": "Bearer your-principal-token",
+        "x-adcp-tenant": "default",  # which seller; over loopback the Host names none
+    },
 )
 
 async with Client(transport=transport) as client:

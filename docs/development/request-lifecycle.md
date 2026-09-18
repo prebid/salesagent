@@ -69,9 +69,13 @@ Three details deserve attention:
   (`src/app.py:490-533`). When the `Host` routes to a tenant, the handler
   advertises that tenant's **stored** host as the A2A URL
   (`_canonical_a2a_url`, `src/app.py:416-432`), so the card publishes the same
-  string the tenant's `brand.json` carries. For a `Host` that routes to no
-  tenant it falls back to the `Apx-Incoming-Host` / `Host` /
-  `X-Forwarded-Proto` sequence below that lookup (`src/app.py:434-482`).
+  string the tenant's `brand.json` carries. A `Host` that routes to no tenant is
+  REFUSED — `CONFIGURATION_ERROR`, recovery `terminal`, no card. It used to fall
+  back to a ladder over request headers, which
+  published whatever host the caller asked for: `Host: evil.example.com` came
+  back as `supportedInterfaces[0].url`. A card states a tenant's stored identity,
+  so with no tenant there is nothing truthful to publish
+  (`tests/e2e/test_a2a_endpoints_working.py:219` pins the refusal).
 
 The app includes the health routes (`src/routes/health.py`) alongside the REST
 router (`src/app.py:604`), and the debug and reset routes only where the
@@ -93,11 +97,13 @@ application, forwarding `Host` verbatim because tenant routing is an exact
   `X-Forwarded-Proto`, and `Authorization`. It sets no tenant header, so the
   resolver identifies the tenant from `Host` (or from an `x-adcp-tenant` the
   caller sent itself).
-- **Multi-tenant deployments** (`config/nginx/nginx-multi-tenant.conf`): a
-  `map $host $tenant` extracts the subdomain, and the tenant server block adds
-  `x-adcp-tenant: $tenant` and `Apx-Incoming-Host: $tenant.<domain>` to the
-  proxied request (`:167`, `:184-185`). Those two headers, plus `Host`, are
-  exactly the three the resolver reads for tenant detection.
+- **Multi-tenant deployments** (`config/nginx/nginx-multi-tenant.conf`): the
+  proxy adds nothing. It used to parse the first label out of `$host` and inject
+  it as `x-adcp-tenant` — a third way to name a tenant, agreeing with the other
+  two only where a tenant's id happened to equal its subdomain. A wildcard
+  `server_name` now sends every host under the domain to the app with `$host`
+  passed through untouched (`:44-49`, `:121-132`), so the proxy has no opinion
+  about which tenant a request is for.
 
 ### The in-network test stack
 
@@ -320,14 +326,25 @@ detection, so an anonymous caller costs no database lookups.
 wins, each reading one indexed column, and only then does the resolver load the
 row once:
 
-1. `Host` header: virtual-host lookup, then subdomain extraction
-   (`<subdomain>.<domain>`; `localhost`, `www`, `admin`, and the service's own
-   name are excluded).
-2. `x-adcp-tenant` header (set by the multi-tenant nginx from the subdomain):
-   subdomain lookup, then the literal tenant id, unverified.
-3. `Apx-Incoming-Host` header (Approximated.app virtual hosts): virtual-host
-   lookup.
-4. Localhost fallback: the `default` tenant.
+1. `Host` header → `tenants.virtual_host`. What a deployment resolves by, and
+   what every proxy in front of this app forwards verbatim.
+2. `x-adcp-tenant` header → the tenant id, LITERALLY, for a caller addressing a
+   tenant explicitly rather than by the host it is served at (the test suites,
+   the CLI, a support tool). Unverified: an id naming no tenant fails at the
+   principal lookup that is scoped by it. No proxy sets this header — the
+   multi-tenant nginx used to inject it from the subdomain and no longer does.
+
+There is no third input, and a second spelling of either of these two would not be
+a redundancy: two readers of one fact disagree, and then one request resolves to
+two different tenants depending on which one asked. A proxy that has to rewrite the
+host to make a deployment work does it at the edge, so that what arrives here is
+the `Host` (`config/nginx/nginx-multi-tenant.conf`, and
+[deployment/multi-tenant.md](../deployment/multi-tenant.md) for a deployment that
+needs one).
+
+Subdomain extraction is GONE, and so is the localhost fallback to the `default`
+tenant. A request that names no tenant this deployment serves is refused as a
+seller-side misconfiguration rather than guessed at.
 
 **3b. The seller's brand policy** (`:369-379`): a public row may still need a
 caller. Once it has loaded the tenant row, the resolver asks the row's
@@ -380,7 +397,7 @@ flowchart TD
     hdrs["Request headers"] --> token["1. Authorization: Bearer"]
     token --> missing{"credential present?"}
     missing -->|"no, row requires one"| am["AdCPAuthRequiredError (AUTH_MISSING)"]
-    missing -->|"otherwise"| tenant["3. Tenant: Host → x-adcp-tenant → Apx-Incoming-Host → localhost\nTenantContext.load"]
+    missing -->|"otherwise"| tenant["3. Tenant: Host → x-adcp-tenant\nneither → CONFIGURATION_ERROR\nTenantContext.load"]
     tenant --> policy{"3b. seller's brand policy\nrequires a caller?"}
     policy -->|"yes, and nothing presented"| am
     policy -->|"no"| principal["4. Principal inside that tenant\n(get_principal_from_token)"]

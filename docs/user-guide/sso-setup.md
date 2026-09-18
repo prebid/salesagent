@@ -23,14 +23,18 @@ This guide describes how to configure SSO for your tenant using OpenID Connect (
 
 ## First-time setup
 
-New tenants start in **Setup Mode**, which enables test credentials for initial configuration:
+New tenants start in **Setup Mode**, which lets you complete an OIDC login for a tenant
+*before* that tenant's SSO is switched on — so you can verify a provider works without
+locking yourself out if it does not.
 
-1. **Start the system** with `docker compose up -d`.
-2. **Log in** with test credentials:
-   - Email: `test_super_admin@example.com`
-   - Password: `test123`
-3. **Configure SSO** following this guide.
-4. **Test your SSO login** works.
+1. **Configure the deployment's own sign-in** first: set `GOOGLE_CLIENT_ID` /
+   `GOOGLE_CLIENT_SECRET` (or the generic `OAUTH_*` variables) and put your address in
+   `SUPER_ADMIN_EMAILS`. That is how the first administrator reaches the Admin UI.
+2. **Start the system** with `docker compose up -d`.
+3. **Log in** at `/admin` with that account.
+4. **Configure the tenant's SSO** following this guide.
+5. **Test your SSO login** works — Setup Mode allows it before you enable it.
+6. **Enable SSO and turn Setup Mode off** from Users & Access.
 5. **Disable Setup Mode** - after this, only SSO authentication works.
 
 > **Important**: Setup Mode is only for initial configuration. Always disable it once SSO is working to ensure production security.

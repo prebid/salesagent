@@ -332,10 +332,10 @@ class TestCapabilitiesPropertyListFiltering:
 
         with (
             patch(
-                "src.core.tools.capabilities.get_adapter_class_for_tenant",
+                "src.services.seller_capabilities.get_adapter_class_for_tenant",
                 side_effect=Exception("adapter unavailable (test)"),
             ),
-            patch("src.core.tools.capabilities.TenantConfigUoW", return_value=mock_uow),
+            patch("src.services.seller_capabilities.TenantConfigUoW", return_value=mock_uow),
         ):
             response = _get_adcp_capabilities_impl(None, identity)
 

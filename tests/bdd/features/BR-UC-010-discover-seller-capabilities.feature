@@ -354,38 +354,24 @@ Feature: BR-UC-010 Discover Seller Capabilities
     # @source repo=adcp ref=v3.1.1 path=dist/docs/3.1.1/building/implementation/get_adcp_capabilities.mdx (L23)
 
   @T-UC-010-ext-a @extension @ext-a @degradation @partition @boundary
-  Scenario: no_tenant — tenant absent, minimal capabilities
+  Scenario: no_tenant — a request naming no seller is refused
     Given no tenant can be resolved from the request context
     When the Buyer Agent calls get_adcp_capabilities
-    Then the response is compliant with the get_adcp_capabilities spec
-    And the response should include adcp.major_versions containing 3
-    And the response should include adcp.supported_versions as a non-empty array
-    And each value in adcp.supported_versions should match pattern "^\d+\.\d+(-[a-zA-Z0-9.-]+)?$"
-    And adcp.idempotency.supported should be exactly true or false, and when false replay_ttl_seconds and in_flight_max_seconds should be absent
-    And the response should include supported_protocols containing "media_buy"
-    And the wire response should not contain a media_buy key
-    And the response should NOT include account section
-    # Former @T-UC-010-ext-a-mcp / @T-UC-010-ext-a-a2a twins merged 2026-07-13 (assertions
-    # aligned; transport covered by 4-way parametrization).
-    # NOT-IN-SPEC: minimal-on-no-tenant is a production contract (spec has no tenant concept);
-    # the minimal shape IS schema-checked: top-level required is [adcp, supported_protocols],
-    # and adcp.required is [major_versions, idempotency] — a minimal response WITHOUT
-    # adcp.idempotency is schema-invalid, hence the idempotency assert.
-    # Hardened (salesagent-ytq6): supported_versions entries pinned to the schema `pattern`
-    # (was non-empty-only); idempotency pinned to the oneOf discriminator invariant — supported
-    # is exactly true/false and, on the IdempotencyUnsupported branch (supported=false), the
-    # `not.anyOf` MUST omit replay_ttl_seconds/in_flight_max_seconds (was "boolean supported
-    # discriminator", a schema-role phrase asserting only the type); media_buy absence asserted
-    # as wire-key absence (was "NOT include media_buy details" — there is no `media_buy.details`
-    # wire key). Graduated: _build_adcp_block() now always emits adcp.supported_versions
-    # (derived from SUPPORTED_ADCP_VERSIONS) on both the no-tenant and tenant-resolved paths.
-    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/protocol/get-adcp-capabilities-response.json pointer=/properties/adcp/properties/supported_versions
-    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/protocol/get-adcp-capabilities-response.json pointer=/properties/adcp/properties/idempotency/oneOf/1
-    # Design tension (flagged, production decision): advertising "media_buy" in
-    # supported_protocols while omitting the media_buy block is schema-valid but against the
-    # storyboard's spirit ("Expected when media_buy is in supported_protocols").
-    # @bva capabilities_degradation: tenant absent
-    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/protocol/get-adcp-capabilities-response.json pointer=/properties/adcp/required
+    Then the response contains error code CONFIGURATION_ERROR
+    And the error recovery should be "terminal"
+    # NOT-IN-SPEC, and deliberately so: the spec has no tenant concept, so what a
+    # deployment does when it cannot tell WHICH seller a request addresses is the
+    # seller's own contract. This one refuses. A request that names neither a host this
+    # deployment serves nor a tenant it knows has no seller behind it, and therefore no
+    # rule of that seller's to apply -- including the rule that would answer minimally.
+    # CONFIGURATION_ERROR is what the pinned enum gives a seller-side deployment fault and
+    # it classifies it terminal: the buyer has no lever and MUST NOT auto-retry.
+    #
+    # This scenario used to assert a MINIMAL CAPABILITIES response instead -- adcp and
+    # supported_protocols with no account block. That answered a discovery request with a
+    # document describing nobody, which reads as "this agent exists and offers nothing"
+    # rather than "you have not said who you are asking".
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/enums/error-code.json pointer=/enum
 
   @T-UC-010-ext-b-degradation @extension @ext-b @degradation @invariant @partition @boundary
   Scenario Outline: Graceful degradation when dependencies fail
@@ -463,7 +449,6 @@ Feature: BR-UC-010 Discover Seller Capabilities
 
     Examples:
       | partition_boundary                                                  | tenant_condition                                          | account_state                                             |
-      | no_tenant no tenant → account section absent                        | no tenant can be resolved from the request context        | absent                                                    |
       | full_response tenant resolved → account section present             | a tenant is resolvable from the request context           | present                                                   |
       | account_degraded partial config → supported_billing-only block      | a tenant is resolvable with partial account config        | present with supported_billing only and no optional fields |
       | empty_billing_policy no billing model supported → whole block absent | a tenant is resolvable with an explicitly empty billing policy | absent                                                    |
@@ -881,7 +866,6 @@ Feature: BR-UC-010 Discover Seller Capabilities
     Examples:
       | partition                  | precondition                                                                | expected_degradation                                                                                                      |
       | full_response              | a tenant is resolvable and adapter and DB are available with all features   | top-level keys include adcp, supported_protocols, account, media_buy and last_updated with account.supported_billing non-empty and adcp.idempotency present |
-      | no_tenant                  | no tenant can be resolved from the request context                          | only adcp and supported_protocols at top level, with adcp carrying major_versions, supported_versions and idempotency     |
       | adapter_fail               | a tenant is resolvable but adapter is unavailable                           | primary_channels equals [display] and targeting equals exactly {geo_countries: true, geo_regions: true} with no reporting_delivery_methods, audience_targeting or conversion_tracking |
       | db_fail                    | the database query fails | publisher_domains equals the placeholder domain and primary_channels equals [display, social, ctv]                        |
       | adapter_and_db_fail        | a tenant is resolvable but both adapter and DB fail                         | primary_channels equals [display] and publisher_domains equals the placeholder domain, adapter-dependent sections absent  |

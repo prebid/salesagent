@@ -1,67 +1,30 @@
-"""Unit tests for virtual host landing page functionality."""
+"""Unit tests for virtual host landing page functionality.
 
-from unittest.mock import Mock, patch
+FOUR TESTS WERE DELETED HERE, and the reason is worth keeping. They were named for
+tenant resolution (``..._with_virtual_host``, ``..._without_virtual_host``,
+``..._with_nonexistent_tenant``, ``..._header_case_insensitive``) but each one mocked
+``get_tenant_by_virtual_host``, reimplemented the root handler's header reading in the
+test body under a comment reading "simulate the root route handler logic", called the
+mock itself, and asserted that the mock returned what the test had just set on it. They
+graded a copy of production that lived in this file — hard rule 5 in tests/CLAUDE.md, and
+the "recomputing the expected value from setup" pitfall — so they could not fail when
+production changed, and they stayed green when the code they simulated was deleted.
 
-from starlette.requests import Request
+Which tenant a host resolves is graded where it is observable: on all four transports by
+``tests/bdd/features/local-tenant-identification-routes.feature``, and for the routing
+function by ``tests/unit/test_domain_routing.py``.
+
+What remains below is real: it calls ``generate_tenant_landing_page`` and asserts on the
+HTML that production returned.
+"""
+
+from unittest.mock import patch
 
 from src.landing.landing_page import generate_fallback_landing_page, generate_tenant_landing_page
 
 
 class TestVirtualHostLandingPage:
     """Test virtual host landing page functionality."""
-
-    @patch("src.core.config_loader.get_tenant_by_virtual_host")
-    async def test_landing_page_with_virtual_host(self, mock_get_tenant):
-        """Test landing page display for virtual host."""
-        # Arrange
-        mock_tenant = {
-            "tenant_id": "landing-test",
-            "name": "Landing Test Publisher",
-            "virtual_host": "landing.test.com",
-        }
-        mock_get_tenant.return_value = mock_tenant
-
-        # Mock request with Apx-Incoming-Host header
-        mock_request = Mock(spec=Request)
-        mock_request.headers = {"apx-incoming-host": "landing.test.com"}
-
-        # Act - simulate the root route handler logic
-        headers = dict(mock_request.headers)
-        apx_host = headers.get("apx-incoming-host")
-
-        tenant = None
-        if apx_host:
-            tenant = mock_get_tenant(apx_host)
-
-        # Assert
-        assert tenant is not None
-        assert tenant["name"] == "Landing Test Publisher"
-        assert tenant["virtual_host"] == "landing.test.com"
-        mock_get_tenant.assert_called_once_with("landing.test.com")
-
-    @patch("src.core.config_loader.get_tenant_by_virtual_host")
-    async def test_landing_page_without_virtual_host(self, mock_get_tenant):
-        """Test redirect to admin for regular requests."""
-        # Arrange
-        mock_request = Mock(spec=Request)
-        mock_request.headers = {}  # No special headers
-
-        # Act - simulate the root route handler logic
-        headers = dict(mock_request.headers)
-        apx_host = headers.get("apx-incoming-host")
-
-        # Should not call get_tenant_by_virtual_host if no header
-        if not apx_host:
-            # Should redirect to admin
-            should_redirect = True
-        else:
-            tenant = mock_get_tenant(apx_host)
-            should_redirect = tenant is None
-
-        # Assert
-        assert apx_host is None
-        assert should_redirect is True
-        mock_get_tenant.assert_not_called()
 
     def test_landing_page_html_generation_with_new_module(self):
         """Test HTML content generation using the new landing page module."""
@@ -176,29 +139,6 @@ class TestVirtualHostLandingPage:
         assert "Media Buy API Reference" in html_content
         assert "Signals API Reference" in html_content
 
-    @patch("src.core.config_loader.get_tenant_by_virtual_host")
-    async def test_landing_page_with_nonexistent_tenant(self, mock_get_tenant):
-        """Test landing page with virtual host that has no tenant."""
-        # Arrange
-        mock_get_tenant.return_value = None
-        mock_request = Mock(spec=Request)
-        mock_request.headers = {"apx-incoming-host": "nonexistent.test.com"}
-
-        # Act - simulate the root route handler logic
-        headers = dict(mock_request.headers)
-        apx_host = headers.get("apx-incoming-host")
-
-        tenant = None
-        if apx_host:
-            tenant = mock_get_tenant(apx_host)
-
-        should_redirect = tenant is None
-
-        # Assert
-        assert tenant is None
-        assert should_redirect is True
-        mock_get_tenant.assert_called_once_with("nonexistent.test.com")
-
     def test_fallback_landing_page_generation(self):
         """Test fallback landing page when tenant lookup fails."""
         # Act
@@ -256,34 +196,6 @@ class TestVirtualHostLandingPage:
         # Should extract "scribd" as the subdomain and use it in URLs
         assert "scribd" in html_content
         assert "https://scribd.sales-agent.example.com" in html_content
-
-    @patch("src.core.config_loader.get_tenant_by_virtual_host")
-    async def test_landing_page_header_case_insensitive(self, mock_get_tenant):
-        """Test header extraction with different cases."""
-        # Arrange
-        mock_tenant = {"name": "Case Test Publisher", "virtual_host": "case.test.com"}
-        mock_get_tenant.return_value = mock_tenant
-
-        test_headers = [
-            {"apx-incoming-host": "case.test.com"},
-            {"Apx-Incoming-Host": "case.test.com"},
-            {"APX-INCOMING-HOST": "case.test.com"},
-        ]
-
-        for headers in test_headers:
-            mock_request = Mock(spec=Request)
-            mock_request.headers = headers
-
-            # Act - simulate header extraction (case might vary)
-            request_headers = dict(mock_request.headers)
-            apx_host = (
-                request_headers.get("apx-incoming-host")
-                or request_headers.get("Apx-Incoming-Host")
-                or request_headers.get("APX-INCOMING-HOST")
-            )
-
-            # Assert
-            assert apx_host == "case.test.com"
 
     def test_landing_page_template_errors_handled(self):
         """Test that template errors are handled gracefully."""
