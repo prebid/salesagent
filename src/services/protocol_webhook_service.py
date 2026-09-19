@@ -22,6 +22,7 @@ from pydantic import BaseModel as PydanticBaseModel
 
 from src.core.audit_logger import get_audit_logger
 from src.core.database.database_session import get_db_session
+from src.core.log_safety import redact_push_notification_config
 from src.core.security.webhook_egress import adeliver_webhook
 from src.core.webhook_validator import webhook_url_for_log
 from src.core.webhooks.delivery import WebhookDeliveryOutcome, WebhookTaskContext, build_webhook_envelope
@@ -163,17 +164,17 @@ class ProtocolWebhookService:
         # Prepare headers
         headers = {"Content-Type": "application/json", "User-Agent": "AdCP-Sales-Agent/1.0"}
 
-        # Log sanitized config (exclude sensitive authentication_token)
-        safe_config = {
-            "url": push_notification_config.url if hasattr(push_notification_config, "url") else None,
-            "authentication_type": (
-                push_notification_config.authentication_type
-                if hasattr(push_notification_config, "authentication_type")
-                else None
-            ),
-            # DO NOT log authentication_token - security risk
-        }
-        logger.info(f"push_notification_config (sanitized): {safe_config}")
+        # Single redaction path (#1617) — the authentication credential is never logged.
+        # Replaces a hand-rolled sanitizer that duck-typed every field with hasattr:
+        # DeliverableWebhookTarget already guarantees url / authentication_type /
+        # authentication_token exist, so those guards were dead, and a second local
+        # copy of "what is safe to log about a config" is a second place to forget
+        # a field when one is added. The helper also records whether a credential
+        # was PRESENT (the REDACTED sentinel) rather than omitting the fact.
+        logger.info(
+            "push_notification_config: %s",
+            redact_push_notification_config(push_notification_config),
+        )
 
         # Serialize once, at the delivery boundary, for HMAC signing and the JSON
         # send. ``exclude_none`` keeps the envelope's optional fields off the wire
