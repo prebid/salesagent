@@ -6,7 +6,7 @@ shared implementation pattern from CLAUDE.md.
 
 import logging
 import time
-from typing import Any, cast
+from typing import Any
 
 # FIXME(#1388): FormatId, ProductFilters have local subclasses; import from src.core.schemas (Pattern #7/#4).
 from adcp import FormatId
@@ -732,16 +732,13 @@ async def _get_products_impl(req: GetProductsRequest, identity: PublicIdentity) 
         for product in eligible_products:
             product.pricing_options = []
 
-    # Our Product extends LibraryProduct - cast for type safety since list is invariant
-    # When serialized, Pydantic automatically uses library Product fields
-    # Internal-only fields (implementation_config) excluded by model_dump()
-    # Note: We use eligible_products (Product objects), not response_data (dicts)
-    # because Product objects have typed pricing_options (CpmFixedRatePricingOption, etc.)
-    # while dicts lose this type information during serialization
-    # adcp 2.16.0+ accepts subclass lists at runtime via BeforeValidator coercion,
-    # but mypy still needs cast() due to list invariance in static typing
+    # GetProductsResponse.products is list[LibraryProduct] and list is invariant, so
+    # list[Product] is not assignable. Bind a shallow copy to an annotated local so
+    # mypy checks the widening without cast() (#1785). Keep Product objects (not dicts)
+    # for typed pricing_options; internal-only fields stay excluded at dump time.
+    widened_products: list[LibraryProduct] = [*eligible_products]
     resp = GetProductsResponse(
-        products=cast(list[LibraryProduct], eligible_products),
+        products=widened_products,
         errors=None,
         message=_products_message(len(eligible_products), anonymous=principal_id is None),
     )
