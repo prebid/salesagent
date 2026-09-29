@@ -357,7 +357,8 @@ class DeliveryWebhookScheduler:
 
             # RELEASE THE READ TRANSACTION BEFORE ANY SOCKET EXISTS (#1757 — "the rule a
             # connection held across a POST to a buyer-supplied URL would break", stated
-            # at protocol_webhook_service._deliver's signer= argument and obeyed there).            #
+            # at protocol_webhook_service._deliver's signer= argument and obeyed there).
+            #
             # Everything above is SELECTs plus an expunge; this ends that transaction and
             # drops the locks it holds. Without it the caller's session (BOTH callers open
             # one and pass it in) stays open for the whole delivery — which is the retry
