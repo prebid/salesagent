@@ -13,6 +13,7 @@ Configuration priority:
 import json
 import logging
 import os
+import secrets
 from urllib.parse import unquote, urlsplit
 
 from authlib.integrations.flask_client import OAuth
@@ -20,7 +21,7 @@ from flask import Blueprint, abort, current_app, flash, redirect, render_templat
 from sqlalchemy import select
 
 from src.admin.auth_utils import extract_user_info
-from src.admin.utils import is_super_admin, test_login_composed
+from src.admin.utils import is_super_admin, require_tenant_access, test_login_composed
 from src.core.config import get_settings
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Tenant
@@ -759,9 +760,15 @@ def logout():
 
 # GAM OAuth Flow endpoints
 @auth_bp.route("/auth/gam/authorize/<tenant_id>")
+@require_tenant_access()
 def gam_authorize(tenant_id):
-    """Initiate GAM OAuth flow for tenant."""
-    # Verify tenant exists and user has access
+    """Initiate GAM OAuth flow for tenant.
+
+    ``require_tenant_access`` is what makes the callback safe: the tenant it binds
+    the refresh token to is the one this authenticated member started the flow for,
+    read back from the session — never from the request (#2205).
+    """
+    # Verify tenant exists
     with get_db_session() as db_session:
         tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
         if not tenant:
@@ -785,7 +792,10 @@ def gam_authorize(tenant_id):
             flash(f"GAM OAuth not properly configured: {str(config_error)}", "error")
             return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id))
 
-        # Store tenant context for callback
+        # Store tenant context for callback, bound to an unguessable ``state`` the
+        # callback compares against before it trusts anything else.
+        state = secrets.token_urlsafe(32)
+        session["gam_oauth_state"] = state
         session["gam_oauth_tenant_id"] = tenant_id
         session["gam_oauth_originating_host"] = request.headers.get("Host", "")
 
@@ -813,7 +823,7 @@ def gam_authorize(tenant_id):
             "response_type=code&"
             "access_type=offline&"
             "prompt=consent&"  # Force consent to get refresh token
-            f"state={tenant_id}"
+            f"state={state}"
         )
 
         logger.debug(f"GAM OAuth authorization URL (redacted): {auth_url.split('client_id=')[0]}client_id=REDACTED...")
@@ -838,6 +848,13 @@ def gam_callback():
         logger.info(f"GAM OAuth callback received - code present: {bool(code)}, state: {state}, error: {error}")
         logger.debug(f"GAM OAuth callback full args: {dict(request.args)}")
 
+        # The flow's context lives only in the session that started it. Popped
+        # first so a nonce is consumed whatever the outcome of this callback.
+        tenant_id = session.pop("gam_oauth_tenant_id", None)
+        issued_state = session.pop("gam_oauth_state", None)
+        originating_host = session.pop("gam_oauth_originating_host", None)
+        external_domain = session.pop("gam_oauth_external_domain", None)
+
         if error:
             error_description = request.args.get("error_description", "No description provided")
             logger.error(f"GAM OAuth error: {error} - {error_description}")
@@ -848,12 +865,11 @@ def gam_callback():
             flash("No authorization code received", "error")
             return redirect(url_for("auth.login"))
 
-        # Get tenant context from session
-        tenant_id = session.pop("gam_oauth_tenant_id", state)
-        originating_host = session.pop("gam_oauth_originating_host", None)
-        external_domain = session.pop("gam_oauth_external_domain", None)
-
-        if not tenant_id:
+        # ``state`` is compared with the value this session was issued; it is never
+        # a source for the tenant. No session, no issued state, or a mismatch all
+        # mean this callback did not come from a flow the caller started (#2205).
+        if not tenant_id or not issued_state or not state or not secrets.compare_digest(issued_state, state):
+            logger.warning("GAM OAuth callback rejected: state does not match a flow started in this session")
             flash("Invalid OAuth state - no tenant context", "error")
             return redirect(url_for("auth.login"))
 
