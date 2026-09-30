@@ -1,5 +1,5 @@
 """Guard: the vendored error-code.json fixture must match its recorded SHA-256
-exactly (#1721 M5, R1-1).
+exactly (#1721, M5: provenance gets a verifier).
 
 ``tests/fixtures/adcp_schemas_pinned/enums/error-code.json`` is claimed to be
 the AdCP v3.1.1 enum verbatim, but that claim was previously just a comment
