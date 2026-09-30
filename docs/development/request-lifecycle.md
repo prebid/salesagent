@@ -129,10 +129,24 @@ credential or resolves an identity. Outermost first:
 1. **`AuthChallengeResponder`** (`src/core/auth_middleware.py`), registered last
    and therefore outermost (`src/app.py:629`). It sees the *finished* response
    of every transport, including the MCP mount and the A2A routes. When the JSON
-   body carries an AdCP `AUTH_MISSING` or `AUTH_INVALID` code it lifts the
-   status to `401` and attaches the `WWW-Authenticate` challenge — `Bearer`, or
-   `Bearer error="invalid_token"` for a presented credential that was rejected
-   (RFC 6750 §3, `auth_middleware.py:35-38`).
+   body carries a code that owes a challenge, it lifts the status to `401` and
+   attaches the `WWW-Authenticate` header.
+
+   Which codes owe one, and what the header says, comes from the code's own
+   entry rather than from a list this middleware holds. `CODE_TABLE[code].group`
+   answers it:
+
+   - `AUTH_MISSING` and `AUTH_INVALID` answer `Bearer` and
+     `Bearer error="invalid_token"` (RFC 6750 §3).
+   - The 28 codes in `CodeGroup.SIGNATURE` answer
+     `Signature error="<code>"`, so a refused signature names its exact
+     failure in the header as well as in the envelope.
+
+   See [A code's group decides whether it also travels in a
+   header](../design/error-architecture.md#a-codes-group-decides-whether-it-also-travels-in-a-header)
+   for why the family is a property of the code, and [Request signature
+   architecture](../design/signature-architecture.md) for how a signature
+   refusal reaches this point.
 2. **`CORSMiddleware`** (`src/app.py:619-625`): adds CORS headers to all
    responses (origins from `settings.runtime.allowed_origin_list`).
 3. **`a2a_messageid_compatibility_middleware`** (`src/app.py:540-576`),
@@ -281,7 +295,15 @@ between the two codes is in
 ### Identity: `_resolve_identity`
 
 All transports converge on one function before business logic runs
-(`src/core/resolved_identity.py:267-412`):
+(`src/core/resolved_identity.py:267-412`).
+
+A request signature is a credential, and this function reads it the way it reads
+a bearer token. The resolver loads the tenant and the principal, then calls
+`verify_inbound_signature` with what it already holds, so the verifier re-reads
+no headers and resolves no tenant of its own. A refusal leaves as a typed error
+and becomes a `401` at the middleware described earlier. For how the seller
+resolves a counterparty's public key and what each posture bucket enforces, see
+[Request signature architecture](../design/signature-architecture.md).
 
 ```
 _resolve_identity(
@@ -486,8 +508,10 @@ and the one unimplemented case (two concurrent requests with the same key) — i
 
 ### The context echo
 
-The buyer's `context` is opaque data this seller carries and returns. It is one
-field on one class, with one writer.
+The buyer's `context` is opaque data this seller carries and returns. At the
+ENVELOPE it is one field on one class, with one writer — that is the rest of this
+section. AdCP also declares the same object at ELEMENT level, and that half has a
+different writer; see [Element-level context](#element-level-context) below.
 
 `AdcpResponse` (`src/core/schemas/_base.py:754-795`) inherits the SDK's
 `AdcpVersionEnvelope` and `ProtocolEnvelope` — the pair every pinned response
@@ -522,6 +546,45 @@ Three tests grade each refusal by breaking it:
 `tests/unit/test_ast_grep_identity_rules.py`.
 `tests/bdd/test_local_context_echo.py` grades the behavior itself, and its
 scenarios run on every transport.
+
+### Element-level context
+
+`core/context.json` is also `$ref`'d from models that sit INSIDE a response, not
+at its root: `core/package.json` declares `context`, and so do `MediaBuy`,
+`PackageUpdate`, `Results` and `MediaBuyDeliveryWebhookResult`. Of the 225 models
+in the SDK that declare the field, those are the ones that are array elements
+rather than envelopes.
+
+The boundary cannot reach them, and this is not an oversight to be fixed there.
+`_served` reads the request ROOT and writes the response ROOT; `_boundary.py`
+mentions `packages` nowhere, and giving it a notion of collections would mean
+teaching the one transport-agnostic seam the shape of every tool's payload. So an
+element's context is echoed by whoever BUILDS the element — for packages, that is
+`_create_media_buy_impl` (`media_buy_create.py`), which copies `pkg.context` onto
+the `Package` it returns.
+
+Nothing refuses that write: the two refusals above are on `AdcpResponse`, and
+`Package` is not one. The `context=` keyword ban is scoped accordingly — it stays
+total for the envelope (a response, an error, or a `model_dump(context=...)`
+serializer call are all findings) and admits the constructors of models that
+declare the field. Without that exception the field would be permanently
+unwritable: buyer-supplied, spec-declared, and silently dropped.
+
+There is nothing to validate or derive. `context` is `additionalProperties: true`
+with zero declared properties, so its members — `buyer_ref` among them, which is
+not a declared field anywhere in AdCP — are carried or they are lost.
+
+AdCP 3.1.1 grades this at
+`media_buy_seller/inline_creatives_without_sync::create_buy_with_legacy_inline_creative`,
+which sends `packages[0].context.buyer_ref` and asserts it back at
+`/packages/0/context/buyer_ref`. Locally,
+`tests/bdd/test_local_context_echo.py`'s `@T-CTXECHO-package-elements` sends a
+distinct random bag per package and asserts each returns on its own package,
+positionally, on every transport.
+
+**Only `Package` is wired.** `MediaBuy`, `PackageUpdate`, `Results` and
+`MediaBuyDeliveryWebhookResult` declare the field with the same unreachability and
+have no echo and no coverage.
 
 ### Failure
 

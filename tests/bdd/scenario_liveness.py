@@ -20,17 +20,19 @@ each record carries the three facts the parent finding names:
   unbound step named, instead of silently stopping at the first failure the
   way a live run's exception would.
 * ``harness_wired`` — a best-effort signal for THIS module only, derived from
-  the same auto-xfail reason text conftest.py already produces verbatim (e.g.
-  ``"No harness wired for {uc}"``, ``"UC-004 harness not yet wired for type:
-  ..."``). ``None`` when the scenario's steps aren't bound at all (the
-  question is unreached: a step that doesn't even parse never gets to the
-  harness-selection branch). ``scripts/audit/scenario_liveness_join.py``
-  does not trust this field — it replaces it with a
+  the MEASURED ``steps_executed`` fact rather than from any reason text: True
+  once a step body of the run began executing, False for a run that never got
+  one (every blanket xfail route aborts in fixture setup), and ``None`` only
+  while no observation has been folded in at all. A partly-dormant scenario
+  therefore reads True — ``StepDefinitionNotFoundError`` is raised at the FIRST
+  unmatched step, so the Background and any earlier steps have already run, and
+  ``steps_bound``/``unbound_steps`` are what report the dormancy.
+  ``scripts/audit/scenario_liveness_join.py`` does not trust this field — it replaces it with a
   proper data lookup against the declarative ``ENV_ROUTES`` registry (no
   reason-text matching), which is why this module's own ``harness_wired`` is
   documented as best-effort rather than promoted further here: any UC not yet
   a row in ``ENV_ROUTES`` should read as not-wired downstream, not as
-  whatever this reason-text heuristic happens to guess.
+  whatever a step body having run happens to imply.
 * ``ledgered`` — True when the observation's reason falls into neither of the
   above two buckets (an explicit, curated ``xfail`` marker for a known
   production/spec gap), or the scenario's e2e_rest nodeid appears in

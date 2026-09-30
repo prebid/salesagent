@@ -11,11 +11,31 @@
 # schemas legitimately declare. The ban has to fall on the CALL SITE, which is a structural
 # fact only a syntax rule can state. Same reasoning as the two identity rules beside this one.
 #
-# The boundary module is excluded by path, never by a suppression comment. Nothing else is:
-# pydantic's `model_dump(context=...)` serializer switch is a `context=` keyword too, and the
-# one use this tree had (a `model_dump_internal` that revealed internal-only fields) had no
-# caller and is deleted, so a serializer context under src/ is as much a finding as any other.
-# `context_id` is a different field and does not match: the regex is anchored.
+# The boundary module is excluded by path, never by a suppression comment. pydantic's
+# `model_dump(context=...)` serializer switch is a `context=` keyword too, and the one use this
+# tree had (a `model_dump_internal` that revealed internal-only fields) had no caller and is
+# deleted, so a serializer context under src/ is as much a finding as any other. `context_id`
+# is a different field and does not match: the regex is anchored.
+#
+# ONE OTHER EXCEPTION, and it is about a DIFFERENT context. What this rule protects is the
+# ENVELOPE's echo -- the `AdcpResponse.context` that `_served` stamps and that
+# `AdcpResponse.__setattr__` refuses to everyone else. AdCP also declares the same opaque
+# `ContextObject` on models NESTED INSIDE a response: `Package`, `PackageUpdate`,
+# `MediaBuyPackage`, `MediaBuy`, `Results`, `MediaBuyDeliveryWebhookResult` (225 models
+# declare the field in all; those are the ones that are array elements rather than envelopes).
+# Those are not `AdcpResponse` subclasses, so nothing refuses them, and the boundary cannot
+# reach them either -- it reads the request root and writes the response root, and mentions
+# collections nowhere.
+#
+# An element-level echo therefore has to be written where the element is built, and banning it
+# would leave the field permanently unwritable: buyer-supplied, spec-declared, and silently
+# dropped. AdCP 3.1.1 `media_buy_seller/inline_creatives_without_sync` grades exactly that on
+# `packages[0].context.buyer_ref`.
+#
+# The exception is by CONSTRUCTOR, not by file: a `context=` keyword is permitted only when it
+# is building one of the models that declares the field. That keeps the envelope ban total --
+# no response, no error, no serializer call gains a second writer -- while letting a package
+# carry back the blob its request package arrived with.
 id: context-is-written-by-the-boundary-alone
 language: Python
 severity: error
@@ -31,6 +51,18 @@ ignores:
   - "src/core/tools/_boundary.py"
 rule:
   kind: keyword_argument
-  has:
-    field: name
-    regex: "^context$"
+  all:
+    - has:
+        field: name
+        regex: "^context$"
+    # Not inside a constructor for a model that DECLARES `context: ContextObject`. The list is
+    # the nested (array-element) models this tree actually builds; extend it only for another
+    # model that declares the field, never to quiet a response or an error.
+    - not:
+        inside:
+          kind: argument_list
+          inside:
+            kind: call
+            has:
+              field: function
+              regex: "^(Package|PackageUpdate|MediaBuyPackage|MediaBuy|Results|MediaBuyDeliveryWebhookResult)$"

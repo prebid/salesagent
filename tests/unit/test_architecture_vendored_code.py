@@ -26,7 +26,12 @@ VENDOR_ROOT = REPO_ROOT / "src" / "vendor"
 #: naming the seam that owns that concept for the rest of the codebase. This list may
 #: SHRINK. Growing it means a second caller reached past the seam -- fix the caller.
 SANCTIONED_IMPORTERS = {
-    "src/core/schemas/_base.py",  # canonical_agent_url owns URL canonicalization
+    # The signing layer's canonicalization seam owns the vendored canonicalizer, and both
+    # sides of url-canonicalization.mdx step 2 hang off it: ``canonical_target_uri`` for a
+    # verifier comparing a signature base, ``producer_target_uri`` for a producer computing
+    # a comparison key. ``canonical_agent_url`` -- which used to be the entry here -- now
+    # reaches the package through that seam like everything else.
+    "src/core/signing/canonical.py",
 }
 
 

@@ -84,27 +84,49 @@ class MediaBuyPushRegistrationEnv(LocalOriginMixin, MediaBuyDualEnv):
     flow and the adapter completion path both use.
     """
 
-    def register_delivery_target(self) -> Any:
-        """Store ONE active ``PushNotificationConfig`` row pointing at the origin.
+    def register_delivery_target(self, count: int = 1) -> Any:
+        """Store *count* active ``PushNotificationConfig`` rows pointing at the origin.
 
-        ``_send_push_notifications`` sends once per active row per mapping, so
-        the row count is the delivery count — one row keeps
-        ``delivery_attempts == 1`` a statement about signing rather than about
-        fan-out. What the row HOLDS is not what gets delivered to: the config
-        the sender receives is rebuilt from the workflow step's stash. The row
-        stands in for the earlier ``create_media_buy`` that registered it, which
-        is the only way a real buyer's ``update_media_buy`` webhook is ever
-        delivered — update never upserts one itself.
+        The rows stand in for the earlier ``create_media_buy`` calls that
+        registered them, which is the only way a real buyer's
+        ``update_media_buy`` webhook is ever delivered — update never upserts one
+        itself. What a row HOLDS is not what gets delivered to: the config the
+        sender receives is rebuilt from the workflow step's stash.
+
+        THE ROW COUNT IS NOT THE DELIVERY COUNT, and this used to take no
+        argument BECAUSE it was: "``_send_push_notifications`` sends once per
+        active row per mapping, so the row count is the delivery count — one row
+        keeps ``delivery_attempts == 1`` a statement about signing rather than
+        about fan-out." That described a BUG and then arranged for it not to
+        show. The production loop it described read no part of the row it
+        iterated; it sent the step's own stashed registration once per row, so a
+        principal with three configs got three copies of one event (measured on
+        the storyboard tenant: the same payload to the same URL three times
+        inside 17ms, failing AdCP 3.1.1
+        ``webhook_emission::expect_no_duplicate_webhook_on_replay``). Seeding
+        exactly one row, with no way to seed two, is what kept every test here
+        green through it.
+
+        The loop is gone. Delivery is once per MAPPED OBJECT, and the stored rows
+        are not consulted on this path at all. ``count`` exists so a test can say
+        that out loud: seed several and the answer must still be one delivery.
+
+        Returns the single row at ``count=1`` (every existing caller's shape), and
+        the list otherwise.
         """
         from tests.factories import PushNotificationConfigFactory
 
         tenant, principal = self.setup_default_data()
-        return PushNotificationConfigFactory(
-            tenant=tenant,
-            principal=principal,
-            url=self.webhook_url,
-            is_active=True,
-        )
+        rows = [
+            PushNotificationConfigFactory(
+                tenant=tenant,
+                principal=principal,
+                url=self.webhook_url,
+                is_active=True,
+            )
+            for _ in range(count)
+        ]
+        return rows[0] if count == 1 else rows
 
     def push_step(self, tool_name: str) -> Any:
         """The workflow step ``tool_name`` created, read fresh from the database.

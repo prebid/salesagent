@@ -13,7 +13,7 @@ grade this path at all, which is why it needs its own assertion surface
 
 The carrier is in scope for the same MUST NOT list as the envelope:
 
-* AdCP 3.1.1 ``dist/docs/3.1.1/building/operating/transport-errors.mdx``
+* AdCP 3.1.1 ``v3.1.1:docs/building/operating/transport-errors.mdx``
   § Security Considerations / Seller Requirements (lines 659-670) opens with
   "Error responses flow through LLM context. Every field is client-facing" and
   forbids internal service names/hostnames/IP addresses and upstream API

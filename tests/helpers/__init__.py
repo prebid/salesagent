@@ -43,8 +43,10 @@ _LAZY_EXPORTS: dict[str, str] = {
     "locate_envelope_errors": "tests.helpers.envelope_assertions",
     "assert_delivered_unsigned": "tests.helpers.hmac_assertions",
     "assert_signature_verifies_over_wire_body": "tests.helpers.hmac_assertions",
+    "assert_construction_rejects": "tests.helpers.construction_assertions",
+    "check_constraint_sql": "tests.helpers.orm_constraints",
+    "check_constraint_values": "tests.helpers.orm_constraints",
     "concurrent_commit_in_write_window": "tests.helpers.race_window",
-    "operator_answer": "tests.helpers.race_window",
     "create_minimal_product": "tests.helpers.adcp_factories",
     "create_product_with_empty_pricing": "tests.helpers.adcp_factories",
     "create_test_brand_manifest": "tests.helpers.adcp_factories",
@@ -63,9 +65,10 @@ _LAZY_EXPORTS: dict[str, str] = {
     "load_ledger_nodeids": "tests.helpers.ledger",
     "LegacyCachedShape": "tests.helpers.idempotency_seeds",
     "make_active_cached_success": "tests.helpers.idempotency_seeds",
+    "operator_answer": "tests.helpers.race_window",
+    "quoted_values": "tests.helpers.orm_constraints",
     "rendered_log_calls": "tests.helpers.log_assertions",
     "seed_cached_success": "tests.helpers.idempotency_seeds",
-    "assert_construction_rejects": "tests.helpers.construction_assertions",
     "seed_media_buy": "tests.helpers.idempotency_seeds",
     "seed_principal": "tests.helpers.idempotency_seeds",
 }
@@ -87,7 +90,6 @@ def __dir__() -> list[str]:
 __all__ = [
     # Admin blueprint session helper
     "admin_auth_session",
-    # Auth helpers
     # Backoff schedule assertions
     "assert_backoff_schedule",
     # In-process request-construction assertions
@@ -103,14 +105,19 @@ __all__ = [
     "TIMESTAMP_HEADER",
     "assert_signature_verifies_over_wire_body",
     "assert_delivered_unsigned",
+    # ORM CHECK-constraint introspection (parity guards)
+    "check_constraint_sql",
+    "check_constraint_values",
+    "quoted_values",
+    # Concurrency harness
+    "concurrent_commit_in_write_window",
+    "operator_answer",
     # Known-failures ledger parsing
     "load_ledger_nodeids",
     # Log-call assertions
     "rendered_log_calls",
-    # Concurrency harness
-    "concurrent_commit_in_write_window",
-    "operator_answer",
     # Idempotency cache seeding
+    "LegacyCachedShape",
     "make_active_cached_success",
     "seed_cached_success",
     "seed_media_buy",

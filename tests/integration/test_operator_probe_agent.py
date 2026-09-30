@@ -176,6 +176,13 @@ class TestConfigForCarriesTheWholeRow:
             auth={"type": STORED_AUTH_TYPE, "credentials": STORED_CREDENTIALS},
             auth_header=STORED_AUTH_HEADER,
             timeout=STORED_TIMEOUT,
+            # NAMED, not left to its ``None`` default, and this is the field the
+            # exact-equality style above exists for: ``config_for`` reads tenant_id
+            # because it SELECTS THE SIGNING KEY, so a probe config built without it
+            # dials UNSIGNED while production's config for the same row dials signed
+            # (``signals_agent_registry.config_for`` states exactly this). Defaulting
+            # it here would assert the divergence away.
+            tenant_id=TENANT_ID,
         )
 
     def test_creative_config_for_leaves_auth_absent_when_the_row_stores_none(self, tenant):
@@ -293,7 +300,17 @@ class TestProbeResultSuccessShape:
 
 
 # ---------------------------------------------------------------------------
-# 4. ProbeResult failure shape -- both branches of probe_failure
+# 4. ProbeResult failure shape -- probe_failure's configuration and
+#    non-configuration branches.
+#
+#    ``probe_failure`` grew a THIRD branch with outbound request signing: an
+#    ``AdCPConfigurationError`` whose ``__cause__`` is an ``MCPSigningError``
+#    gets its own sentence, naming the key-ACTIVE and private-half levers
+#    instead of the URL/credentials/egress ones below. Nothing in this file
+#    grades it yet -- the signing branch reaches this seam only through
+#    ``call_operator_mcp_tool``'s ``except MCPSigningError`` chaining, which
+#    needs a tenant with an ACTIVE request_signing key whose material fails to
+#    load, and therefore a signing-key fixture.
 # ---------------------------------------------------------------------------
 
 _OPERATOR_LEVERS = (

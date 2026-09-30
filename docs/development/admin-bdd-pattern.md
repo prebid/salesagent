@@ -40,10 +40,11 @@ tests/harness/
 └── admin_tenant_scoping.py          # AdminTenantScopingEnv (AdminAccountEnv subclass)
 
 tests/helpers/
-└── admin_session.py                 # admin_auth_session() for the Flask client
+├── admin_session.py                   # admin_auth_session() for the Flask client
+└── admin_tenant_scoping_contract.py   # #2203 contract classes, written once
 
 tests/admin/
-└── test_tenant_scoped_routes_auth.py  # #2203 contract classes, run in-process
+└── test_tenant_scoped_routes_auth.py  # collects them in-process
 
 tests/e2e/
 └── test_admin_tenant_scoping_e2e.py   # the same classes over the live stack

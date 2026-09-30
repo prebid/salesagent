@@ -5,7 +5,7 @@
   "description": "Storyboard measurement sidecar: runs the real @adcp/sdk runStoryboard/adcp-CLI conformance runner against the salesagent e2e MCP endpoint. Not part of the application build; ephemeral scaffold committed for reproducibility.",
   "type": "commonjs",
   "dependencies": {
-    "@adcp/sdk": "14.0.0-rc.35",
+    "@adcp/sdk": "14.0.0-rc.42",
     "@a2a-js/sdk": "^1.0.1"
   },
   "scripts": {

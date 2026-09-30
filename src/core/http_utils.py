@@ -4,6 +4,26 @@ from collections.abc import Mapping
 from typing import Any
 
 
+def path_from_asgi_scope(scope: Mapping[str, Any]) -> str:
+    """The request path with any ASGI ``root_path`` mount prefix stripped.
+
+    A sub-mounted app sees ``path`` still carrying the mount prefix, so anything
+    matching a path against a route table or a surface allowlist has to strip it
+    first. Two copies of that rule is two chances to disagree about the empty-path
+    edge, so every routing predicate that must agree with the dispatcher calls
+    this one.
+
+    Deliberately the OPPOSITE of the path that feeds a signature base: ``@target-uri``
+    covers the bytes the client dialed, mount prefix and percent-encoding intact
+    (see ``src.core.signing.capture``). Do not collapse the two.
+    """
+    path = str(scope.get("path", ""))
+    root_path = str(scope.get("root_path") or "")
+    if root_path and path.startswith(root_path):
+        path = path[len(root_path) :] or "/"
+    return path
+
+
 def get_header_case_insensitive(headers: Mapping[str, Any], header_name: str) -> str | None:
     """Get a header value with case-insensitive lookup.
 

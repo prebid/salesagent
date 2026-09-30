@@ -6,7 +6,7 @@ its own text. Its companion, [Building a tool § Errors](../development/building
 states the rules for writing a raise site. Read this page when you add a code, decide
 which lane a failure belongs in, or change how an error reaches the wire.
 
-**Measured at:** `f0090632d`, 2026-09-15, against AdCP 3.1.1 (`adcp==6.6.0`).
+**Measured at:** `073987796`, 2026-09-18, against AdCP 3.1.1 (`adcp==6.6.0`).
 
 ## Contents
 
@@ -15,6 +15,7 @@ which lane a failure belongs in, or change how an error reaches the wire.
 - [An error names its code by its class](#an-error-names-its-code-by-its-class)
 - [Two lanes: a raised failure and an advisory](#two-lanes-a-raised-failure-and-an-advisory)
 - [Neither lane authors text](#neither-lane-authors-text)
+- [A code's group decides whether it also travels in a header](#a-codes-group-decides-whether-it-also-travels-in-a-header)
 - [Field-level rejections travel in issues](#field-level-rejections-travel-in-issues)
 - [retry_after is clamped once](#retry_after-is-clamped-once)
 - [Worked case: format discovery](#worked-case-format-discovery)
@@ -27,22 +28,31 @@ needs with it: the recovery classification, the suggestion, the message, and the
 status that signals the failure. Nothing else decides those four, and nothing decides
 them per raise site.
 
-The table holds 100 entries. `_load_published_codes` (`src/core/errors/codes.py:261`)
-loads the 92 codes AdCP 3.1.1 publishes at import, from the pinned bundle's
-`enums/error-code.json` through `importlib.resources`, so the table cannot drift from
-the file it came from. The other 8 are this platform's own: `AppErrorCode`
-(`src/core/errors/codes.py:118`) declares them with their `CodeEntry` inline, so
-declaring a code and declaring what it means are one act — a member with no entry is a
-`TypeError` at class creation.
+The table holds 128 entries, and they come from two sources.
+
+The SDK supplies the vocabulary for 120 of them. `_load_published_codes` reads the 92
+codes AdCP 3.1.1 publishes from the pinned bundle's `enums/error-code.json` through
+`importlib.resources`, so the table cannot drift from the file it came from. The other
+28 are the request-signature family, which `SignatureErrorCode` generates from
+`adcp.signing.errors.REQUEST_TO_WEBHOOK_CODE`.
+
+The remaining 8 belong to this platform. `AppErrorCode` declares them with their
+`CodeEntry` inline, so declaring a code and declaring what it means are one act — a
+member with no entry raises `TypeError` at class creation.
+
+The signature family lacks one thing the other published codes have: metadata. The
+pinned `enums/error-code.json` carries `enumMetadata` for the codes it publishes and
+publishes none of the 28, so `src/core/errors/signature_codes.py` transcribes their
+recovery, suggestion, and message from the specification's own tables. That transcription
+is a fallback inside the published loop rather than a pass written over the top, so a
+future pin that publishes the family answers for it and the transcription stops being
+consulted.
 
 `recovery`, `suggestion` and `message` come from the pinned file and nowhere else. A
 message resolves from the first of two sources that has one: an authored override for
 the nine published codes whose pinned text is implementer-facing
 (`_AUTHORED_SPEC_MESSAGES` in `src/core/errors/codes.py`), then the pinned
-`enumDescriptions` with the trailing `Recovery: …` clause stripped. The SDK's
-`STANDARD_ERROR_CODES` used to sit between them; it shadowed published text for 37 of
-the 92 codes and covered none of the other 55, so it is gone and the SDK is a
-cross-check here as it is everywhere else.
+`enumDescriptions` with the trailing `Recovery: …` clause stripped. The SDK is a cross-check here, as it is everywhere else.
 
 `CodeEntry` refuses an empty suggestion or message, and a status outside 100..599, at
 construction (`src/core/errors/codes.py:108`). That check runs at the one place that
@@ -72,30 +82,49 @@ vocabulary in this codebase for that axis.
 
 ## An error names its code by its class
 
-`AdCPSalesAgentError` (`src/core/exceptions.py:153`) is generic in its details class, so
-each of the 48 concrete subclasses declares its exact detail type in its type parameter
+`AdCPSalesAgentError` (`src/core/exceptions.py:165`) is generic in its details class, so
+each of the 77 concrete subclasses declares its exact detail type in its type parameter
 and mypy rejects both a dict and a foreign detail class at every raise site.
 
-An error names its code by its class or explicitly, never both and never neither.
-`__init_subclass__` (`src/core/exceptions.py:246`) refuses at class creation a subclass
-whose `_code` the table does not classify. `__new__` (`src/core/exceptions.py:262`)
-refuses a bare base construction and refuses an `error_code=` on a class that already
-declares one.
+An error names its code by its class. There is no second way and no exception:
+`__init_subclass__` (`src/core/exceptions.py:258`) refuses at class creation a subclass
+whose `_code` the table does not classify, and `__new__` (`src/core/exceptions.py:274`)
+refuses to construct a class that declares none — which is what makes
+`AdCPSalesAgentError` and `AdCPRequestSignatureError` abstract.
 
-The constructor (`src/core/exceptions.py:288`) has no `message` parameter. Its
-keyword-only parameters are `error_code`, `details`, `issues`, `field`, `retry_after`,
-and `internal_detail`. `message`, `recovery`, `suggestion`, and `status_code` are
-read-only properties that resolve from `CODE_TABLE` at every read
-(`src/core/exceptions.py:347`). No instance can carry a value that disagrees with the
+That rule used to read "by its class **or explicitly**, never both and never neither",
+and `__new__` carried a second refusal for an `error_code=` on a class that already
+declared one. Both halves existed for a single caller. `AdCPRequestSignatureError` was
+the only class in the tree declaring no `_code`, so the RFC 9421 verifier was the only
+raise site naming its own — which made the invariant a convention with one exception in
+it rather than a property nothing can violate. It is now the abstract parent of the 28
+request-signature classes (`src/core/exceptions.py:513` onward), each declaring its code
+like every other class here, and `error_code` is off the constructor entirely.
+
+Those 28 are **written out**, one class statement each, never generated from
+`SignatureErrorCode`. The enum is derived from the SDK's taxonomy, so generating classes
+from it would let an SDK upgrade rename this seller's public error classes — silently,
+with no source line to change and no diff to review. Typed out, the same upstream change
+is an `AttributeError` at import on the line that names the member.
+
+The constructor (`src/core/exceptions.py:318`) has no `message` parameter and no
+`error_code` parameter. Its keyword-only parameters are `details`, `issues`, `field`,
+`retry_after`, and `internal_detail`. `message`, `recovery`, `suggestion`, and
+`status_code` are read-only properties that resolve from `CODE_TABLE` at every read
+(`src/core/exceptions.py:376`). No instance can carry a value that disagrees with the
 table by any route, assignment included, and `__str__` returns the property.
 
-`adcp_error_for` (`src/core/exceptions.py:1180`) is the one normalizer from an untyped
+`adcp_error_for` (`src/core/exceptions.py:1650`) is the one normalizer from an untyped
 exception to a typed one. Every branch carries a type mapping and no text. A typed error
-passes through unchanged. A pydantic `ValidationError` becomes `AdCPInvalidRequestError`
-with a derived `field` and `issues[]`, and the function tests for it before `ValueError`,
-which it subclasses. A plain `ValueError` becomes `AdCPValidationError`, a
-`PermissionError` becomes `AdCPAuthorizationError`, and anything else names
-`INTERNAL_ERROR` on the base.
+passes through unchanged. The SDK's `SignatureVerificationError` becomes the
+request-signature class its `code` names, through the written-out
+`_SIGNATURE_ERROR_BY_CODE` table (`src/core/exceptions.py:889`) — the one seam where a
+code arrives as a string, because checks 1-13 run inside `adcp.signing.verifier` and it
+reports which failed the only way it can. A pydantic `ValidationError` becomes
+`AdCPInvalidRequestError` with a derived `field` and `issues[]`, and the function tests
+for it before `ValueError`, which it subclasses. A plain `ValueError` becomes
+`AdCPValidationError`, a `PermissionError` becomes `AdCPAuthorizationError`, and anything
+else becomes `AdCPInternalError`.
 
 ## Two lanes: a raised failure and an advisory
 
@@ -108,7 +137,7 @@ There are exactly two ways an error reaches a buyer, and the response type says 
 
 An implementation raises an `AdCPSalesAgentError` subclass and returns only on success.
 The boundary records the fault, builds the response once, and raises `AdcpFailure`
-(`src/core/exceptions.py:1124`) — the one exception a transport catches. Each transport
+(`src/core/exceptions.py:1594`) — the one exception a transport catches. Each transport
 adds only its own failure marker: an HTTP status, an MCP `ToolError`, or a failed A2A
 task state. All three serialize the body with the same `to_wire` the success path uses.
 
@@ -178,10 +207,53 @@ every spelling, over `src/`, `scripts/`, and `tests/`.
 
 A details block is a declared class, never a dict. `ErrorDetails.to_wire`
 (`src/core/errors/details.py:85`) is the one projection and `_details_to_wire`
-(`src/core/exceptions.py:135`) its one call site. `ErrorProblem`
+(`src/core/exceptions.py:147`) its one call site. `ErrorProblem`
 (`src/core/errors/details.py:101`) carries a list of problems as structured facts —
 `code`, `subject_type`, `subject_id`, `field`, `rejected_value`, `accepted_values` — and
 declares no free-text field, so there is no slot for a sentence to move into.
+
+## A code's group decides whether it also travels in a header
+
+Most codes reach the buyer one way: inside the response envelope. The 28
+request-signature codes reach the buyer twice. AdCP requires a refused signature to
+name its code in a `WWW-Authenticate: Signature error="<code>"` header beside the
+envelope that already carries it.
+
+`CodeEntry.group` records which family a code belongs to. `CodeGroup` has two members:
+
+- `GENERAL`, the default, for a code that needs no special transport. The 92 published
+  codes and the 8 platform codes declare nothing and take it.
+- `SIGNATURE`, which the 28 request-signature rows declare.
+
+The fact lives on the code rather than on the reader that needs it.
+`AuthChallengeResponder` reads an AdCP code off a finished response body, by which point
+the exception class that knew the code's family is gone. A set of code strings held by
+that renderer would work and would be one line, and it would also be a second vocabulary
+that drifts from this table. A field named for what the code **is**, rather than for what
+one reader does with it, keeps the dependency pointing at the table.
+
+The wire gives no way to mark the family. `core/error.json` types `error.code` as an open
+string, and `enums/error-code.json` does not publish the signature codes at all, so the
+grouping has to be re-added on this side.
+
+`AuthChallengeResponder` (`src/core/auth_middleware.py`) is the one renderer. It buffers a
+JSON response, reads the AdCP code out of the finished body, and when
+`CODE_TABLE[code].group` is `SIGNATURE` it sets the status to `401` and attaches the
+challenge. A bearer refusal takes the same path and answers `Bearer` or
+`Bearer error="invalid_token"`.
+
+Three properties follow from putting this in one place:
+
+1. **Every transport answers the same way.** MCP, A2A, and REST each wrote their own
+   `401` before, and the three disagreed.
+2. **A second renderer cannot win.** The responder strips any inbound
+   `WWW-Authenticate` header unconditionally, then re-derives it from the body. Anything
+   further in that writes its own challenge has it overwritten.
+3. **The renderer knows nothing about tools.** Which tool a request called, and whether
+   that tool requires a caller, is decided at the boundary where the name is available.
+
+For how a signature refusal reaches the responder, see
+[Request signature architecture](signature-architecture.md).
 
 ## Field-level rejections travel in issues
 
@@ -205,12 +277,12 @@ The pin asks for the same path twice, in two spellings, and one class owns both.
 and the JSONPath-lite form for the top-level `field`, and `pointer_to_field`
 (`src/core/errors/issues.py:456`) is the translation the pin makes a MUST. The exception
 derives `field` from `issues[0].pointer` in `__init__` when the caller passed none
-(`src/core/exceptions.py:323`), so every reader of the error sees one value.
+(`src/core/exceptions.py:353`), so every reader of the error sees one value.
 
 ## retry_after is clamped once
 
 The pin bounds `retry_after` at 1..3600 and requires a seller to stay inside it.
-`RETRY_AFTER_MAX` and `clamp_retry_after` (`src/core/exceptions.py:108`, `:111`) are the
+`RETRY_AFTER_MAX` and `clamp_retry_after` (`src/core/exceptions.py:115`, `:118`) are the
 one floor and ceiling, shared by the idempotency policy's rejection branches, the egress
 attempt recorder, and the outbound error mapping. It is a spec constant, not an
 operational knob, so it is deliberately not settings-tunable.
@@ -252,7 +324,7 @@ merely failed during seller-side aggregation and the entry stays `AGENT_UNREACHA
 with `field="formats"`, naming the response section it degrades. AdCP 3.1.1 is explicit
 about the first half — "Requested `format_id` doesn't exist, or referenced creative
 agent is unavailable / not accessible. `error.field` MUST identify which typed parameter
-failed to resolve" (`dist/docs/3.1.1/creative/task-reference/list_creative_formats.mdx:654`).
+failed to resolve" (`v3.1.1:docs/creative/task-reference/list_creative_formats.mdx:654`).
 
 The split is buyer-visible in `recovery`, which is the point: `AGENT_UNREACHABLE` is
 `transient`, so retrying the same request may work, and `REFERENCE_NOT_FOUND` is
@@ -277,8 +349,8 @@ The obligations above are about the buyer-facing tool, not this helper.
 
 | What it holds | Mechanism |
 |---|---|
-| A class cannot name a code the table does not classify | `__init_subclass__` at class creation (`src/core/exceptions.py:246`) |
-| An error cannot be built with no code, or two | `__new__` (`src/core/exceptions.py:262`) |
+| A class cannot name a code the table does not classify | `__init_subclass__` at class creation (`src/core/exceptions.py:258`) |
+| An error cannot be built by a class that declares no code | `__new__` (`src/core/exceptions.py:274`) |
 | A code table entry cannot be blank or carry a non-status | `CodeEntry.__post_init__` (`src/core/errors/codes.py:108`) |
 | Every pydantic error type is classified, or explicitly omitted | import-time totality check (`src/core/errors/issues.py:234`) |
 | A raise site cannot author message, recovery, or suggestion | no such parameter, on either lane; properties and a `mode="before"` validator |
@@ -287,30 +359,3 @@ The obligations above are about the buyer-facing tool, not this helper.
 | Recovery values stay inside the pinned set | `tests/unit/test_architecture_error_recovery_enum_conformance.py` |
 | The two authentication errors are the resolver's alone | `ruff-boundary.toml` TID251 |
 | A failure body is a valid response envelope | `AdcpErrorResponse` is a declared response class; the pin requires `status` and `of` sets it |
-
-## What this replaced
-
-The lanes used to disagree with each other and with the pin.
-
-The advisory lane was hand-built text: `wire_advisory()` constructed an entry and
-`normalize_advisory_errors()` repaired it afterwards, filling `recovery` and `suggestion`
-only where a caller had left them unset and never touching `message` at all.
-
-The raised lane took the buyer's text as arguments. Its constructor accepted `message`,
-`suggestion`, and `status_code`, and per-class `_default_message` / `_default_recovery` /
-`_default_suggestion` knobs supplied the rest, so a class could contradict the pinned
-classification for its own code. The HTTP status came from a per-class
-`_default_status_code`, writable by inheritance, so a class that re-coded itself kept its
-parent's status — 26 such declarations, per the note at `src/core/errors/codes.py:345`.
-`details` was typed `dict[str, Any]`, so each raise site assembled the facts in whatever
-shape it chose.
-
-On the way out, `ERROR_CODE_MAPPING`, `translate_error_code()`, and
-`to_wire_error_code()` then rewrote the code against a closed `WIRE_STANDARD_CODES` set,
-which an open vocabulary makes unnecessary. Each transport hand-assembled its own refusal
-dict, and none of those dicts could carry `status` or `context`, so every error body this
-seller emitted was invalid against every pinned response schema.
-
-None of those mechanisms exists; the names survive only in comments recording their
-removal (`src/core/exceptions.py:50-99`). The code a raise site declares is the code the
-buyer reads, and the four fields around it are table lookups.

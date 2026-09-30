@@ -121,6 +121,34 @@ def _module_constants(tree: ast.Module) -> dict[str, str]:
     return consts
 
 
+def _imported_constants(tree: ast.Module, by_module: dict[str, dict[str, str]]) -> dict[str, str]:
+    """Constants this module IMPORTS from a sibling, resolved through the exporter.
+
+    ``_module_constants`` alone is per-file, so a key spelled as a constant that is
+    DEFINED in one step module and USED in another resolved on the writing side and not
+    on the reading side -- which is the one asymmetry that makes a live key look dead.
+    That is exactly how it failed: ``_dispatch.py`` defines
+    ``CREDENTIAL_REGISTRATIONS = "credential_registrations"`` and writes with it, while
+    ``signing_enforcement.py`` imports the name and reads with it, so the write was seen,
+    the read was not, and the key was reported as written-by-a-step-and-read-by-nothing.
+
+    Resolution follows the IMPORT, not a global union of every constant name in the
+    corpus: two modules are free to bind the same name to different strings, and a union
+    would silently pick one of them.
+    """
+    resolved: dict[str, str] = {}
+    for stmt in ast.walk(tree):
+        if not isinstance(stmt, ast.ImportFrom) or not stmt.module or stmt.level:
+            continue
+        exporter = by_module.get(stmt.module.replace(".", "/") + ".py")
+        if not exporter:
+            continue
+        for alias in stmt.names:
+            if alias.name in exporter:
+                resolved[alias.asname or alias.name] = exporter[alias.name]
+    return resolved
+
+
 def _joined_prefix(node: ast.JoinedStr) -> str | None:
     """The literal head of an f-string, e.g. ``f"db_principal_{x}"`` -> ``db_principal_``."""
     if node.values and isinstance(node.values[0], ast.Constant) and isinstance(node.values[0].value, str):
@@ -359,9 +387,13 @@ def _scan() -> _Scan:
             for child in ast.iter_child_nodes(n):
                 parents[id(child)] = n
 
+    by_module = {rel: _module_constants(tree) for rel, tree in trees.items()}
     scan = _Scan()
     for rel, tree in trees.items():
-        shared = _ScanContext(sinks, helpers, _module_constants(tree), parents)
+        # Own constants win over imported ones, which is what Python does: a module that
+        # rebinds an imported name uses its own value from that point on.
+        constants = {**_imported_constants(tree, by_module), **by_module[rel]}
+        shared = _ScanContext(sinks, helpers, constants, parents)
         for n in ast.walk(tree):
             if not isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 continue

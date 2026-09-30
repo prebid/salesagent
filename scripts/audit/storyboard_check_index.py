@@ -531,12 +531,22 @@ def build(repo: Path, adcp: Path) -> dict[str, Any]:
             "graduation_candidates": sum(1 for r in graded if r.graduation_candidate),
             "with_issue": sum(1 for r in graded if r.issues),
             "neither": len(gaps),
-            "failing": sum(1 for r in graded if r.measured_failing_protocols),
-            # The two halves the single "no ledger entry" number used to hide. They
-            # partition the graded set with `failing` and `ungradable`.
+            # ALL FOUR READ `r.measured`, which is `measured_status()`'s verdict and the
+            # one place the precedence lives. Two of them used to read the raw INPUTS
+            # instead — `measured_failing_protocols` and `requires_controller` — and a
+            # check that is both a ledgered failure AND controller-gated was therefore
+            # counted twice. The precedence says such a check is FAILING (a failure
+            # proves the run reached the assertions, so `ungradable` would discard a
+            # real measurement), so the double count also contradicted the documented
+            # order. Latent until the ledger first admitted a media_buy_seller failure
+            # on a controller-gated step, at which point the partition assertion in
+            # tests/unit/test_architecture_storyboard_measured_status.py caught it at 7
+            # over. Reading the verdict makes the partition true by construction rather
+            # than by three predicates happening to stay disjoint.
+            "failing": sum(1 for r in graded if r.measured == MEASURED_FAILING),
             "not_failing": sum(1 for r in graded if r.measured == MEASURED_NOT_FAILING),
             "not_measured": sum(1 for r in graded if r.measured == MEASURED_NOT_MEASURED),
-            "ungradable": sum(1 for r in graded if r.requires_controller),
+            "ungradable": sum(1 for r in graded if r.measured == MEASURED_UNGRADABLE),
             "wireable": sum(1 for r in graded if r.e2e_wireable == "wireable"),
             "conditional": sum(1 for r in graded if r.e2e_wireable == "conditional"),
             "not_wireable": sum(1 for r in graded if r.e2e_wireable == "not_wireable"),

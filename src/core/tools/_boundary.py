@@ -65,6 +65,8 @@ from src.core.idempotency_canonical import canonical_request_hash
 from src.core.idempotency_replay import cache_success, lookup_cached_replay, maybe_evict_expired
 from src.core.resolved_identity import PublicIdentity, TransportProtocol
 from src.core.schemas._base import AdcpErrorResponse, AdcpResponse, BuyerRequest
+from src.core.signing.capture import HttpExchange, SignatureSubject
+from src.core.signing.webhook_credentials import log_arriving_webhook_credentials, registers_webhook_credentials
 from src.core.tool_error_logging import record_boundary_error
 from src.core.version_negotiation import SERVED_ADCP_VERSION, negotiate_adcp_version
 
@@ -239,6 +241,7 @@ async def serve(
     raw: Any,
     headers: Mapping[str, str],
     protocol: TransportProtocol,
+    exchange: HttpExchange | None = None,
 ) -> AdcpResponse:
     """Answer one buyer payload. THE transport entry.
 
@@ -246,8 +249,13 @@ async def serve(
     same way -- as ``AdcpFailure`` carrying the response that says so -- so a transport wraps
     ONE call in ONE ``try``. ``invoke_tool`` is the entry for a caller that already holds a
     validated request.
+
+    ``exchange`` is the HTTP message as it arrived, recorded by ``SignedExchangeCapture``
+    where its raw bytes and raw path still existed, and handed over exactly as ``headers``
+    are: sourced from the transport, never re-derived here. A transport that is not serving
+    an HTTP request passes none, which is a request presenting no signature.
     """
-    return await invoke_tool(tool_name, validated_request(tool_name, raw, protocol), headers, protocol)
+    return await invoke_tool(tool_name, validated_request(tool_name, raw, protocol), headers, protocol, exchange)
 
 
 async def invoke_tool(
@@ -255,6 +263,7 @@ async def invoke_tool(
     req: BuyerRequest,
     headers: Mapping[str, str],
     protocol: TransportProtocol,
+    exchange: HttpExchange | None = None,
 ) -> AdcpResponse:
     """Run the registry's tool named ``tool_name``, for the caller the request *headers* present.
 
@@ -266,6 +275,13 @@ async def invoke_tool(
     reader, and it is handed the registry row's declaration of whether the credential must
     verify, so no transport decides it. ``protocol`` labels the observability record a
     failure writes and decides nothing; the identity does not carry it.
+
+    The same is true of ``exchange``, the captured HTTP message an RFC 9421 signature covers.
+    Nothing here reads it either. What this function DOES add is the two things only it knows
+    and the capture cannot: the registry key this request dispatched on, and whether the
+    VALIDATED request registers webhook credentials (security.mdx @ v3.1.1 :1462-1465). Both
+    go into one :class:`~src.core.signing.verifier.SignatureSubject` beside the headers, and
+    the resolver -- the one reader of a credential, signature included -- decides.
     """
     from src.core.resolved_identity import _resolve_identity
     from src.core.tools.registry import TOOLS
@@ -313,6 +329,16 @@ async def invoke_tool(
     # tenant-dependent half of the row's policy (``requires_credential(tenant)``) is handed
     # over for the resolver to ask once it holds the tenant.
     account_ref = req.get_account()
+
+    # The escalation's input, and the seller's LOG duty on the same fact. security.mdx @
+    # v3.1.1 :1464 is per REQUEST and unqualified by posture, so it is discharged HERE --
+    # the one place a request has arrived and been read -- rather than inside the verifier,
+    # which runs only after a bearer resolved and only while the kill switch is on. See
+    # ``log_arriving_webhook_credentials``.
+    registers_credentials = registers_webhook_credentials(req)
+    if registers_credentials:
+        log_arriving_webhook_credentials(tool_name)
+
     try:
         identity = await asyncio.to_thread(
             _resolve_identity,
@@ -320,6 +346,11 @@ async def invoke_tool(
             require_valid_token=spec.requires_credential() or account_ref is not None,
             account_ref=account_ref,
             credential_required_for=spec.requires_credential,
+            signature_subject=SignatureSubject(
+                operation=tool_name,
+                registers_credentials=registers_credentials,
+                exchange=exchange,
+            ),
         )
     except Exception as exc:
         _failed(protocol, tool_name, exc, echo)

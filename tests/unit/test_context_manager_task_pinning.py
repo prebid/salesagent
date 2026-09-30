@@ -60,7 +60,7 @@ def _drive(send_notification_side):
 
     cm = context_manager.ContextManager()
     with patch.object(context_manager, "get_protocol_webhook_service", return_value=fake_service):
-        cm._send_push_notifications(make_push_step(), "completed", session)
+        cm._send_push_notifications(make_push_step(), "completed")
 
 
 @pytest.mark.asyncio

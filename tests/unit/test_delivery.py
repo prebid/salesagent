@@ -1533,6 +1533,24 @@ class TestDeliveryWebhookHappyPath:
         assert "next_expected_at" in payload
         assert payload["notification_type"] == "scheduled"
 
+    # UC-004-WH-07 (HMAC-SHA256 signature headers) is MOVED, not retired. It stood here
+    # and bound a real socket through CircuitBreakerEnv, which a unit test cannot
+    # legitimately do: the only address it can bind is loopback, production's egress gate
+    # refuses loopback, and so the case ran only because ADCP_OUTBOUND_ALLOW_PRIVATE was
+    # open. docker-compose.e2e.yml:988 records that hatch as "considered and rejected" for
+    # precisely this purpose — it "opens 127.0.0.1, host.docker.internal and all of RFC1918
+    # for whatever sets it". Its own docstring said the quiet part: the assertion is only
+    # meaningful "running against an origin the real policy admits", and in unit there is
+    # no such origin.
+    #
+    # The obligation is graded where an origin IS admitted on its own terms — the e2e
+    # network is allocated outside the private ranges for exactly that
+    # (scripts/dev/alloc-e2e-subnet.sh):
+    #
+    #   tests/bdd/features/BR-UC-004-deliver-media-buy-metrics.feature:284
+    #     @T-UC-004-webhook-hmac — "HMAC-SHA256 signed webhook payload", across transports,
+    #     asserting the X-ADCP-Signature header and the timestamp.payload concatenation.
+
     # UC-004-WH-09 (webhook excludes aggregated_totals) is RETIRED, not moved. It asserted
     # `"aggregated_totals" not in payload` against a dict this function builds key by key
     # from its own parameters -- a dict that has never had the key and structurally cannot
@@ -1541,7 +1559,9 @@ class TestDeliveryWebhookHappyPath:
     # -result.json sets `additionalProperties: true` and does not declare the field, so an
     # emitted `aggregated_totals` is schema-VALID. What replaced it is the shape assertion
     # one level up -- the POST body is the mcp-webhook-payload envelope, graded by the
-    # UC-004 webhook-compliance scenarios against the pinned schema.
+    # UC-004 webhook-compliance scenarios against the pinned schema. (The other side's copy
+    # also read `call_args[1]["delivery_payload"]`, a kwarg `_send_webhook_enhanced` no
+    # longer takes -- it is `result=` now, as WH-06 above reads.)
 
     def test_webhook_filters_requested_metrics(self):
         """UC-004-WH-10: webhook totals only include metrics actually provided.

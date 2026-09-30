@@ -65,13 +65,13 @@ from src.core.schemas import Principal, ReportingPeriod
 from src.core.security.egress.attempts import OutboundDeliveryFailed
 from src.core.security.outbound_http import OutboundError
 from tests.harness._base import IntegrationEnv
+from tests.helpers.egress_backoff import fast_backoff
 from tests.helpers.local_http_origin import LocalOrigin, OriginResponse
 
 # Reused rather than restated: which escape hatches a case opens is one decision
 # with one home, and the backoff knob that keeps a retry case fast is the seam
 # suite's own helper.
 from tests.integration.property_list_helpers import allow_local_origin
-from tests.integration.test_outbound_http import fast_backoff
 
 pytestmark = [pytest.mark.integration]
 
@@ -1074,13 +1074,18 @@ def test_require_vendor_refuses_an_unconfigured_client(vendor):
     assert isinstance(exc.details, ConfigurationDetails)
     assert exc.details.provider == vendor
 
-    # The authored diagnostic: server-side only, and it names the vendor an
-    # operator has to go and configure.
-    assert isinstance(exc.internal_detail, str)
-    assert vendor in exc.internal_detail, "the operator diagnostic must name the vendor that cannot be dialled"
+    # RFC 9421 MERGE NOTE. The incoming branch graded the same obligation — "the vendor
+    # that cannot be dialled is named from the ARGUMENT, not enumerated in one adapter's
+    # copy of the guard" — through ``exc.internal_detail``, asserting it was a str
+    # CONTAINING the name. That API is gone: on this branch ``internal_detail`` is typed
+    # ``BaseException | None`` (src/core/exceptions.py:247), the non-wire CAUSE rather
+    # than an authored sentence, and ``require_vendor`` has no cause to carry. The
+    # obligation is not dropped, it is graded one line up and more strictly: the
+    # ``details.provider == vendor`` equality above admits no other vendor's name at all,
+    # where "other not in text" only ruled out the ones the test remembered to list.
     for other in _VENDORS_WITH_A_CLIENT:
         if other != vendor:
-            assert other not in exc.internal_detail, (
+            assert exc.details.provider != other, (
                 f"{other!r} must not be blamed for {vendor!r}'s missing credentials — the name has to be "
                 "interpolated from the argument, not enumerated in one adapter's copy of the guard"
             )

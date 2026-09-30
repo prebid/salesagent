@@ -54,18 +54,18 @@ import pytest
 from src.core.database.repositories.uow import PushNotificationConfigUoW
 from tests.factories import PrincipalFactory, TenantFactory
 from tests.harness._base import IntegrationEnv
+from tests.helpers.egress_backoff import set_flags
 
 # The registration form, the flash reader and the admitted URL are already
 # spelled once, by the module that owns this route's ingest cases. Imported
 # rather than re-typed: two copies of "what a browser posts to the webhook
 # registration form" drift the moment the form changes, and the non-canonical
 # ``hmac_sha256`` spelling the gate refuses is exactly what crept in last time.
-from tests.integration.test_admin_ingest_url_policy import (
+from tests.integration._egress_ingest_helpers import (
     ADMITTED_URL,
     flashes,
     post_register_hmac_webhook,
 )
-from tests.integration.test_outbound_http import set_flags
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 

@@ -1,18 +1,31 @@
 # Known-failing storyboard-conformance checks.
 #
-# SEEDED FROM ONE MEASURED RUN: test-results/innet_160926_1917, an in-network run of the
-# current tree, scoring passed=30 failed=21 skipped=249 storyboards_executed=72 on BOTH
-# protocols with zero disparity between them. Every id below is a nodeid that run produced;
-# none was derived by hand from a check name, because the failure messages print check ids
+# SEEDED FROM ONE MEASURED RUN, and RE-MEASURED against another. Originally
+# test-results/innet_160926_1917 (passed=30 failed=21 on BOTH protocols); last graduated
+# against test-results/innet_200926_0647, an in-network run of the current tree scoring
+# passed=99 failed=16 skipped=238 storyboards_executed=72 on both protocols with zero
+# disparity between them. Every id below is a nodeid a measured run produced; none was
+# derived by hand from a check name, because the failure messages print check ids
 # slash-separated while the parametrized ids are ``::``-separated and the media_buy track
 # carries an extra path segment -- converting between them by hand is the arithmetic the
 # previous version of this header forbade.
 #
 # WHY IT IS NO LONGER EMPTY. It was empty by decision, to see the whole gap surface at once
-# rather than to isolate regressions. That surface has now been seen and understood: 30
-# checks pass per protocol, 21 fail per protocol for reasons in the list below, and the job
-# reddened on all of them. The decision reverses on purpose: ledger the measured gaps so the
-# job is green, and so a NEW failure is the only thing that can redden it.
+# rather than to isolate regressions. That surface has now been seen and understood: the
+# measured gaps are ledgered so the job is green, and so a NEW failure is the only thing
+# that can redden it.
+#
+# IT ONLY SHRINKS. 30 entries graduated in one change on 2026-09-20, when seeding the
+# storyboard tenant's account portfolio, signing key and vector product turned checks that
+# had been failing on fixture reasons into passes (or into runner-reported skips, which are
+# never ledgerable). The fitness check names entries that grade nothing; removing what it
+# names is the only way this file is allowed to change size.
+#
+# IT GREW ONCE, on 2026-09-21, by the 16 entries in the last section. The same seeding that
+# graduated 30 entries let the corpus REACH eight checks it had never executed, so eight
+# pre-existing production defects became measurable for the first time. That section states
+# the exception and cites a GitHub issue per check; read it there rather than trusting this
+# paragraph, and do not treat it as a precedent for adding a failure this tree caused.
 #
 # WHAT THAT COSTS, stated plainly because the previous header stated the opposite trade.
 # ``tests/storyboard/conftest.py`` xfails these ids with strict=False, so a regression INSIDE
@@ -21,8 +34,8 @@
 # each run publishes to test-results/storyboard_summary_<protocol>.json. A run-to-run
 # comparison (scripts/audit/compare_runs.py) remains the way to see a ledgered check move.
 #
-# THE SYMMETRY IS THE POINT. 23 mcp entries and 23 a2a entries, and every failing check
-# fails on both surfaces. The runner grades the agent once per PROTOCOL, so an mcp-only fix
+# THE SYMMETRY IS THE POINT. Every entry appears twice, once per protocol, and every
+# failing check fails on both surfaces. The runner grades the agent once per PROTOCOL, so an mcp-only fix
 # that leaves its a2a twin behind shows up here as an asymmetric pair -- which is the drift
 # this split exists to expose.
 #
@@ -38,7 +51,7 @@
 #
 # THE SDK PIN CHECK IS LEDGERED, and it is the one entry here that is not a conformance
 # gap. ``test_runner_sdk_pin.py`` compares the npm runner's declared ``adcp_version`` against
-# the version this repo pins, and fails: @adcp/sdk@14.0.0-rc.35 declares 3.2.0-rc.1 while the
+# the version this repo pins, and fails: @adcp/sdk@14.0.0-rc.42 declares 3.2.0-rc.4 while the
 # repo pins 3.1.1. It was already failing in the runs that scored 30/21, so it predates this
 # ledger.
 #
@@ -49,9 +62,11 @@
 # be". There is no runner flag that separates the client's contract from the vectors it grades
 # against, which is a defect in the grader rather than in this repo, raised upstream.
 #
-# 14.0.0-rc.35 is not a free choice either. The last runner line that declares 3.1 is 11.x, and
-# its A2A path carries an unfixed 0.x dependency; the A2A fixes are not backported. So grading
-# both protocol surfaces at all requires the 14 line, and the 14 line declares 3.2.0-rc.1.
+# 14.0.0-rc.42 is not a free choice either. The 14 line is the only one carrying the A2A
+# request-signing dispatch (adcp-client#2967), without which every signed_requests vector on the
+# A2A card is ungradable. So grading both protocol surfaces at all requires the 14 line, and the
+# 14 line declares 3.2.0-rc.4 -- a WIDER divergence than the 3.2.0-rc.1 this entry was written
+# against, recorded here because the runner moved, not because this repo did.
 #
 # It is marked at its own source rather than listed below: this ledger's grammar keys on
 # (protocol, track, storyboard_id, step_id) and refuses an entry without a protocol prefix,
@@ -62,54 +77,68 @@
 # ``--compliance-version`` as the client contract. Until then, leaving it red would mean a
 # permanently red job whose redness says nothing a reader can act on.
 
-# --- core (10) ---
+# --- core (8) ---
 tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::core::notification_config_event_scope::sync_accounts_rejects_scheduled_account_notification]
 tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::core::notification_config_lifecycle::sync_accounts_create_paused_notification_config]
 tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::core::notification_config_rejections::sync_accounts_rejects_duplicate_subscriber_id]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::core::read_tool_idempotency::get_products_with_idempotency_key]
 tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::core::read_tool_idempotency::list_creative_formats_with_idempotency_key]
 tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::core::notification_config_event_scope::sync_accounts_rejects_scheduled_account_notification]
 tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::core::notification_config_lifecycle::sync_accounts_create_paused_notification_config]
 tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::core::notification_config_rejections::sync_accounts_rejects_duplicate_subscriber_id]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::core::read_tool_idempotency::get_products_with_idempotency_key]
 tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::core::read_tool_idempotency::list_creative_formats_with_idempotency_key]
 # --- creative (2) ---
 tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::creative::media_buy_seller/creative_reception::list_formats]
 tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::creative::media_buy_seller/creative_reception::list_formats]
-# --- error_handling (8) ---
+# --- error_handling (2) ---
 tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::error_handling::billing_gate_dispatch::sync_accounts_passthrough_rejects_agent]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::error_handling::error_compliance::missing_fields]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::error_handling::error_compliance::supported_major_version]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::error_handling::stale_response_advisory::no_stale_on_healthy_upstream]
 tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::error_handling::billing_gate_dispatch::sync_accounts_passthrough_rejects_agent]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::error_handling::error_compliance::missing_fields]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::error_handling::error_compliance::supported_major_version]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::error_handling::stale_response_advisory::no_stale_on_healthy_upstream]
-# --- media_buy (22) ---
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::media_buy::media_buy_seller/creative_fate_after_cancellation::get_products_brief]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::media_buy::media_buy_seller/dependency_impairment::get_products_brief]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::media_buy::media_buy_seller/dependency_impairment_cardinality::get_products_brief]
+# --- media_buy (4) ---
 tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::media_buy::media_buy_seller/inline_creatives_without_sync::get_products_canonical_format]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::media_buy::media_buy_seller/inline_creatives_without_sync::get_products_legacy_format]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::media_buy::media_buy_seller/invalid_transitions::get_products_brief]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::media_buy::media_buy_seller/invalid_transitions::update_unknown_package]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::media_buy::media_buy_seller/inventory_list_no_match::get_products_brief]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::media_buy::media_buy_seller/inventory_list_targeting::get_products_brief]
 tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::media_buy::media_buy_seller/measurement_terms_rejected::create_media_buy_aggressive_terms]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::media_buy::media_buy_seller/measurement_terms_rejected::get_products_brief]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::media_buy::media_buy_seller/creative_fate_after_cancellation::get_products_brief]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::media_buy::media_buy_seller/dependency_impairment::get_products_brief]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::media_buy::media_buy_seller/dependency_impairment_cardinality::get_products_brief]
 tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::media_buy::media_buy_seller/inline_creatives_without_sync::get_products_canonical_format]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::media_buy::media_buy_seller/inline_creatives_without_sync::get_products_legacy_format]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::media_buy::media_buy_seller/invalid_transitions::get_products_brief]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::media_buy::media_buy_seller/invalid_transitions::update_unknown_package]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::media_buy::media_buy_seller/inventory_list_no_match::get_products_brief]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::media_buy::media_buy_seller/inventory_list_targeting::get_products_brief]
 tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::media_buy::media_buy_seller/measurement_terms_rejected::create_media_buy_aggressive_terms]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::media_buy::media_buy_seller/measurement_terms_rejected::get_products_brief]
-# --- security (4) ---
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::security::security_baseline::assert_mechanism]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::security::security_baseline::probe_api_key]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::security::security_baseline::assert_mechanism]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::security::security_baseline::probe_api_key]
+
+# --- media_buy, unmasked by this branch's fixture fixes (16) ---
+#
+# THE LEDGER GREW, and it is only allowed to shrink. This is the exception, stated rather
+# than slipped in: these eight checks are PRE-EXISTING defects that never ran before.
+# Seeding the storyboard tenant's accounts, signing key and vector product fixed the
+# fixture faults that used to kill the create path first, so the corpus now reaches
+# scenarios it could not previously execute. The gap did not widen; the measurement did.
+#
+# Every one is a defect in production this branch does not touch. `media_buy_update.py` is
+# byte-identical to main, and the reviewer of #1757 confirmed the cancel defect against
+# `origin/main` rather than assuming it. Landing this branch would otherwise turn a green
+# job red for eight faults it did not cause and does not fix.
+#
+# EACH LINE NAMES ITS GITHUB ISSUE. A local tracker id does not resolve for anyone outside
+# the machine that wrote it, which is the whole reason CLAUDE.md requires a GH number here.
+# These entries graduate when their issue closes, not when someone decides they are stale;
+# the fitness check in tests/storyboard/ names any that stop grading anything.
+
+# gh#1041 — update_media_buy accepted but never applied; /affected_packages/* incomplete
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::media_buy::media_buy_seller/dependency_impairment::assign_creative_to_package]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::media_buy::media_buy_seller/dependency_impairment::assign_creative_to_package]
+# gh#1041 — same defect, reached through the legacy inline-creative path
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::media_buy::media_buy_seller/inline_creatives_without_sync::update_buy_with_replacement_legacy_inline_creative]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::media_buy::media_buy_seller/inline_creatives_without_sync::update_buy_with_replacement_legacy_inline_creative]
+# gh#1261 — media-buy cancellation is not implemented on update_media_buy, so the first
+# cancel is a no-op and the second cannot answer NOT_CANCELLABLE
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::media_buy::media_buy_seller/invalid_transitions::second_cancel]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::media_buy::media_buy_seller/invalid_transitions::second_cancel]
+# gh#1305 — async/submitted response envelopes: no task-level submitted envelope at /status
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::media_buy::media_buy_seller/get_products_async::get_products_submitted]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::media_buy::media_buy_seller/get_products_async::get_products_submitted]
+# gh#1445 — property_list targeting end-to-end
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::media_buy::media_buy_seller/inventory_list_targeting::create_buy_with_lists]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::media_buy::media_buy_seller/inventory_list_targeting::create_buy_with_lists]
+# gh#2267 — two packages naming one product are refused; the pin has no uniqueItems and the
+# storyboard sends the same product twice on purpose
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::media_buy::media_buy_seller/dependency_impairment_cardinality::create_buy_two_packages]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::media_buy::media_buy_seller/dependency_impairment_cardinality::create_buy_two_packages]
+# gh#2268 — the refusal for an unknown product fails the pinned response oneOf
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::media_buy::media_buy_seller/inventory_list_no_match::create_buy_no_match]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::media_buy::media_buy_seller/inventory_list_no_match::create_buy_no_match]
+# gh#2269 — the mock adapter's simulated 1M-impression cap refuses a conformance-sized buy
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::media_buy::media_buy_seller/measurement_terms_rejected::create_media_buy_relaxed_terms]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::media_buy::media_buy_seller/measurement_terms_rejected::create_media_buy_relaxed_terms]

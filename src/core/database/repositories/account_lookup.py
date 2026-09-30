@@ -16,6 +16,8 @@ the principal, and status-checked; a refusal is one of the typed account errors.
 
 from __future__ import annotations
 
+import logging
+
 from adcp.types import AccountReference, AccountReferenceById, AccountReferenceByNaturalKey
 
 from src.core.database.models import Account
@@ -31,6 +33,8 @@ from src.core.exceptions import (
 )
 from src.core.helpers.brand_key import brand_key_parts
 from src.core.schemas import Principal
+
+logger = logging.getLogger(__name__)
 
 
 def find_account(repo: AccountRepository, account_ref: AccountReference, principal: Principal) -> Account:
@@ -97,6 +101,20 @@ def _by_natural_key(repo: AccountRepository, ref: AccountReferenceByNaturalKey, 
 
     account = matches[0] if matches else None
     if account is None:
+        # OPERATOR-FACING, never on the wire. A natural-key miss is scoped to the calling
+        # agent's grants (#1417), so "no such account" and "an account you cannot see" are
+        # the same envelope by design — correct for the buyer, and indistinguishable for
+        # whoever has to fix a fixture. The typed details stay wire-safe; the tenant and
+        # the resolved principal go to the log, which is the only place that can tell a
+        # missing row from a missing grant.
+        logger.warning(
+            "account natural-key miss: tenant=%s principal=%s brand_domain=%s operator=%s sandbox=%s",
+            repo.tenant_id,
+            principal_id,
+            brand_domain,
+            ref.operator,
+            ref.sandbox,
+        )
         raise AdCPAccountNotFoundError(details=EntityRefDetails(brand_domain=brand_domain, operator=ref.operator))
     _require_access(repo, principal_id, account.account_id)
     _check_status(account.account_id, account.status)

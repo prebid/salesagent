@@ -98,13 +98,42 @@ _BLOCKED_HOSTNAMES = frozenset(
 # It classifies what we are willing to DIAL, never what we accept as a NAME. A
 # brand.domain is an identifier and is graded by `core/brand-ref.json`'s hostname
 # pattern alone.
-RESERVED_TLDS: frozenset[str] = frozenset({".test", ".invalid", ".example", ".localhost"})
+#
+# SIX entries, not four. ``.local`` (RFC 6762 §3, multicast DNS) and ``.internal`` (RFC 8375
+# / ICANN SAC113, private-use) are special-use names exactly as much as the RFC 2606 four,
+# and a name under either resolves only inside somebody's LAN -- which is the whole class
+# this gate exists to refuse. They were dropped when this policy moved out of the retired
+# ``url_validator``; restoring them is fail-closed and is what
+# ``tests/unit/test_architecture_reserved_tld_single_matcher.py`` grades the set against.
+RESERVED_TLDS: frozenset[str] = frozenset({".test", ".invalid", ".example", ".localhost", ".local", ".internal"})
+
+
+def reserved_tld_for_host(hostname: str) -> str | None:
+    """Which reserved TLD *hostname* sits under, or None.
+
+    THE single matcher for this policy, and the reason it returns the TLD rather than a
+    bool: a caller that has to tell the operator WHICH name class it refused would
+    otherwise re-derive it with its own ``endswith`` loop, and a bare ``endswith`` is the
+    defect this function exists to prevent -- it matches ``notlocal`` for ``.local`` unless
+    the dot is included, and misses the bare label ``test``.
+
+    Normalizes case and a trailing root dot, and matches a bare reserved LABEL (``test``)
+    as well as a suffix (``acme.test``); all three are spellings a caller meets.
+    """
+    lowered = hostname.lower().rstrip(".")
+    for tld in RESERVED_TLDS:
+        if lowered == tld.lstrip(".") or lowered.endswith(tld):
+            return tld
+    return None
 
 
 def is_reserved_tld_host(hostname: str) -> bool:
-    """Whether *hostname* sits under an RFC 2606/6761 reserved TLD."""
-    lowered = hostname.lower().rstrip(".")
-    return any(lowered == tld.lstrip(".") or lowered.endswith(tld) for tld in RESERVED_TLDS)
+    """Whether *hostname* sits under a reserved / special-use TLD.
+
+    The boolean gate, expressed over :func:`reserved_tld_for_host` so the two cannot
+    disagree about what counts.
+    """
+    return reserved_tld_for_host(hostname) is not None
 
 
 class PinnedHost(NamedTuple):

@@ -11,6 +11,7 @@ if TYPE_CHECKING:
     from src.core.database.models import Tenant as DBTenant
     from src.core.resolved_identity import ResolvedIdentity
     from src.core.tenant_context import TenantContext
+    from src.core.utils.mcp_client import SignMcpAttempt
 
     #: Same shape as ResolvedIdentity.tenant (src/core/resolved_identity.py): the tenant
     #: context the resolver loaded. Never a dict.
@@ -44,6 +45,126 @@ logger = logging.getLogger(__name__)
 # was still here. ``raise_mapped_outbound_error`` is what the registries actually call
 # (``creative_agent_registry.py:525``). It was also the second of the two raise sites
 # passing a plain dict as ``details``, which no longer constructs.
+
+
+def request_signer_for_tenant(*, tenant_id: str | None) -> SignMcpAttempt | None:
+    """The ONE place that decides whether *tenant_id*'s outbound agent calls are signed.
+
+    Returns the ``adcp/request-signing/v1`` signing CALLBACK the tenant signs
+    with, or ``None`` when this tenant honestly signs nothing. Both agent
+    registries (``CreativeAgentRegistry``, ``SignalsAgentRegistry``) call THIS
+    rather than each re-deriving the posture, so a future call site cannot
+    silently skip RFC 9421 request signing (#1291 C3) and the two registries
+    cannot drift apart on when a tenant signs. They previously held three
+    independent copies of the gate below, and they had ALREADY drifted: the
+    creative registry spelled the key-presence half ``signing_key_backed(repo,
+    now=now).signs``, whose ``_private_half_is_resolvable`` conjunct folds an
+    unreadable private half into ``False`` -- so one registry raised on a
+    broken KEK while the other dialled unsigned, on the same tenant, in the
+    same deployment. That is precisely the failure a single home makes
+    unconstructible.
+
+    Consumed by the SSRF-guarded MCP seam, which is the only thing in ``src/``
+    that dials another agent::
+
+        await call_operator_mcp_tool(
+            agent_url, tool, arguments,
+            sign=request_signer_for_tenant(tenant_id=tenant_id),
+        )
+
+    A CALLBACK, not the strategy object, and the return type is exactly
+    ``call_mcp_tool``'s ``sign=`` parameter type
+    (:class:`~src.core.utils.mcp_client.SignMcpAttempt`), so the answer drops
+    into the only thing anyone does with it and mypy checks the fit. Handing
+    back the strategy instead would make every call site write ``signer
+    .build_signed_headers if signer is not None else None`` -- re-scattering,
+    once per dial, the very conditional this function exists to own; four call
+    sites across the two registries want the callback and nothing in ``src/``
+    wants the strategy. Narrowing also keeps the crypto pinned: a caller
+    holding a :class:`~src.core.signing.request_signer.RequestSignerStrategy`
+    could mint headers OUTSIDE the guarded transport, which defeats the
+    per-message, per-retry ``created``/``nonce`` the seam exists to compute
+    over the exact bytes on the wire.
+    (:func:`~src.core.signing.outbound.delivery_signer_for_tenant` returns a
+    strategy for the WEBHOOK direction because its senders genuinely need the
+    object; that asymmetry is the callers', not an inconsistency.)
+
+    THIS FUNCTION BUILDS NO CLIENT. Its predecessor
+    (``build_adcp_multi_agent_client``) constructed an ``ADCPMultiAgentClient``
+    and handed it a ``SigningConfig``, which put an un-pinned dialer -- no
+    resolve-once IP pin, no redirect refusal, no port policy -- beside the
+    guarded egress seam; #1802 banned constructing that client for exactly that
+    reason (``ruff-egress.toml``, ``adcp.ADCPMultiAgentClient``). Yielding a
+    *callback* instead lets the signature be computed INSIDE the guarded
+    transport, per HTTP message and per retry, over the exact bytes that go on
+    the wire (:func:`src.core.utils.mcp_client._install_signing_hook`) -- which
+    is also what RFC 9421's replay-rejectable ``nonce`` requires and what the
+    SDK's operation-name ContextVar could never deliver on the MCP transport
+    (adcontextprotocol/adcp-client-python#1017).
+
+    THE POSTURE GATE, unchanged from that predecessor -- a tenant signs only
+    when BOTH hold:
+
+    * an ACTIVE ``request_signing`` key exists for the tenant at *now*; and
+    * the tenant's canonical origin is publishable (``https://``). A signature
+      no conformant receiver could ever resolve a key for is worse than sending
+      nothing (security.mdx @ pinned AdCP 3.1.1 :1226) -- the same gate
+      :func:`~src.core.signing.posture.webhook_signing_posture` applies in the
+      webhook direction (C1). Deliberately parallel to it rather than shared:
+      that one answers what posture to ADVERTISE and returns a posture block;
+      this one answers what to DO and returns a signer.
+
+    ``tenant_id is None`` (a caller with no tenant in scope yet -- e.g. a
+    connectivity smoke-check against an as-yet-unsaved agent config) yields
+    ``None`` and dials unsigned, same as before this seam existed.
+
+    NO SILENT DOWNGRADE. Once the gate says this tenant signs, a strategy that
+    cannot be built RAISES ``AdCPConfigurationError`` (from
+    :func:`~src.core.signing.provider.resolve_signing_material`: a revoked key,
+    a private half this deployment cannot decrypt, a forbidden ref scheme, or
+    the published-JWK tripwire). The predecessor swallowed that exception and
+    dialled unsigned, so a broken KEK downgraded every outbound call silently
+    and looked identical to a tenant that had simply never provisioned a key.
+    :func:`~src.core.signing.posture.signing_key_backed` is NOT used for the
+    key-presence half for the same reason: its ``signs`` field folds that
+    failure into ``False`` (it answers "what may this tenant honestly
+    declare", where degrading is right); here degrading is the defect.
+
+    The signing imports are function-local because the signing layer pulls in
+    the ORM and ``adcp.signing``; module scope would put that on every import
+    of this helper, including admin call sites that only read adapter config.
+    They are spelled as dotted-path module imports because
+    ``src/core/signing/__init__.py`` deliberately re-exports nothing.
+    """
+    if tenant_id is None:
+        return None
+
+    from datetime import UTC, datetime
+
+    from src.core.signing.algorithms import REQUEST_SIGNING
+    from src.core.signing.outbound import signing_repo
+    from src.core.signing.posture import origin_is_publishable
+    from src.core.signing.provider import resolve_signing_material, signing_config_from_material
+    from src.core.signing.request_signer import RequestSignerStrategy
+
+    now = datetime.now(UTC)
+    with signing_repo(tenant_id) as repo:
+        if repo is None:
+            return None
+        # Both halves of the gate are read on the repository's OWN transaction,
+        # so a rotation cannot be observed from one side and the host from the
+        # other (SigningKeyRepository.canonical_origin).
+        if repo.active_at(now=now, purpose=REQUEST_SIGNING) is None:
+            return None
+        if not origin_is_publishable(repo.canonical_origin()):
+            return None
+        material = resolve_signing_material(repo, tenant_id=tenant_id, purpose=REQUEST_SIGNING, now=now)
+
+    # Projected after the session closes: signing_repo's session is scoped to the
+    # key read, and this projection is pure. The bound method keeps the strategy
+    # (and its key material) alive; no repository outlives the ``with``, so no
+    # pooled connection is parked on an agent's latency (#1757).
+    return RequestSignerStrategy(signing_config_from_material(material)).build_signed_headers
 
 
 def _resolve_tenant_id_and_fallback_adapter(tenant: TenantLike) -> tuple[str, str]:

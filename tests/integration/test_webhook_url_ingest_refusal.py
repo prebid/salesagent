@@ -84,6 +84,7 @@ from tests.harness.transport import Transport
 from tests.helpers import assert_envelope_shape
 from tests.helpers.adcp_factories import create_test_media_buy_request_dict, valid_reporting_webhook
 from tests.helpers.envelope_assertions import assert_no_marker_in_envelope
+from tests.integration._egress_ingest_helpers import _assert_no_push_config_persisted
 from tests.integration.property_list_helpers import enforce_egress_policy
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
@@ -154,6 +155,23 @@ _SEEDED_PACKAGE_ID = "pkg_001"
 # gate (gh-#1589 / gh-#1697). Independently pinned for the sync leg by BR-UC-006
 # ``@T-UC-006-ext-webhook-ssrf``.
 _REGISTRATION_GATE_CODE = "VALIDATION_ERROR"
+
+# The generic cause words a refusal may not disclose — "reserved"/"resolve"/
+# "metadata" say WHY we refused, which is the same disclosure about our network
+# that L1 ``security.mdx`` point 6 forbids, reached by another route. The
+# metadata address is listed alongside them because a refusal of some OTHER
+# refused URL (a CGNAT row, say) must not name it either.
+#
+# This used to be read off ``test_admin_ingest_url_policy.LEAKED_FRAGMENTS`` so
+# the wire surface and the admin surface withheld one list. That import is a
+# ``test_*`` module importing a sibling ``test_*`` module, which
+# ``tests/unit/test_architecture_no_cross_test_module_imports.py`` forbids (it
+# drags that suite into this one's collection), and its allowlist may only
+# shrink. So the list is restated here, deliberately and visibly: the shared
+# home when someone promotes it is ``tests/integration/_egress_ingest_helpers.py``
+# — the module the guard's docstring names for exactly this case, and the one
+# both surfaces already import from.
+_LEAKED_FRAGMENTS = ("169.254.169.254", "reserved", "resolve", "metadata")
 
 # A schema-valid ReportingWebhook carrying a refused URL: url/authentication/
 # reporting_frequency are required by the pinned core/reporting-webhook.json,
@@ -226,15 +244,13 @@ def _withheld(url: str, *secrets: str) -> tuple[str, ...]:
 
     Sibling grading: the admin surface withholds the same triple through
     ``assert_webhook_registration_refused``'s ``withheld=`` parameter
-    (``tests/integration/test_admin_ingest_url_policy.py``). That helper reads a
-    Flask flash queue and cannot be called from a wire test, so the shared piece
-    is the LIST rather than the reader, and its generic cause words come from
-    that module's own ``LEAKED_FRAGMENTS`` rather than a second copy here.
+    (``tests/integration/test_admin_ingest_url_policy.py``), whose own
+    ``LEAKED_FRAGMENTS`` is the same list as :data:`_LEAKED_FRAGMENTS` here.
+    That helper reads a Flask flash queue and cannot be called from a wire test,
+    so the shared piece is the LIST rather than the reader.
     """
-    from tests.integration.test_admin_ingest_url_policy import LEAKED_FRAGMENTS
-
     host = urlsplit(url).hostname
-    return tuple(value for value in (url, host, *secrets, *LEAKED_FRAGMENTS) if value)
+    return tuple(value for value in (url, host, *secrets, *_LEAKED_FRAGMENTS) if value)
 
 
 def _assert_registration_suggestion(envelope: dict, surface: str, *, code: str) -> None:
@@ -269,30 +285,6 @@ def _assert_registration_suggestion(envelope: dict, surface: str, *, code: str) 
             f"{surface}: {layer}.suggestion={body.get('suggestion')!r}, expected {expected!r} — "
             f"a refusal that names no repair leaves the buyer nothing to act on"
         )
-
-
-def _assert_no_push_config_persisted(tenant_id: str, principal_id: str) -> None:
-    """The refused URL left no push_notification_configs row.
-
-    The repository upsert is the single write funnel for this table
-    (GH #1697 disposition row 19: the repository is the verification
-    point, deliberately not the fix site), so an empty active list for the
-    principal IS "the refusal preceded the store".
-
-    The rows are described INSIDE the UoW block. Read outside it, ``c.id`` /
-    ``c.url`` are expired attributes on detached instances, so the one code path
-    that matters — a row actually having been written — raised
-    ``DetachedInstanceError`` from the f-string instead of reporting which row.
-    The test still went red, so this is the diagnostic and not the verdict; but
-    a message that cannot render is a message the next reader does not get.
-    """
-    from src.core.database.repositories.uow import PushNotificationConfigUoW
-
-    with PushNotificationConfigUoW(tenant_id) as uow:
-        assert uow.push_notification_configs is not None
-        persisted = uow.push_notification_configs.list_active_by_principal(principal_id)
-        described = [(config.id, str(config.url)) for config in persisted]
-    assert described == [], f"a refused push_notification_config.url must not be persisted, found {described}"
 
 
 def _create_kwargs(product) -> dict:
@@ -357,7 +349,7 @@ class TestCreateMediaBuyRefusedPushNotificationConfigUrl:
         fact rather than the seam's own metadata-outranks-the-override behaviour, which
         is graded separately in ``tests/integration/test_outbound_http.py``.
         """
-        from tests.integration.test_outbound_http import set_flags
+        from tests.helpers.egress_backoff import set_flags
 
         set_flags(monkeypatch, private=True)
 

@@ -231,16 +231,48 @@ class TestSeatTwoTheStashPathRefusesWithoutAnOutcome:
     """Rehydration refuses, the status transition survives, and nothing reaches the seam."""
 
     def _register_and_stash(self, env: MediaBuyPushRegistrationEnv) -> Any:
-        """Register a CONFORMING webhook over A2A and return its workflow step.
+        """Register a CONFORMING webhook, SIGNED, and return its workflow step.
 
         Conforming on purpose: the row has to be one the ingest gate accepts, or
         the case would be grading ingest a second time instead of grading what a
         STORED row does. The stash is then rewritten into the legacy shape — the
         one only the untyped A2A path could have written — which is the document
-        this seat actually meets in production.
+        this seat actually meets in production. The legacy shape is manufactured
+        by :meth:`restash_authentication`, so what matters about this call is only
+        that it leaves an ACCEPTED registration stashed on the step.
+
+        The buyer signs, and that is a PRECONDITION rather than anything graded
+        here. This request hands the seller webhook credentials, and security.mdx
+        @ v3.1.1 :1462-1465 makes an RFC 9421 signature mandatory on such a
+        request "regardless of ``required_for`` membership" (:1375) — enforced by
+        ``registers_webhook_credentials`` (``src/core/signing/webhook_credentials.py``),
+        read at the boundary (``src/core/tools/_boundary.py``), escalated to the
+        ``required`` bucket by ``verifier._bucket_for`` and refused inside
+        ``_resolve_identity``. Unsigned, the registration is answered
+        ``request_signature_required`` and NOTHING is stashed, so every case below
+        would fail on a setup that never happened.
+
+        Over MCP rather than A2A, which is what changed when signing became a
+        precondition: ``tests/harness/_base.py``'s A2A-over-HTTP leg — the one an
+        env takes once it can sign — answers ``-32601 Method not found`` and then
+        raises through a stale ``AdCPError`` import #1721 deleted, so a signed A2A
+        registration cannot be realized at all today. The transport of the
+        REGISTRATION is not what this seat grades (the stored document is rewritten
+        immediately afterwards, and rehydration reads a stash, not a wire), whereas
+        registering unsigned would be asserting against a seller that does not
+        verify — a posture this file has no reason to claim.
+
+        The dispatch is asserted to have SUCCEEDED: a refused registration stashes
+        nothing, and a later "0 deliveries" would then read as a refusal this file
+        proved rather than as setup that never ran.
         """
+        from tests.harness.transport import Transport
+
         _tenant, _principal, product, pricing_option = env.setup_media_buy_data()
-        env.call_a2a(
+        env.enable_request_signing()
+        result = env.call_via(
+            Transport.MCP,
+            signed=True,
             **env.minimal_create_kwargs(
                 product,
                 pricing_option,
@@ -249,7 +281,11 @@ class TestSeatTwoTheStashPathRefusesWithoutAnOutcome:
                     credentials=CONFORMING_SECRET,
                     url=env.webhook_url,
                 ),
-            )
+            ),
+        )
+        assert result.is_success, (
+            f"the signed registration was refused ({result.wire_error_envelope or result.error!r}); "
+            f"nothing was stashed, so there is no stored row left to grade"
         )
         return env.push_step("create_media_buy")
 

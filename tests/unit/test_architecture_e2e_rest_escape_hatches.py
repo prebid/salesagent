@@ -644,6 +644,39 @@ EXPECTED_UNSUPPORTED_DECLARATIONS: frozenset[tuple[str, str, str]] = frozenset(
             "the seam's BR-RULE-029 retry-schedule sleep count is process-local "
             "(env.mock['sleep']), not observable across the Docker HTTP boundary",
         ),
+        # Added by the rfc9421-onto-#1721 merge, and noted against this pin's
+        # shrink-only direction of travel like the #1721 and prkv.16/.18 precedents
+        # above. WHAT CHANGED UNDERNEATH, precisely: the 9421 branch gave
+        # ``deliver_webhook`` an e2e realization (``_deliver_via_live_server``) so the
+        # DEPLOYMENT makes the delivery over e2e_rest instead of the runner — the
+        # transport bypass salesagent-n78j0.1.4 existed to remove. The #1721 side had
+        # graduated T-UC-004-webhook-retry-5xx and -no-retry-4xx off
+        # _UC004_E2E_WEBHOOK_INTERNAL_TAGS on the explicit premise that "the webhook
+        # SENDER runs in the test process on every transport, e2e_rest included"
+        # (tests/bdd/conftest.py). That premise is false on the merged tree, and the
+        # two legs failed on exactly the two assertions it protected: a sleep list
+        # with no calls and a log handler with no records.
+        #
+        # These two declarations are what the graduation is worth keeping FOR. Routing
+        # the tags back would take the whole scenario out of e2e grading again;
+        # declaring the two runner-local READS instead leaves the payload-compliance,
+        # notification_type, retry-COUNT, no-retry and marked-failed Thens grading the
+        # live server's real delivery, which is more than either parent graded. They
+        # come out when the capture service records receipt times (the backoff
+        # schedule becomes gap arithmetic, graded by the same shared
+        # assert_backoff_schedule with jitter=None) and when a server-side log
+        # read-back surface exists.
+        #
+        # GRADUATED: assert_retry_backoff_schedule. Its declaration named the missing
+        # capability -- "the capture service records no receipt times to reconstruct them
+        # from" -- and that capability was BUILT rather than the declaration re-justified:
+        # every capture now carries a monotonic ``received_at``
+        # (tests/e2e/webhook_capture_service.py::_wire_entry), so the gaps between
+        # consecutive receipts ARE the waits, measured on the wire. The e2e realization
+        # (_mixins.py::_e2e_assert_retry_backoff_schedule) grades the wait COUNT exactly and
+        # each gap against its own rung of the 1s/2s/4s schedule with the jitter range as the
+        # upper bound. Only the white-box DRAW COUNT has no wire projection, and the
+        # realization says so in place rather than leaving a silent difference.
         # #1802: get_service() under e2e_rest is a fresh, in-process
         # WebhookDeliveryService never touched by the live server's actual
         # delivery — service._circuit_breakers has no wire surface at all.
@@ -653,6 +686,33 @@ EXPECTED_UNSUPPORTED_DECLARATIONS: frozenset[tuple[str, str, str]] = frozenset(
             "get_service() constructs a fresh in-process WebhookDeliveryService under e2e_rest, "
             "disconnected from the live server's real circuit-breaker state — no wire surface",
         ),
+        # The circuit-breaker SEEDS, added alongside the reader above rather than
+        # after it. Declaring only the Then was the hole: the Givens still ran, so the
+        # scenarios arranged a breaker in the runner's own process and then drove REAL
+        # deliveries against an endpoint programmed to fail — which is how they passed
+        # while production did the opposite, and how one per-worker server was driven
+        # unhealthy. Two independent disqualifiers, spelled out at
+        # ``_mixins._BREAKER_IS_PROCESS_LOCAL``: wrong process (the runner's
+        # WebhookDeliveryService, not the server's) and wrong sender (the e2e delivery
+        # path is ProtocolWebhookService, which has no breaker at all).
+        #
+        # Parking is honest rather than lossy: AdCP 3.1.1 mandates no circuit breaker —
+        # webhooks.mdx :528 is its only, descriptive mention and nothing in
+        # dist/compliance/3.1.1/ grades it. The spec's buyer-visible observable is
+        # webhook_activity[] on get_media_buys (include_webhook_activity;
+        # core/webhook-activity-record.json), which this repo does not implement. These
+        # five come OUT when it lands and the Thens are rewritten against it.
+        # "<dynamic>" because all five share ONE reason constant
+        # (``_mixins._BREAKER_IS_PROCESS_LOCAL``) rather than five copies of a long
+        # string, and the detector can only read a literal. Same precedent as
+        # _validate_registry_formats below. What the pin still locks is the SET of
+        # parked method names, which is the tracking property that matters; the reason
+        # itself is reviewable at the source, where it is stated once.
+        ("tests/harness/_mixins.py", "seed_breaker_failures", "<dynamic>"),
+        ("tests/harness/_mixins.py", "set_breaker_state", "<dynamic>"),
+        ("tests/harness/_mixins.py", "elapse_breaker_timeout", "<dynamic>"),
+        ("tests/harness/_mixins.py", "drive_breaker_transition", "<dynamic>"),
+        ("tests/harness/_mixins.py", "breaker_snapshot", "<dynamic>"),
         (
             "tests/harness/creative_formats.py",
             "_validate_registry_formats",

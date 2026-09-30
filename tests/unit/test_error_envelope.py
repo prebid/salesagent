@@ -12,8 +12,20 @@ table into a second place instead of grading production.
 
 What remains is a fact about the exception CLASSES, not about the boundary: the status each
 of these four resolves to through the table, which no scenario names.
-``tests/unit/test_adcp_exceptions.py::TestPerClassHttpStatus`` pins a disjoint set of
-classes -- the two lists must not overlap.
+``tests/unit/test_adcp_exceptions.py::TestEveryEmittedCodeHasAnAuthoredStatus`` grades the
+disjoint obligation -- that no code a typed class emits falls through to the unclassified
+500 default -- and deliberately transcribes no per-class number, so these four values are
+pinned here or nowhere.
+
+The pre-reshape suite that lived here graded the retired shape and is gone with it: an
+authored ``message`` in both layers, ``suggestion`` and ``details`` passed as a dict per
+raise, ``ERROR_CODE_MAPPING`` translating an internal code to a wire code, ``_serialize_context``
+copying a context off the exception, and ``_default_error_code`` as the class-level code slot.
+Nothing it graded is ungraded now: the two layers agreeing on code, recovery, field, details
+and issues is ``tests/helpers/envelope_assertions.py::assert_envelope_shape`` over the real
+wire; ``context`` is stamped by the boundary, not carried on the exception, and is graded by
+``local-context-echo-every-outcome.feature``; the per-class code is ``_code``, graded against
+the pinned vocabulary by ``test_adcp_exceptions.py``.
 """
 
 from __future__ import annotations

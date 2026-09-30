@@ -6,7 +6,7 @@ causes pytest_generate_tests to SKIP parametrization. These scenarios then
 run WITHOUT ctx["transport"] set, causing the When step to dispatch through
 IMPL instead of the tagged transport.
 
-Also finds scenarios that SHOULD be parametrized across all 5 transports
+Also finds scenarios that SHOULD be parametrized across all 4 transports
 but aren't — e.g., scenarios missing from test results entirely, or
 scenarios present on fewer transports than expected.
 

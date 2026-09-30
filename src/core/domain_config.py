@@ -20,9 +20,30 @@ def _is_localhost(domain: str | None) -> bool:
     return host in ("localhost", "127.0.0.1")
 
 
+def _is_single_label_host(domain: str | None) -> bool:
+    """True for a bare hostname with no dot (``proxy``, ``adcp-server``).
+
+    A single-label host is not a public FQDN, so no public CA will issue a
+    certificate for it and https is unreachable there by construction. These are
+    container/service names on an internal network — the shape a Docker stack is
+    reached at from inside its own network.
+    """
+    if not domain:
+        return False
+    return "." not in domain.split(":")[0]
+
+
 def _get_protocol_for_domain(domain: str | None) -> str:
-    """Return http for localhost, https for production domains."""
-    return "http" if _is_localhost(domain) else "https"
+    """Return http for hosts that cannot serve https, https for public domains.
+
+    Two http cases, and they are one case seen twice: localhost/127.0.0.1, and
+    any single-label service name. Neither can present a publicly-trusted
+    certificate, so advertising https for them yields a URL nothing can reach —
+    which for the trust root (#1291 A3) means publishing an agent identity that
+    is not where the agent answers. The in-network e2e stack, reached at
+    ``proxy:8000``, is exactly that case.
+    """
+    return "http" if _is_localhost(domain) or _is_single_label_host(domain) else "https"
 
 
 def get_sales_agent_domain() -> str | None:

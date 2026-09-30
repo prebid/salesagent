@@ -20,7 +20,10 @@ GREEN='\033[0;32m' RED='\033[0;31m' BLUE='\033[0;34m' NC='\033[0m'
 MODE=${1:-ci}
 PYTEST_TARGET="${2:-}"
 PYTEST_ARGS="${@:3}"
-RESULTS_DIR="$(pwd)/test-results/$(date +%d%m%y_%H%M)"
+# UTC, matching run_all_tests.sh. Both runners write into the same
+# `test-results/` tree, so naming them off different clocks makes two directories
+# from the same instant carry names two hours apart.
+RESULTS_DIR="$(pwd)/test-results/$(date -u +%d%m%y_%H%M)"
 mkdir -p "$RESULTS_DIR"
 
 # Keep only the last 10 result directories
@@ -31,9 +34,15 @@ echo "Mode: $MODE | Reports: $RESULTS_DIR/"
 # --- Helpers ---
 
 validate_imports() {
+    # Names the transport entry point and one _impl per layer, so a refactor that
+    # breaks either is caught before Docker starts. This used to import
+    # `get_products_raw`/`create_media_buy_raw`; #1721 deleted every `*_raw`
+    # re-export in favour of one boundary that reads the TOOLS registry, so the
+    # check now names that boundary. Do not reinstate a `*_raw` import here.
     echo "Validating imports..."
     if ! uv run python -c "
-from src.core.tools import get_products_raw, create_media_buy_raw
+from src.core.tools._boundary import invoke_tool
+from src.core.tools.registry import TOOLS
 from src.core.tools.products import _get_products_impl
 from src.core.tools.media_buy_create import _create_media_buy_impl
 " 2>/dev/null; then

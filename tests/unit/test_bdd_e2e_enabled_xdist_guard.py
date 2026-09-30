@@ -3,7 +3,7 @@
 Guards PR #1420 review finding #5: when BDD_E2E_ENABLED=true is run under
 pytest-xdist (-n auto / >0), the e2e_rest transport is silently dropped at
 collection (the worker's pytest_generate_tests never appends it) and the bdd
-suite goes green having never exercised the 5th transport. The ctx fixture's
+suite goes green having never exercised the e2e_rest transport. The ctx fixture's
 hard-error can't catch this — collection never happens. pytest_configure must
 turn the silent drop into a hard error.
 

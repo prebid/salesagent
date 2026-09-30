@@ -60,61 +60,19 @@ from adcp import get_adcp_spec_version
 from adcp.types import ErrorCode
 from adcp.validation.version import resolve_bundle_key
 
+from src.core.errors._entry import CodeEntry, CodeGroup, Recovery
+from src.core.errors.signature_codes import SIGNATURE_CODE_TABLE, SignatureErrorCode
+
 __all__ = [
     "CODE_BY_VALUE",
     "CODE_TABLE",
     "AppErrorCode",
     "CodeEntry",
+    "CodeGroup",
     "ErrorCodeT",
     "Recovery",
+    "SignatureErrorCode",
 ]
-
-
-class Recovery(StrEnum):
-    """What a buyer can do about an error.
-
-    Closed at three values by the wire schema, and the one field a receiver is
-    required to read when it meets a code it does not know.
-    """
-
-    CORRECTABLE = "correctable"
-    TRANSIENT = "transient"
-    TERMINAL = "terminal"
-
-
-@dataclass(frozen=True)
-class CodeEntry:
-    """Everything a code resolves to. Frozen: the table is a fact, not state.
-
-    Refuses an empty ``suggestion`` or ``message`` at construction: every error
-    on the wire derives both from its table entry, so an empty string here would
-    put a blank buyer-facing field on every raise of that code. Checking it at
-    the one place entries are built — pinned-schema load and platform authorship
-    alike — means no test or raise site ever needs to re-check non-emptiness.
-
-    ``status`` is the HTTP status the failure is signalled with. It belongs to
-    the CODE, not to whichever exception class happened to raise it: the pinned
-    schema states the transport-level failure marker per code — ``HTTP 5xx`` for
-    CONFIGURATION_ERROR and GOVERNANCE_UNAVAILABLE, ``HTTP 4xx`` for
-    GOVERNANCE_DENIED and CREDENTIAL_IN_ARGS (``enums/error-code.json``,
-    ``enumDescriptions``, AdCP 3.1.1) — so a class that emitted a code with a
-    status from a different band would contradict the pin. The band is the
-    spec's; the exact number inside it is this seller's.
-    """
-
-    recovery: Recovery
-    suggestion: str
-    message: str
-    status: int
-
-    def __post_init__(self) -> None:
-        if not self.suggestion or not self.message:
-            raise ValueError(
-                f"CodeEntry requires non-empty suggestion and message, got "
-                f"suggestion={self.suggestion!r}, message={self.message!r}"
-            )
-        if not 100 <= self.status <= 599:
-            raise ValueError(f"CodeEntry.status must be an HTTP status code, got {self.status!r}")
 
 
 class AppErrorCode(StrEnum):
@@ -226,11 +184,13 @@ class AppErrorCode(StrEnum):
     )
 
 
-#: Any code this seller can emit: AdCP's published set plus this platform's own.
+#: Any code this seller can emit: AdCP's published set, this platform's own, and the
+#: RFC 9421 transport error taxonomy (:mod:`src.core.errors.signature_codes`, which
+#: explains why those are codes rather than a header-only vocabulary).
 #: A union rather than a subclass because a Python enum with members cannot be
 #: extended -- ``class AppErrorCode(ErrorCode)`` is a TypeError at class
 #: creation, not a design choice.
-ErrorCodeT = ErrorCode | AppErrorCode
+ErrorCodeT = ErrorCode | AppErrorCode | SignatureErrorCode
 
 
 # ---------------------------------------------------------------------------
@@ -431,23 +391,48 @@ _HTTP_STATUS: Final[Mapping[ErrorCode, int]] = MappingProxyType(
 
 
 def _build_code_table() -> dict[ErrorCodeT, CodeEntry]:
-    """Assemble the published codes and this platform's own into one table.
+    """Assemble the SDK's codes and this platform's own into one table.
 
-    A message comes from the first source that has one: authored here, then the
-    pinned schema's own prose. Every code resolves to text, so no code can reach
-    a buyer with an empty message. A status comes from ``_HTTP_STATUS`` or, for
-    the published codes this seller never raises, from ``_UNCLASSIFIED_STATUS``.
+    TWO SOURCES, not three. A code is either the SDK's or this application's, and the
+    signature family is the SDK's: :class:`SignatureErrorCode` is generated from
+    ``adcp.signing.errors.REQUEST_TO_WEBHOOK_CODE``, not authored here.
+
+    What the signature family lacks is METADATA. ``enums/error-code.json`` carries
+    ``enumMetadata`` for the codes it publishes, and at AdCP 3.1.1 it publishes none of
+    the 28 (adcontextprotocol/adcp#7642), so their recovery/suggestion/message are
+    transcribed in :mod:`src.core.errors.signature_codes` from the spec's own prose.
+    That is a different SOURCE OF METADATA, not a different source of codes — so it is
+    a fallback inside this loop rather than a third pass after it.
+
+    Why that matters at the next pin bump: adcontextprotocol/adcp#7647 publishes the
+    vocabulary upstream. When a version carrying it is pinned, ``published`` starts
+    answering for these codes and the transcription stops being consulted — one
+    conditional flips, and ``_SIGNATURE_METADATA`` becomes deletable. Under the old
+    three-pass build the same bump produced two entries for one code and let write
+    order decide, silently.
+
+    A message comes from the first source that has one: authored here, then the pinned
+    schema's own prose. Every code resolves to text, so no code can reach a buyer with
+    an empty message. A status comes from ``_HTTP_STATUS`` or, for the published codes
+    this seller never raises, from ``_UNCLASSIFIED_STATUS``.
     """
     published = _load_published_codes()
     table: dict[ErrorCodeT, CodeEntry] = {}
 
-    for code in ErrorCode:
-        spec = published[code.value]
+    for code in (*ErrorCode, *SignatureErrorCode):
+        spec = published.get(code.value)
+        if spec is None:
+            # The pin publishes no metadata for this code, so the transcription answers.
+            # A code in neither is a KeyError here, which is the right failure: it means
+            # the SDK grew a code nothing describes.
+            table[code] = SIGNATURE_CODE_TABLE[code]
+            continue
         table[code] = CodeEntry(
             recovery=spec.recovery,
             suggestion=spec.suggestion,
             message=(_AUTHORED_SPEC_MESSAGES.get(code) or _message_from_prose(spec.description)),
             status=_HTTP_STATUS.get(code, _UNCLASSIFIED_STATUS),
+            group=SIGNATURE_CODE_TABLE[code].group if code in SIGNATURE_CODE_TABLE else CodeGroup.GENERAL,
         )
 
     # Each member carries its own entry, so there is nothing to reconcile: a code

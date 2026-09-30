@@ -31,7 +31,12 @@ from pytest_bdd import given, parsers, then, when
 from tests.bdd.steps._outcome_helpers import wire_dict, wire_error_dict
 from tests.bdd.steps.generic._dispatch import dispatch_request
 from tests.factories.mint import mint
-from tests.factories.request import OMIT, GetMediaBuysRequestFactory, GetProductsRequestFactory
+from tests.factories.request import (
+    OMIT,
+    CreateMediaBuyRequestFactory,
+    GetMediaBuysRequestFactory,
+    GetProductsRequestFactory,
+)
 
 #: The ctx slot the Givens accumulate their perturbations into, applied over the
 #: factory baseline at the When. Named rather than reusing a generic key so
@@ -40,12 +45,23 @@ from tests.factories.request import OMIT, GetMediaBuysRequestFactory, GetProduct
 _OVERRIDES = "ctxecho_overrides"
 
 #: The factory for each tool a scenario can name; the routing tag decides the tool.
-_FACTORY_BY_TOOL = {"get_products": GetProductsRequestFactory, "get_media_buys": GetMediaBuysRequestFactory}
+_FACTORY_BY_TOOL = {
+    "get_products": GetProductsRequestFactory,
+    "get_media_buys": GetMediaBuysRequestFactory,
+    "create_media_buy": CreateMediaBuyRequestFactory,
+}
 
 #: The ctx slot holding the context object as SENT. The Then compares the wire
 #: against this, so a seller that returns a context of its own invention fails
 #: rather than satisfying a presence check.
 _SENT = "ctxecho_sent_context"
+
+#: The per-package context objects as SENT, in request order. Separate from
+#: ``_SENT`` because the two are different obligations on different objects: the
+#: envelope's is written by one seam for every outcome, an element's is carried
+#: by whoever builds the element. A scenario that conflated them could pass on
+#: the envelope echo while every package came back bare.
+_SENT_PACKAGES = "ctxecho_sent_package_contexts"
 
 
 # ── Given ────────────────────────────────────────────────────────────
@@ -110,6 +126,71 @@ def given_context_not_an_object(ctx: dict) -> None:
     something the seller invented.
     """
     ctx.setdefault(_OVERRIDES, {})["context"] = "not-an-object"
+
+
+@given("each package in the request carries its own opaque context object")
+def given_packages_carry_context(ctx: dict) -> None:
+    """Put a DISTINCT random bag on every package, and remember them positionally.
+
+    Random, and different per package, for the reason the envelope Given is
+    three-membered: a seller that echoed a constant, echoed package 0's object
+    onto every package, or rebuilt the bag from the members it recognises would
+    satisfy any weaker check. Nothing here is a value production can derive --
+    ``buyer_ref`` is not a declared field anywhere in AdCP, it is an extra inside
+    an ``additionalProperties: true`` object with zero declared properties -- so
+    the only way the assertion below passes is that the bytes were carried.
+
+    The nested object and the list matter too: a seller that flattened, sorted or
+    JSON-normalized the bag reshapes them while leaving the scalars intact.
+    """
+    baseline = _FACTORY_BY_TOOL["create_media_buy"].payload()
+    packages = [dict(p) for p in baseline["packages"]]
+    assert packages, "the create_media_buy baseline carries no packages — nothing to grade the element echo on"
+
+    # Name the rows the route's seed actually created. The factory baseline carries its
+    # own product_id/pricing_option_id literals, which no seed creates, so the create is
+    # refused PRODUCT_NOT_FOUND before a package exists and the echo grades nothing.
+    product = ctx.get("default_product")
+    pricing_option = ctx.get("default_pricing_option")
+    assert product is not None and pricing_option is not None, (
+        "the route's seed did not stash default_product / default_pricing_option — "
+        "this scenario needs the full create chain"
+    )
+
+    sent: list[dict] = []
+    for index, package in enumerate(packages):
+        package["product_id"] = product.product_id
+        package["pricing_option_id"] = pricing_option.pricing_option_id
+        bag = {
+            "correlation_id": mint(f"ctxecho-pkg-{index}-{uuid4().hex}"),
+            "buyer_ref": f"line-{uuid4().hex[:8]}",
+            "trace": {"span": uuid4().hex[:6], "depth": index},
+            "tags": [uuid4().hex[:4], uuid4().hex[:4]],
+        }
+        package["context"] = bag
+        sent.append(bag)
+
+    ctx[_SENT_PACKAGES] = sent
+
+    # Written into ``request_kwargs``, NOT this module's ``_OVERRIDES``. The
+    # create_media_buy When belongs to ``uc002_create_media_buy`` -- one sentence,
+    # one definition -- and its default path dispatches ``ctx["request_kwargs"]``
+    # flat through the parametrized transport. Feeding that seam is how this
+    # scenario reaches the wire without a second copy of a step that exists.
+    payload = dict(baseline)
+    payload["packages"] = packages
+    if _SENT in ctx:
+        payload["context"] = ctx[_SENT]
+
+    # The account the `the request targets a production account` Given seeded. The
+    # baseline factory names one of its own, which no seed creates, so the create is
+    # refused ACCOUNT_NOT_FOUND before a package is ever built and the echo grades
+    # nothing. Same handoff the uc002 full-create branch performs.
+    account_ref = ctx.get("account_ref")
+    if account_ref is not None:
+        payload["account"] = account_ref.model_dump(mode="json", exclude_none=True)
+
+    ctx["request_kwargs"] = payload
 
 
 @given("the request carries a brief of the wrong JSON type")
@@ -189,6 +270,13 @@ def when_send_get_media_buys(ctx: dict) -> None:
     _send(ctx, tool="get_media_buys")
 
 
+# NO `create_media_buy` When here. ``uc002_create_media_buy.when_send_create_media_buy``
+# already owns that sentence, and a second definition of it is exactly the duplication
+# ``test_architecture_bdd_no_duplicate_steps`` exists to stop. The package-context
+# scenario feeds that step's own seam instead: it writes ``ctx["request_kwargs"]``, which
+# ``_dispatch_full_create`` dispatches flat through the parametrized transport.
+
+
 # ── Then ─────────────────────────────────────────────────────────────
 
 
@@ -240,6 +328,60 @@ def then_error_echoes_context(ctx: dict) -> None:
     step pins the outcome the same way its success twin does.
     """
     _assert_echo(ctx, wire_error_dict(ctx), outcome="error")
+
+
+@then("every created package echoes its own context object unchanged")
+def then_packages_echo_context(ctx: dict) -> None:
+    """Each returned package carries back the bag ITS request package sent.
+
+    Positional, and one assertion per package rather than a set comparison: the
+    obligation is that package *i* gets package *i*'s object, and a seller that
+    returned the right objects against the wrong packages has not met it while a
+    set comparison would say it had.
+
+    The count is asserted first. A seller that returned FEWER packages than were
+    asked for would otherwise pass this vacuously on the ones it did return --
+    the same vacuity the envelope Then avoids by comparing the whole object
+    rather than probing one member.
+    """
+    sent = ctx.get(_SENT_PACKAGES)
+    assert sent is not None, "no package contexts were stashed — the Given must run before the Then"
+
+    envelope = wire_dict(ctx)
+    returned = envelope.get("packages")
+    assert isinstance(returned, list), (
+        f"the success response carries no packages array to read an element echo off: keys={sorted(envelope)}"
+    )
+    assert len(returned) == len(sent), (
+        f"sent {len(sent)} package(s) and got {len(returned)} back, so the positional echo "
+        f"cannot be graded: {returned!r}"
+    )
+
+    for index, (package, expected) in enumerate(zip(returned, sent, strict=True)):
+        echoed = package.get("context")
+        assert echoed == expected, (
+            f"packages[{index}] did not echo its own context object unchanged.\n"
+            f"  sent:   {expected!r}\n"
+            f"  echoed: {echoed!r}\n"
+            f"  package keys: {sorted(package)}"
+        )
+
+
+@then("the response carries no packages array")
+def then_response_carries_no_packages(ctx: dict) -> None:
+    """The Submitted branch answers with no element to echo into.
+
+    ``create-media-buy-response.json``'s Submitted variant declares task_id and a
+    message; ``media_buy_id`` and ``packages`` land on the task's completion artifact.
+    Asserting the ABSENCE is what stops the element-echo scenario's twin from being
+    read as "this branch echoes too" -- there is nothing here to echo, and a seller that
+    started returning packages on this branch would owe the element echo and get graded
+    for it by the other scenario, not silently by this one.
+    """
+    envelope = wire_dict(ctx)
+    assert "packages" not in envelope, (
+        f"the submitted-for-approval response carried a packages array: {envelope['packages']!r}"
+    )
 
 
 @then("the error response carries no context object")

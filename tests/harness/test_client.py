@@ -608,7 +608,17 @@ class TestClientE2eA2aDelivery:
         assert "Authorization" not in headers
         assert "x-adcp-tenant" not in headers
 
-    def test_task_state_failed_reconstructs_wire_error(self):
+    def test_task_state_failed_surfaces_the_wire_error_envelope_verbatim(self):
+        """A failed Task's artifact envelope reaches the caller unchanged.
+
+        Arranged as production emits it: ``AdcpErrorResponse.of`` "Carries the SAME error
+        object at both levels the wire expects -- ``adcp_error`` on the envelope and
+        ``errors[0]``", which pinned ``core/protocol-envelope.json`` asks for ("a fatal task
+        failure SHOULD populate both this envelope-level field AND the payload's ``errors[]``
+        array"). ``_wire_envelope`` returns that body and nothing else -- it fills no layer
+        and reshapes no body, so this equality grades what the buyer received rather than a
+        harness repair of it.
+        """
         from unittest.mock import MagicMock, patch
 
         from tests.harness.transport import E2EConfig
@@ -617,7 +627,7 @@ class TestClientE2eA2aDelivery:
             pass
 
         adcp_error = {"code": "PRODUCT_NOT_FOUND", "message": "no such product", "recovery": "retry"}
-        envelope = {"adcp_error": adcp_error}
+        envelope = {"adcp_error": adcp_error, "errors": [adcp_error]}
         rpc_response = {
             "jsonrpc": "2.0",
             "id": "req-1",
@@ -642,28 +652,25 @@ class TestClientE2eA2aDelivery:
                 result = client.call("get_products", {"brief": "x"}, Transport.E2E_A2A)
 
         assert result.is_error
-        # BOTH layers, not just the envelope one. Pinned AdCP 3.1.1
-        # ``core/protocol-envelope.json``, the ``adcp_error`` property: "a fatal task
-        # failure SHOULD populate both this envelope-level field AND the payload's
-        # ``errors[]`` array — the envelope carries a typed, extractable error so
-        # MCP/A2A clients can dispatch without re-parsing the payload, while the
-        # payload's structured ``errors[]`` remains the canonical normative shape."
-        # ``_wire_envelope`` (tests/harness/_base.py) therefore mirrors a single-layer
-        # artifact body into that two-layer shape, and this equality grades the whole
-        # normalized envelope — the arranged ``adcp_error`` carried through verbatim
-        # plus the ``errors[]`` layer the spec calls canonical.
-        assert result.wire_error_envelope == {"adcp_error": adcp_error, "errors": [adcp_error]}
+        assert result.wire_error_envelope == envelope
 
-    def test_task_state_submitted_synthesizes_submitted_wire(self):
-        """``create_media_buy`` is the named no-pinned-response-model case
-        : its SDK response type is a ``Union`` of
-         outcome variants (``spec_response_model`` returns ``None`` for it, see
-         that function's docstring), so UNWRAP cannot pick a single class to
-         parse the synthesized "submitted" wire into. ``payload`` stays
-         explicitly ``None`` — ``result.error is None`` (not ``is_success``,
-         which requires a non-``None`` payload) is the correct success check
-         here — and ``wire_response`` carries the raw dict, exactly as
-         production callers that only read the wire body already expect."""
+    def test_task_state_submitted_reads_the_wire_off_status_message_parts(self):
+        """A submitted Task's payload is READ from ``status.message.parts``, not invented.
+
+        Pinned L0/a2a-response-format.mdx gives an interim status its data there and
+        reserves ``artifacts`` for the final deliverable, so this leg reads the DataPart
+        out of the status message. Every field the server sent reaches the caller,
+        including the envelope ``context`` the buyer is owed on every outcome — the arranged
+        payload below carries one, and a synthesized ``{status, task_id}`` wire would drop it.
+
+        ``create_media_buy`` is the named no-pinned-response-model case: its SDK response
+        type is a ``Union`` of outcome variants (``spec_response_model`` returns ``None``
+        for it, see that function's docstring), so UNWRAP cannot pick a single class to
+        parse the wire into. ``payload`` stays explicitly ``None`` — ``result.error is
+        None`` (not ``is_success``, which requires a non-``None`` payload) is the correct
+        success check here — and ``wire_response`` carries the raw dict, exactly as
+        production callers that only read the wire body already expect.
+        """
         from unittest.mock import MagicMock, patch
 
         from tests.harness.transport import E2EConfig
@@ -671,13 +678,25 @@ class TestClientE2eA2aDelivery:
         class _UnitEnv(BaseTestEnv):
             pass
 
+        submitted_payload = {
+            "status": "submitted",
+            "task_id": "task_submitted_1",
+            "message": "Media buy submitted for approval.",
+            "context": {"correlation_id": "corr-1"},
+        }
         rpc_response = {
             "jsonrpc": "2.0",
             "id": "req-1",
             "result": {
                 "task": {
                     "id": "task_submitted_1",
-                    "status": {"state": "TASK_STATE_SUBMITTED"},
+                    "status": {
+                        "state": "TASK_STATE_SUBMITTED",
+                        "message": {
+                            "role": "ROLE_AGENT",
+                            "parts": [{"text": "Media buy submitted for approval."}, {"data": submitted_payload}],
+                        },
+                    },
                     "artifacts": [],
                 }
             },
@@ -696,7 +715,7 @@ class TestClientE2eA2aDelivery:
 
         assert result.error is None, result.error
         assert result.payload is None
-        assert result.wire_response == {"status": "submitted", "task_id": "task_submitted_1"}
+        assert result.wire_response == submitted_payload
 
     def test_http_error_status_still_surfaces_the_wire_error_envelope(self):
         """An A2A response with an HTTP error status must NOT discard its body.

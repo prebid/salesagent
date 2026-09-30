@@ -112,8 +112,10 @@ class DeliveryWebhookScheduler:
                             continue
 
                         # Send delivery report
-                        await self._send_report_for_media_buy(media_buy, reporting_webhook, session)
-                        reports_sent += 1
+                        if await self._send_report_for_media_buy(media_buy, reporting_webhook, session):
+                            reports_sent += 1
+                        else:
+                            errors += 1
 
                     except Exception as e:
                         logger.error(f"Error sending report for media buy {media_buy.media_buy_id}: {e}", exc_info=True)
@@ -153,23 +155,42 @@ class DeliveryWebhookScheduler:
                     return False
 
                 # Force sending even if already sent today (for testing)
-                await self._send_report_for_media_buy(media_buy, reporting_webhook, session, force=True)
-                return True
+                return await self._send_report_for_media_buy(media_buy, reporting_webhook, session, force=True)
         except Exception as e:
             logger.error(f"Error manually triggering report for {media_buy_id}: {e}", exc_info=True)
             return False
 
     async def _send_report_for_media_buy(
         self, media_buy: Any, reporting_webhook: dict, session: Any, force: bool = False
-    ) -> None:
-        """Send a delivery report for a single media buy.
+    ) -> bool:
+        """Send a delivery report for a single media buy, and report WHETHER IT WENT.
+
+        Returns the sender's own verdict rather than ``None``. It used to return nothing
+        and discard ``notify()``'s bool, so every caller treated "we reached the end of
+        this function" as "the buyer was told" -- and the two are not the same. A
+        delivery refused by the egress policy before any connection (a blocked
+        destination), or refused for an unusable stored registration, still walked off
+        the end of this function, so the admin trigger flashed "Sent" and the daily batch
+        counted a report the buyer never received. That is the quiet failure the
+        no-quiet-failures rule exists to forbid: the one surface an operator has for
+        "did this go out" answered yes for a webhook that was blocked.
+
+        Every early return above is likewise ``False`` now, for the same reason and with
+        the same meaning: a decline is a verdict, not a success.
 
         Args:
             media_buy: MediaBuy database model
             reporting_webhook: Webhook configuration dict
             session: Database session
             force: If True, bypass frequency checks and duplicate checks
+
+        Returns:
+            bool: True only if the sender reported the delivery as made.
         """
+        # Captured as a plain str up front: everything after the release below runs
+        # against EXPIRED ORM instances, so a post-send ``media_buy.media_buy_id``
+        # would silently re-open a transaction just to format a log line.
+        media_buy_id = media_buy.media_buy_id
         try:
             # Determine reporting frequency from AdCP config (hourly, daily, monthly)
             raw_freq = str(reporting_webhook.get("frequency") or "daily").lower()
@@ -181,7 +202,7 @@ class DeliveryWebhookScheduler:
                     raw_freq,
                     media_buy.media_buy_id,
                 )
-                return
+                return False
 
             # Calculate reporting period for daily frequency: yesterday (full day)
             start_date_obj = datetime.now(UTC).date() - timedelta(days=1)
@@ -207,7 +228,7 @@ class DeliveryWebhookScheduler:
                         end_date_obj,
                         existing_log.id,
                     )
-                    return
+                    return False
 
             delivery_response = delivery_for_media_buy(
                 media_buy,
@@ -219,13 +240,13 @@ class DeliveryWebhookScheduler:
                 logger.warning(
                     f"`Couldn't get media_delivery` for {media_buy.media_buy_id}. Result is {delivery_response!r}"
                 )
-                return
+                return False
 
             if delivery_response.errors is not None:
                 logger.warning(
                     f"`Couldn't get media_delivery` for {media_buy.media_buy_id}. We have received an error in the result. Result is {delivery_response!r}"
                 )
-                return
+                return False
 
             # Get sequence number for this webhook (get max sequence + 1)
             sequence_number = 1
@@ -254,7 +275,7 @@ class DeliveryWebhookScheduler:
             webhook_url = reporting_webhook.get("url")
             if not webhook_url:
                 logger.warning(f"No webhook URL configured for media buy {media_buy.media_buy_id}")
-                return
+                return False
 
             # A stored row still wins: a real registration outranks whatever the
             # request carried inline.
@@ -303,7 +324,7 @@ class DeliveryWebhookScheduler:
                         f"Refusing to send delivery report for media buy {media_buy.media_buy_id}: "
                         f"its reporting_webhook registration is invalid ({exc})"
                     )
-                    return
+                    return False
 
             # Wire vs internal task_type distinction:
             # - metadata["task_type"] = "media_buy_delivery" -- internal logging/dedup label
@@ -334,9 +355,30 @@ class DeliveryWebhookScheduler:
                 else None,
             )
 
-            # Send webhook notification OUTSIDE the session context
-            # This ensures the session is closed before async webhook call
-            await self.webhook_service.notify(
+            # RELEASE THE READ TRANSACTION BEFORE ANY SOCKET EXISTS (#1757 — "the rule a
+            # connection held across a POST to a buyer-supplied URL would break", stated
+            # at protocol_webhook_service._deliver's signer= argument and obeyed there).
+            #
+            # Everything above is SELECTs plus an expunge; this ends that transaction and
+            # drops the locks it holds. Without it the caller's session (BOTH callers open
+            # one and pass it in) stays open for the whole delivery — which is the retry
+            # ladder, i.e. SECONDS of outbound HTTP to a buyer-controlled endpoint — while
+            # holding row locks on webhook_delivery_log. MEASURED, not theorised: a live
+            # bdd_e2e worker deadlocked exactly there, pg_stat_activity showing this
+            # session "idle in transaction" on push_notification_configs while the BDD
+            # harness's per-scenario `TRUNCATE TABLE webhook_delivery_log, ...` waited on
+            # an ACCESS EXCLUSIVE lock behind it. Everything queued, /health stopped
+            # answering, and the server read as hung while sitting at 0.01% CPU.
+            #
+            # The comment this replaces claimed the opposite — "Send webhook notification
+            # OUTSIDE the session context / This ensures the session is closed before async
+            # webhook call". It was never true: the session is the CALLER's and is still
+            # open. Committing a read-only transaction is the release; it expires the ORM
+            # instances, which is why media_buy_id is captured above and why the batch
+            # loop's next iteration refreshes (a short query, holding nothing).
+            session.commit()
+
+            delivered = await self.webhook_service.notify(
                 push_notification_config,
                 task=webhook_task,
                 # Delivery reports are status updates on existing media buys, so the
@@ -347,10 +389,21 @@ class DeliveryWebhookScheduler:
                 result=delivery_response,
             )
 
-            logger.info(f"Sent delivery report webhook for media buy {media_buy.media_buy_id}")
+            if delivered:
+                logger.info(f"Sent delivery report webhook for media buy {media_buy_id}")
+            else:
+                # NOT an exception: the sender already booked the outcome (delivery-log
+                # row plus audit entry) and named the reason. Re-raising would turn one
+                # buyer's refused destination into a batch-level error and lose the
+                # per-media-buy verdict this function now returns.
+                logger.warning(
+                    f"Delivery report webhook for media buy {media_buy_id} was NOT delivered; "
+                    "see the sender's own refusal/failure log line above"
+                )
+            return bool(delivered)
 
         except Exception as e:
-            logger.error(f"Error sending delivery report for media buy {media_buy.media_buy_id}: {e}", exc_info=True)
+            logger.error(f"Error sending delivery report for media buy {media_buy_id}: {e}", exc_info=True)
             raise
 
 

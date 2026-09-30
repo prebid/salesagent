@@ -417,10 +417,16 @@ def when_sync_creative(ctx: dict) -> None:
     A no-auth Given's ``ctx["credential"]`` (a token-less credential, or one addressing
     a tenant that does not exist) is presented by ``dispatch_request`` itself, so the
     resolver's refusal fires on the wire without this step reading the key.
+
+    ``ctx["signed"]`` asks for a REAL RFC 9421 signature on this dispatch. It is
+    forwarded verbatim rather than branched on or collapsed with ``bool(...)``: it is a
+    realization, not a flag (False / True / "malformed" / "tampered"), and what a
+    signature IS on each transport belongs to the dispatcher. Defaulting to False keeps
+    every existing scenario byte-identical.
     """
     account_ref = ctx.get("account_ref")
     creatives = ctx.get("creatives", [])
-    kwargs: dict = {"account": account_ref, "creatives": creatives}
+    kwargs: dict = {"account": account_ref, "creatives": creatives, "signed": ctx.get("signed", False)}
     if "assignments" in ctx:
         kwargs["assignments"] = _assignments_for_the_wire(ctx["assignments"], ctx.get("assignment_terms"))
     if "assignment_entries" in ctx:

@@ -80,7 +80,16 @@ _DUPLICATE_THRESHOLD = 2
 # instead of a merge. The cluster's other groups were resolved on the
 # Gherkin side: two dead sentences swept to their canonical twin, one row corrected to the
 # pin, so nothing here to lower for them.
-_DUPLICATE_GROUP_BASELINE = 24
+#
+# 24 -> 22: both remaining uc010 pairs separated on their own, without a collapse, when the
+# capability steps grew the state their sentences always claimed. "full capabilities
+# configured" now reports the mock adapter's pricing-model set
+# (``env.set_supported_pricing_models()``), which its "full degradation baseline" twin does
+# not; "the adapter is unavailable" now seeds a real publisher partner so the degradation rows
+# grade the adapter channel alone, which its "advisory warning" twin does not. Both were listed
+# above as claims a shared body failed to distinguish -- the bodies now distinguish them, so
+# the groups are gone rather than merged.
+_DUPLICATE_GROUP_BASELINE = 22
 
 # Steps exempt from the 3+ identical-body scan (load-bearing: each suppresses a
 # cluster that would otherwise fail test_no_excessive_duplicate_step_bodies).
@@ -91,6 +100,21 @@ _DUPLICATE_GROUP_BASELINE = 24
 # request contract (pinned 04f59d2d5), and the e2e-harness wiring implemented the
 # remaining steps. No pass-body stubs remain, so the allowlist is empty.
 _ALLOWED_DUPLICATES: set[str] = set()
+
+# The SECOND half of the ratchet, and the merge is what proved it necessary. The incoming
+# branch graded this obligation as ``assert not duplicates`` at threshold 3 — no body may be
+# shared by 3+ steps, full stop. This branch replaced that with the GROUP-count ratchet above,
+# which is strictly better at catching a new pair and strictly blind to an existing pair
+# GROWING into a trio: a third clone joins group N, the group count stays put, and the guard
+# stays green on exactly the shape the incoming branch refused.
+#
+# Demonstrated, not theorised: a third step whose body is ``ctx.setdefault("tenant_id",
+# "test_tenant")`` — joining the live given_tenant_resolvable / given_tenant_setup_complete
+# pair — left the group count at 22 and the guard passing.
+#
+# So the MEMBER count is ratcheted too, two-sided, in the same shape. Together the two numbers
+# carry both sides' obligation: no new group, and no group growing.
+_DUPLICATE_MEMBER_BASELINE = 45
 
 
 def _is_step_decorated(func: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
@@ -189,6 +213,19 @@ class TestBddNoDuplicateSteps:
             f"{_DUPLICATE_GROUP_BASELINE}. Lower _DUPLICATE_GROUP_BASELINE to "
             f"{len(duplicates)} in the same change that removed them, so the ratchet cannot "
             f"drift back up unnoticed."
+        )
+
+        members = sum(len(funcs) for _, funcs in duplicates)
+        assert members <= _DUPLICATE_MEMBER_BASELINE, (
+            f"{members} step function(s) share a body with another, above the recorded baseline "
+            f"of {_DUPLICATE_MEMBER_BASELINE}. The GROUP count above cannot see this: a third "
+            f"clone joining an existing pair leaves it unchanged. A body shared by three "
+            f"sentences cannot express three states:" + "".join(lines)
+        )
+        assert members == _DUPLICATE_MEMBER_BASELINE, (
+            f"Only {members} duplicated step function(s) remain but the baseline still says "
+            f"{_DUPLICATE_MEMBER_BASELINE}. Lower _DUPLICATE_MEMBER_BASELINE to {members} in "
+            f"the same change that removed them, so the ratchet cannot drift back up unnoticed."
         )
 
     @pytest.mark.arch_guard

@@ -932,6 +932,55 @@ class TestMainFlowObligations:
 
         assert exc_info.value.error_code == "VALIDATION_ERROR"
 
+    def test_unsupported_format_refusal_names_what_was_rejected_and_what_is_accepted(self, integration_db):
+        """Requesting a format the product does not carry is refused, NAMING both sides.
+
+        The two branches this replaces built a diagnostic sentence into a local and then
+        raised ``AdCPValidationError()`` bare, so the string was dead: neither the buyer
+        nor the log ever saw it, and every create refusal looked identical because the
+        message is a property of the CODE, not of the raise site (25 of 27 refusals on
+        the storyboard tenant logged ``field=None details=None`` — salesagent-basxl).
+
+        ``rejected_value`` and ``accepted_values`` are the declared keys those sentences
+        were carrying, and "the product has no format_ids configured" is
+        ``accepted_values == []`` rather than a second branch saying so in words.
+        """
+        from src.core.format_resolver import format_display, format_identity
+        from src.core.tools._wire import to_wire
+
+        requested = {"agent_url": "https://creative.adcontextprotocol.org", "id": "video_preroll"}
+        carried = {"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"}
+        req = _make_request(
+            packages=[
+                {
+                    "product_id": "prod_1",
+                    "budget": 5000.0,
+                    "pricing_option_id": "cpm_usd_fixed",
+                    "format_ids": [requested],
+                }
+            ]
+        )
+
+        with MediaBuyCreateEnv() as env:
+            tenant, _principal = env.setup_default_data()
+            env.setup_product_chain(tenant, format_ids=[carried])
+            with raises_adcp(AdCPValidationError) as exc_info:
+                env.call_impl(req=req)
+
+        envelope = to_wire(exc_info.value.response)
+        assert_envelope_shape(envelope, "VALIDATION_ERROR", recovery="correctable")
+
+        (error,) = envelope["errors"]
+        assert error["field"] == "packages[0].format_ids", error
+        details = error["details"]
+        assert details["product_id"] == "prod_1", details
+        # Both sides named: what the buyer asked for that is unavailable, and what is.
+        # `format_display` is the canonical rendering of the (agent_url, id) identity the
+        # pinned core/format-id.json defines, so the values are compared through it rather
+        # than restated as literals.
+        assert details["rejected_value"] == [format_display(format_identity(requested))], details
+        assert details["accepted_values"] == [format_display(format_identity(carried))], details
+
     def test_persistence_after_adapter_success(self, integration_db):
         """Media buy is persisted after adapter returns success.
 
@@ -1230,6 +1279,45 @@ class TestInlineCreativeObligations:
         assert exc_info.value.error_code == "VALIDATION_ERROR"
 
     @pytest.mark.asyncio
+    async def test_malformed_registered_agent_url_skipped_not_hard_failed(self, integration_db):
+        """A malformed PRE-EXISTING registered creative agent_url (admin-ingested
+        data the buyer never touched) is excluded from registration matching
+        with a log, rather than hard-failing every format_id in the request.
+
+        Covers #1291.
+        """
+        from src.core.tools.media_buy_create import _validate_and_convert_format_ids
+        from tests.factories import CreativeAgentFactory
+
+        with MediaBuyCreateEnv() as env:
+            tenant, _principal = env.setup_default_data()
+            # Well-formed registration the buyer's format_id should match.
+            CreativeAgentFactory(tenant=tenant, agent_url="https://creative.example.com", enabled=True)
+            # Malformed pre-existing registration -- bypasses admin-ingestion
+            # validation entirely by writing directly to the DB, which is
+            # exactly how such a row would already exist in production.
+            # NOT a U-label host: the merged canonicalizer IDNA-encodes "https://exämple.com"
+            # to https://xn--exmple-cua.com/ and returns normally, which left the
+            # TargetUriMalformedError arm in _build_registered_agent_urls unexecuted and this
+            # case grading nothing. An unparseable authority is refused for real.
+            CreativeAgentFactory(tenant=tenant, agent_url="https://[::1", enabled=True)
+
+            # No get_format mocking needed: ADCP_TESTING=true (autouse fixture)
+            # makes CreativeAgentRegistry serve the checked-in reference formats
+            # for any agent_url, so this exercises the real registry lookup.
+            result = await _validate_and_convert_format_ids(
+                format_ids=[{"agent_url": "https://creative.example.com", "id": "display_300x250_image"}],
+                tenant_id=tenant.tenant_id,
+                package_idx=0,
+            )
+
+        # Returned in CANONICAL form, trailing slash and all: the merged canonicalizer
+        # applies url-canonicalization step 5 ("empty path + authority -> /"), which the
+        # pre-merge one undid with a now-deleted rstrip("/"). Same obligation, spelled in
+        # the one canonical form both sides of the registration check now use.
+        assert result == [{"agent_url": "https://creative.example.com/", "id": "display_300x250_image"}]
+
+    @pytest.mark.asyncio
     async def test_unapproved_creatives_may_trigger_manual_approval(self):
         """Unapproved creatives may trigger manual approval path.
 
@@ -1486,10 +1574,13 @@ class TestExtensionObligations:
         """
         from src.core.tools.media_buy_create import _validate_and_convert_format_ids
 
-        with patch("src.core.creative_agent_registry.CreativeAgentRegistry") as mock_registry_cls:
+        # Patched at the ACCESSOR, not the class: production asks
+        # get_creative_agent_registry() for the registry the deployment selected, so
+        # replacing the constructor would leave the real (reference-formats) registry in play.
+        with patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_get_registry:
             mock_registry = MagicMock()
             mock_registry._get_tenant_agents.return_value = []  # No agents registered
-            mock_registry_cls.return_value = mock_registry
+            mock_get_registry.return_value = mock_registry
 
             from src.core.exceptions import AdCPAuthorizationError
 
@@ -1515,11 +1606,13 @@ class TestExtensionObligations:
         mock_agent = MagicMock()
         mock_agent.agent_url = "https://creative.example.com"
 
-        with patch("src.core.creative_agent_registry.CreativeAgentRegistry") as mock_registry_cls:
+        # Patched at the ACCESSOR, not the class -- see the note in
+        # test_unregistered_creative_agent_rejected.
+        with patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_get_registry:
             mock_registry = MagicMock()
             mock_registry._get_tenant_agents.return_value = [mock_agent]
             mock_registry.get_format = AsyncMock(return_value=None)  # Format not found
-            mock_registry_cls.return_value = mock_registry
+            mock_get_registry.return_value = mock_registry
 
             with pytest.raises(AdCPFormatNotFoundError) as exc_info:
                 await _validate_and_convert_format_ids(

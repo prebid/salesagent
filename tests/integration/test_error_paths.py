@@ -8,9 +8,15 @@ is a copy that drifts". That is true of every envelope/recovery/serialization te
 this file used to carry, and those are gone for good:
 
 * the parametrized REST recovery propagation and the NOT_FOUND both-layers case ->
-  ``tests/unit/test_error_boundary_translation.py::TestRestStatusCodeRoundtrip``,
-  which drives each typed class through the real handler stack and grades both
-  envelope layers via ``assert_envelope_shape``;
+  BDD on the real wire: every error scenario grades code and recovery on BOTH
+  envelope layers through ``TransportResult.assert_wire_error`` (which calls
+  ``assert_envelope_shape``), and REST's HTTP status through the REST-tagged
+  scenarios of ``local-pre-dispatch-refusals.feature``. The two facts about the
+  exception CLASSES that no scenario names are pinned by
+  ``tests/unit/test_error_envelope.py::TestTypedSubclassHttpStatus`` (the status
+  each typed class resolves to) and
+  ``tests/unit/test_adcp_exceptions.py::TestEveryEmittedCodeHasAnAuthoredStatus``
+  (no emitted code falls through to the unclassified 500 default);
 * ``to_dict()`` recovery roundtrip -> the method no longer exists; recovery is a
   read-only property over ``CODE_TABLE`` and is graded on both wire layers by
   ``assert_envelope_shape`` on every use;
@@ -37,6 +43,17 @@ the wire envelope and BR-SECURITY-001 grades the boundary LOG via caplog; neithe
 grades the persisted audit row, and no other test in the tree asserts an
 ``audit_logs`` entry with ``adapter_id == "rest_boundary"``. Deleting this class
 would have made that whole best-effort identity path unobserved.
+
+Merge note (RFC 9421 signing epic): the epic's only edit to this file was adding an
+``integration_db`` fixture to the two ``TestRecoveryFieldInErrorResponses`` tests,
+because the inbound verifier MIDDLEWARE it introduced resolved the seller tenant on
+every AdCP request and so needed a database. That middleware does not exist here --
+inbound verification is part of ``_resolve_identity``, reached through
+``_boundary.invoke_tool`` -- and the class it fixed is one of the ones deleted above.
+The underlying fact survives and is already satisfied: the one class below drives the
+real ASGI app through identity resolution, and it takes ``factory_session``,
+``sample_tenant`` and ``sample_principal``, all of which require the database this
+file is already marked for.
 """
 
 import pytest

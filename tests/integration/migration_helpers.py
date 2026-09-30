@@ -35,19 +35,37 @@ def parse_postgres_url() -> tuple[str, str, str, int] | None:
 
 
 def _run_alembic_command(db_url: str, command_fn, target_revision: str) -> None:
-    """Run an Alembic command with temporary DATABASE_URL override.
+    """Run an Alembic command against *db_url*, whatever the caller's context.
 
-    Temporarily sets DATABASE_URL for alembic/env.py which reads from
-    DatabaseConfig.get_connection_string().
+    THE ENV VAR ALONE IS NOT THE OVERRIDE. ``alembic/env.py`` resolves its URL at import
+    time from ``DatabaseConfig.get_connection_string()``, which reads ``get_settings()`` --
+    and that is a PROCESS-WIDE CACHE (``src.core.config._settings``, built on first use).
+    Setting ``DATABASE_URL`` and hoping is therefore a coin flip decided by whether anything
+    earlier in the process warmed that cache: measured, the identical override resolved to
+    the ambient ``.../adcp_test`` when called from a module-scoped fixture and to the
+    intended ``.../test_migration_<hex>`` when called from a test body, because a
+    function-scoped conftest fixture resets the cache in between. The failure is silent --
+    the upgrade runs against the wrong database, the intended one stays empty, and the next
+    statement dies on a missing table.
+
+    So the cache is dropped for the duration and rebuilt after, making the override mean
+    what it says from any caller. Restored rather than left cleared: the ambient settings
+    belong to whatever is running this, and a test that finds them missing afterwards would
+    be paying for someone else's migration.
     """
     from alembic.config import Config
 
+    from src.core import config as config_module
+
     old_url = os.environ.get("DATABASE_URL")
+    old_settings = config_module._settings
     os.environ["DATABASE_URL"] = db_url
+    config_module._settings = None
     try:
         alembic_cfg = Config("alembic.ini")
         command_fn(alembic_cfg, target_revision)
     finally:
+        config_module._settings = old_settings
         if old_url:
             os.environ["DATABASE_URL"] = old_url
         elif "DATABASE_URL" in os.environ:

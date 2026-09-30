@@ -23,6 +23,18 @@ if TYPE_CHECKING:
 # real sentinel (meaning "no override") would be misread as HAVING overridden
 # the credential. One object, one name.
 
+#: Opt-in: a Given sets this when the scenario's claim is about WEBHOOK CREDENTIALS
+#: rather than about one request. The seller must then answer the same way at every
+#: place the transport lets a buyer hand it credentials — see
+#: ``BaseTestEnv.credential_registrations``. Opt-in rather than inferred from a
+#: ``push_notification_config`` being present, because most scenarios that carry one
+#: are about the WEBHOOK (its URL, its echo), not about the credential-registration
+#: surface, and they must keep dispatching exactly one request.
+GRADE_EVERY_CREDENTIAL_LOCATION = "grade_every_credential_location"
+
+#: Where the per-location results land: ``((location, TransportResult), ...)``.
+CREDENTIAL_REGISTRATIONS = "credential_registrations"
+
 
 class WireCtx(TypedDict, total=False):
     """What a WIRE dispatch may publish into ``ctx``, and with what types.
@@ -276,6 +288,79 @@ def dispatch_request(ctx: dict, *, credential: Any = NO_IDENTITY_OVERRIDE, **kwa
     # caught nothing; it was dead weight standing where a real swallow could grow.
     result = env.call_via(transport, **kwargs)
     _populate_ctx_from_result(cast("WireCtx", ctx), result)
+    # Runs UNCONDITIONALLY after the dispatch, never in an ``else:`` hung off a
+    # ``try``. The blanket ``except Exception`` that ``else`` belonged to is gone
+    # (above), so there is no longer a branch on which an opted-in scenario could
+    # silently skip the second credential location and still be graded — which is
+    # the vacuity :func:`_record_credential_registrations` exists to prevent, and
+    # the same one :func:`dispatch_via_client` raises over.
+    _record_credential_registrations(ctx, transport, result, kwargs)
+
+
+def _record_credential_registrations(
+    ctx: dict, transport: Transport, result: TransportResult, kwargs: dict[str, Any]
+) -> None:
+    """Ask the env for the seller's answer at EVERY credential location, not just this one.
+
+    A DEPARTURE FROM "one request, one outcome", and it is deliberate: for the
+    opted-in scenarios this one When puts more than one request on the wire,
+    because on at least one transport a buyer has more than one way to hand the
+    seller webhook credentials, and a claim about "registrations" that exercised
+    only one of them is a claim about a surface nothing looked at. WHICH transport
+    that is, and how many places it has, is not stated here and must not be — see
+    the env.
+
+    The step layer stays transport-blind through it: WHICH locations exist, and
+    what each is called, is the env's answer (``credential_registrations``), and
+    this function neither knows nor asks how many there will be. If a THIRD
+    location ever appears it appears there, silently, and every opted-in scenario
+    grades it.
+
+    Off by default (``GRADE_EVERY_CREDENTIAL_LOCATION``), so no existing scenario
+    changes its dispatch count.
+    """
+    if not ctx.get(GRADE_EVERY_CREDENTIAL_LOCATION):
+        return
+    # The REALIZATION, verbatim — never ``bool(...)``. ``signed`` is not a flag: it is
+    # one of False / True / "malformed" / "tampered"
+    # (tests.helpers.signing.SIGNATURE_REALIZATIONS), and ``bool("malformed")`` is
+    # True, so collapsing it here would hand this frame a WELL-FORMED signature while
+    # the operation dispatch above carried the malformed one. The scenario would then
+    # grade an acceptance at the credential location it exists to grade a refusal at,
+    # and pass. A second credential location is the epic's headline bypass surface, so
+    # these are the frames that can least afford the collapse. WHICH transport has one
+    # stays the env's business, here too: this comment names the hazard, not the leg.
+    ctx[CREDENTIAL_REGISTRATIONS] = ctx["env"].credential_registrations(
+        transport,
+        kwargs.get("push_notification_config"),
+        result,
+        signed=kwargs.get("signed", False),
+    )
+
+
+def _refuse_ungraded_credential_locations(ctx: dict, caller: str) -> None:
+    """Refuse to dispatch from an entry that CANNOT grade every credential location.
+
+    :func:`dispatch_request` is the only entry whose call shape (a keyword bag carrying
+    ``push_notification_config`` and the ``signed`` realization) lets it ask the env for
+    the seller's answer at each location. The other two entries take a single opaque
+    body and have no ``signed``, so they can only ever produce ONE outcome. Letting an
+    opted-in scenario through them would grade one location and pass — the exact vacuity
+    :func:`_record_credential_registrations` exists to prevent, and worse than a missing
+    test because it reads as coverage.
+
+    ONE function rather than the check written out at each entry: the guard shipped with
+    two entries in view and the merge added a third (:func:`dispatch_raw_document`), which
+    is precisely how a seam-level obligation goes missing on the newest seam. A rule that
+    must hold at every non-grading entry is a function, not a convention (CLAUDE.md DRY
+    invariant).
+    """
+    if ctx.get(GRADE_EVERY_CREDENTIAL_LOCATION):
+        raise RuntimeError(
+            f"{caller}: scenario opted into {GRADE_EVERY_CREDENTIAL_LOCATION!r}, which only "
+            "dispatch_request grades. Dispatch through dispatch_request, or teach this entry "
+            "the credential-registration contract first."
+        )
 
 
 def dispatch_raw_document(ctx: dict, document: Any, *, credential: Any = NO_IDENTITY_OVERRIDE) -> None:
@@ -288,6 +373,10 @@ def dispatch_raw_document(ctx: dict, document: Any, *, credential: Any = NO_IDEN
     """
     from tests.harness.raw_wire import dispatch_raw
 
+    # A raw document is one opaque body; there is no keyword bag to read a
+    # push_notification_config or a ``signed`` realization out of, so this entry cannot
+    # answer a credentials claim at more than one location.
+    _refuse_ungraded_credential_locations(ctx, "dispatch_raw_document")
     env = ctx["env"]
     transport = _as_transport(ctx, "dispatch_raw_document")
     _populate_ctx_from_result(cast("WireCtx", ctx), dispatch_raw(env, transport, document, credential))
@@ -316,6 +405,12 @@ def dispatch_via_client(
     ``then_operation_fails`` would mistake it for a real AdCP rejection
     (client.py's own anti-vacuity comment on ``call()``).
     """
+    # The dispatch paths converge on the same ctx contract but NOT on the same
+    # credential-location grading: ``AdCPTestClient.call`` takes a single ``payload``
+    # and has no ``signed`` parameter, so this path cannot ask the env for the seller's
+    # answer at every credential location. Fail loudly instead; no scenario wires both
+    # today.
+    _refuse_ungraded_credential_locations(ctx, "dispatch_via_client")
     client = ctx["client"]
     transport = _as_transport(ctx, "dispatch_via_client")
     # This entry CANNOT be folded into :func:`dispatch_request`, so it is gated in

@@ -9,12 +9,18 @@ than the longest one.
 
 Runs the REAL run_all_tests.sh end to end (real arg parsing, real env/suite
 resolution, real command construction) rather than grepping its source, so it
-asserts on genuine behavior instead of text shape. The only thing replaced is
-the ``docker`` binary on PATH -- a stub that records every invocation and exits
-0 -- because standing up the full Postgres/app/proxy compose stack is not
+asserts on genuine behavior instead of text shape. The principal thing replaced
+is the ``docker`` binary on PATH -- a stub that records every invocation and
+exits 0 -- because standing up the full Postgres/app/proxy compose stack is not
 needed to observe *which command run_all_tests.sh hands to tox*, and doing so
 would make this slow, non-hermetic, and dependent on a real Docker daemon.
 Docker orchestration is the external boundary being stubbed, not the subject.
+
+The helper scripts run_all_tests.sh calls on the host are copied in REAL
+wherever their only reach outside the process is through that stubbed
+``docker``; only the one that would touch the host's Python toolchain and
+generate real X.509 material is replaced. See ``_REAL_HOST_SCRIPTS`` /
+``_HOST_SCRIPT_STUBS``.
 
 Also covers ``scripts/check_truncated_reports.py``, the predicate BOTH runners
 apply to decide whether a green-looking run actually reported everything it
@@ -33,21 +39,7 @@ import pytest
 
 from scripts import check_truncated_reports
 from scripts.check_truncated_reports import truncation_report
-from tests.unit.test_run_all_tests_contract import _REPO_ROOT, _RUNNER
-
-_CREATIVE_AGENT_STACK = _REPO_ROOT / "scripts" / "creative-agent-stack.sh"
-
-# Every scripts/ module the runner shells out to after collecting reports, plus
-# the shared walk they both import. Listing only the entry points was how the
-# sandbox went stale: `report_suite_failures.py` joined the runner and
-# `_suite_reports.py` became their shared dependency, and the sandbox -- which
-# copies files rather than the tree -- kept handing the runner a scripts/ dir
-# that could not execute the checks it invokes.
-_RUNNER_REPORT_SCRIPTS = (
-    "check_truncated_reports.py",
-    "report_suite_failures.py",
-    "_suite_reports.py",
-)
+from tests.unit._run_all_tests_helpers import REPO_ROOT, RUNNER
 
 _DOCKER_STUB = """#!/usr/bin/env bash
 # Records every invocation of this fake `docker` (argv, space-joined) to
@@ -104,6 +96,110 @@ esac
 exit 0
 """
 
+#: Helper scripts run_all_tests.sh executes ON THE HOST that are copied in for
+#: REAL, repo-relative to REPO_ROOT. Each one's only reach outside its own
+#: process is through `docker`, which is already stubbed, so running the genuine
+#: article is both hermetic and more faithful than a hand-written double:
+#:
+#:   creative-agent-stack.sh   `build` is docker image inspect/build/tag only.
+#:   dev/alloc-e2e-subnet.sh   pure `ipaddress` arithmetic over the subnets
+#:                             `docker network inspect` reports; against the
+#:                             stub it sees none taken and prints a real
+#:                             `E2E_NETWORK_SUBNET=<cidr>` for the runner's
+#:                             `eval "export $(...)"` to consume. A double that
+#:                             printed nothing would leave that variable unbound
+#:                             under `set -u`.
+#:   check_truncated_reports.py  pure-stdlib JSON arithmetic over $RESULTS_DIR
+#:                             (main, PR #2091): the runner shells out to it
+#:                             after collecting reports so a truncated suite is
+#:                             not mistakable for a green one. It reaches
+#:                             nothing outside the workdir, and its absence is
+#:                             not inert -- whichever report-extraction shape
+#:                             run_all_tests.sh settles on, a populated
+#:                             $RESULTS_DIR makes the runner invoke it, and a
+#:                             missing file would surface only as a python3
+#:                             "No such file or directory" the rot guard below
+#:                             has to name.
+#:   report_suite_failures.py  the runner's second post-collection check (a suite
+#:                             can report "failed 0" everywhere and still exit
+#:                             non-zero), same pure-stdlib reach.
+#:   _suite_reports.py         not invoked directly -- it is the report walk the
+#:                             two checks above both import. Listing only the
+#:                             entry points was how this sandbox went stale
+#:                             once: it copies files rather than the tree, so a
+#:                             missing shared dependency hands the runner a
+#:                             scripts/ dir that cannot execute the checks it
+#:                             invokes.
+_REAL_HOST_SCRIPTS = (
+    "scripts/creative-agent-stack.sh",
+    "scripts/dev/alloc-e2e-subnet.sh",
+    "scripts/check_truncated_reports.py",
+    "scripts/report_suite_failures.py",
+    "scripts/_suite_reports.py",
+)
+
+#: Helper scripts run_all_tests.sh executes on the host that must NOT run for
+#: real, mapped to the stub that replaces each.
+#:
+#: ensure-test-tls.sh searches the HOST for a Python that has `cryptography`
+#: (trying `uv run python`, which resolves and builds project environments) and
+#: then generates real X.509 material on disk. That is host and toolchain reach,
+#: and none of it bears on which command the runner hands to tox. Exiting 0 is
+#: the faithful simulation: the runner reads it as "TLS material is present" and
+#: skips its in-container fallback.
+_HOST_SCRIPT_STUBS = {
+    "scripts/dev/ensure-test-tls.sh": """#!/usr/bin/env bash
+# Stands in for scripts/dev/ensure-test-tls.sh: reports that the stack's TLS
+# material exists, without touching the host's Python toolchain or writing
+# certificates. See _HOST_SCRIPT_STUBS.
+exit 0
+""",
+    # storyboard-signing-env.sh derives the storyboard agent's signed-requests settings by
+    # running `uv run python -m scripts.setup.storyboard_signing`, which resolves and builds
+    # project environments -- the same host-toolchain reach ensure-test-tls.sh is stubbed
+    # for, and none of it bears on which command the runner hands to tox.
+    #
+    # NO `exit 0` HERE, unlike the stub above: the runner SOURCES this one, so an `exit`
+    # would end run_all_tests.sh itself at that line and the test would be asserting on a
+    # run that never reached tox. Falling off the end returns 0, which is the faithful
+    # simulation -- the runner reads it as "the settings were derived" and proceeds with
+    # them unset, which is exactly what a stack brought up without them looks like.
+    "scripts/dev/storyboard-signing-env.sh": """#!/usr/bin/env bash
+# Stands in for scripts/dev/storyboard-signing-env.sh: exports nothing and returns 0,
+# without reaching the host's Python toolchain. See _HOST_SCRIPT_STUBS.
+:
+""",
+}
+
+
+def _make_executable(path: Path) -> None:
+    path.chmod(path.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
+
+
+def _provision_runner_dependencies(workdir: Path) -> None:
+    """Populates `workdir` with run_all_tests.sh and the helpers it shells out to.
+
+    Copying is deliberate over stubbing wherever the real script's only external
+    boundary is the stubbed `docker` -- see _REAL_HOST_SCRIPTS.
+    """
+    shutil.copy2(RUNNER, workdir / "run_all_tests.sh")
+
+    for relative in _REAL_HOST_SCRIPTS:
+        source = REPO_ROOT / relative
+        assert source.is_file(), (
+            f"{relative} is copied into this test's stub workdir but no longer exists in the repo; "
+            "run_all_tests.sh's host dependencies have moved -- update _REAL_HOST_SCRIPTS."
+        )
+        destination = workdir / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, destination)
+
+    for relative, body in _HOST_SCRIPT_STUBS.items():
+        destination = workdir / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_text(body)
+        _make_executable(destination)
+
 
 def _run_with_stubbed_docker(tmp_path: Path) -> tuple[subprocess.CompletedProcess, Path]:
     """Runs the real run_all_tests.sh default invocation with `docker` stubbed.
@@ -112,20 +208,14 @@ def _run_with_stubbed_docker(tmp_path: Path) -> tuple[subprocess.CompletedProces
     script attempted to hand to `docker`.
     """
     workdir = tmp_path / "workdir"
-    (workdir / "scripts").mkdir(parents=True)
-    shutil.copy2(_RUNNER, workdir / "run_all_tests.sh")
-    shutil.copy2(_CREATIVE_AGENT_STACK, workdir / "scripts" / "creative-agent-stack.sh")
-    # The runner shells out to these after collecting reports (main, PR #2091):
-    # a truncated suite, or one whose only problem is a setup error, must not be
-    # mistakable for a green one.
-    for name in _RUNNER_REPORT_SCRIPTS:
-        shutil.copy2(_REPO_ROOT / "scripts" / name, workdir / "scripts" / name)
+    workdir.mkdir(parents=True)
+    _provision_runner_dependencies(workdir)
 
     stub_bin = tmp_path / "stub_bin"
     stub_bin.mkdir()
     docker_stub = stub_bin / "docker"
     docker_stub.write_text(_DOCKER_STUB)
-    docker_stub.chmod(docker_stub.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
+    _make_executable(docker_stub)
 
     docker_log = tmp_path / "docker_calls.log"
     docker_log.touch()
@@ -147,6 +237,23 @@ def _run_with_stubbed_docker(tmp_path: Path) -> tuple[subprocess.CompletedProces
         text=True,
         timeout=60,
     )
+
+    # The rot guard. run_all_tests.sh gaining another host helper is the failure
+    # this harness has already suffered once (a cross-branch merge added two,
+    # and the run died at line 219 before reaching the assertion below). Naming
+    # the missing path here turns that into a one-line diagnosis, and catches
+    # the SILENT variant too -- a new dependency invoked as `helper.sh || true`
+    # leaves the exit code 0 while the runner takes a branch it would never take
+    # in production.
+    missing = [line for line in proc.stderr.splitlines() if "No such file or directory" in line]
+    assert not missing, (
+        "run_all_tests.sh reached for a host file this stub workdir does not provide:\n"
+        + "\n".join(missing)
+        + "\n\nAdd it to _REAL_HOST_SCRIPTS (copy it, if its only external boundary is the "
+        "stubbed `docker`) or to _HOST_SCRIPT_STUBS (double it, if running it for real would "
+        "touch the network, the host toolchain, or a live Docker daemon)."
+    )
+
     return proc, docker_log
 
 

@@ -14,9 +14,11 @@ from typing import Any, cast
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
+from starlette.requests import ClientDisconnect
 
 from src.core.exceptions import AdcpFailure
 from src.core.resolved_identity import TransportProtocol
+from src.core.signing.capture import captured_exchange
 from src.core.tools._announced_shape import apply_signature
 from src.core.tools._boundary import serve
 from src.core.tools._wire import to_wire
@@ -41,8 +43,21 @@ async def _payload(request: Request) -> Any:
     Both go to ``validated_request``, which refuses a non-object the same way, so a body that
     is not JSON earns the same INVALID_REQUEST as a JSON list rather than a decode error
     escaping to a handler that types it differently.
+
+    A body that never finished arriving joins them. Starlette raises ``ClientDisconnect`` out
+    of ``body()`` when the receive channel answers ``http.disconnect`` instead of the chunk it
+    promised, and it DISCARDS what did arrive, so there is nothing left to parse. That is a
+    truncated request, not a server fault: it earns the boundary's INVALID_REQUEST like every
+    other unparseable body. Letting it escape would leave the one route function that reads
+    its own body raising past ``except AdcpFailure`` into a 500 — the reads FastAPI does for a
+    declared body model are wrapped this way too (``fastapi/routing.py``, "There was an error
+    parsing the body"), and this route declares ``Request`` precisely so that
+    ``validated_request`` owns the refusal.
     """
-    raw = await request.body()
+    try:
+        raw = await request.body()
+    except ClientDisconnect:
+        raw = b""
     try:
         return json.loads(raw)
     except ValueError:
@@ -76,9 +91,14 @@ def _rest_handler(tool_name: str, spec: Any) -> Any:
                     body = {**body, **path_values}
                 except TypeError:
                     pass
-            # The request HEADERS, not an identity: the boundary resolves the caller and reads
-            # the row's auth declaration itself.
-            response = await serve(tool_name, body, request.headers, TransportProtocol.REST)
+            # The request HEADERS and the captured HTTP MESSAGE, not an identity: the boundary
+            # resolves the caller and reads the row's auth declaration itself. The capture
+            # comes off the scope rather than from ``await request.body()`` because a
+            # signature covers ``@method`` and ``@target-uri`` as well as the bytes, and
+            # ``@target-uri`` can only be rebuilt from ``raw_path``.
+            response = await serve(
+                tool_name, body, request.headers, TransportProtocol.REST, captured_exchange(request.scope)
+            )
         except AdcpFailure as failure:
             # REST's wire failure marker is the HTTP STATUS, and that is all this transport
             # adds. The BODY is the response the boundary built, serialized by the same

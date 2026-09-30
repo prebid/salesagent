@@ -41,7 +41,7 @@ def scoping_env(integration_db):  # noqa: F811 — fixture parameter, not a rede
     """``AdminTenantScopingEnv`` on the Flask test_client, target tenant seeded (#2203).
 
     The e2e twin is the ``scoping_env`` fixture in tests/e2e/test_admin_tenant_scoping_e2e.py;
-    the test classes in tests/admin/test_tenant_scoped_routes_auth.py run against either.
+    the contract classes in tests/helpers/admin_tenant_scoping_contract.py run against either.
     """
     from tests.harness.admin_tenant_scoping import AdminTenantScopingEnv
 

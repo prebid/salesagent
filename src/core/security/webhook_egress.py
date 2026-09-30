@@ -14,6 +14,19 @@ seconds>`` on compact-separator JSON. ``adcp.sign_legacy_webhook`` (the
 installed ``adcp==6.6.0`` SDK) implements exactly this and is a cross-check
 confirming the spec reading, not the authority.
 
+Three authentication arms, one match (:func:`_headers_for`): legacy HMAC-SHA256,
+Bearer, and — selected by the ABSENCE of an ``authentication`` block, which is the
+pinned schema's own selector (``docs/building/by-layer/L1/security.mdx`` @ v3.1.1
+:1424) — the RFC 9421 webhook-signing profile. The 9421 arm does NOT get its own
+HTTP client: it is applied as ``send``/``asend``'s ``sign=`` callback, invoked once
+per attempt over ``request.content``. That is what keeps a signed delivery inside
+:mod:`outbound_http`'s resolve-once-and-pin, redirect refusal, port policy and body
+cap, and simultaneously gives each retry a fresh ``nonce`` — a signature computed
+once above the retry loop is one a conformant receiver must reject on attempt two.
+The strategy itself is never built here; it comes from
+:func:`src.core.signing.outbound.delivery_signer_for_tenant`, the one place that
+decides which key signs a tenant's webhooks.
+
 Placed beside :mod:`outbound_http` rather than in ``src/services/``: this is
 egress policy (what bytes represent a payload, and how those bytes are
 authenticated), not business logic.
@@ -42,6 +55,7 @@ from typing import Any
 
 from adcp import sign_legacy_webhook
 from adcp.types import AuthenticationScheme
+from adcp.webhook_auth import JwkSignerStrategy
 from pydantic import ValidationError
 
 from src.core.schemas.notification import PushAuthentication
@@ -50,6 +64,7 @@ from src.core.security.outbound_http import (
     OutboundError,
     OutboundRequestBlocked,
     OutboundResult,
+    SignAttempt,
     asend,
     send,
     terminal_client_error_status,
@@ -227,28 +242,136 @@ def prepare_signed_request(
 
 # ── The seam: one decision, one outcome ───────────────────────────────────────
 
+#: The ONE Content-Type an RFC 9421 delivery may carry, because
+#: ``JwkSignerStrategy.build_auth_headers`` builds its signature base from a
+#: hard-coded ``{"Content-Type": "application/json"}`` and covers the
+#: ``content-type`` component whenever that header is present. It is not a
+#: preference: :func:`prepare_signed_request` ``setdefault``\\ s exactly this value,
+#: and a caller that supplied any other spelling would ship a signature covering a
+#: header that never left, which a conformant verifier rejects with
+#: ``webhook_signature_components_incomplete`` (security.mdx @ v3.1.1 :1476).
+_SIGNABLE_CONTENT_TYPE = "application/json"
 
-def _headers_for(auth: PushAuthentication | None, headers: dict[str, str] | None) -> tuple[dict[str, str], str | None]:
-    """Turn a validated block into (headers, signing secret). Matched ONCE.
+
+def _check_signable_content_type(headers: dict[str, str]) -> None:
+    """Refuse a caller-supplied Content-Type the RFC 9421 signer cannot honestly cover.
+
+    Loud rather than silent, and loud rather than corrective. Overwriting the
+    caller's value would send a body framed one way under a header claiming
+    another; leaving it would send a signature every receiver must reject, and
+    "every delivery to this receiver fails verification" is exactly the quiet
+    failure a header-shaped bug hides behind. Neither is an outcome the delivery
+    taxonomy can express — no ``RefusalReason`` names a caller's own header — so it
+    surfaces as the programming error it is, on the same footing as the
+    unhandled-scheme line below.
+
+    Absence is fine and is the normal case: :func:`prepare_signed_request` supplies
+    the value, so only a caller that went out of its way to name a different one
+    lands here.
+    """
+    for name, value in headers.items():
+        if name.lower() != "content-type":
+            continue
+        if value.strip() != _SIGNABLE_CONTENT_TYPE:
+            raise ValueError(
+                f"an RFC 9421 delivery must carry Content-Type {_SIGNABLE_CONTENT_TYPE!r} — "
+                f"the signer covers that exact value, so {value!r} would sign a header that "
+                "never ships and no receiver could rebuild the signature base from"
+            )
+
+
+def _headers_for(
+    auth: PushAuthentication | None,
+    headers: dict[str, str] | None,
+    signer: JwkSignerStrategy | None,
+) -> tuple[dict[str, str], str | None, SignAttempt | None]:
+    """Turn a validated block into (headers, HMAC secret, per-attempt signer). Matched ONCE.
+
+    Three arms, one match, and exactly one of the three outputs is ever non-empty —
+    a delivery is authenticated ONE way (security.mdx @ v3.1.1 :1425 forbids
+    "signed both ways"), and spelling all three as one return is what makes a
+    two-armed delivery unconstructible rather than merely discouraged.
+
+    * ``HMAC-SHA256`` -> the credential, which :func:`prepare_signed_request` signs the
+      serialized body with ONCE per delivery. That signature covers body + timestamp
+      and verifies on replay inside its window, so re-signing per attempt would buy
+      nothing and cost a second serialization.
+    * ``Bearer`` -> an ``Authorization`` header, no body signature at all.
+    * **No ``authentication`` block at all** -> the RFC 9421 arm. Absence is the
+      pinned schema's own selector for the 9421 profile (security.mdx @ v3.1.1 :1424),
+      which is why this arm is keyed on ``auth is None`` and not on an enum member:
+      ``AuthenticationScheme`` has exactly two members, ``Bearer`` and ``HMAC-SHA256``,
+      and neither of them is 9421. The seam returns ``signer.build_auth_headers``
+      itself — a :class:`SignAttempt`, the SDK-shaped
+      ``(method, url, body) -> headers`` callback ``send``/``asend`` invoke once PER
+      ATTEMPT — because an RFC 9421 signature carries a ``nonce`` a conformant
+      receiver must reject on replay, so one signature computed above the retry loop
+      is invalid on attempts two and three. No adapter is written here: the SDK's
+      ``WebhookAuthStrategy.build_auth_headers`` and this seam's ``SignAttempt`` are
+      the same keyword-only shape on purpose.
+
+    ``signer`` is IGNORED when a block is present, and that is the spec's mode
+    selection rather than a dropped input: the presence of ``authentication`` selects
+    the legacy arm (:1424), and applying a 9421 signature on top of it is precisely
+    what :1425 forbids. A caller reading a stored row cannot know which arm the row
+    selects, so it passes the tenant's signer unconditionally and this match decides.
 
     Shared by both twins deliberately: if each destructured the decision itself,
     "decided here and nowhere else" would be false on the day this shipped.
     """
     prepared = dict(headers or {})
     if auth is None:
-        return prepared, None
+        if signer is None:
+            # ``None`` signer is not a downgrade: it is the answer
+            # ``webhook_delivery_signer`` gives for a tenant whose capabilities already
+            # advertise ``webhook_signing.supported=false``, i.e. a receiver that has been
+            # told not to expect a Signature header. A tenant that CAN sign never reaches
+            # here with ``None`` — that function raises rather than returning one.
+            return prepared, None, None
+        _check_signable_content_type(prepared)
+        return prepared, None, signer.build_auth_headers
 
     scheme = auth.schemes[0]
     credential = auth.credentials
     match scheme:
         case AuthenticationScheme.HMAC_SHA256:
-            return prepared, credential
+            return prepared, credential, None
         case AuthenticationScheme.Bearer:
             prepared["Authorization"] = f"Bearer {credential}"
-            return prepared, None
+            return prepared, None, None
     # Adding a member to AuthenticationScheme without a branch here lands on this line
     # rather than delivering the webhook with the new scheme silently ignored.
     raise AssertionError(f"unhandled scheme: {scheme!r} — add a branch in _headers_for")
+
+
+#: A throwaway credential that only has to clear the pinned ``minLength: 32`` so the
+#: probe below can construct a block. It never leaves this module and never signs.
+_HMAC_PROBE_CREDENTIAL = "x" * 32
+
+
+def legacy_hmac_fallback_supported() -> bool:
+    """Whether this agent falls back to HMAC-SHA256 — ``webhook_signing.legacy_hmac_fallback``.
+
+    Pinned AdCP 3.1.1 defines the field as whether this agent falls back to HMAC-SHA256
+    on the legacy ``push_notification_config.authentication`` path. The SDK model
+    DEFAULTS it to false, which for this deployment would be a FALSE declaration:
+    :func:`_headers_for` answers an ``HMAC-SHA256`` registration by handing the stored
+    credential to :func:`prepare_signed_request`, unconditionally, for every sender.
+
+    ASKED of the arm rather than written as ``True``, and owned HERE rather than in
+    ``posture.py``, so the declaration cannot outlive the behaviour it declares: the
+    probe drives the real match with a real block, so deleting the ``HMAC_SHA256`` case
+    (AdCP 4.0 removes legacy HMAC) makes the wire follow on the next call instead of
+    advertising a fallback that no longer exists. A scheme that survives in the pinned
+    enum with no arm still lands on the ``AssertionError`` above — losing the fallback
+    silently is the one answer this must not give.
+    """
+    _, secret, _ = _headers_for(
+        PushAuthentication(schemes=[AuthenticationScheme.HMAC_SHA256], credentials=_HMAC_PROBE_CREDENTIAL),
+        None,
+        None,
+    )
+    return secret is not None
 
 
 def _outcome_for_outbound_error(exc: OutboundError, *, payload_size_bytes: int | None) -> WebhookDeliveryOutcome:
@@ -304,6 +427,7 @@ def deliver_webhook(
     headers: dict[str, str] | None = None,
     timeout: float = 10.0,
     max_attempts: int = 3,
+    signer: JwkSignerStrategy | None = None,
 ) -> WebhookDeliveryOutcome:
     """Deliver one webhook and say what became of it.
 
@@ -312,12 +436,35 @@ def deliver_webhook(
     them a type to construct would hand each of them a ``ValidationError`` to
     interpret — three senders deciding again what an invalid registration means,
     which is the divergence this seam exists to end. Primitives in, outcome out.
+
+    ``signer`` is the tenant's RFC 9421 strategy, obtained from
+    :func:`src.core.signing.outbound.delivery_signer_for_tenant` — the ONE place that
+    decides which key signs this tenant's webhooks, and the same object the capabilities
+    response derives ``webhook_signing`` from, so what we advertise and what we emit are
+    one decision. It is APPLIED only on the arm the spec selects for it (no ``authentication`` block; see :func:`_headers_for`), and only
+    ever through ``send``'s per-attempt ``sign=`` hook, never by pre-computing headers
+    here: the seam owns retry, and an RFC 9421 ``nonce`` replayed onto attempt two is
+    a signature a conformant receiver must reject.
+
+    Passing it does NOT open a second dialer. The signature is computed inside
+    ``send``, over ``request.content`` — the exact bytes httpx is about to transmit,
+    which are the exact bytes ``prepare_signed_request`` produced here — so the seam's
+    resolve-once-and-pin, redirect refusal, port policy and body cap all still apply,
+    unchanged, to a signed delivery.
+
+    A refused destination is still an OUTCOME (``refused_destination``), never a
+    downgrade: ``send`` raises :class:`OutboundRequestBlocked` from
+    ``EgressPolicy.resolve_for_dial`` before it builds any request, so on that path
+    ``signer`` is never even invoked and no unsigned body exists to fall back to. A
+    signer that raises mid-attempt escapes for the same reason — it is not in the
+    caught set, so an unsignable delivery fails loudly instead of retrying in the
+    clear.
     """
     decided = _authentication_or_refusal(scheme, credentials)
     if isinstance(decided, WebhookDeliveryOutcome):
         return decided
 
-    auth_headers, secret = _headers_for(decided, headers)
+    auth_headers, secret, sign = _headers_for(decided, headers, signer)
 
     # ONE serialization per delivery. The bytes that are measured, the bytes that
     # are signed and the bytes that go on the wire are the same object, because
@@ -325,10 +472,19 @@ def deliver_webhook(
     # once again inside the delivery helper -- and two runs of a serializer are
     # two things that can disagree, which is the whole reason the signed and
     # transmitted bodies had to be asserted equal in tests rather than being
-    # equal by construction.
+    # equal by construction. The RFC 9421 arm does not weaken that: ``sign`` is
+    # handed ``request.content``, which httpx took from this same ``body_bytes``
+    # object on the ``content=`` path and never re-encodes.
     request_headers, body_bytes = prepare_signed_request(payload, secret, auth_headers)
     try:
-        result = send(url, content=body_bytes, headers=request_headers, timeout=timeout, max_attempts=max_attempts)
+        result = send(
+            url,
+            content=body_bytes,
+            headers=request_headers,
+            timeout=timeout,
+            max_attempts=max_attempts,
+            sign=sign,
+        )
     except (OutboundRequestBlocked, OutboundDeliveryFailed) as exc:
         return _outcome_for_outbound_error(exc, payload_size_bytes=len(body_bytes))
     return _delivered(result, payload_size_bytes=len(body_bytes))
@@ -343,19 +499,30 @@ async def adeliver_webhook(
     headers: dict[str, str] | None = None,
     timeout: float = 10.0,
     max_attempts: int = 3,
+    signer: JwkSignerStrategy | None = None,
 ) -> WebhookDeliveryOutcome:
-    """Async twin of :func:`deliver_webhook` — identical policy, shared helpers."""
+    """Async twin of :func:`deliver_webhook` — identical policy, shared helpers.
+
+    ``signer`` included: the RFC 9421 arm is decided by the same ``_headers_for``
+    match and applied through ``asend``'s same per-attempt ``sign=`` hook, so the two
+    twins cannot come to sign different deliveries differently.
+    """
     decided = _authentication_or_refusal(scheme, credentials)
     if isinstance(decided, WebhookDeliveryOutcome):
         return decided
 
-    auth_headers, secret = _headers_for(decided, headers)
+    auth_headers, secret, sign = _headers_for(decided, headers, signer)
 
     # One serialization, exactly as in the sync twin above.
     request_headers, body_bytes = prepare_signed_request(payload, secret, auth_headers)
     try:
         result = await asend(
-            url, content=body_bytes, headers=request_headers, timeout=timeout, max_attempts=max_attempts
+            url,
+            content=body_bytes,
+            headers=request_headers,
+            timeout=timeout,
+            max_attempts=max_attempts,
+            sign=sign,
         )
     except (OutboundRequestBlocked, OutboundDeliveryFailed) as exc:
         return _outcome_for_outbound_error(exc, payload_size_bytes=len(body_bytes))

@@ -52,33 +52,17 @@ import pytest
 
 from src.core.security.outbound_http import OutboundRequestBlocked
 from tests.factories.creative_asset import CreativeAssetFactory
-from tests.factories.format import AGENT_URL, FormatFactory
+from tests.factories.format import AGENT_URL
 from tests.harness.creative_sync import CreativeSyncEnv
 from tests.harness.transport import Transport
+from tests.integration._egress_ingest_helpers import (
+    _FORMAT_ID,
+    _registered_format,
+)
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
 _ALL_TRANSPORTS = [Transport.A2A, Transport.REST, Transport.MCP]
-
-_FORMAT_ID = "display_300x250_image"
-
-
-def _registered_format() -> object:
-    """A Format the tenant's registry advertises — the operator's own agent_url.
-
-    ``format_id`` MUST be built from a plain dict, not a pre-constructed
-    ``src.core.schemas.FormatId`` instance: the ``_create_new_creative`` match
-    (``fmt.format_id == creative_format``) is Pydantic ``BaseModel.__eq__``,
-    which requires an EXACT class match, not a subclass one. Passing an
-    already-built ``FormatId`` instance to the factory makes Pydantic keep
-    that subclass as-is; a dict goes through real field validation and lands
-    on the same ``FormatReferenceStructuredObject`` variant the buyer's
-    ``CreativeAsset.format_id`` resolves to on the wire — which is what
-    ``registry.list_all_formats`` actually returns in production (its formats
-    are built by validating agent JSON responses, not by embedding pre-built
-    ``FormatId`` objects).
-    """
-    return FormatFactory(format_id={"id": _FORMAT_ID, "agent_url": AGENT_URL})
 
 
 def _creative_for_registered_format(creative_id: str):

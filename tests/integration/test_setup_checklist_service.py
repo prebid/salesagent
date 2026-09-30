@@ -17,6 +17,8 @@ from src.core.database.models import (
     Tenant,
     TenantAuthConfig,
 )
+from src.core.database.repositories.uow import SigningKeyUoW
+from src.core.signing.keys import provision_signing_key
 from src.services.setup_checklist_service import (
     AdCPConfigurationError,
     SetupChecklistService,
@@ -25,6 +27,7 @@ from src.services.setup_checklist_service import (
 )
 from tests.factories.principal import plaintext_token_for
 from tests.helpers.adcp_factories import create_test_db_product
+from tests.helpers.signing import deployment_kek
 
 pytestmark = pytest.mark.requires_db
 
@@ -366,7 +369,7 @@ class TestSetupChecklistService:
                 assert "action_url" in step
                 assert "priority" in step
 
-    def test_bulk_setup_status_for_multiple_tenants(self, integration_db):
+    def test_bulk_setup_status_for_multiple_tenants(self, integration_db, monkeypatch):
         """Test bulk setup status calculation for multiple tenants efficiently."""
         from datetime import UTC, datetime
 
@@ -500,6 +503,18 @@ class TestSetupChecklistService:
             db_session.add(principal3)
 
             db_session.commit()
+
+        # A signing key, because the checklist now enumerates one (salesagent-7x8t)
+        # and tenant 3 is this test's "fully configured" tenant. Minted through
+        # production's ONE provisioning function, over the same unit of work the
+        # admin route and the ops script use, rather than assembled as ORM kwargs.
+        # This used to mint env: BECAUSE env: needed no deployment KEK; since
+        # salesagent-9misv the only mintable scheme is db:, so the KEK is now part
+        # of the setup. It comes from the shared helper every provisioning suite
+        # uses -- a second mechanism here is how one of them ends up naming a
+        # passphrase variable nothing sets.
+        with deployment_kek(monkeypatch), SigningKeyUoW(tenant_ids[2]) as uow:
+            provision_signing_key(uow.signing_keys, tenant_id=tenant_ids[2], alg="ed25519")
 
         # Call bulk setup status method
         statuses = SetupChecklistService.get_bulk_setup_status(tenant_ids)

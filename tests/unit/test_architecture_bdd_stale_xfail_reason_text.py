@@ -205,11 +205,24 @@ class TestUC010MainReasonAccuracy:
             f"as the live gap. Got: {reason!r}"
         )
 
-    def test_reason_cites_the_signing_dependency_not_a_resolved_claim(self) -> None:
-        """The gap is spec-gated on RFC 9421 webhook signing (#1291), and account.sandbox
-        is long since resolved -- the reason must say the former and not the latter."""
+    def test_reason_names_the_rule_and_no_resolved_claim(self) -> None:
+        """The gap is the pinned cross-field rule and the state this scenario's Given can reach.
+
+        Two claims the reason must NOT make, both resolved. ``account.sandbox`` is long
+        since emitted. And RFC 9421 webhook signing is IMPLEMENTED -- ``webhook_signing``
+        is derived from real key material (``src.core.signing.posture.webhook_signing_posture``)
+        and the emitting case is graded by ``@T-UC-010-v31-webhook-signing-required-when``
+        -- so a reason citing #1291 as an unimplemented dependency describes a tree that
+        no longer exists, and pins a scenario as unreachable for a reason that has gone.
+        """
         reason = _xfail_tags_reasons()["T-UC-010-main-reporting-delivery"]
-        assert "#1291" in reason, f"The reason must cite the RFC 9421 signing dependency. Got: {reason!r}"
+        assert "must_equal_when" in reason, (
+            f"The reason must name the pinned cross-field rule that forbids the emission. Got: {reason!r}"
+        )
+        assert "#1291" not in reason, (
+            "The reason cites #1291 as the blocker, but webhook_signing is derived from key material "
+            f"and graded by @T-UC-010-v31-webhook-signing-required-when. Got: {reason!r}"
+        )
         assert "account.sandbox" not in reason, (
             f"The reason still claims the resolved account.sandbox gap. Got: {reason!r}"
         )

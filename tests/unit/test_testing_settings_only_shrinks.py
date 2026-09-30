@@ -31,7 +31,7 @@ EXPECTED_TESTING_FIELDS: frozenset[str] = frozenset(
         # loopback check while a suite runs. Goes when the test environments' loopback
         # origins are reachable without it — the same work ADCP_OUTBOUND_ALLOW_PRIVATE needs.
         "adcp_testing",
-        # One reader: src/admin/app.py:350, deciding whether the test-credential login
+        # One reader: src/admin/app.py:351, deciding whether the test-credential login
         # blueprint is COMPOSED. Goes when first-run admin setup has an answer that is not a
         # test flag (salesagent-091d8). Today that blueprint is the only non-SSO path to a
         # first admin session and the deployment docs tell operators to use it.

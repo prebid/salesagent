@@ -42,7 +42,8 @@ import pytest
 
 from scripts.audit import ledger, storyboard_spec
 from scripts.setup.init_database_ci import CI_TEST_SUBDOMAIN, CI_TEST_TOKEN
-from tests.storyboard import collected
+from scripts.setup.storyboard_signing import STORYBOARD_VIRTUAL_HOST
+from tests.storyboard import collected, corrected_storyboards, corrected_vectors
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _RUNNER_DIR = Path(__file__).parent / "runner"
@@ -100,9 +101,15 @@ _PROTOCOLS: tuple[str, ...] = ("mcp", "a2a")
 # MCP takes its endpoint directly (`/mcp/`, trailing slash included — FastMCP mounts it
 # that way). A2A takes the BASE url: the SDK appends `/.well-known/...` verbatim, so a
 # `/a2a` suffix would ask for `/a2a/.well-known/agent-card.json`, which 404s.
+#
+# The ORIGIN is imported, not spelled here. `scripts/setup/storyboard_signing.py` writes it
+# onto the tenant as its `virtual_host`, which is what makes a BEARER-LESS signed vector
+# resolve a tenant at all — those probes carry no `x-adcp-tenant`, so `_detect_tenant` has
+# only the Host. Two literals of it is a posture nothing enforces and 20+ negative vectors
+# answered 200, with the two spellings looking identical in review.
 _DEFAULT_AGENT_URLS: dict[str, str] = {
-    "mcp": "https://storyboard.adcp.test:8443/mcp/",
-    "a2a": "https://storyboard.adcp.test:8443",
+    "mcp": f"https://{STORYBOARD_VIRTUAL_HOST}/mcp/",
+    "a2a": f"https://{STORYBOARD_VIRTUAL_HOST}",
 }
 
 # Env vars the storyboard-conformance job MAY set. The compliance/schema paths
@@ -195,6 +202,22 @@ def _node_ca_env(agent_url: str) -> dict[str, str]:
         return {}
     bundle = os.environ.get("E2E_CA_BUNDLE") or str(_REPO_ROOT / ".test-tls" / "ca.pem")
     return {"NODE_EXTRA_CA_CERTS": bundle}
+
+
+#: Set on the in-network runner. Names the shared TLS front the receiver is
+#: published behind (host suffix + port), e.g. ``adcp-e2e.dev:8443``. Absent
+#: host-side, where the SDK's loopback receiver already works.
+_WEBHOOK_TLS_FRONT_ENV = "STORYBOARD_WEBHOOK_TLS_FRONT"
+
+
+def _webhook_tls_origin(protocol: str, tls_front: str) -> str:
+    """``storyboard-webhooks-<protocol>.<suffix>:<port>`` -- the advertised origin.
+
+    Per-protocol because :func:`_webhook_port` gives each run its own bind port and
+    nginx selects the upstream by SNI NAME: one hostname cannot route to two ports,
+    so each protocol needs its own row in the ``$ssl_server_name`` map.
+    """
+    return f"storyboard-webhooks-{protocol}.{tls_front}"
 
 
 def _webhook_port(protocol: str) -> str:
@@ -412,6 +435,34 @@ def _bundle_path(env_name: str) -> str:
     return str((storyboard_spec.adcp_home(_REPO_ROOT) / _BUNDLE_SUBDIR[env_name]).resolve())
 
 
+def _graded_compliance_dir() -> str:
+    """The compliance tree the runner is pointed at: the pinned one, fixtures corrected.
+
+    THE PINNED TREE IS NOT EDITED. This writes a sibling (``adcp-<version>-corrected/``,
+    covered by the runner directory's existing ``adcp-*/`` ignore) and hands the runner
+    that. Two corrections, both to fixtures rather than to anything a check grades:
+
+    * request-signing vector BODIES (``corrected_vectors``, adcp#7567). A seller
+      validates the payload before it authenticates the caller, so the corpus's stub
+      bodies (``{"plan_id":"plan_001"}``) are answered ``INVALID_REQUEST`` and the RFC
+      9421 checklist never runs — measured here as all 27 graded signed-requests checks
+      failing with ``got 200 (error="(none)")``.
+    * a product for ``webhook_emission`` to buy (``corrected_storyboards``, adcp#7609).
+      That storyboard discovers no product, so its four ``create_media_buy`` triggers
+      ship the SDK's ``"test-product"`` placeholder and are answered
+      ``PRODUCT_NOT_FOUND`` — measured as 4 of the 7 webhook_emission failures in run
+      innet_200926_0635.
+
+    Everything else is copied through byte-for-byte. Both are local stand-ins until the
+    fixes land upstream.
+    """
+    source = Path(_bundle_path(_COMPLIANCE_DIR_ENV))
+    dest = source.parent.parent / f"{source.parent.name}-corrected" / source.name
+    tree = corrected_vectors.corrected_compliance_tree(source, dest)
+    corrected_storyboards.correct_webhook_emission(tree)
+    return str(tree)
+
+
 def _webhook_receiver_args(protocol: str) -> tuple[list[str], dict[str, str]]:
     """CLI args + extra env that let the runner host a reachable webhook receiver.
 
@@ -431,8 +482,8 @@ def _webhook_receiver_args(protocol: str) -> tuple[list[str], dict[str, str]]:
     adcontextprotocol/adcp-client#2448); the flag ships in the pinned SDK, so the patch
     and the ADCP_WEBHOOK_RECEIVER_HOST env var it added are both gone.
     """
-    callback_host = os.environ.get(_WEBHOOK_CALLBACK_HOST_ENV)
-    if not callback_host:
+    tls_front = os.environ.get(_WEBHOOK_TLS_FRONT_ENV)
+    if not tls_front:
         return [], {}
 
     port = _webhook_port(protocol)
@@ -442,7 +493,14 @@ def _webhook_receiver_args(protocol: str) -> tuple[list[str], dict[str, str]]:
         "--webhook-receiver-port",
         port,
         "--webhook-receiver-public-url",
-        f"http://{callback_host}:{port}/",
+        # HTTPS at the shared TLS front, never http:// at a bare service name.
+        # The advertised URL is what the SERVER dials, so it is the one place a
+        # plaintext webhook destination could enter the stack -- which is exactly
+        # why ADCP_WEBHOOK_HOST was retired and is guarded against
+        # (tests/unit/test_architecture_e2e_compose_tls_origins.py). Per-protocol
+        # hostname because the two runs bind different ports and SNI selects the
+        # upstream by NAME, so one name cannot reach two ports.
+        f"https://{_webhook_tls_origin(protocol, tls_front)}/",
         # Not loopback: the server is a DIFFERENT container and calls back to this
         # runner's compose alias, so a receiver bound to 127.0.0.1 puts the delivery on
         # the container's eth0 with nothing listening.
@@ -478,7 +536,7 @@ def _run_storyboard_runner(protocol: str) -> dict[str, Any]:
         "--compliance-version",
         storyboard_spec.pinned_version(_REPO_ROOT),
         "--compliance-dir",
-        _bundle_path(_COMPLIANCE_DIR_ENV),
+        _graded_compliance_dir(),
         "--schema-root",
         _bundle_path(_SCHEMA_ROOT_ENV),
         "--timeout",
@@ -594,6 +652,36 @@ def _scoreboard(protocol: str, summary: dict[str, Any]) -> str:
     )
 
 
+def _drain_grading_replay_rows() -> None:
+    """Empty the replay cache of the conformance keyids before a protocol run.
+
+    THE TWO PROTOCOL RUNS SHARE ONE DEPLOYMENT AND ONE REPLAY STORE, and vector
+    ``020-rate-abuse`` deliberately drives ``test-ed25519-2026`` to its per-keyid cap. The
+    ``replay_ttl_overrides`` clamp drains those rows between VECTORS, which is what it was
+    sized for; it does not drain them between PROTOCOL RUNS, because the second run starts
+    seconds after the first ends rather than a TTL later.
+
+    Measured: with the a2a card grading for the first time, its first four signed vectors
+    were answered ``request_signature_rate_abuse`` — including ``positive/001`` and
+    ``negative/016``'s must-be-accepted first submission. That is the mcp run's cap bleeding
+    into the a2a run, not a verdict about either surface.
+
+    Deleting the rows rather than sleeping out the TTL: a sleep long enough to be safe is
+    longer than the run it protects, and an arithmetic relationship between two sleeps and a
+    clamp is the kind of thing that is right once and silently wrong after any of the three
+    moves.
+    """
+    from sqlalchemy import delete
+
+    from scripts.setup.storyboard_signing import counterparty_registry
+    from src.core.database.database_session import get_db_session
+    from src.core.database.models import ReplayNonce
+
+    with get_db_session() as session:
+        session.execute(delete(ReplayNonce).where(ReplayNonce.keyid.in_(sorted(counterparty_registry()))))
+        session.commit()
+
+
 def _collect_checks(protocol: str) -> list[dict[str, Any]]:
     """One entry per (protocol, track, storyboard_id, step_id): a failure or a skip.
 
@@ -602,6 +690,7 @@ def _collect_checks(protocol: str) -> list[dict[str, Any]]:
     passing check has no ledger identity to track; only failures and skips
     are gradeable per-check here.
     """
+    _drain_grading_replay_rows()
     summary = _run_storyboard_runner(protocol)
     _publish_summary(protocol, summary)
     print(_scoreboard(protocol, summary))

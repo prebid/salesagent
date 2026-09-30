@@ -97,13 +97,26 @@ tests/integration/test_create_media_buy_behavioral.py::TestMainFlowObligations::
 # --- Cluster G (salesagent-e30o7.7) ------------------------------------------------
 # An adapter that must hold no vendor client when unconfigured. "dry_run" is the tell:
 # that channel through create_media_buy is gone, so a test named for it may be asserting
-# a mode that no longer exists.
+# a mode that no longer exists. Both remaining entries are exactly that: Kevel and
+# Triton now refuse to construct at all without credentials (base.py _require_config),
+# so "a dry-run adapter holds no vendor client" has no subject left to grade.
+#
+# Graduated: the three test_require_vendor_refuses_an_unconfigured_client entries. They
+# were ledgered because the test asserted the vendor name through exc.internal_detail as
+# a str, an API #1721 retyped to BaseException | None (the non-wire CAUSE). The merge
+# re-expressed the same obligation on exc.details.provider, which require_vendor really
+# populates from its argument (src/adapters/vendor_http.py:127) — so the entries are
+# stale, not passing vacuously.
 tests/integration/test_vendor_egress.py::test_a_dry_run_adapter_holds_no_vendor_client[kevel]
 tests/integration/test_vendor_egress.py::test_a_dry_run_adapter_holds_no_vendor_client[triton]
-tests/integration/test_vendor_egress.py::test_require_vendor_refuses_an_unconfigured_client[Kevel]
-tests/integration/test_vendor_egress.py::test_require_vendor_refuses_an_unconfigured_client[Triton Digital]
-tests/integration/test_vendor_egress.py::test_require_vendor_refuses_an_unconfigured_client[Xandr]
-tests/integration/test_webhook_refusal_reaches_both_seats.py::TestSeatTwoTheStashPathRefusesWithoutAnOutcome::test_a_stored_legacy_row_stops_delivering_and_says_so[sub-32 credential-schemes1-sssssssssssssssssssssssssssssss-Bearer]
+#
+# Graduated: the test_webhook_refusal_reaches_both_seats sub-32 entry. It was ledgered
+# because the rehydration refusal's operator log line stringified exc.internal_detail,
+# which #1721 made pydantic's own ValidationError: that text names no scheme unless the
+# objection was about schemes, and for a short credential it renders input_value — the
+# BUYER'S CREDENTIAL — into an ERROR log. The line now composes from the refusal's own
+# structured facts (field + details.rejected_value, src/core/context_manager.py), which
+# is where from_stash deliberately puts the scheme. A production fix, not a stale entry.
 
 # --- Cluster H (salesagent-e30o7.8) ------------------------------------------------
 # A response field, status or envelope production now produces differently. Spec question
@@ -123,32 +136,48 @@ tests/integration/test_list_accounts_auth_missing_wire.py::TestListAccountsNoTok
 tests/integration/test_mcp_client_util.py::TestExhaustedFailureReachesTheRegistryClassified::test_seam_failure_surfaces_as_the_mapped_envelope[connection-level]
 tests/integration/test_mcp_client_util.py::TestExhaustedFailureReachesTheRegistryClassified::test_seam_failure_surfaces_as_the_mapped_envelope[tool-level]
 
-# --- Cluster I (salesagent-091d8) ---------------------------------------------------
-# These two are NOT the testing layer's fault, and they are the reason the count below
-# started at 50 rather than the 48 a box run measured: the box has ADCP_AUTH_TEST_MODE on,
-# so they pass there and fail wherever it is off. That flag gates whether create_app
-# composes the test-credential login blueprint, which makes the app under test a different
-# app from the one deployed (CLAUDE.md pattern 11, one frame up at composition).
+# --- Cluster I (salesagent-091d8) -- GRADUATED, no entries --------------------------
+# The two test_template_url_validation.py rows came off by fixing the SCANNER'S
+# COMPOSITION, not by setting a flag and not by weakening an assertion.
 #
-# The tests themselves regex-scan templates for url_for() with no awareness of Jinja
-# guards, so they demand that url_for('test_auth.test_auth') -- which sits inside
-# {% if test_mode %} -- resolve in an app that deliberately did not compose that blueprint.
-# Fixing the scanner, or setting the flag, both paper over the real question: how a first
-# admin reaches a fresh deployment before SSO exists. salesagent-091d8 asks it.
-tests/integration/test_template_url_validation.py::TestTemplateUrlValidation::test_all_template_url_for_calls_resolve
-tests/integration/test_template_url_validation.py::TestTemplateUrlValidation::test_form_actions_point_to_valid_endpoints
+# What they actually recorded was a fork in the app under test: create_app registers the
+# test-credential login blueprint only when adcp_auth_test_mode and not is_production
+# (src/admin/app.py:351), the module built its app from the ambient environment, and the
+# regex scanners cannot see the {% if test_mode %} guard that login.html:77,87 puts around
+# url_for('test_auth.test_auth'). So the verdict reported which environment the run
+# happened in -- green on the box, red wherever the flag is off -- and a strict xfail on an
+# environment fact can only ever be red where it is enforced.
+#
+# The module now composes that conditional blueprint unconditionally, which removes the
+# fork and is the stricter of the two readings: every template branch is scanned, including
+# the ones that render only under test mode. Nothing is excused.
+#
+# This does NOT discharge salesagent-091d8. That issue asks how a first admin reaches a
+# fresh deployment before SSO exists -- a production composition question about the
+# test-credential blueprint's existence, which this scanner never graded and still does not.
+# It stays open.
 
-# --- Cluster J (GH #2189) -----------------------------------------------------------
-# Owned by an OPEN PR, not by this epic. These three publish their own liveness artifact
-# by re-running a slice of the BDD suite, so they grade a 9-scenario subrun and then
-# assert against it -- which is the mechanism #2189 ("read what the run published instead
-# of re-running it") removes. Verified to reproduce locally and on CI alike.
+# --- Cluster J (GH #2189) -- GRADUATED, no entries ----------------------------------
+# Graduated at the #1721 re-merge: the three test_bdd_scenario_liveness_real_run.py
+# entries. #1721 ledgered them as red for a known, owned reason, and on that tree they
+# were: the module froze WHICH UC-006 and UC-005 storyboard scenarios are ledgered and
+# which are live, and five UC-006 scenarios had graduated out from under the frozen list
+# (production now derives the per-creative status from the row's review state and refuses
+# a policy-violating creative with the pin's PROVENANCE_* codes), so the module went on
+# demanding xfails that no longer happen.
 #
-# I first left them out of the ledger on the grounds that they are not this epic's to fix.
-# That conflated fixing with recording: a test red for a known, owned reason is exactly
-# what a ledger is for, and excluding them left CI red for a reason no reader could find.
-# They come out when #2189 lands, and its author does not need to touch this file --
-# strict xfail means they fail here the moment they start passing.
-tests/integration/test_bdd_scenario_liveness_real_run.py::test_real_run_records_uc006_storyboard_scenarios_as_ledgered_or_live
-tests/integration/test_bdd_scenario_liveness_real_run.py::test_real_run_records_uc005_format_id_roundtrip_scenarios_as_live
-tests/integration/test_bdd_scenario_liveness_real_run.py::test_provenance_tag_is_a_recorded_field_not_a_collection_filter
+# This branch fixed that in the same file: both graders now read the live routing map
+# (tests/bdd/conftest.py::_XFAIL_TAGS) instead of a frozen id list, so a graduation moves
+# the expectation in the commit that removes the route. That is a repair, not a rename --
+# the ledgered/live partition is still graded exactly, and the ledgered half must still
+# carry the routing map's own reason text verbatim.
+#
+# MEASURED on the merged tree, not inferred from the repair: all three XPASS(strict)
+# against this ledger and the module's fourth test passes
+# (3 failed [XPASS strict], 1 passed in 117.16s, real Postgres). Keeping the entries would
+# turn three green tests red, which is the one thing a strict ledger exists to prevent.
+# The pin in tests/unit/test_integration_ledger_state.py drops with them.
+#
+# #2189 ("read what the run published instead of re-running it") still owns the re-run
+# mechanism these tests use. Removing that mechanism is a refactor of passing tests, and a
+# ledger of failures is not where a refactor is tracked.

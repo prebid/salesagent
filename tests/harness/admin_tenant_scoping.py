@@ -21,8 +21,9 @@ check and not the test-mode bypass, and the in-process leg takes the same branch
 decorator the stack does.
 
 The module-level helpers (route table, case expansion, seeding, state snapshot, assertion
-helpers) are shared with ``tests/admin/test_tenant_scoped_routes_auth.py`` (whose classes
-``tests/e2e/test_admin_tenant_scoping_e2e.py`` reuses) so the three layers grade one contract.
+helpers) are shared by the contract classes in
+``tests/helpers/admin_tenant_scoping_contract.py`` and the BDD steps, so the three layers
+grade one contract.
 """
 
 from __future__ import annotations

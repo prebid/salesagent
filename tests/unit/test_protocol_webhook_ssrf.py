@@ -24,7 +24,6 @@ surfaces that still accept one.
 from __future__ import annotations
 
 import contextlib
-import os
 from collections.abc import Iterator
 from unittest.mock import MagicMock, patch
 
@@ -47,9 +46,6 @@ from tests.factories import WebhookTaskContextFactory
 from tests.factories.webhook import PushNotificationConfigRequestFactory
 from tests.helpers.adcp_factories import create_test_media_buy_request_dict, valid_reporting_webhook
 from tests.helpers.creative_test_helpers import sync_creatives_request
-from tests.helpers.egress_hatches import egress_hatch_env
-from tests.helpers.local_http_origin import run_local_origin
-from tests.helpers.test_tls_material import load_gen_test_tls, server_ssl_context
 from tests.helpers.unit_identity import fabricated_account_identity
 
 # No WEBHOOK_SSRF_SUGGESTION* import: origin/main narrowed the two dev/strict
@@ -60,7 +56,7 @@ from tests.helpers.unit_identity import fabricated_account_identity
 _METADATA_URL = "http://169.254.169.254/latest/meta-data/"
 
 # What a delivery carries when the case is only about the destination. Written
-# once because all four send-path cases below pass the same pair and none of
+# once because all five send-path cases below pass the same pair and none of
 # them is about the payload: ``task_type`` deliberately stays outside the
 # delivery-report pair so no case touches the database.
 # The real envelope, built by the SDK exactly as ``notify`` builds it. It used to be a
@@ -92,20 +88,6 @@ class _RecordingTransport(httpx.AsyncBaseTransport):
 
     async def aclose(self) -> None:
         await self._inner.aclose()
-
-
-@contextlib.contextmanager
-def _egress_hatches(*, private: bool) -> Iterator[None]:
-    """Pin the private-range outbound escape hatch for the block.
-
-    A refusal case that leaves it ambient is graded by whichever gate the
-    surrounding shell happened to branch, so a test meaning "production posture"
-    would silently grade nothing. Same spelling as ``LocalOriginMixin`` and the
-    seam's own suite. There is no ``insecure`` hatch anymore (salesagent-e6h0):
-    the scheme gate is unconditional in production.
-    """
-    with patch.dict(os.environ, egress_hatch_env(private=private)):
-        yield
 
 
 @contextlib.contextmanager
@@ -186,6 +168,36 @@ def _minimal_create_request(**overrides):
     return CreateMediaBuyRequest(**data)
 
 
+# RETIRED WITH THE SUBJECT THEY GRADED (merge of the RFC 9421 signing lane into
+# the #1802 egress seam) -- recorded rather than dropped in silence:
+#
+#   * ``_running_service()`` / ``_send()``. Both named things this service no
+#     longer has. ``ProtocolWebhookService`` owns NO connection state now, so
+#     there is no ``close()`` to call and no long-lived client whose construction
+#     had to happen inside a capture block; and ``send_notification`` takes a
+#     typed ``task: WebhookTaskContext`` rather than the loose ``metadata`` dict
+#     ``_send`` built. Their replacement is ``_config(url)`` + ``_PAYLOAD`` +
+#     ``_TASK`` passed directly.
+#
+#   * the ``constructed_http_clients()`` legs, which asserted
+#     ``client.timeout.connect == 10.0`` and ``client.follow_redirects is False``
+#     on the client the SERVICE constructed. That client is deleted (#1802): a
+#     pooled client is trusted completely by ``adcp``'s ``WebhookSender`` and
+#     cannot carry a per-destination pin, so each delivery now builds and discards
+#     a transport inside ``outbound_http.asend``. Neither property is assertable
+#     HERE any more without mocking the seam, and neither is unowned: the timeout
+#     is ``_DELIVERY_TIMEOUT_SECONDS`` handed to ``adeliver_webhook``, and the
+#     redirect refusal is ``guarded_async_client``/``asend``'s unconditional
+#     ``follow_redirects=False`` -- both graded in the seam's own suites. What
+#     survives here, and is strictly stronger than the client-attribute check, is
+#     ``test_send_notification_does_not_follow_redirect_to_metadata``'s dispatch
+#     log: it counts the hops that were actually put on the wire.
+#
+#   * the backoff stub that patched ``protocol_webhook_service.asyncio.sleep``. The
+#     module imports no ``asyncio`` at all now -- the retry ladder moved into the
+#     seam's ``Attempts`` -- so that patch target does not exist and would raise.
+
+
 @pytest.mark.asyncio
 async def test_send_notification_rejects_metadata_url_without_post() -> None:
     """A cloud-metadata destination fails closed, with nothing put on the wire.
@@ -201,101 +213,49 @@ async def test_send_notification_rejects_metadata_url_without_post() -> None:
     """
     service = ProtocolWebhookService()
 
-    with _egress_hatches(private=True), _dispatched_hops() as hops:
+    with _dispatched_hops() as hops:
         sent = await service.send_notification(_config(_METADATA_URL), payload=_PAYLOAD, task=_TASK)
 
     assert sent is False
     assert hops == [], f"a request was dispatched towards a cloud-metadata address: {hops}"
 
 
-@pytest.mark.asyncio
-async def test_send_notification_rejects_localhost_without_post() -> None:
-    """Under production posture a loopback destination is refused, unreached.
-
-    The endpoint is a REAL origin that is genuinely listening on ``localhost``,
-    so "no POST" is read off the server's own hit count rather than off a mock:
-    zero hits is a fact about a socket nobody connected to. Opening the hatches
-    is the whole difference between this and
-    :func:`test_send_notification_posts_when_url_is_public`, which reaches the
-    same kind of origin and counts one hit.
-    """
-    service = ProtocolWebhookService()
-
-    with run_local_origin(listen_host="localhost") as origin:
-        origin.respond_with(200)
-
-        with _egress_hatches(private=False), _dispatched_hops() as hops:
-            sent = await service.send_notification(_config(f"{origin.base_url}/webhook"), payload=_PAYLOAD, task=_TASK)
-
-        assert sent is False
-        assert origin.hits == 0, f"the loopback endpoint was reached anyway: {origin.requests}"
-        assert hops == [], f"a request was dispatched towards a reserved address: {hops}"
+# ``test_send_notification_rejects_localhost_without_post`` STOOD HERE and is deleted.
+#
+# Its subject was "under production posture a loopback destination is refused, unreached"
+# — and the only way to produce that inside a module whose origins ARE loopback was
+# ``_egress_hatches(private=False)``, flipping an operator posture mid-test. A case that
+# can only pass by mutating a production policy grades the policy, not the seam.
+#
+# Nothing is lost. The property belongs to the egress seam, whose own suite grades it
+# against a real listening origin:
+# ``tests/integration/test_outbound_http.py::test_loopback_over_https_is_refused_without_connecting``.
+# And per CLAUDE.md §9 this application implements no SSRF protection of its own — the
+# private-range decision is the SDK's flags, so a unit test here was re-deriving a library.
 
 
-@pytest.mark.asyncio
-async def test_send_notification_posts_when_url_is_public(monkeypatch) -> None:
-    """A destination the seam permits is really POSTed to — body and headers included.
-
-    Asserted against the bytes the origin received rather than against the
-    arguments a transport mock was handed: the latter reads back the object the
-    caller passed and proves nothing crossed a socket. The origin is served
-    over real TLS (salesagent-e6h0's ``local_origin_tls`` equivalent, inline
-    here since this file is tests/unit/) standing in for "public": the seam
-    requires https unconditionally now, so the only origin a unit test can
-    really run has to earn that scheme, not merely be waved through by a hatch.
-    What the case grades is that a destination the gate ALLOWS is dialled and served.
-    """
-    service = ProtocolWebhookService()
-    gen_test_tls = load_gen_test_tls()
-    gen_test_tls.ensure_test_tls()
-    monkeypatch.setenv("SSL_CERT_FILE", str(gen_test_tls.COMBINED_CERT))
-
-    with run_local_origin(ssl_context=server_ssl_context(gen_test_tls)) as origin:
-        origin.respond_with(200)
-
-        with _egress_hatches(private=True):
-            sent = await service.send_notification(_config(f"{origin.base_url}/webhook"), payload=_PAYLOAD, task=_TASK)
-
-        assert sent is True
-        assert origin.hits == 1, f"the endpoint served {origin.hits} requests for one notification"
-        request = origin.last_request
-        assert request.method == "POST"
-        assert request.path == "/webhook"
-        assert request.json() == _PAYLOAD.model_dump(mode="json", exclude_none=True)
-        assert request.headers["Content-Type"] == "application/json"
-        assert request.headers["User-Agent"] == "AdCP-Sales-Agent/1.0"
-
-
-@pytest.mark.asyncio
-async def test_send_notification_does_not_follow_redirect_to_metadata(monkeypatch) -> None:
-    """A 302 towards link-local metadata is returned, never chased.
-
-    The dispatch log is the proof, not the return value: were the redirect
-    followed, the pinned transport would refuse the wrong-host connect and the
-    call would STILL come back ``False``, so ``sent is False`` alone cannot tell
-    a refused redirect from a followed one. Every hop httpx follows is dispatched
-    through the client's transport, so a chased 302 appears as a second entry
-    naming ``169.254.169.254``.
-
-    The hit count carries the other half: a 302 is terminal to the seam, so the
-    buyer's endpoint is asked exactly once. The origin is served over real TLS
-    (salesagent-e6h0) since the seam requires https unconditionally now.
-    """
-    service = ProtocolWebhookService()
-    gen_test_tls = load_gen_test_tls()
-    gen_test_tls.ensure_test_tls()
-    monkeypatch.setenv("SSL_CERT_FILE", str(gen_test_tls.COMBINED_CERT))
-
-    with run_local_origin(ssl_context=server_ssl_context(gen_test_tls)) as origin:
-        origin.redirect_to(_METADATA_URL, status=302)
-        webhook_url = f"{origin.base_url}/webhook"
-
-        with _egress_hatches(private=True), _dispatched_hops() as hops:
-            sent = await service.send_notification(_config(webhook_url), payload=_PAYLOAD, task=_TASK)
-
-        assert sent is False
-        assert origin.hits == 1, f"the 302 was retried: {origin.paths}"
-        assert hops == [webhook_url], f"the redirect was followed: {hops}"
+# THREE CASES STOOD HERE AND ARE DELETED: they bound a real socket.
+#
+# A unit test cannot reach an in-network origin. The only address it can bind is
+# loopback, which production's egress gate refuses — so every one of them existed only
+# because ADCP_OUTBOUND_ALLOW_PRIVATE was open, and that hatch is the shape
+# docker-compose.e2e.yml:988 records as "considered and rejected", because it "opens
+# 127.0.0.1, host.docker.internal and all of RFC1918 for whatever sets it". A test that
+# needs a production policy relaxed to run is grading the relaxation.
+#
+# The e2e network is allocated OUTSIDE the private ranges for exactly this reason
+# (scripts/dev/alloc-e2e-subnet.sh), so a DNS-named in-network origin is accepted by the
+# gate ON ITS OWN TERMS, with no hatch. That is where a delivery is graded:
+#
+#   tests/bdd/features/local-egress-ssrf-refusal.feature:234
+#       a refused push_notification_config.url is a correctable buyer error at ingest
+#   tests/bdd/features/BR-UC-004-deliver-media-buy-metrics.feature:284
+#       the signed delivery itself, across transports
+#   tests/integration/test_outbound_http.py
+#       the seam's own suite, which owns the gate
+#
+# What remains in this module is what a unit test CAN answer: the pure URL decisions,
+# taken without dialling anything.
 
 
 @pytest.mark.parametrize(
@@ -334,10 +294,9 @@ def test_reject_unsafe_webhook_registration_url_raises_validation_error(url: str
     internal service names, hostnames, or IP addresses") the gate cites as the
     reason it discards the computed cause.
     """
-    # Posture pinned explicitly rather than left ambient: a refusal case that
-    # inherits whichever hatch the surrounding shell happened to branch is graded by
-    # a gate the case did not choose. Same spelling as the send-path cases above.
-    with _egress_hatches(private=False), pytest.raises(AdCPUrlNotAllowedError) as exc_info:
+    # No posture change: ``metadata.google.internal`` is refused with the private hatch
+    # OPEN (measured), so this grades the metadata rule rather than a flipped setting.
+    with pytest.raises(AdCPUrlNotAllowedError) as exc_info:
         reject_unsafe_webhook_registration_url(url, field="reporting_webhook.url")
 
     assert exc_info.value.field == "reporting_webhook.url", rule

@@ -23,13 +23,14 @@ from pydantic import BaseModel as PydanticBaseModel
 from src.core.audit_logger import get_audit_logger
 from src.core.database.database_session import get_db_session
 from src.core.security.webhook_egress import adeliver_webhook
+from src.core.signing.outbound import WebhookAuthConfig, delivery_signer_for_tenant
 from src.core.webhook_validator import webhook_url_for_log
 from src.core.webhooks.delivery import WebhookDeliveryOutcome, WebhookTaskContext, build_webhook_envelope
 from src.services.webhook_conclusion import record_conclusion
 
 
-class DeliverableWebhookTarget(Protocol):
-    """What this sender actually needs off a push-notification config: three fields.
+class DeliverableWebhookTarget(WebhookAuthConfig, Protocol):
+    """What this sender actually needs off a push-notification config: five fields.
 
     Structural, and READ-ONLY on purpose. Two kinds of object arrive here — the
     stored ORM ``PushNotificationConfig`` row, and the
@@ -43,16 +44,15 @@ class DeliverableWebhookTarget(Protocol):
     Declared as properties rather than plain attributes because a Protocol with
     mutable attributes is invariant, and would then REFUSE a frozen(slots)
     dataclass — the read-only form admits both.
+
+    The three AUTHENTICATION-bearing fields (``url``, ``authentication_type``,
+    ``authentication_token``) are not restated here: they ARE
+    :class:`~src.core.signing.outbound.WebhookAuthConfig`, the shape the signing
+    boundary reads off a registration, so this name is a local alias for that
+    contract rather than a second copy of it. Restating them would put the same
+    document in two modules, and a value satisfying one but not the other would
+    then be constructible.
     """
-
-    @property
-    def url(self) -> str: ...
-
-    @property
-    def authentication_type(self) -> str | None: ...
-
-    @property
-    def authentication_token(self) -> str | None: ...
 
     #: The two values core/push-notification-config.json obliges the seller to echo
     #: verbatim into every payload built against this registration.
@@ -70,10 +70,17 @@ class ProtocolWebhookService:
     """
     Service for sending protocol-level push notifications to clients.
 
-    Supports authentication schemes:
-    - HMAC-SHA256: Signs payload with shared secret
-    - Bearer: Sends credentials as Bearer token
-    - None: No authentication
+    How a delivery is authenticated is NOT decided here. The receiver's stored
+    ``PushNotificationConfig`` selects exactly one of three modes, and the
+    selection is made by ``src.core.security.webhook_egress``'s one three-arm
+    match: legacy HMAC-SHA256, Bearer, or — selected by the ABSENCE of an
+    ``authentication`` block, which is the pinned schema's own selector for the
+    profile (AdCP 3.1.1 ``L1/security.mdx`` :1424) — RFC 9421 request signing.
+    :1425 forbids answering a legacy registration with a 9421 signature, so the
+    arms are exclusive by construction rather than by a rule kept here. The key
+    that arm signs with comes from the one signing seam, reached through
+    ``delivery_signer_for_tenant``. This service owns delivery logging and the
+    audit trail, and nothing else.
     """
 
     async def notify(
@@ -160,7 +167,15 @@ class ProtocolWebhookService:
         # predicate now lives in src/core/security/egress/policy.py) was for.
         url = push_notification_config.url
 
-        # Prepare headers
+        # Content-Type is the sender's (it frames the body it serialized) and is
+        # load-bearing rather than decoration now that the seam transmits ``content=``
+        # bytes: httpx sets no Content-Type of its own on that path, while the 9421
+        # webhook profile COVERS the ``content-type`` component — so it ships here or
+        # the signature covers a header that never left, which a conformant verifier
+        # rejects with ``webhook_signature_components_incomplete`` (security.mdx @
+        # v3.1.1 :1476). ``application/json`` is the one spelling the 9421 arm accepts;
+        # the seam refuses any other value loudly rather than signing a lie. Auth
+        # headers are the boundary's and never appear here.
         headers = {"Content-Type": "application/json", "User-Agent": "AdCP-Sales-Agent/1.0"}
 
         # Log sanitized config (exclude sensitive authentication_token)
@@ -279,6 +294,14 @@ class ProtocolWebhookService:
         serialization of ``payload`` otherwise. They go on the wire unchanged;
         this function does not call ``json.dumps`` on ``payload`` itself, so
         there is no second serialization that could disagree with the first.
+
+        One body, many SIGNATURES: the RFC 9421 arm signs those same bytes afresh
+        on every attempt, because a ``nonce`` a conformant receiver must reject on
+        replay makes a signature computed once above a retry loop invalid on
+        attempt two. That is why the seam takes a ``sign=`` callback rather than a
+        finished header map, and why the payload's ``idempotency_key`` — minted
+        once by :func:`~src.core.webhooks.delivery.build_webhook_envelope` and
+        therefore constant across those attempts — is what the receiver dedups on.
         """
         # The caller's typed context, used as given. It used to be rebuilt here
         # from a four-key dict plus the payload, and the rebuild was lossy in both
@@ -330,13 +353,42 @@ class ProtocolWebhookService:
                 headers=headers,
                 timeout=10.0,
                 max_attempts=max_attempts,
+                # Resolved as an ARGUMENT, so the signing session opens, is read and
+                # CLOSES before ``adeliver_webhook`` is entered and any socket exists
+                # (#1757) — the rule a pooled connection held across a POST to a
+                # buyer-supplied URL would break. WHICH key is not this sender's
+                # decision: ``delivery_signer_for_tenant`` is the one open-read-close
+                # all three webhook senders share, so two transports cannot sign one
+                # tenant's deliveries with two different keys.
+                #
+                # Passed UNCONDITIONALLY, and that is not a dropped decision. A stored
+                # row does not tell its reader which arm it selects, so the seam's one
+                # ``_headers_for`` match decides: with an ``authentication`` block
+                # present the block selects a legacy arm and the signer is IGNORED
+                # (security.mdx @ v3.1.1 :1424, :1425); with the block absent the
+                # signer signs. Re-deriving that here would put arm selection in a
+                # second place.
+                #
+                # No silent downgrade. ``None`` is not a failure and never a fallback:
+                # it is the decided posture of a tenant whose advertised
+                # ``webhook_signing.supported`` is already ``false``, so its receivers
+                # have been told not to expect a ``Signature`` header. A tenant that
+                # CAN sign but whose material cannot be honestly used RAISES out of the
+                # helper — inside this ``try`` on purpose, so the raise lands on the
+                # handler below and is BOOKED as an unexpected outcome with zero
+                # attempts, which is the literal truth: nothing was serialized and
+                # nothing was dialled.
+                signer=delivery_signer_for_tenant(ctx.tenant_id),
             )
         except Exception as e:
-            # Deliberately kept. The seam maps its OWN failure taxonomy onto the
-            # outcome, but relying on that alone would let anything else escape a
-            # function contracted ``-> bool``, and the delivery scheduler re-raises
-            # what it catches. The pinned transport's own wrong-host guard raises a
-            # bare RuntimeError, which belongs here.
+            # Deliberately kept, and it carries more weight after the signing rewire.
+            # The seam maps its OWN failure taxonomy onto the outcome, but relying on
+            # that alone would let anything else escape a function contracted
+            # ``-> bool``, and the delivery scheduler re-raises what it catches. The
+            # pinned transport's own wrong-host guard raises a bare RuntimeError, and
+            # an unresolvable-but-declared signing posture raises out of
+            # ``delivery_signer_for_tenant`` before the seam is called at all — both
+            # belong here.
             logger.error(f"Unexpected error sending webhook for task {ctx.task_id}: {e}", exc_info=True)
             # Nothing reached the wire, and no outcome kind covers a NON-transport
             # failure — so this branch builds the one it means: exhausted with zero

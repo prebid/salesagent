@@ -286,10 +286,16 @@ def test_every_precheck_handles_the_index_verdict():
 # ── Inventory non-vacuity ───────────────────────────────────────────
 
 #: Measured against models.py. Counts, not just presence: a silently emptied
-#: inventory makes every scan below vacuously green.
-EXPECTED_DECLARED_TUPLES = 19
-EXPECTED_DECLARED_MODELS = 17
-EXPECTED_FORM_COUNTS = {"unique-constraint": 11, "unique-index": 5, "column-unique": 3}
+#: inventory makes every scan below vacuously green. Three of the 21 declared
+#: tuples postdate the guard: ``PricingOption.uq_pricing_options_option_id`` and
+#: ``Principal.uq_principals_tenant_agent_url`` from the rewritten request
+#: boundary, and ``SigningKey.uq_signing_keys_tenant_kid`` on ``(tenant_id, kid)``
+#: — a real UNIQUE constraint (``e7a2c40b91d5_add_signing_keys_table``), not a PK
+#: subset: ``signing_keys`` keys on a surrogate ``id``, so the natural key is
+#: separately declared and separately enforced.
+EXPECTED_DECLARED_TUPLES = 21
+EXPECTED_DECLARED_MODELS = 18
+EXPECTED_FORM_COUNTS = {"unique-constraint": 13, "unique-index": 5, "column-unique": 3}
 
 #: Excluded, never truncated — the column subset these name is NOT unique in the DB.
 EXPECTED_UNUSABLE = {
@@ -301,6 +307,10 @@ EXPECTED_UNUSABLE = {
 EXPECTED_PK_ADDITIONS = {
     ("AuthorizedProperty", frozenset({"property_id", "tenant_id"})),
     ("PropertyTag", frozenset({"tag_id", "tenant_id"})),
+    # ReplayNonce keys on (keyid, nonce) and declares nothing else — the replay
+    # cache's whole defence is that this pair cannot be claimed twice, so the
+    # inventory has to carry it or a pre-check-then-write on it scans as clean.
+    ("ReplayNonce", frozenset({"keyid", "nonce"})),
 }
 
 
@@ -314,7 +324,7 @@ def test_unique_key_inventory_is_complete_and_untruncated():
     form_counts = {form: sum(1 for key in declared if key.kind == form) for form in EXPECTED_FORM_COUNTS}
     assert form_counts == EXPECTED_FORM_COUNTS, (
         "every declaration form is the ONLY form for at least one model — Tenant.subdomain and "
-        "Principal.access_token are column-level only, ix_tenants_virtual_host is Index-only"
+        "Principal.token_hash are column-level only, ix_tenants_virtual_host is Index-only"
     )
 
     unusable = {(key.model, key.name) for key in keys if not key.usable}
@@ -497,7 +507,7 @@ class TestGuardMetaCases:
         source = (
             "def create_principal(session, tenant_id):\n"
             "    rows = session.scalars(select(Principal).filter_by(tenant_id=tenant_id)).all()\n"
-            "    session.add(Principal(tenant_id=tenant_id, access_token=secrets.token_urlsafe()))\n"
+            "    session.add(Principal(tenant_id=tenant_id, token_hash=hash_token(secrets.token_urlsafe())))\n"
             "    return rows\n"
         )
         assert _find(source) == []

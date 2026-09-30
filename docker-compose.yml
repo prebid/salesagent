@@ -86,6 +86,18 @@ services:
       ADCP_SALES_PORT: "8080"
       # Enable test login mode for development
       ADCP_AUTH_TEST_MODE: "true"
+      # The key encryption key for RFC 9421 signing keys (#1291) comes from .env, and
+      # from nowhere else. `.env.template` seeds a worthless development value, so
+      # `cp .env.template .env` gives a working stack; a real deployment edits it or
+      # takes the variable from its orchestrator's secret store.
+      #
+      # NOT listed here as `environment:` entries. Compose applies `environment:` OVER
+      # `env_file:`, so a literal here would silently shadow the .env value an operator
+      # sets — the variable would have two definition sites and the one in git would
+      # win. key_passphrase_env NAMES the variable; the variable holds the passphrase.
+      # Provisioning refuses to mint with no KEK and there is no plaintext fallback, so
+      # a missing value fails loudly at the point of use rather than minting something
+      # weak.
       # Development settings (venv at /opt/venv in image — see Dockerfile UV_PROJECT_ENVIRONMENT)
       PYTHONPATH: "/app"
       PYTHONUNBUFFERED: "1"

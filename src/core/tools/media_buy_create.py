@@ -16,7 +16,6 @@ from collections.abc import Sequence
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Literal, NoReturn, TypedDict, cast
-from urllib.parse import urlparse
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -69,35 +68,6 @@ class PackageAssignmentDict(TypedDict):
 
 logger = logging.getLogger(__name__)
 console = Console()
-
-
-def validate_agent_url(url: str | None) -> bool:
-    """Validate agent_url is a well-formed HTTP(S) URL per AdCP spec.
-
-    This validates format/structure only (scheme + netloc). It does NOT
-    perform DNS resolution or SSRF network checks because it is called
-    during approval processing against URLs that are already stored in
-    the database — not against live user-supplied input.
-
-    Egress policy for user-supplied agent URLs is enforced at the admin
-    ingestion boundary (src/admin/blueprints/signals_agents.py) via
-    src.admin.utils.url_policy, which applies the seam's validate_url —
-    address validation and DNS resolution belong to adcp.signing, reached
-    through src/core/security/outbound_http.py.
-
-    Args:
-        url: URL string to validate
-
-    Returns:
-        True if valid HTTP(S) URL with a non-empty netloc.
-    """
-    if not url or not isinstance(url, str):
-        return False
-    try:
-        result = urlparse(url)
-        return all([result.scheme in ("http", "https"), result.netloc])
-    except Exception:
-        return False
 
 
 # Tool-specific imports
@@ -1735,6 +1705,51 @@ def _validate_pricing_model_selection(
     return pricing_info_for(selected_option, bid_price=float(package.bid_price) if package.bid_price else None)
 
 
+def _build_registered_agent_urls(registered_agents: list[Any], tenant_id: str) -> set[str]:
+    """Normalize each registered agent's URL for registration-matching comparison.
+
+    A malformed PRE-EXISTING registered agent_url (admin-ingested data the buyer
+    never touched) is skipped with a warning rather than raised: it can never
+    legitimately equal a well-formed incoming agent_url, so excluding it changes
+    nothing for a correct match, but hard-failing here would let ONE unrelated
+    bad registration break every format_id validation in the request
+    (#1291).
+    """
+    from src.core.signing.canonical import TargetUriMalformedError
+
+    registered_agent_urls = set()
+    for agent in registered_agents:
+        try:
+            registered_agent_urls.add(canonical_agent_url(agent.agent_url))
+        except TargetUriMalformedError as e:
+            logger.warning(
+                f"Tenant {tenant_id}: registered creative agent_url {agent.agent_url!r} is malformed "
+                f"per RFC 9421 canonicalization ({e.reason}); excluded from registration matching."
+            )
+    return registered_agent_urls
+
+
+def _normalize_incoming_agent_url(agent_url: str, package_idx: int, idx: int) -> str:
+    """Normalize a buyer-supplied format_id.agent_url, or raise with the same
+    'Package N, format_ids[idx]' context every sibling validation in
+    ``_validate_and_convert_format_ids`` carries (#1291).
+    """
+    from src.core.signing.canonical import TargetUriMalformedError
+
+    try:
+        return canonical_agent_url(agent_url)
+    except TargetUriMalformedError as e:
+        # The refusal REASON is the signing layer's diagnostic, not buyer-facing text:
+        # post-ADR-010 the sentence is CODE_TABLE's property and the cause rides
+        # ``internal_detail``. What the buyer gets is the position and the offending
+        # value, in the same ``ValidationDetails`` shape every sibling rejection here uses.
+        raise AdCPValidationError(
+            field=f"packages[{package_idx}].format_ids[{idx}]",
+            details=ValidationDetails(package_index=package_idx, format_index=idx, rejected_value=str(agent_url)),
+            internal_detail=e,
+        ) from e
+
+
 async def _validate_and_convert_format_ids(
     format_ids: list[Any], tenant_id: str, package_idx: int
 ) -> list[dict[str, str]]:
@@ -1758,12 +1773,17 @@ async def _validate_and_convert_format_ids(
     Raises:
         ToolError: If any format_id is invalid, unregistered, or doesn't exist
     """
-    from src.core.creative_agent_registry import CreativeAgentRegistry
+    from src.core.creative_agent_registry import get_creative_agent_registry
 
     if not format_ids:
         return []
 
-    registry = CreativeAgentRegistry()
+    # The registry the DEPLOYMENT selected, never a hand-constructed one: which class
+    # answers an operator agent (live dial vs the checked-in reference catalog) is a
+    # composition decision `get_creative_agent_registry()` owns, and constructing
+    # `CreativeAgentRegistry()` here quietly opted this path out of it — the one call
+    # site in src/ still doing so after the settings refactor.
+    registry = get_creative_agent_registry()
     validated_format_ids = []
 
     # Get registered agents for this tenant.
@@ -1775,8 +1795,13 @@ async def _validate_and_convert_format_ids(
     # AUTHORIZATION outcome: an agent registered at `https://x.com` also authorized
     # `https://x.com/mcp`, and one host serving MCP at /mcp and A2A at /a2a read as a
     # single agent.
+    #
+    # The set is built through `_build_registered_agent_urls` rather than a bare
+    # comprehension so that ONE malformed pre-existing registration (admin-ingested data
+    # the buyer never touched) is skipped with a warning instead of failing every
+    # format_id in the request (#1291).
     registered_agents = registry._get_tenant_agents(tenant_id)
-    registered_agent_urls = {canonical_agent_url(agent.agent_url) for agent in registered_agents}
+    registered_agent_urls = _build_registered_agent_urls(registered_agents, tenant_id)
 
     for idx, fmt_id in enumerate(format_ids):
         # Every rejection here is per-package AND per-format, so the position and the
@@ -1797,7 +1822,11 @@ async def _validate_and_convert_format_ids(
             validated_fmt = FormatId.model_validate(fmt_id, from_attributes=True)
         except (ValueError, ValidationError) as e:
             raise AdCPValidationError(field=field, details=ValidationDetails(**where), internal_detail=e) from e
-        agent_url = canonical_agent_url(validated_fmt.agent_url)
+        # Canonicalized ONCE, here, and every later use (the registration check and the
+        # registry fetch) reads this value. A URL the canonicalization profile refuses
+        # outright — no host, bare IPv6, unclosed bracket — comes back as a positioned
+        # VALIDATION_ERROR rather than an uncaught ValueError (#1291).
+        agent_url = _normalize_incoming_agent_url(str(validated_fmt.agent_url), package_idx, idx)
         format_id = validated_fmt.id
 
         if not agent_url or not format_id:
@@ -2271,6 +2300,18 @@ async def _create_media_buy_impl(
                 # Gathered ACROSS every package (a set difference over all
                 # product_ids), so the pointer names the array and details enumerate
                 # which ids were missing (salesagent-rfxfu).
+                #
+                # OPERATOR-FACING, never on the wire. The typed details name what the
+                # buyer asked for; only the log can say what the tenant actually holds,
+                # which is the difference between "the buyer sent a bad id" and "this
+                # deployment's catalog was never seeded".
+                logger.warning(
+                    "product miss: tenant=%s requested=%s missing=%s available=%s",
+                    tenant.tenant_id,
+                    sorted(product_ids),
+                    sorted(missing_product_ids),
+                    sorted(product_map),
+                )
                 raise AdCPProductNotFoundError(
                     details=ProductRefDetails(missing_product_ids=sorted(missing_product_ids)),
                     field=PACKAGES_FIELD,
@@ -2719,59 +2760,26 @@ async def _create_media_buy_impl(
                 logger.warning(f"⚠️ Failed to send manual approval Slack notification: {e}")
 
             # Generate permanent package IDs (not dependent on media buy ID)
-            # These IDs will be used whether the media buy is pending or approved
-            pending_packages = []
+            # These IDs will be used whether the media buy is pending or approved.
+            #
+            # An ID is ALL this branch carries forward. It answers with
+            # `_submitted_approval_result` — a CreateMediaBuySubmitted whose only members
+            # are task_id and a message — so no package of this branch's making reaches a
+            # buyer, and everything else about a package is read off `req.packages` where
+            # the buyer wrote it.
             package_id_map: dict[int, str] = {}  # 0-based index → package_id
 
             # req.packages validated earlier in _create_media_buy_impl
             assert req.packages is not None, "packages required - validated earlier"
-            for idx, pkg in enumerate(req.packages, 1):
-                # Generate permanent package ID using product_id and index
-                # Format: pkg_{product_id}_{timestamp_part}_{idx}
-                package_id = f"pkg_{pkg.product_id}_{secrets.token_hex(4)}_{idx}"
-
-                # Use product_id for package name since Package schema doesn't have 'name'
-                pkg_name = f"Package {idx}"
-                if pkg.product_id:
-                    pkg_name = f"{pkg.product_id} - Package {idx}"
-
-                # Build Package object with complete package data (matching auto-approval path)
-                # NOTE: Package schema does NOT have a 'status' field - workflow state is tracked in WorkflowStep
-                # (Package is imported at module level)
-
-                # Create Package object from request package, adding generated fields
-                # Maps PackageRequest fields to Package fields directly:
-                # - format_ids (request) → format_ids_to_provide (response)
-                # - creative_ids/creatives (request) → creative_assignments (response) [handled separately]
-                pending_packages.append(
-                    Package(
-                        package_id=package_id,
-                        paused=False,  # Initial state is not paused (AdCP 2.12.0)
-                        product_id=pkg.product_id,
-                        budget=pkg.budget,
-                        bid_price=pkg.bid_price,
-                        pricing_option_id=pkg.pricing_option_id,
-                        targeting_overlay=pkg.targeting_overlay,
-                        pacing=pkg.pacing,
-                        impressions=getattr(pkg, "impressions", None),
-                        ext=pkg.ext,
-                        creative_assignments=pkg.creative_assignments,
-                        format_ids_to_provide=pkg.format_ids,
-                    )
-                )
-
-                # Track package_id for injection into serialized raw_request (0-based index)
-                package_id_map[idx - 1] = package_id
+            for idx, pkg in enumerate(req.packages):
+                # Format: pkg_{product_id}_{timestamp_part}_{1-based index}
+                package_id_map[idx] = f"pkg_{pkg.product_id}_{secrets.token_hex(4)}_{idx + 1}"
 
             # Remap package_pricing_info from index-based keys to actual package IDs
-            # Note: pending_packages loop used enumerate(req.packages, 1) but pricing used enumerate(req.packages) starting at 0
             package_pricing_info: dict[str, dict[str, Any]] = {}
-            # Map pricing info from package index to package_id
-            for pkg_idx, pkg_obj in enumerate(pending_packages):
+            for pkg_idx, mapped_package_id in package_id_map.items():
                 if pkg_idx in package_pricing_info_by_index:
-                    # Only add to dict if package_id is not None
-                    if pkg_obj.package_id is not None:
-                        package_pricing_info[pkg_obj.package_id] = package_pricing_info_by_index[pkg_idx]
+                    package_pricing_info[mapped_package_id] = package_pricing_info_by_index[pkg_idx]
                 else:
                     logger.warning(f"No pricing info found for package index {pkg_idx}")
             logger.debug(f"[PRICING] Mapped {len(package_pricing_info)} package pricing info")
@@ -2851,57 +2859,42 @@ async def _create_media_buy_impl(
                 # FIXME(#1788): package creation should use repository methods
                 assert pkg_uow.session is not None
                 session = pkg_uow.session
-                for pkg_obj in pending_packages:
-                    # Get paused state from package (adcp 2.12.0: replaced status enum with paused bool)
-                    paused = getattr(pkg_obj, "paused", False)  # Default to False (not paused) if not present
+                for idx, req_pkg in enumerate(req.packages):
+                    mapped_package_id = package_id_map[idx]
+                    pricing_info_for_package = package_pricing_info.get(mapped_package_id)
 
+                    # Serialize budget: normalize to object format for database storage
+                    # ADCP 2.5.0 sends flat numbers, but we normalize to object with currency for DB
+                    budget_value: dict[str, Any] | None = None
+                    if req_pkg.budget is not None:
+                        if isinstance(req_pkg.budget, (int, float)):
+                            # ADCP 2.5.0 flat format: normalize to object with currency from pricing
+                            package_currency = request_currency  # Use request-level currency
+                            if pricing_info_for_package:
+                                package_currency = pricing_info_for_package.get("currency", request_currency)
+                            budget_value = {
+                                "total": float(req_pkg.budget),
+                                "currency": package_currency,
+                            }
+                        else:
+                            # ADCP 2.3 object format or other: _pydantic_json_serializer handles it
+                            budget_value = req_pkg.budget
+
+                    # _pydantic_json_serializer on the engine handles Pydantic models,
+                    # AnyUrl, enums, and datetimes in JSONType columns automatically
                     package_config = {
-                        "package_id": pkg_obj.package_id,
-                        "name": getattr(pkg_obj, "name", None),
-                        "paused": paused,  # Store paused state (adcp 2.12.0)
+                        "package_id": mapped_package_id,
+                        # A newly created package is not paused (adcp 2.12.0 replaced the
+                        # status enum with this bool).
+                        "paused": False,
+                        "product_id": req_pkg.product_id,
+                        "budget": budget_value,
+                        "targeting_overlay": req_pkg.targeting_overlay,
+                        "creative_ids": _get_creative_ids(req_pkg),
+                        "format_ids": req_pkg.format_ids,
+                        "pricing_info": pricing_info_for_package,  # Store pricing info for UI display
+                        "impressions": getattr(req_pkg, "impressions", None),  # legacy field, for display
                     }
-                    # Add full package data from raw_request
-                    assert req.packages is not None, "packages required - validated earlier"
-                    for idx, req_pkg in enumerate(req.packages):
-                        if idx == pending_packages.index(pkg_obj):
-                            # Get pricing info for this package if available
-                            pricing_info_for_package = (
-                                package_pricing_info.get(pkg_obj.package_id) if pkg_obj.package_id else None
-                            )
-
-                            # Serialize budget: normalize to object format for database storage
-                            # ADCP 2.5.0 sends flat numbers, but we normalize to object with currency for DB
-                            budget_value: dict[str, Any] | None = None
-                            if req_pkg.budget is not None:
-                                if isinstance(req_pkg.budget, (int, float)):
-                                    # ADCP 2.5.0 flat format: normalize to object with currency from pricing
-                                    package_currency = request_currency  # Use request-level currency
-                                    if pricing_info_for_package:
-                                        package_currency = pricing_info_for_package.get("currency", request_currency)
-                                    budget_value = {
-                                        "total": float(req_pkg.budget),
-                                        "currency": package_currency,
-                                    }
-                                else:
-                                    # ADCP 2.3 object format or other: _pydantic_json_serializer handles it
-                                    budget_value = req_pkg.budget
-
-                            # _pydantic_json_serializer on the engine handles Pydantic models,
-                            # AnyUrl, enums, and datetimes in JSONType columns automatically
-                            package_config.update(
-                                {
-                                    "product_id": req_pkg.product_id,
-                                    "budget": budget_value,
-                                    "targeting_overlay": req_pkg.targeting_overlay,
-                                    "creative_ids": _get_creative_ids(req_pkg),
-                                    "format_ids": req_pkg.format_ids,
-                                    "pricing_info": pricing_info_for_package,  # Store pricing info for UI display
-                                    "impressions": getattr(
-                                        req_pkg, "impressions", None
-                                    ),  # Store impressions for display (legacy field)
-                                }
-                            )
-                            break
 
                     # Extract pricing fields for dual-write
                     budget_total = None
@@ -2921,7 +2914,7 @@ async def _create_media_buy_impl(
                     # Create MediaPackage with dual-write: dedicated columns + JSON
                     db_package = DBMediaPackage(
                         media_buy_id=media_buy_id,
-                        package_id=pkg_obj.package_id,
+                        package_id=mapped_package_id,
                         package_config=package_config,
                         # Dual-write: populate dedicated columns
                         budget=Decimal(str(budget_total)) if budget_total is not None else None,
@@ -2931,7 +2924,7 @@ async def _create_media_buy_impl(
                     session.add(db_package)
 
                 # UoW auto-commits on clean exit
-                logger.info(f"✅ Created {len(pending_packages)} MediaPackage records")
+                logger.info(f"✅ Created {len(package_id_map)} MediaPackage records")
 
             # Link the workflow step to the media buy so the approval button shows in UI
             ctx_manager.link_workflow_to_object(
@@ -2976,8 +2969,8 @@ async def _create_media_buy_impl(
                     for i, package in enumerate(req.packages):
                         pkg_cids = _get_creative_ids(package)
                         if pkg_cids:
-                            # Get package_id from pending_packages (already generated)
-                            pkg_id: str | None = pending_packages[i].package_id if i < len(pending_packages) else None
+                            # The ID generated for this package above
+                            pkg_id: str | None = package_id_map.get(i)
                             if not pkg_id:
                                 logger.error(f"Cannot assign creatives: No package_id for package {i}")
                                 continue
@@ -3210,20 +3203,25 @@ async def _create_media_buy_impl(
                 ]
 
                 if unsupported_formats:
-                    if not product_format_keys:
-                        # Product has no format_ids configured - this is a configuration error
-                        error_msg = (
-                            f"Product '{pkg_product.name}' ({pkg_product.product_id}) has no format_ids configured. "
-                            f"This product is not properly set up for media buys. "
-                            f"Please configure format_ids on the product or contact the publisher."
-                        )
-                    else:
-                        supported_formats_str = ", ".join(format_display(key) for key in sorted(product_format_keys))
-                        error_msg = (
-                            f"Product '{pkg_product.name}' ({pkg_product.product_id}) does not support requested format(s): "
-                            f"{', '.join(unsupported_formats)}. Supported formats: {supported_formats_str}"
-                        )
-                    raise AdCPValidationError()
+                    # The two branches this replaces built a diagnostic sentence into a
+                    # local and then raised bare, so the string was DEAD -- neither the
+                    # buyer nor the log ever saw it, and the refusal named nothing at all
+                    # (measured: 25 of 27 create refusals on the storyboard tenant logged
+                    # `field=None details=None`, salesagent-basxl). No raise site authors
+                    # text (ADR-010); the facts those sentences carried are `rejected_value`
+                    # and `accepted_values`, which are declared keys.
+                    #
+                    # ONE raise, not two: "the product has no format_ids configured" is
+                    # `accepted_values=[]`, which says it without a second branch saying it
+                    # in words.
+                    raise AdCPValidationError(
+                        field=package_field_path("format_ids", pkg_index),
+                        details=ValidationDetails(
+                            product_id=pkg_product.product_id,
+                            rejected_value=unsupported_formats,
+                            accepted_values=[format_display(key) for key in sorted(product_format_keys)],
+                        ),
+                    )
 
                 # Merge dimensions from product's format_ids if request format_ids don't have them.
                 # This handles the case where buyer specifies a format but not dimensions.
@@ -3380,7 +3378,10 @@ async def _create_media_buy_impl(
         # Create the media buy using the adapter (SYNCHRONOUS operation)
         # Defensive null check: ensure start_time and end_time are set
         if not req.start_time or not req.end_time:
-            raise AdCPValidationError()
+            # Name WHICH one is missing. A bare raise here is indistinguishable in the log
+            # from every other AdCPValidationError the create path can raise, because the
+            # message is a property of the CODE (salesagent-basxl).
+            raise AdCPValidationError(field="start_time" if not req.start_time else "end_time")
 
         # PRE-VALIDATE: Check all creatives have required fields BEFORE calling adapter
         # This prevents GAM order creation when creatives are invalid (all-or-nothing approach)
@@ -3887,20 +3888,14 @@ async def _create_media_buy_impl(
                 else:
                     adapter_paused = bool(adapter_paused)
 
-            # Build Package response directly from request fields + adapter fields
+            # The buyer's fields arrive by construction, the same way as the pending arm
+            # above; the adapter decides the two below.
             response_packages.append(
-                Package(
+                Package.echoing(
+                    package,
                     package_id=adapter_package_id,
                     paused=adapter_paused,
-                    product_id=package.product_id,
-                    budget=package.budget,
-                    bid_price=package.bid_price,
-                    pricing_option_id=package.pricing_option_id,
-                    pacing=package.pacing,
-                    targeting_overlay=package.targeting_overlay,
-                    impressions=getattr(package, "impressions", None),
-                    creative_assignments=package.creative_assignments,
-                    format_ids_to_provide=getattr(package, "format_ids", None),
+                    format_ids_to_provide=package.format_ids,
                 )
             )
 

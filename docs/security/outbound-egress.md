@@ -14,7 +14,7 @@ what the gateway decides on your behalf, why adding your own check is a defect
 rather than an improvement, and how the codebase makes the alternatives hard to
 write. The gateway's internals — the module map, what the `adcp` SDK owns, the two
 verdicts' shared predicate, and which local workarounds are temporary — are in
-[The egress gateway and the SDK boundary](../design/egress-sdk-boundary.md).
+[The egress gateway and the SDK boundary](../design/egress-sdk-boundary.md). For what the `sign` parameter does with a tenant's key, see [Request signature architecture](../design/signature-architecture.md).
 
 ## The rule
 

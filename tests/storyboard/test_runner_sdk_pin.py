@@ -46,14 +46,25 @@ from scripts.audit import storyboard_spec  # noqa: E402
 #: ``--compliance-version`` with the pinned version, and it does not move the client -- the
 #: assertion message below says as much itself.
 #:
-#: 14.0.0-rc.35 is not a free choice. The newest line declaring 3.1 is 11.x, and its A2A path
-#: carries an unfixed 0.x dependency because the A2A fixes are not backported. Grading both
-#: protocol surfaces therefore requires the 14 line, and the 14 line declares 3.2.0-rc.1.
+#: 14.0.0-rc.42 is not a free choice. Grading both protocol surfaces requires the 14 line:
+#: it is the only line carrying the A2A request-signing dispatch (adcp-client#2967, merged
+#: 2026-09-20), without which every ``signed_requests`` vector on the A2A card is ungradable.
+#: The 14 line declares 3.2.0-rc.4.
 #:
-#: That a grader accepts ``--compliance-version`` without honouring it as the client contract
-#: is a defect in the grader, raised upstream as adcontextprotocol/adcp-client#2950. Retire
-#: this pin when the runner either declares 3.1.1 or separates the two.
-_ACCEPTED_DIVERGENCE = ("14.0.0-rc.35", "3.2.0-rc.1", "3.1.1")
+#: THE DIVERGENCE WIDENED AT THIS BUMP, from 3.2.0-rc.1 to 3.2.0-rc.4, and that is recorded
+#: rather than smoothed over: the runner line we need moved further from our pin, we did not
+#: choose to move away from it. The measured conformance score did not change across the bump
+#: (see below), which is what makes the wider divergence acceptable rather than merely tolerated.
+#:
+#: adcontextprotocol/adcp-client#2950 -- "``--compliance-version`` does not move the client
+#: contract, and no maintained line declares 3.1.1" -- is now CLOSED, and it is worth being
+#: precise about what that did and did not give us. It shipped ``@adcp/sdk@13.1.0`` on the
+#: ``adcp-3.1`` tag, which declares ``adcp_version: 3.1.20``. Closer than 3.2.0-rc.4, still not
+#: 3.1.1, and it predates the A2A dispatch above -- so it is not a retirement path for this
+#: divergence today. Retire the pin when a line both declares this repo's pin and carries the
+#: A2A signing dispatch, or when the runner separates the client contract from the vectors it
+#: grades against.
+_ACCEPTED_DIVERGENCE = ("14.0.0-rc.42", "3.2.0-rc.4", "3.1.1")
 
 
 def test_runner_sdk_targets_the_pinned_adcp_version() -> None:

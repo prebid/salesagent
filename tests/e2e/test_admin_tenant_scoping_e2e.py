@@ -1,9 +1,8 @@
 """E2E transport for the tenant-scoped admin route tests of #2203.
 
-The contract lives in tests/admin/test_tenant_scoped_routes_auth.py. Importing its three
-classes here collects them a second time against the ``scoping_env`` below, which drives the
-same harness through ``requests.Session`` against nginx -> FastAPI -> admin blueprints, as
-tests/e2e/test_admin_bdd_e2e.py does for BR-ADMIN-ACCOUNTS.
+The contract classes live in tests/helpers/admin_tenant_scoping_contract.py. Importing them
+here collects them against the ``scoping_env`` below, which drives the same harness through
+``requests.Session`` against nginx -> FastAPI -> admin blueprints.
 
 Requires: ADCP_SALES_PORT set (Docker stack running). The stack runs with
 ADCP_AUTH_TEST_MODE=true; the harness logs in through ``/test/auth`` as the non-admin
@@ -15,14 +14,15 @@ from __future__ import annotations
 
 import pytest
 
+from tests.e2e.conftest import admin_stack_env
+from tests.harness.admin_tenant_scoping import AdminTenantScopingEnv
+
 # Collected here, not just imported: pytest picks up every Test* class in the module namespace.
-from tests.admin.test_tenant_scoped_routes_auth import (  # noqa: F401
+from tests.helpers.admin_tenant_scoping_contract import (  # noqa: F401
     TestActiveMemberUnchanged,
     TestAnonymousDenied,
     TestNonMemberDenied,
 )
-from tests.e2e.conftest import admin_stack_env
-from tests.harness.admin_tenant_scoping import AdminTenantScopingEnv
 
 
 @pytest.fixture()

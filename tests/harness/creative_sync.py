@@ -1053,7 +1053,7 @@ class CreativeSyncEnv(EgressHatchMixin, IntegrationEnv):
         """Convert kwargs to SyncCreativesBody shape for REST POST."""
         # The REST body expects 'creatives' as list[dict], matching SyncCreativesBody.
         # 'push_notification_config' and 'account' are declared by SyncCreativesBody and
-        # forwarded by the route to sync_creatives_raw — dropping either here would make
+        # forwarded by the route through ``serve`` — dropping either here would make
         # any REST test of that behavior silently vacuous.
         #
         # 'idempotency_key' is schema-REQUIRED on sync_creatives (pinned_request_schema_fields

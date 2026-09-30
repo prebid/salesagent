@@ -34,7 +34,8 @@ that need it are recorded in ``tests/bdd/e2e_rest_known_failures.txt``.
 These tests run the real path unpatched -- real Postgres via ``IntegrationEnv``,
 real repositories, real ``MockAdServer`` -- so each fails if the resolution regresses.
 
-Covers: salesagent-689e (superseded), #1871.
+Covers: salesagent-689e (superseded), #1871, salesagent-piyo (the portfolio
+precondition these scenarios have to satisfy -- see ``_tenant_with_a_portfolio``).
 """
 
 from __future__ import annotations
@@ -44,8 +45,32 @@ from adcp.types.generated_poc.enums.channels import MediaChannel
 
 from src.adapters.mock_ad_server import MockAdServer
 from tests.factories import ProductFactory
-from tests.factories.core import set_adapter_type
+from tests.factories.core import PublisherPartnerFactory, set_adapter_type
 from tests.harness._base import IntegrationEnv
+
+
+def _tenant_with_a_portfolio(env: IntegrationEnv) -> tuple:
+    """Seed a tenant that has a ``media_buy.portfolio`` at all, then return it.
+
+    ``primary_channels`` lives on ``Portfolio``, and ``Portfolio`` is only emitted
+    for a tenant with at least one real ``PublisherPartner`` row: ``publisher_domains``
+    is REQUIRED with ``minItems: 1`` there (pinned v3.1.1
+    get-adcp-capabilities-response.json), so ``_get_adcp_capabilities_impl`` omits the
+    whole section rather than fabricate a ``<subdomain>.example.com`` domain the seller
+    does not own (salesagent-piyo; graded by
+    ``tests/integration/test_capabilities_publisher_domain_honesty.py``, which depends on
+    ``setup_default_data`` seeding NO partner -- so the row belongs here, not in the harness).
+
+    A partnership is ordinary per-tenant data and is orthogonal to both facts under test:
+    it fixes ``publisher_domains``, never ``primary_channels`` (the catalog does that) and
+    never the degradation advisory (the adapter lookup does that). Seeding it is the same
+    move ``given_adapter_unavailable`` makes for the UC-010 degradation rows
+    (tests/bdd/steps/domain/uc010_capabilities.py), and for the same reason.
+    """
+    tenant, principal = env.setup_default_data()
+    PublisherPartnerFactory(tenant=tenant)
+    env._commit_factory_data()
+    return tenant, principal
 
 
 @pytest.mark.requires_db
@@ -63,7 +88,7 @@ class TestMisconfiguredAdapterDegrades:
         real operator reaches it -- by typing the adapter name wrong.
         """
         with IntegrationEnv(tenant_id="t_bad_adapter", principal_id="p_bad_adapter") as env:
-            tenant, _principal = env.setup_default_data()
+            tenant, _principal = _tenant_with_a_portfolio(env)
             set_adapter_type(env, tenant.tenant_id, "__no_such_ad_server__")
 
             from src.core.tools.capabilities import _get_adcp_capabilities_impl
@@ -86,7 +111,7 @@ class TestMisconfiguredAdapterDegrades:
     def test_a_resolvable_adapter_is_unaffected(self, integration_db):
         """The control: a normally-configured tenant degrades nothing and advises nothing."""
         with IntegrationEnv(tenant_id="t_ok_adapter", principal_id="p_ok_adapter") as env:
-            tenant, _principal = env.setup_default_data()
+            tenant, _principal = _tenant_with_a_portfolio(env)
             set_adapter_type(env, tenant.tenant_id, "mock")
 
             from src.core.tools.capabilities import _get_adcp_capabilities_impl
@@ -115,7 +140,7 @@ class TestPortfolioChannelsComeFromTheCatalog:
         union were dropped for a first-product-wins read.
         """
         with IntegrationEnv(tenant_id="t_catalog_ch", principal_id="p_catalog_ch") as env:
-            tenant, _principal = env.setup_default_data()
+            tenant, _principal = _tenant_with_a_portfolio(env)
             for channel in ("display", "social", "ctv"):
                 ProductFactory(tenant=tenant, channels=[channel])
             env._commit_factory_data()
@@ -139,7 +164,7 @@ class TestPortfolioChannelsComeFromTheCatalog:
         one set and filtered by another.
         """
         with IntegrationEnv(tenant_id="t_catalog_bare", principal_id="p_catalog_bare") as env:
-            tenant, _principal = env.setup_default_data()
+            tenant, _principal = _tenant_with_a_portfolio(env)
             ProductFactory(tenant=tenant, channels=None)
             env._commit_factory_data()
 
@@ -162,7 +187,7 @@ class TestPortfolioChannelsComeFromTheCatalog:
         or ``"hologram"``, but ``default_channels`` is a raw string list and can.
         """
         with IntegrationEnv(tenant_id="t_catalog_empty", principal_id="p_catalog_empty") as env:
-            env.setup_default_data()
+            _tenant_with_a_portfolio(env)
 
             from src.core.tools.capabilities import _get_adcp_capabilities_impl
 
@@ -180,7 +205,7 @@ class TestPortfolioChannelsComeFromTheCatalog:
         a claim that a seller must offer all 20 -- the catalog is what fixes the set.
         """
         with IntegrationEnv(tenant_id="t_catalog_all", principal_id="p_catalog_all") as env:
-            tenant, _principal = env.setup_default_data()
+            tenant, _principal = _tenant_with_a_portfolio(env)
             for channel in MediaChannel:
                 ProductFactory(tenant=tenant, channels=[channel.value])
             env._commit_factory_data()

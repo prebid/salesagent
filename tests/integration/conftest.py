@@ -29,7 +29,7 @@ from src.core.database.models import MediaBuy, MediaPackage, Principal, Tenant
 from tests.fixtures import TenantFactory
 from tests.helpers.local_http_origin import run_local_origin
 from tests.helpers.local_mcp_origin import MCPOrigin, run_mcp_origin
-from tests.helpers.test_tls_material import load_gen_test_tls, server_ssl_context
+from tests.helpers.tls_material import load_gen_test_tls, server_ssl_context
 from tests.integration.migration_helpers import parse_postgres_url
 
 # ---------------------------------------------------------------------------
@@ -619,161 +619,6 @@ def sample_products(integration_db, sample_tenant):
         return [p.product_id for p in products]
 
 
-@pytest.fixture(scope="function")
-def mcp_server(integration_db):
-    """Start a real MCP server for integration testing using the test database."""
-    import shutil
-    import socket
-    import subprocess
-    import sys
-    import tempfile
-    import time
-    from pathlib import Path
-
-    # Find an available port
-    def get_free_port():
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            s.bind(("", 0))
-            s.listen(1)
-            port = s.getsockname()[1]
-        return port
-
-    port = get_free_port()
-
-    # Use the integration_db (PostgreSQL database name already created by the integration_db fixture)
-    db_name = integration_db
-
-    # IMPORTANT: Close any existing connections to ensure the database is fully committed
-    # This is necessary because the server subprocess will create a new connection
-    # Note: SQLAlchemy 2.0 uses get_db_session() context manager, no global db_session to close
-
-    # Set up environment for the server (use PostgreSQL, not SQLite)
-    # Get PostgreSQL connection details from current DATABASE_URL
-    postgres_url = os.environ.get("DATABASE_URL", "")
-    if not postgres_url or not postgres_url.startswith("postgresql://"):
-        raise RuntimeError("mcp_server fixture requires PostgreSQL DATABASE_URL")
-
-    import re
-
-    pattern = r"postgresql://([^:]+):([^@]+)@([^:]+):(\d+)/(.+)"
-    match = re.match(pattern, postgres_url)
-    if match:
-        user, password, host, port_str, _ = match.groups()
-        postgres_port = int(port_str)
-        server_db_url = f"postgresql://{user}:{password}@{host}:{postgres_port}/{db_name}"
-    else:
-        raise RuntimeError(f"Failed to parse DATABASE_URL: {postgres_url}")
-
-    env = os.environ.copy()
-    env["ADCP_SALES_PORT"] = str(port)
-    env["DATABASE_URL"] = server_db_url
-    env["DB_TYPE"] = "postgresql"
-    env["ADCP_TESTING"] = "true"
-    env["PYTHONUNBUFFERED"] = "1"  # Force unbuffered output for better debugging
-
-    # Start the server process using mcp.run() instead of uvicorn directly
-    server_script = f"""
-import sys
-sys.path.insert(0, '.')
-from src.core.main import mcp
-mcp.run(transport='http', host='0.0.0.0', port={port})
-"""
-
-    # The server's output goes to FILES, never PIPEs. A PIPE nobody drains caps
-    # at 64KB; once server logging fills it (uvicorn access lines + app INFO +
-    # rich console output), the server blocks on a log write INSIDE a request
-    # handler and the calling test awaits forever — py-spy showed the server
-    # MainThread parked in logging emit while create_media_buy hung for four
-    # consecutive runs, and this wedged every full CI run at integration's quiet
-    # tail until the >1h run reaper killed it (#1868 review). Files keep the
-    # error-path diagnostics below without needing a drainer thread.
-    output_dir = Path(tempfile.mkdtemp(prefix=f"mcp-server-{port}-"))
-    stdout_path = output_dir / "stdout.log"
-    stderr_path = output_dir / "stderr.log"
-    stdout_f = stdout_path.open("wb")
-    stderr_f = stderr_path.open("wb")
-    try:
-        process = subprocess.Popen(
-            [sys.executable, "-c", server_script],
-            env=env,
-            stdout=stdout_f,
-            stderr=stderr_f,
-        )
-    finally:
-        # The child inherited the fds; the parent's handles are not needed.
-        stdout_f.close()
-        stderr_f.close()
-
-    def _tail(path: Path, limit: int = 8000) -> str:
-        """Last `limit` bytes of a log file — a chatty server writes far more than a failure message needs."""
-        try:
-            data = path.read_bytes()
-        except OSError:
-            return "N/A (log unreadable)"
-        return data[-limit:].decode(errors="replace") if data else "N/A"
-
-    def _server_output() -> str:
-        return f"STDOUT: {_tail(stdout_path)}\nSTDERR: {_tail(stderr_path)}"
-
-    # Wait for server to be ready.
-    # Server startup is dominated by Python imports (fastmcp + adcp SDK + project)
-    # plus FastAPI lifespan + DB pool warm-up. Under CI load this routinely takes
-    # 20-40s; the prior 20s deadline produced flaky 'failed to start' errors even
-    # though Uvicorn's own log showed it had started just past the threshold. Same
-    # rationale as bf5fe3a66 (test-stack readiness deadline 120s -> 360s for
-    # cold-boot).
-    max_wait = 60  # seconds
-    start_time = time.time()
-    server_ready = False
-
-    try:
-        while time.time() - start_time < max_wait:
-            try:
-                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                    s.settimeout(1)
-                    s.connect(("localhost", port))
-                    server_ready = True
-                    break
-            except (ConnectionRefusedError, OSError):
-                # Check if process has died
-                if process.poll() is not None:
-                    raise RuntimeError(f"MCP server process died unexpectedly.\n{_server_output()}")
-                time.sleep(0.3)
-
-        if not server_ready:
-            process.kill()
-            process.wait(timeout=5)
-            raise RuntimeError(f"MCP server failed to start on port {port} within {max_wait}s.\n{_server_output()}")
-    except BaseException:
-        # Both raise points above happen before yield, so pytest's generator-fixture
-        # teardown (the code after yield, including shutil.rmtree(output_dir) below)
-        # never runs for them -- clean up here instead, on every setup-failure path.
-        shutil.rmtree(output_dir, ignore_errors=True)
-        raise
-
-    # Return server info
-    class ServerInfo:
-        def __init__(self, port, process, db_name):
-            self.port = port
-            self.process = process
-            self.db_name = db_name
-
-    server = ServerInfo(port, process, db_name)
-
-    yield server
-
-    # Cleanup
-    process.terminate()
-    try:
-        process.wait(timeout=5)
-    except subprocess.TimeoutExpired:
-        process.kill()
-        process.wait()
-    shutil.rmtree(output_dir, ignore_errors=True)
-
-    # Don't remove db_name - the PostgreSQL database is managed by integration_db fixture
-
-
 @pytest.fixture
 def test_admin_app(integration_db):
     """Provide a test Admin UI app with real database."""
@@ -1328,6 +1173,28 @@ def seed_error_test_tenant(
         # credential any more — the hash in the row comes from the principal id.
         "access_token": plaintext_token_for(principal_id),
     }
+
+
+@pytest.fixture(autouse=True)
+def _reset_signing_warning_state():
+    """Clear the outbound delivery signer's warn-once cache between tests.
+
+    ``src.core.signing.outbound`` warns once per ``(warning, tenant)`` pair for the
+    process. The cache outlives the per-test database, so a tenant warned in one test
+    stays warned in the next — and a test asserting that a keyless tenant IS warned
+    then passes or fails on the order it ran in. This layer has already produced
+    order-dependent failures of exactly that shape.
+
+    Autouse rather than opt-in: the seam it exercises was previously a reset function
+    with no caller anywhere in ``src/`` or ``tests/``, which is indistinguishable from
+    no reset at all. A fixture every test in this suite loads cannot fall into that
+    state again.
+    """
+    from src.core.signing.outbound import reset_warning_state
+
+    reset_warning_state()
+    yield
+    reset_warning_state()
 
 
 @pytest.fixture

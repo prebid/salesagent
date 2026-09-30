@@ -365,8 +365,8 @@ def _deliver_e2e_a2a(
     walks in-process (``tests/harness/_base.py``) — FAILED raises a
     ``WireError`` carrying the failed Task artifact's DataPart VERBATIM
     (normalized by the same ``_wire_envelope`` the in-process path uses),
-    SUBMITTED synthesizes the manual-approval wire, otherwise the first
-    artifact's ``data`` Part is the success payload.
+    SUBMITTED reads the manual-approval wire off the status message's ``data``
+    Part, otherwise the first artifact's ``data`` Part is the success payload.
 
     Sends the ``A2A-Version`` header the real JSON-RPC route requires
     (``a2a.server.routes.jsonrpc_dispatcher``'s ``@validate_version(PROTOCOL_VERSION_1_0)``
@@ -438,7 +438,14 @@ def _deliver_e2e_a2a(
         raise RuntimeError(f"A2A task failed: {task.get('status')}")
 
     if state == "TASK_STATE_SUBMITTED":
-        submitted_wire = {"status": "submitted", "task_id": task.get("id")}
+        # An interim status carries its payload in ``status.message.parts[]``, not in
+        # ``artifacts`` (pinned L0/a2a-response-format.mdx). Read it there rather than
+        # synthesizing a two-key wire, which would hide every other field the server sent —
+        # including the envelope ``context`` the buyer is owed on every outcome.
+        message = task.get("status", {}).get("message") or {}
+        submitted_wire = _artifact_data_from_json(message)
+        if not submitted_wire:
+            raise ValueError(f"A submitted Task carried no data part in status.message.parts: {task.get('status')!r}")
         return DeliverResult(payload=submitted_wire, wire_response=dict(submitted_wire))
 
     artifacts = task.get("artifacts") or []
@@ -543,15 +550,14 @@ def _rest_transport_fault(envelope: dict[str, Any], raw_response: Any) -> Transp
     and a guess is not evidence of what the buyer received (see
     ``BaseTestEnv.parse_rest_error_envelope``).
     """
-    from src.core.errors.codes import AppErrorCode
-    from src.core.exceptions import AdCPSalesAgentError
+    from src.core.exceptions import AdCPInternalError
 
     return TransportResult(
         # The HTTP response was received; its body just carries no AdCP
         # envelope. Bytes crossed the wire, so has_wire is True.
         has_wire=True,
         envelope={**envelope, "status": derive_error_status(None)},
-        error=AdCPSalesAgentError(error_code=AppErrorCode.INTERNAL_ERROR),
+        error=AdCPInternalError(),
         raw_response=raw_response,
     )
 

@@ -15,26 +15,12 @@ frozen 3-value literal and this file's spec-pin tuple are the only deliberate
 literals — they exist precisely so everything else can derive.
 """
 
-import re
-
 from src.core.database.models import Account
+from tests.helpers.orm_constraints import check_constraint_values, quoted_values
 
 # The authoritative spec value-set for billing-party, pinned by tag.
 # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/enums/billing-party.json pointer=/enum
 _SPEC_BILLING_PARTIES = ("operator", "agent", "advertiser")
-
-
-def _quoted_values(sql: str) -> tuple[str, ...]:
-    """Extract the single-quoted value literals from a CHECK constraint's SQL text."""
-    return tuple(re.findall(r"'([^']*)'", sql))
-
-
-def _billing_check_sql() -> str:
-    """Return the SQL text of the ck_accounts_billing CHECK on the Account ORM model."""
-    for constraint in Account.__table__.constraints:
-        if constraint.name == "ck_accounts_billing":
-            return str(constraint.sqltext)
-    raise AssertionError("Account model has no CHECK constraint named ck_accounts_billing")
 
 
 def test_billing_party_values_match_spec_pin():
@@ -63,7 +49,7 @@ def test_orm_billing_check_derives_from_billing_party_values():
     """
     from src.core.billing_policy import BILLING_PARTY_VALUES
 
-    check_values = _quoted_values(_billing_check_sql())
+    check_values = check_constraint_values(Account, "ck_accounts_billing")
     assert check_values == BILLING_PARTY_VALUES, (
         f"ck_accounts_billing CHECK values {check_values!r} != BILLING_PARTY_VALUES "
         f"{BILLING_PARTY_VALUES!r}. The ORM constraint must derive from "
@@ -76,7 +62,7 @@ class TestParserModelsTheForm:
 
     def test_extracts_in_clause_values_in_order(self):
         sql = "billing IS NULL OR billing IN ('operator', 'agent', 'advertiser')"
-        assert _quoted_values(sql) == ("operator", "agent", "advertiser")
+        assert quoted_values(sql) == ("operator", "agent", "advertiser")
 
     def test_no_quoted_literals_yields_empty(self):
-        assert _quoted_values("billing IS NULL") == ()
+        assert quoted_values("billing IS NULL") == ()

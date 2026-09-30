@@ -16,6 +16,13 @@ This env used to auto-detect its transport from the process-global
 
 The transport now arrives from the BDD collection-time parametrization and the
 address from ``e2e_stack``; both are ordinary arguments.
+
+The two ids these tests pin are the ones the run-splitting selectors key on:
+``admin_integration`` is collected by the in-process ``bdd_inprocess`` env and
+``e2e_admin`` is named in the ``bdd_e2e`` env's
+``-k "e2e_rest or e2e_mcp or e2e_a2a or e2e_admin"``. Renaming either value
+without updating tox.ini would leave the scenarios collected by no env —
+dormant, with CI still green.
 """
 
 from __future__ import annotations

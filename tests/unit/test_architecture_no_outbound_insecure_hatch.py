@@ -11,11 +11,12 @@ plaintext-http escape hatch this ticket closed — this guard catches that at
 ``make quality`` time.
 
 ``.github/workflows/ci.yml``'s "creative" integration matrix group was the
-last holdout (GH #1802): it now consumes
-``scripts/creative-agent-stack.sh``'s own https TLS front (GH #1757)
-via ``steps.creative_agent.outputs.url`` instead of a plaintext
-``localhost:9999`` URL, so the flag has no remaining legitimate use anywhere
-in the repo.
+last holdout (GH #1802). It no longer runs on the HOST at all: it runs
+IN-NETWORK via ``./run_all_tests.sh`` against ``docker-compose.e2e.yml`` and
+reaches the reference agent by service name
+(``CREATIVE_AGENT_URL=http://creative-agent:8080/...``), so there is no
+inline hatch and no plaintext ``localhost:9999`` URL left in ``ci.yml`` —
+and so the flag has no remaining legitimate use anywhere in the repo.
 """
 
 from __future__ import annotations
@@ -169,10 +170,11 @@ _ALLOWED_ALLOW_PRIVATE_SITES: frozenset[str] = frozenset(
         "tox.ini",
         # The host runner stands up the same stack outside compose.
         "run_all_tests_host.sh",
-        # The creative integration matrix group consumes the same private
-        # origins; its own comment records that the compose files and the host
-        # runner already open the hatch and this group needs it too.
-        ".github/workflows/ci.yml",
+        # NOTE: .github/workflows/ci.yml was removed from this pin at the #1802 merge.
+        # Its "creative" integration group used to run on the host and set the flag
+        # inline; the group now runs IN-NETWORK via ./run_all_tests.sh, so the compose
+        # file and run_all_tests_host.sh are the only declaration sites left. Dropping a
+        # site that genuinely stopped declaring is a shrink, not a relaxation.
     }
 )
 
@@ -227,7 +229,7 @@ def test_allow_private_sites_match_the_pin_exactly() -> None:
     """The files that may name ADCP_OUTBOUND_ALLOW_PRIVATE are exactly the pin.
 
     Set IDENTITY, not a count: an add-plus-drop must fail, because a count that
-    stays at five while `docker-compose.yml` replaces `tox.ini` is precisely the
+    stays at three while `docker-compose.yml` replaces `tox.ini` is precisely the
     change this guard exists to refuse.
     """
     found = find_allow_private_declaring_files(_REPO_ROOT)

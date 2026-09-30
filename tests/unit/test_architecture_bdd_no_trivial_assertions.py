@@ -54,25 +54,11 @@ with no ``else``, at any nesting depth, whatever accessor produced the value.
 from __future__ import annotations
 
 import ast
-from pathlib import Path
 
 import pytest
 
 from tests.unit._architecture_helpers import iter_call_expressions
-
-_BDD_STEPS_DIR = Path(__file__).resolve().parents[1] / "bdd" / "steps"
-
-
-def _is_then_decorated(func: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
-    """Check if function is decorated with @then(...)."""
-    for dec in func.decorator_list:
-        if isinstance(dec, ast.Call):
-            func_node = dec.func
-            if isinstance(func_node, ast.Name) and func_node.id == "then":
-                return True
-        if isinstance(dec, ast.Name) and dec.id == "then":
-            return True
-    return False
+from tests.unit._bdd_guard_helpers import BDD_STEPS_DIR, iter_bdd_steps
 
 
 def _assert_is_meaningful(assert_node: ast.Assert) -> bool:
@@ -282,27 +268,86 @@ def _body_without_docstring(func: ast.FunctionDef | ast.AsyncFunctionDef) -> lis
     return [s for s in func.body if not (isinstance(s, ast.Expr) and isinstance(s.value, ast.Constant))]
 
 
-def _scan_bdd_steps() -> list[str]:
-    """Find Then steps with only trivial assertions."""
-    violations = []
+#: Packages a step file may import a shared verdict FROM. Both are test-support trees
+#: whose whole job is holding assertions the steps share; ``src`` is deliberately absent,
+#: because production code asserting is not a step grading its claim.
+_HELPER_IMPORT_ROOTS = ("tests.bdd.steps", "tests.helpers")
 
-    for py_file in sorted(_BDD_STEPS_DIR.rglob("*.py")):
-        if py_file.name.startswith("_"):
+#: The repository root, derived from the shared discovery constant rather than restated.
+_REPO_ROOT = BDD_STEPS_DIR.parents[2]
+
+
+def _imported_asserting_helpers(tree: ast.Module, cache: dict[str, frozenset[str]]) -> set[str]:
+    """Names this module IMPORTS that are asserting helpers where they are defined.
+
+    :func:`_is_asserting_helper_name` exists because "module-local resolution cannot see
+    across an import", and it answers that with a NAME convention: ``assert_*`` /
+    ``require_*``. That convention does not cover every shared verdict this codebase has
+    — ``_outcome_helpers.wire_absent`` and ``wire_dict`` (the wire-envelope assertions
+    tests/CLAUDE.md's error-verification policy directs Then steps to use) both end in a
+    bare ``assert`` and follow neither prefix, so a step delegating to them read as
+    having no reachable assertion at all.
+
+    Resolving the import is strictly better than widening the convention: the helper has
+    to REALLY assert, checked in its own source by the same
+    :func:`_asserting_helpers` walk used module-locally. Adding a ``wire_*`` prefix to
+    the name list would have credited any future ``wire_``-named reader that grades
+    nothing.
+
+    ONE level, deliberately. A helper that only delegates further is not credited, which
+    keeps the resolution decidable and cheap; the cost of that limit is a false positive
+    on a two-hop delegation, which fails loudly and is fixable by naming the hop
+    ``assert_*``.
+    """
+    names: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.ImportFrom) or node.level != 0 or not node.module:
             continue
-        source = py_file.read_text()
-        tree = ast.parse(source, filename=str(py_file))
-        helpers = _asserting_helpers(tree)
-        relative = py_file.relative_to(_BDD_STEPS_DIR.parent.parent)
+        if not node.module.startswith(_HELPER_IMPORT_ROOTS):
+            continue
+        path = _REPO_ROOT / (node.module.replace(".", "/") + ".py")
+        if not path.is_file():
+            continue
+        key = f"import::{node.module}"
+        if key not in cache:
+            cache[key] = _asserting_helpers(ast.parse(path.read_text(), filename=str(path)))
+        defined = cache[key]
+        # The step binds `asname or name`; the DEFINITION is `name`.
+        names.update(alias.asname or alias.name for alias in node.names if alias.name in defined)
+    return names
 
-        for node in ast.walk(tree):
-            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                continue
-            if not _is_then_decorated(node):
-                continue
-            if not _has_meaningful_assertion_or_delegation(node):
-                violations.append(f"{relative}:{node.lineno} {node.name} [no meaningful assertion]")
-            elif _has_a_skippable_branch(node) and not _executes_an_assertion(_body_without_docstring(node), helpers):
-                violations.append(f"{relative}:{node.lineno} {node.name} [assertion is unreachable on some path]")
+
+def _asserting_helpers_for(relative: str, cache: dict[str, frozenset[str]]) -> frozenset[str]:
+    """Asserting helpers a step in *relative* can delegate to: defined here, or imported.
+
+    ``iter_bdd_steps`` yields step FUNCTIONS, not the module they came from, but
+    the reachability rule resolves delegation against the defining module. The
+    file is re-parsed once per path and memoised in *cache*, so the shared
+    discovery walk stays shared without re-parsing per step.
+    """
+    if relative not in cache:
+        path = BDD_STEPS_DIR.parent.parent / relative
+        tree = ast.parse(path.read_text(), filename=str(path))
+        cache[relative] = _asserting_helpers(tree) | _imported_asserting_helpers(tree, cache)
+    return cache[relative]
+
+
+def _scan_bdd_steps() -> list[str]:
+    """Find Then steps that do not grade what they claim.
+
+    Discovery is shared (``iter_bdd_steps``); both rules below are this guard's
+    own — presence of a meaningful assertion, then its reachability.
+    """
+    violations = []
+    helpers_by_file: dict[str, frozenset[str]] = {}
+
+    for step in iter_bdd_steps(step_names=("then",)):
+        if not _has_meaningful_assertion_or_delegation(step.node):
+            violations.append(f"{step.key} [no meaningful assertion]")
+        elif _has_a_skippable_branch(step.node) and not _executes_an_assertion(
+            _body_without_docstring(step.node), _asserting_helpers_for(step.relative, helpers_by_file)
+        ):
+            violations.append(f"{step.key} [assertion is unreachable on some path]")
 
     return violations
 

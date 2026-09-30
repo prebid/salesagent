@@ -8,6 +8,28 @@ This service implements the AdCP webhook specification from PR #86:
 - Bounded queues (1000 webhooks per endpoint)
 - Support for is_adjusted flag for late-arriving data
 - Per-endpoint isolation to prevent cascading failures
+
+RFC 9421 (#1291): WHETHER a 9421 signature is applied is decided inside the egress
+boundary and NOT here — ``webhook_egress._headers_for`` keys the arm on the ABSENCE
+of an ``authentication`` block, which is the pinned schema's own selector
+(``security.mdx`` @ v3.1.1 :1424), and applies it as ``outbound_http.send``'s
+``sign=`` hook, invoked once PER ATTEMPT over ``request.content``. That is what keeps
+the ``nonce`` fresh across a retry and the signature over the exact bytes sent, while
+this sender never holds a signature and never opens a second HTTP client.
+
+What this sender contributes is the one input that boundary cannot derive for itself:
+WHICH TENANT's key. It resolves that once per delivery with
+``src.core.signing.outbound.delivery_signer_for_tenant`` — the ONE open-read-close all
+three webhook senders share, so no two of them resolve it differently — and hands it
+over as ``signer=``. ``QueuedWebhook`` therefore carries ``tenant_id``: it is a
+DISPATCH-level value, held on the QUEUE ENTRY and never merged into ``payload``,
+because a dispatch kwarg folded into the body changes the bytes a receiver must verify
+against the signature. (``idempotency_key`` is the other half of that pair and is NOT
+carried here: it is a REQUIRED PAYLOAD FIELD of the AdCP webhook document, minted once
+per event by :func:`~src.core.webhooks.delivery.build_webhook_envelope` — via the SDK's
+``create_mcp_webhook_payload`` — and stable across that event's retries because the
+body is built once, before the queue. Merging a second key at the send site would
+overwrite the envelope's own field with a different value on every delivery.)
 """
 
 import atexit
@@ -15,6 +37,7 @@ import logging
 import threading
 import time
 from collections import deque
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import Enum
 from typing import Any
@@ -22,6 +45,7 @@ from uuid import uuid4
 
 from adcp import get_adcp_spec_version
 from adcp.webhooks import GeneratedTaskStatus
+from pydantic import JsonValue
 
 from src.core.config import get_settings
 from src.core.security.webhook_egress import deliver_webhook
@@ -163,6 +187,52 @@ class CircuitBreaker:
                 logger.warning("Circuit breaker reopened (recovery test failed)")
 
 
+@dataclass(frozen=True, slots=True)
+class QueuedWebhook:
+    """One queued delivery — PRIMITIVES ONLY, and that is the invariant.
+
+    Every field is a plain value. No ORM model, no ``Mapped[...]``, no session, no
+    repository. That is what makes the retry loop STRUCTURALLY unable to reach a database
+    connection: a loop whose only input is primitives cannot lazy-load a relationship and
+    cannot touch a session — no matter how many call frames deep the work sits (#1757).
+
+    THIS REPLACED A ``dict[str, Any]`` CARRYING A LIVE ``PushNotificationConfig`` ORM row,
+    whose lazy-loads need a session that may well be closed by the time the delivery
+    touches it. ``url`` / ``authentication_type`` / ``authentication_token`` are exactly
+    the three attributes any sender reads off a config, so this projection satisfies the
+    same contract the row did. They are handed to
+    :func:`~src.core.security.webhook_egress.deliver_webhook` as the stored PRIMITIVES it
+    takes (``scheme=`` / ``credentials=``) — that boundary deliberately accepts the raw
+    pair rather than a validated block, so what an invalid registration MEANS is decided
+    once there instead of once per sender.
+
+    ``tenant_id`` is a dispatch-level value, carried here and NEVER merged into
+    ``payload``: it is what the RFC 9421 arm at the egress boundary is keyed to.
+    :meth:`WebhookDeliveryService._deliver_with_backoff` reads it off the DEQUEUED ENTRY
+    to resolve that tenant's signer, so the key that signs is the one the item being
+    delivered names. A SIGNING REPOSITORY used to ride here for that same stated reason,
+    and that was the fault: a repository carries a session, and the strategy resolved
+    from this id does not.
+
+    ``payload`` is ``dict[str, JsonValue]``, NOT ``dict[str, Any]``: ``JsonValue`` is
+    pydantic's recursive JSON type, so an ORM object in the payload is a TYPE ERROR at
+    every producer rather than a runtime possibility. It is deliberately NOT pre-
+    serialized bytes — the seam must "serialize, authenticate and POST as one act, so the
+    bytes signed are the bytes sent" (#1441), and bytes on the queue would be something
+    the sent body could diverge from.
+
+    Pinned by ``tests/unit/test_architecture_repository_pattern.py``; the mutations that
+    turn it red are an ORM-typed or ``Mapped[...]`` field, or dropping ``frozen=True``.
+    """
+
+    url: str
+    authentication_type: str | None
+    authentication_token: str | None
+    payload: dict[str, JsonValue]
+    tenant_id: str | None
+    timestamp: datetime
+
+
 class WebhookQueue:
     """Bounded queue for webhook delivery per endpoint."""
 
@@ -177,7 +247,7 @@ class WebhookQueue:
         self._lock = threading.Lock()
         self._dropped_count = 0
 
-    def enqueue(self, webhook_data: dict[str, Any]) -> bool:
+    def enqueue(self, webhook_data: QueuedWebhook) -> bool:
         """Add webhook to queue.
 
         Args:
@@ -197,7 +267,7 @@ class WebhookQueue:
             self.queue.append(webhook_data)
             return True
 
-    def dequeue(self) -> dict[str, Any] | None:
+    def dequeue(self) -> QueuedWebhook | None:
         """Remove and return oldest webhook from queue.
 
         Returns:
@@ -421,7 +491,17 @@ class WebhookDeliveryService:
 
         # Add to queue (bounded)
         # The body, built HERE because its echo fields belong to THIS registration, and
-        # serialized once so the queue carries a plain dict the signer can hash.
+        # serialized once so the queue carries a plain dict the signer can hash. Building
+        # it once is also what makes its ``idempotency_key`` stable across the seam's
+        # retries of this event, which is the field's whole contract (webhooks.mdx :195).
+        #
+        # Projected off the ORM row HERE, while the session is open — that read is
+        # legitimate and stays inside the block. What goes ON THE QUEUE is primitives
+        # only, so the delivery below cannot lazy-load a relationship off a row whose
+        # session may be gone, and a SIGNING REPOSITORY can never ride along again
+        # (#1757). ``tenant_id`` rides on the ENTRY rather than on ``payload``: it is
+        # dispatch-level — what the RFC 9421 arm at the egress boundary is keyed to — and
+        # folding it into the body would change the bytes a receiver verifies.
         payload = build_webhook_envelope(
             task=ctx,
             status=GeneratedTaskStatus.completed,
@@ -429,11 +509,14 @@ class WebhookDeliveryService:
             operation_id=config.operation_id,
             token=config.token,
         )
-        webhook_data = {
-            "config": config,
-            "payload": payload.model_dump(mode="json", exclude_none=True),
-            "timestamp": datetime.now(UTC),
-        }
+        webhook_data = QueuedWebhook(
+            url=config.url,
+            authentication_type=config.authentication_type,
+            authentication_token=config.authentication_token,
+            payload=payload.model_dump(mode="json", exclude_none=True),
+            tenant_id=ctx.tenant_id,
+            timestamp=datetime.now(UTC),
+        )
 
         if not queue.enqueue(webhook_data):
             logger.warning("⚠️ Queue full for %s, webhook dropped", safe_url)
@@ -557,19 +640,65 @@ class WebhookDeliveryService:
         Returns:
             The outcome, or ``None`` when the queue was empty and nothing was
             attempted — which is not an outcome and must not be recorded as one.
+
+        Raises:
+            AdCPConfigurationError: when this tenant IS configured to sign its
+                deliveries but the signer cannot be honestly built. Nothing is sent.
         """
         webhook_data = queue.dequeue()
         if not webhook_data:
             return None
 
-        config = webhook_data["config"]
-        payload = webhook_data["payload"]
-        safe_url = webhook_url_for_log(config.url)
+        payload = webhook_data.payload
+        safe_url = webhook_url_for_log(webhook_data.url)
+
+        # WHICH TENANT'S KEY -- the one input the egress boundary cannot derive for
+        # itself. WHETHER a 9421 signature is applied at all remains that boundary's
+        # decision (``_headers_for`` keys the arm on the ABSENCE of an ``authentication``
+        # block, security.mdx @ v3.1.1 :1424); this only says which key would sign if it
+        # is, so a legacy-registered receiver is unaffected by what is resolved here.
+        # Read off the DEQUEUED ENTRY rather than a tenant threaded down in parallel, so
+        # the key that signs is the one the item being delivered names.
+        #
+        # ONE call, and it is the signing layer's own ``delivery_signer_for_tenant`` --
+        # the same function the other two senders call, so the key a tenant's deliveries
+        # are signed with cannot differ with the transport they took. It opens, reads and
+        # CLOSES a session of its own, consuming the repository eagerly, so nothing lazy
+        # survives the close.
+        #
+        # NO ``try`` HERE, DELIBERATELY, and the one below must not be widened over it.
+        # ``None`` and a raise are two different answers, and the helper never converts
+        # one into the other:
+        #
+        #   * ``None`` is a DECIDED posture, not a failure -- this tenant has no ACTIVE
+        #     signing key, or a key on an origin whose trust root cannot be published.
+        #     Its capabilities already advertise ``webhook_signing.supported=false``, so
+        #     a receiver has been told not to expect a ``Signature`` header, and delivery
+        #     proceeds on the legacy arms exactly as it did before this parameter existed.
+        #   * a raise means the tenant IS configured to sign and we cannot honour it
+        #     (``AdCPConfigurationError``). Catching that and passing ``signer=None``
+        #     would convert a misconfiguration into an UNSIGNED delivery to a receiver
+        #     that is verifying -- the silent downgrade this seam exists to remove. So it
+        #     escapes to ``_send_webhook_enhanced``'s outermost handler, which logs the
+        #     configuration error, and NOTHING is sent. THIS sender's disposition of the
+        #     raise is local to it; the other two book it their own way, which is why the
+        #     helper carries the resolution and not the handling.
+        #
+        # Imported in-function, matching this module's existing convention for the
+        # signing/database chain: the signing layer pulls in the ORM, and this module
+        # builds a singleton at import time. By DOTTED PATH, never a package facade:
+        # ``src/core/signing/__init__.py`` re-exports nothing.
+        from src.core.signing.outbound import delivery_signer_for_tenant
+
+        signer = delivery_signer_for_tenant(webhook_data.tenant_id)
 
         # Signing (X-ADCP-Signature / X-ADCP-Timestamp) is owned entirely by
         # deliver_webhook below -- it serializes, signs and stamps the timestamp
         # as one decision, so this function never holds a signature and a body
-        # serialization as two independent things to keep in sync.
+        # serialization as two independent things to keep in sync. Routing the 9421
+        # signature through the same call PRESERVES that: prepare_signed_request returns
+        # (headers, bytes) and those exact bytes are handed to outbound_http.send as
+        # ``content=``, so the signed object and the transmitted object are one object.
         #
         # The auth DECISION above that transport is owned entirely by
         # deliver_webhook/adeliver_webhook (#1894). This
@@ -603,17 +732,26 @@ class WebhookDeliveryService:
         # tolerance here — that reinstates the divergence this seam removed.
         #
         # No ``field=``: this URL is read back out of storage, not off a request
-        # document. Every log names ``safe_url`` (scheme://host/path), never
-        # ``config.url``, which may carry userinfo credentials or a query token.
+        # document. Every log names ``safe_url`` (scheme://host/path), never the raw
+        # URL, which may carry userinfo credentials or a query token.
+        #
+        # ``signer`` is passed UNCONDITIONALLY, and that is not a dropped decision: a
+        # sender reading a stored row cannot know which arm the row selects, so it offers
+        # the tenant's strategy and ``_headers_for`` decides. On a legacy registration the
+        # seam IGNORES it (:1425 forbids answering a legacy registration with a 9421
+        # signature); on a refused destination it is never invoked at all, because
+        # ``send`` raises before it builds a request -- so there is no unsigned body for a
+        # blocked send to fall back to.
         try:
             outcome = deliver_webhook(
-                config.url,
+                webhook_data.url,
                 payload,
-                scheme=config.authentication_type,
-                credentials=config.authentication_token,
+                scheme=webhook_data.authentication_type,
+                credentials=webhook_data.authentication_token,
                 headers=headers,
                 timeout=get_settings().limits.adcp_webhook_delivery_timeout_seconds,
                 max_attempts=3,
+                signer=signer,
             )
         except Exception as e:
             # DELIBERATELY KEPT. The seam maps its OWN failure taxonomy onto the

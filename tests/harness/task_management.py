@@ -11,8 +11,6 @@ Requires: integration_db fixture.
 
 from __future__ import annotations
 
-from typing import Any
-
 from tests.harness._base import IntegrationEnv
 
 
@@ -37,12 +35,9 @@ class TaskManagementEnv(IntegrationEnv):
     def _configure_mocks(self) -> None:
         """No mocks needed -- real WorkflowUoW."""
 
-    def call_impl(self, **kwargs: Any) -> dict[str, Any]:
-        """Call list_tasks directly with real DB (no transport dispatch)."""
-        import asyncio
-
-        from src.core.tools.task_management import list_tasks
-
-        self._commit_factory_data()
-        identity = kwargs.pop("identity", self.identity)
-        return asyncio.run(list_tasks(identity=identity, **kwargs))
+    # No ``call_impl``. There was one, reaching ``_list_tasks_impl`` directly, and it had
+    # NO CALLER: the one live consumer (tests/integration/test_get_task_principal_scope.py)
+    # dispatches through ``env.call_via(Transport.MCP, ...)``, and the BDD step that looked
+    # like a caller bypassed this env entirely. #1721 deleted ``Transport.IMPL``, so an
+    # impl leg on a harness env is a route to nowhere -- kept alive only by the dangling
+    # ``list_tasks`` import it carried. Deleted rather than repaired.

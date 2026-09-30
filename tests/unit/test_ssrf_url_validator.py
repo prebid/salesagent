@@ -1,9 +1,16 @@
 """Unit tests for SSRF-adjacent URL handling (F-04).
 
 ``TestCheckUrlSsrf`` and ``TestBlockedHostnames`` — the direct tests of
-``check_url_ssrf``/``BLOCKED_HOSTNAMES`` — are DELETED: that module
-(``src.core.security.url_validator``) no longer exists (salesagent-tbrk.1).
-Every row's behavioral content migrated into
+``check_url_ssrf``/``BLOCKED_HOSTNAMES`` — are DELETED. The module
+``src.core.security.url_validator`` is GONE entirely: it first lost the SSRF
+half (salesagent-tbrk.1 / GH #1802) — ``check_url_ssrf``, ``check_url_syntax``,
+``BLOCKED_NETWORKS``, ``BLOCKED_HOSTNAMES`` — and its surviving reserved-TLD
+family then moved to its one remaining owner,
+``src.core.security.egress.policy`` (``RESERVED_TLDS`` /
+``reserved_tld_for_host`` / ``is_reserved_tld_host``), which is where
+``TestReservedTldPolicy`` below grades it. The policy VERDICT graded here is
+unchanged by that move — only the import path is.
+Every deleted row's behavioral content migrated into
 ``tests/integration/test_outbound_http.py``'s verdict-parity table (see that
 file's ``EgressPolicy.check_registration`` cases), which grades the SAME
 address predicate now shared by both the registration and dial verdicts —
@@ -29,9 +36,26 @@ triaged row-by-row so nothing was silently dropped:
   dead; the one production caller always passed ``require_https=True``.
   Nothing to migrate.
 
+One more class is RETIRED rather than migrated, and for a different reason —
+its subject is gone too, but it had no address-policy content to move:
+
+- ``TestValidateAgentUrl`` (7 rows) tested
+  ``src.core.tools.media_buy_create.validate_agent_url``, a format-only
+  (scheme + netloc) pre-check. That function no longer exists anywhere in
+  ``src/``: ``media_buy_create`` now hands the creative-agent URL straight to
+  the seam with ``CounterpartyUrl`` provenance
+  (``media_buy_create.py`` lines 418 / 702 / 718), so the real verdict — not a
+  structural guess — is what the buyer gets. A format-only accept is no longer
+  a behavior this codebase has, so there is nothing to retarget; the refusal
+  that replaced it is graded in
+  ``tests/integration/test_creative_agent_url_ingest_refusal.py``.
+
 Covers:
-- validate_agent_url: media_buy_create wrapper (format-only, unrelated to the
-  address-policy migration above)
+- reserved-TLD policy: the surviving half of the retired ``url_validator``, now
+  owned by ``src.core.security.egress.policy``
+  (RFC 9421 notification-proof policy — "can an endpoint under this host ever be
+  PROVEN?" — which the egress seam has no notion of and deliberately does not
+  want)
 - Flask endpoint-level wiring for signals agents add/edit handlers (routes
   through ``src.admin.utils.url_policy`` -> ``outbound_http.validate_url``,
   never called ``check_url_ssrf`` directly)
@@ -40,57 +64,61 @@ Covers:
 import os
 from unittest.mock import MagicMock, patch
 
+import pytest
 
-class TestValidateAgentUrl:
-    """validate_agent_url in media_buy_create validates format only (scheme + netloc).
 
-    This function is called during approval processing against URLs already stored
-    in the database, not against live user input. It validates structure, not
-    network safety. SSRF protection for user-supplied URLs is enforced at the
-    admin ingestion boundary in signals_agents.py via check_url_ssrf().
+class TestReservedTldPolicy:
+    """The half of the retired ``url_validator`` that SURVIVED #1802 still refuses.
+
+    This is notification-proof policy, not address policy: it answers "can an
+    endpoint under this hostname ever be PROVEN?", which the egress seam has no
+    notion of — a ``.invalid`` host passes ``check_registration`` on its own
+    terms. So this obligation has no home in the seam's parity table and keeps
+    its owner here, where the module's own unit tests live.
+
+    Deliberately narrow: ``tests/unit/test_architecture_reserved_tld_single_matcher.py``
+    grades the *structural* rule (one matcher, boolean delegates to it, callers
+    never re-match the frozenset). What is graded here is the policy VERDICT the
+    F-04 file has always been about — which hosts get refused, which get through.
     """
 
-    def test_none_rejected(self):
-        from src.core.tools.media_buy_create import validate_agent_url
+    def test_dot_test_host_refused(self):
+        from src.core.security.egress.policy import is_reserved_tld_host, reserved_tld_for_host
 
-        assert validate_agent_url(None) is False
+        assert reserved_tld_for_host("acme.test") == ".test"
+        assert is_reserved_tld_host("acme.test") is True
 
-    def test_empty_string_rejected(self):
-        from src.core.tools.media_buy_create import validate_agent_url
+    def test_dot_invalid_host_refused(self):
+        from src.core.security.egress.policy import is_reserved_tld_host, reserved_tld_for_host
 
-        assert validate_agent_url("") is False
+        assert reserved_tld_for_host("no-such-host.invalid") == ".invalid"
+        assert is_reserved_tld_host("no-such-host.invalid") is True
 
-    def test_public_https_url_accepted(self):
-        from src.core.tools.media_buy_create import validate_agent_url
+    def test_normal_public_host_passes(self):
+        """The non-vacuity half: a refusal that refuses everything grades nothing.
 
-        assert validate_agent_url("https://creatives.example.com/agent") is True
+        ``signals.example.com`` is the trap spelling — ``.example`` IS reserved,
+        but only as a TLD, and a call-site ``endswith(".example")`` that this
+        owner exists to replace would get this one right while getting
+        ``Acme.TEST`` and ``acme.test.`` wrong.
+        """
+        from src.core.security.egress.policy import is_reserved_tld_host, reserved_tld_for_host
 
-    def test_public_http_url_accepted(self):
-        from src.core.tools.media_buy_create import validate_agent_url
-
-        assert validate_agent_url("http://creatives.example.com/agent") is True
-
-    def test_non_http_scheme_rejected(self):
-        from src.core.tools.media_buy_create import validate_agent_url
-
-        assert validate_agent_url("ftp://creatives.example.com") is False
-
-    def test_missing_netloc_rejected(self):
-        from src.core.tools.media_buy_create import validate_agent_url
-
-        assert validate_agent_url("https://") is False
-
-    def test_unresolvable_hostname_accepted(self):
-        """Format validation does not do DNS resolution — offline services are structurally valid."""
-        from src.core.tools.media_buy_create import validate_agent_url
-
-        assert validate_agent_url("https://not-deployed-yet.internal.example.com/agent") is True
+        for host in ("signals.example.com", "creatives.example.com", "93.184.216.34"):
+            assert reserved_tld_for_host(host) is None, host
+            assert is_reserved_tld_host(host) is False, host
 
 
 # A public, non-reserved address as a literal: the ingest gate's verdict on it is
 # decided entirely by address policy, with no DNS lookup to go missing offline.
 # (The mirror image of the reject cases' 169.254.169.254 / host.docker.internal.)
 SAFE_PUBLIC_URL = "https://93.184.216.34/agent"
+
+# The URL both reject-path wiring tests submit. Named once so the seam-linkage
+# test below and the endpoint tests cannot drift onto different vectors — a
+# redirect proves the handler refused, not WHY, and the two only compose into
+# "the seam is what refused it" while they are the same URL.
+BLOCKED_INGEST_URL = "http://host.docker.internal:9999"
 
 
 def _make_signals_agent_client():
@@ -123,13 +151,43 @@ class TestSignalsAgentEndpointSSRFWiring:
     These tests exercise the actual POST /tenant/<id>/signals-agents/add and
     POST /tenant/<id>/signals-agents/<id>/edit endpoints so that removing or
     bypassing the ingest check in the handler would cause a real failure. The
-    handlers no longer call check_url_ssrf() directly: they go through
+    handlers no longer call ``check_url_ssrf`` directly: they go through
     ``src.admin.utils.url_policy`` -> ``src.core.security.outbound_http.validate_url``,
     whose address policy is the live ``adcp.signing`` validator. The accepted URL is
     therefore a public IP literal rather than a fixture hostname: nothing here patches
     a resolver any more, so a hostname would make the accept case depend on this
     machine's DNS, and the verdict must be a pure address-policy fact.
     """
+
+    def test_the_seam_raises_on_the_url_the_endpoints_reject(self):
+        """The redirect assertions below are caused by the seam REFUSING, not by luck.
+
+        A 302-back-to-the-form is what this handler does for any failure at all, so
+        on its own it grades "something went wrong", not "egress policy said no".
+        This pins the missing half: for the exact URL those tests submit, the seam
+        raises ``OutboundRequestBlocked`` — a raise, not a ``(bool, str)`` verdict,
+        which is the contract change ``check_url_ssrf`` -> ``validate_url`` made.
+
+        The refusal is also asserted to be OPAQUE (AdCP 3.1.1,
+        ``building/by-layer/L1/security.mdx`` point 6): the sentence handed back
+        names neither the resolved address nor which rule fired, because the party
+        that supplied the URL would otherwise have a host and port scanner. The
+        general form of that rule is owned by
+        ``tests/integration/test_outbound_http.py``; what is graded here is that THIS
+        file's vector obeys it on the way to the operator.
+        """
+        from src.core.security.outbound_http import OutboundRequestBlocked, validate_url
+
+        with pytest.raises(OutboundRequestBlocked) as blocked:
+            validate_url(BLOCKED_INGEST_URL)
+
+        message = str(blocked.value)
+        for leak in ("host.docker.internal", "9999", "scheme", "https", "resolve failed"):
+            assert leak not in message, f"refusal echoed {leak!r} back to the URL's supplier: {message!r}"
+
+        # Non-vacuity: the same call admits the URL the accept-path test submits, so
+        # the raise above is a verdict on the vector and not a blanket refusal.
+        assert validate_url(SAFE_PUBLIC_URL) is None
 
     def test_add_endpoint_rejects_docker_internal_url(self):
         """POST /signals-agents/add with host.docker.internal URL must return a redirect with error flash."""
@@ -141,7 +199,7 @@ class TestSignalsAgentEndpointSSRFWiring:
                 response = client.post(
                     "/tenant/default/signals-agents/add",
                     data={
-                        "agent_url": "http://host.docker.internal:9999",
+                        "agent_url": BLOCKED_INGEST_URL,
                         "name": "SSRF Test Agent",
                         "enabled": "on",
                         "timeout": "30",
@@ -223,7 +281,7 @@ class TestSignalsAgentEndpointSSRFWiring:
                 response = client.post(
                     "/tenant/default/signals-agents/1/edit",
                     data={
-                        "agent_url": "http://host.docker.internal:9999",
+                        "agent_url": BLOCKED_INGEST_URL,
                         "name": "Existing Agent",
                         "enabled": "on",
                         "timeout": "30",

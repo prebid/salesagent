@@ -17,7 +17,28 @@ from typing import Final
 
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
+from src.core.errors.codes import CODE_BY_VALUE, CODE_TABLE, CodeGroup
+from src.core.errors.signature_codes import challenge_for
+
 logger = logging.getLogger(__name__)
+
+
+def _is_signature_code(code: str | None) -> bool:
+    """Does *code* belong to the family AdCP requires echoed in ``WWW-Authenticate``?
+
+    ASKED OF THE CODE TABLE, which is where the answer is declared
+    (``CodeEntry.group``). This used to be a frozenset built here from the signature
+    enum — correct, one line, and a second vocabulary: a middleware holding its own
+    list of codes is a place that can disagree with the table about what a code is.
+    Now the table is the only place that knows, and this reads it.
+
+    An unknown code is not a signature code. ``error.code`` is an open string, so a
+    code outside the table can legitimately reach here; the challenge is only owed
+    for a family this seller declares.
+    """
+    member = CODE_BY_VALUE.get(code or "")
+    return member is not None and CODE_TABLE[member].group is CodeGroup.SIGNATURE
+
 
 #: The challenge a 401 carries, per code.
 #:
@@ -28,11 +49,12 @@ logger = logging.getLogger(__name__)
 #: and RFC 7235
 #: permits a challenge carrying the scheme alone.
 #:
-#: NOT the ``WWW-Authenticate: Signature error="..."`` family from L1/security.mdx's
-#: "Transport error taxonomy" -- that is REQUEST SIGNING, a different mechanism with its own
-#: codes. AUTH_MISSING and AUTH_INVALID are ordinary published codes from
-#: ``enums/error-code.json`` and travel in the AdCP envelope as usual; what this adds is the
-#: HTTP handshake beside it, which is what the storyboard's security_baseline grades.
+#: The ``Signature`` family from L1/security.mdx's "Transport error taxonomy" is the OTHER
+#: scheme this function answers, and it is not in this table: it has 27 codes, the challenge
+#: is a mechanical function of the code (``Signature error="<code>"``), and both the codes and
+#: the function are generated from the SDK's own taxonomy in
+#: :mod:`src.core.errors.signature_codes`. A 27-row copy here would be a second source for a
+#: string the pinned compliance vectors grade BYTE-FOR-BYTE.
 _CHALLENGE_BY_CODE: Final[dict[str, str]] = {
     "AUTH_MISSING": "Bearer",
     "AUTH_INVALID": 'Bearer error="invalid_token"',
@@ -46,7 +68,20 @@ def _challenge_for_code(code: str | None) -> str | None:
     no purpose except writing the header, so a second caller would be a second renderer.
     Three transports each answered it once and disagreed, and the module-private name is
     what keeps a fourth from starting -- there is nothing importable to build one from.
+
+    TWO SCHEMES, one renderer. A bearer refusal answers ``Bearer`` per RFC 6750 §3; a request
+    -signature refusal answers ``Signature error="<code>"`` per security.mdx @ v3.1.1
+    § "``WWW-Authenticate`` format", which additionally requires no ``realm`` and no other
+    parameters. They are different mechanisms with different codes, and the reason ONE
+    function answers both is that both now arrive here the same way: as an AdCP code on a
+    finished body, because #1291's verifier raises its refusal inside the resolver instead of
+    sending its own bodyless 401 from an ASGI middleware. That is what makes the SPECIFIC
+    signature code — not a generic AUTH_INVALID — the thing this reads.
     """
+    if _is_signature_code(code):
+        # ``code`` is the wire string off a finished body; the membership test against the
+        # generated vocabulary is what keeps an arbitrary body from minting a challenge.
+        return challenge_for(code or "")
     return _CHALLENGE_BY_CODE.get(code or "")
 
 

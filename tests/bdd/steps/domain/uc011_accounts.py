@@ -8,12 +8,13 @@ All steps operate on ctx dict (shared across Given/When/Then).
 ctx["env"] is the harness environment (AccountSyncEnv or AccountListEnv).
 ctx["result"] is the dispatch's TransportResult after When; read its typed
 payload through require_payload()/payload_or_none() and its wire through the
-wire_* accessors in _outcome_helpers — never a detached ctx["response"] copy.
-ctx["error"] is any exception raised.
+wire_* accessors in _outcome_helpers — never a detached ctx["response"] copy
+(#1802 removed it). ctx["error"] is any exception raised.
 """
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from pytest_bdd import given, parsers, then, when
@@ -2357,6 +2358,28 @@ def then_failed_has_errors(ctx: dict) -> None:
         assert err.message, f"Per-account error missing message: {err}"
 
 
+@then(parsers.re(r'the per-account errors array contains an error with code "(?P<code>[^"]+)"$'))
+def then_per_account_error_code(ctx: dict, code: str) -> None:
+    """Assert the failed account's errors contain a specific error code.
+
+    Resolution is delegated to :func:`_last_account_errors`, the module's one
+    referenced-account errors[] oracle: it prefers ``ctx['last_account']`` (set by
+    a prior action/error Then) and falls back to the first response account, so an
+    error-code Then placed first in a scenario grades the real response rather than
+    erroring on step ordering. Re-spelling that resolution here would be the
+    duplication the DRY invariant bans.
+
+    ``parsers.re`` with ``[^"]+`` and an end anchor, NOT ``parsers.parse`` with
+    ``{code}``: parse's capture is greedy and spans quotes, so on a disjunction
+    text ``code "INVALID_REQUEST" or "VALIDATION_ERROR"`` it would match FIRST and
+    bind the literal ``INVALID_REQUEST" or "VALIDATION_ERROR`` as a single code,
+    failing against a correct production response. A capture that cannot cross a
+    quote makes the single-code step bind only single-code sentences.
+    """
+    codes = [e.code for e in _last_account_errors(ctx)]
+    assert code in codes, f"Expected error code '{code}' in {codes}"
+
+
 @then("the error message explains the billing model is not available")
 def then_billing_error_message(ctx: dict) -> None:
     """Assert the billing error has an explanatory message."""
@@ -2774,8 +2797,13 @@ def then_no_dry_run_include(ctx: dict) -> None:
 
     ``wire_absent`` distinguishes "field genuinely absent from the wire" from
     "field present with a null value" — the distinction the prior
-    ``getattr(..., None)`` check collapsed, and it fails loudly (rather than
-    silently passing) when the response never arrived at all.
+    ``getattr(..., None)`` check collapsed. It is also the stricter reading of
+    #1802's point that this step must not tolerate a missing payload: this
+    step's text makes a claim about a RESPONSE, so an errored dispatch cannot
+    satisfy it, and ``wire_absent`` -> ``_wire_body`` raises on the error path
+    (the error variant has its own step, ``then_no_dry_run_field``, grading that
+    path under its own text). Tolerating None here made the step pass with zero
+    assertions whenever the dispatch errored.
     """
     wire_absent(ctx, "dry_run")
 
@@ -3597,7 +3625,14 @@ def _notif_config(
 
 
 def _dispatch_sync_notification(ctx: dict, domain: str, notification_configs: list[dict[str, Any]]) -> None:
-    """Dispatch a sync_accounts request carrying a notification_configs array for one account."""
+    """Dispatch a sync_accounts request carrying a notification_configs array for one account.
+
+    ``ctx["signed"]`` asks for a REAL RFC 9421 signature on this dispatch and is
+    forwarded rather than branched on (salesagent-n78j0.1.3): a registration carrying
+    ``notification_configs[].authentication`` is one the seller MUST refuse unless it is
+    signed (security.mdx @ v3.1.1 :1462-1465), so the credential-carrying scenario has
+    to be able to sign. Defaults to False, leaving every other scenario byte-identical.
+    """
     from src.core.schemas.account import SyncAccountsRequest
 
     entry = {
@@ -3608,7 +3643,7 @@ def _dispatch_sync_notification(ctx: dict, domain: str, notification_configs: li
     }
     try:
         req = SyncAccountsRequest(idempotency_key=fresh_idempotency_key(), accounts=[entry])
-        dispatch_request(ctx, req=req)
+        dispatch_request(ctx, req=req, signed=ctx.get("signed", False))
     except Exception as exc:
         ctx["error"] = exc
 
@@ -3678,27 +3713,6 @@ def _persisted_subscribers(ctx: dict, domain: str | None = None) -> list[Any]:
 def _find_subscriber(subs: list[Any], subscriber_id: str) -> Any:
     """Find an echoed subscriber by subscriber_id, or None."""
     return next((s for s in subs if str(_sub_attr(s, "subscriber_id")) == subscriber_id), None)
-
-
-@when(
-    parsers.re(
-        r'the Buyer Agent sends a sync_accounts request provisioning brand domain "(?P<domain>[^"]+)" '
-        r'with a paused notification config subscriber "(?P<sub>[^"]+)" for url "(?P<url>[^"]+)", '
-        r'event_types "(?P<ets>[^"]+)", and legacy Bearer authentication'
-    )
-)
-def when_sync_provision_paused_subscriber(ctx: dict, domain: str, sub: str, url: str, ets: str) -> None:
-    """Provision an account with one paused (active:false) subscriber carrying legacy Bearer auth.
-
-    The authentication block (Bearer scheme + a 32-char write-only credential per
-    core/notification-config.json#/properties/authentication/properties/credentials)
-    gives the credentials-omitted echo assertion teeth: the input declares a
-    credential, so an echo that returns it is a real write-only leak.
-    """
-    ctx["notif_domain"] = domain
-    auth = {"schemes": ["Bearer"], "credentials": "x" * 32}
-    cfg = _notif_config(sub, url, ets, active=False, authentication=auth)
-    _dispatch_sync_notification(ctx, domain, [cfg])
 
 
 @when(
@@ -3786,14 +3800,39 @@ def then_echoed_subscriber_auth_omits(ctx: dict, field: str) -> None:
     in authentication.credentials are write-only — sellers MUST NOT echo them back";
     sync-accounts-response notification_configs — "authentication.credentials is
     omitted on every entry (write-only)."
+
+    RESTORED with the branch that made it vacuous REMOVED (salesagent-n78j0.1.3). The
+    original returned early when no ``authentication`` object was echoed at all, which
+    is a pass for a response that echoed the credential under any OTHER key — and for a
+    response that echoed nothing, which is not what the Then claims. Both halves are now
+    graded: the named field is absent from the authentication object (empty when the
+    object is omitted, which legitimately satisfies "omits"), AND the registered
+    credential VALUE appears nowhere in the serialized subscriber. The value check is
+    what gives the step teeth on the omitted-object path, and it is the whole point of a
+    write-only rule.
     """
     subs = _echoed_subscribers(ctx)
     assert subs, f"No echoed subscribers to check authentication on: {subs!r}"
-    auth = _sub_attr(subs[0], "authentication")
+    subscriber = subs[0]
+    auth = _sub_attr(subscriber, "authentication")
     if auth is None:
-        return  # no authentication block echoed at all → the write-only field is not leaked
-    auth_dict = auth if isinstance(auth, dict) else auth.model_dump(exclude_none=True)
+        auth_dict: dict[str, Any] = {}
+    else:
+        auth_dict = auth if isinstance(auth, dict) else auth.model_dump(exclude_none=True)
     assert field not in auth_dict, f"authentication echoed write-only {field!r}: {auth_dict!r}"
+
+    credential = ctx.get("notif_credential")
+    assert credential, (
+        "the When that registers a subscriber must record the credential it sent "
+        "(ctx['notif_credential']); without it this Then cannot tell an omitted "
+        "authentication object apart from a credential echoed under another key"
+    )
+    serialized = json.dumps(subscriber, default=str) if isinstance(subscriber, dict) else subscriber.model_dump_json()
+    assert credential not in serialized, (
+        f"the registered credential was echoed back in the subscriber document: {serialized!r}. "
+        "core/notification-config.json makes authentication.credentials write-only, which is a "
+        "statement about the WHOLE echoed document, not only about the field it was sent in."
+    )
 
 
 @then(
@@ -3867,9 +3906,9 @@ def given_account_with_paused_notif_subscriber(ctx: dict, domain: str, sub: str,
 def when_sync_provision_paused_subscriber_event_types(ctx: dict, domain: str, sub: str, url: str, ets: str) -> None:
     """Provision an account with one paused subscriber whose event_types are under test.
 
-    Distinct from the ``…, event_types "…", and legacy Bearer authentication`` When
-    (which also declares an auth block): this variant carries only the event_types so
-    the scenario grades event-scope rejection, not credential handling.
+    The credential-free sibling of the ``…, and legacy Bearer authentication`` When
+    below: this variant carries only the event_types, so the scenarios that use it grade
+    event-scope rejection rather than credential handling.
 
     Spec: core/notification-config.json#/properties/event_types — media-buy-anchored
     types (scheduled, final, delayed, adjusted, impairment) "are invalid on this
@@ -3879,6 +3918,37 @@ def when_sync_provision_paused_subscriber_event_types(ctx: dict, domain: str, su
     """
     ctx["notif_domain"] = domain
     cfg = _notif_config(sub, url, ets, active=False)
+    _dispatch_sync_notification(ctx, domain, [cfg])
+
+
+@when(
+    parsers.re(
+        r'the Buyer Agent sends a sync_accounts request provisioning brand domain "(?P<domain>[^"]+)" '
+        r'with a paused notification config subscriber "(?P<sub>[^"]+)" for url "(?P<url>[^"]+)", '
+        r'event_types "(?P<ets>[^"]+)", and legacy Bearer authentication'
+    )
+)
+def when_sync_provision_paused_subscriber(ctx: dict, domain: str, sub: str, url: str, ets: str) -> None:
+    """Provision an account with one paused (active:false) subscriber carrying legacy Bearer auth.
+
+    The authentication block (Bearer scheme + a 32-char write-only credential per
+    core/notification-config.json#/properties/authentication/properties/credentials)
+    gives the credentials-omitted echo assertion teeth: the input declares a
+    credential, so an echo that returns it is a real write-only leak.
+
+    RESTORED SIGNED (salesagent-n78j0.1.3). Registering a credential is exactly the
+    payload that forces a signature (security.mdx @ v3.1.1 :1462-1465), so the scenario
+    that uses this When declares ``the Buyer Agent signs the request`` — without it the
+    seller would (correctly) answer ``request_signature_required`` and the echo
+    assertions would never be reached. The step itself stays transport-blind: it does
+    not know what signing means on any leg, only that ``ctx["signed"]`` travels with the
+    dispatch.
+    """
+    ctx["notif_domain"] = domain
+    credential = "x" * 32
+    ctx["notif_credential"] = credential
+    auth = {"schemes": ["Bearer"], "credentials": credential}
+    cfg = _notif_config(sub, url, ets, active=False, authentication=auth)
     _dispatch_sync_notification(ctx, domain, [cfg])
 
 
@@ -3972,6 +4042,11 @@ def then_account_keeps_prior_notif_set(ctx: dict) -> None:
     assert _sub_attr(match, "active") is prior["active"], (
         f"Prior active flag changed: expected {prior['active']!r}, got {_sub_attr(match, 'active')!r}"
     )
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# THEN steps — governance_agents + dry-run update assertions
+# ═══════════════════════════════════════════════════════════════════════
 
 
 @then(parsers.parse('the governance_agents are stored for brand domain "{domain}"'))
@@ -4267,7 +4342,7 @@ def then_db_field_unchanged(ctx: dict, field: str) -> None:
     captured original.
     """
     from src.core.database.database_session import get_db_session
-    from src.core.database.repositories.account import AccountRepository
+    from src.core.database.repositories.account import AccountRepository, NaturalKey
 
     acct = ctx.get("last_account")
     assert acct is not None, "No last_account in ctx — need a preceding account action step"
@@ -4276,7 +4351,7 @@ def then_db_field_unchanged(ctx: dict, field: str) -> None:
         repo = AccountRepository(session, tenant.tenant_id)
         # Find by brand domain from the last_account
         domain = acct.brand.domain if hasattr(acct.brand, "domain") else str(acct.brand)
-        db_acct = repo.get_by_natural_key(operator=domain, brand_domain=domain)
+        db_acct = repo.get_by_natural_key(NaturalKey.from_parts(domain, None, domain, None))
         assert db_acct is not None, f"Account for {domain} not found in DB"
         db_val = getattr(db_acct, field, None)
         # Compare against captured original value
@@ -4404,6 +4479,9 @@ def then_brandless_rejected_validation_error(ctx: dict) -> None:
 
     if wire_error_envelope_or_none(ctx) is not None:
         # Seller's own validation (A2A/REST) → assert the two-layer AdCP envelope.
+        # Selector reads through the TransportResult, not a stale ctx key; the
+        # assertion is the single sanctioned wire-error surface, whose recovery
+        # defaults from the PINNED enum (pin-wins).
         ctx["result"].assert_wire_error("VALIDATION_ERROR", recovery="correctable")
     else:
         # MCP: the tool surface types accounts as list[Accounts] (brand required),
@@ -4615,6 +4693,9 @@ def when_sync_provision_with_billing_entity(ctx: dict, domain: str, legal_name: 
             "billing_entity": BusinessEntityFactory.build_payload(legal_name=legal_name),
         },
     )
+    # payload_or_none, not ctx.get("response"): #1802 stopped the dispatch seams
+    # writing ctx["response"], so the old spelling silently read None forever and
+    # this capture (the baseline for the "account_id is unchanged" Then) never ran.
     resp = payload_or_none(ctx)
     if resp is not None and getattr(resp, "accounts", None):
         _capture_server_account_id(ctx, resp.accounts[0].account_id)
