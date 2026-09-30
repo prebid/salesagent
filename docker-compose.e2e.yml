@@ -226,7 +226,8 @@ services:
       SSL_CERT_FILE: /app/.test-tls/ca-bundle.pem
       ADCP_SIGNING_KEY_PASSPHRASE_ENV: "ADCP_SIGNING_DEV_KEK"
       ADCP_SIGNING_DEV_KEK: "dev-only-signing-kek-not-a-secret"
-      DELIVERY_WEBHOOK_INTERVAL: ${DELIVERY_WEBHOOK_INTERVAL:-5}      # GH #1802: the breaker's RECOVERY timeout only. Reaching
+      DELIVERY_WEBHOOK_INTERVAL: ${DELIVERY_WEBHOOK_INTERVAL:-5}
+      # GH #1802: the breaker's RECOVERY timeout only. Reaching
       # HALF_OPEN honestly means waiting this out inside the server, and 60s per
       # scenario is wall clock the suite should not spend. This is a VALUE, not a
       # branch — the server runs the same line of code here and in production,
@@ -269,7 +270,8 @@ services:
       # (DB migrations) and without grace Docker can mark UNHEALTHY under load.
       interval: 5s
       timeout: 5s
-      retries: 36      start_period: 60s
+      retries: 36
+      start_period: 60s
 
   # ─── The agent the STORYBOARD grades, and only the storyboard ───────────────
   #

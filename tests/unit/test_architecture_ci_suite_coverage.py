@@ -9,11 +9,11 @@ must propagate BDD/E2E failures so a red suite turns CI red.
 This is a configuration-contract assertion: the workflow file is parsed as
 YAML data and the job graph is inspected. It is NOT a source-code AST scan.
 
-One documented local-only exclusion (``ui``), ratcheted via
-``test_local_suites_map_or_explicit_exclusion``. Every locally-run suite in
-``run_all_tests.sh`` ALL_SUITES must map to a summary gate **or** appear in
-``UNGATED_LOCAL_SUITES`` with a ``# see #<issue>`` anchor. CI-only gates
-(smoke, bdd-in-network) are listed separately.
+Documented Summary exclusions (``ui``, ``quality``, ``storyboard``) are
+ratcheted via ``test_local_suites_map_or_explicit_exclusion``. Every
+locally-run suite in ``run_all_tests.sh`` ALL_SUITES must map to a summary
+gate **or** appear in ``UNGATED_LOCAL_SUITES`` with a ``# see #<issue>``
+anchor. CI-only gates (smoke, bdd-in-network) are listed separately.
 """
 
 import re
@@ -40,7 +40,7 @@ _LOCAL_SUITE_TO_SUMMARY_GATE: dict[str, str] = {
     "admin": "admin-ui-tests",
     "e2e": "e2e-tests",
 }
-# Intentionally ungated in CI Summary (no Playwright job yet). Soften the
+# Intentionally absent from CI Summary. Soften the
 # "every suite gates CI" claim: these are excluded at the source map, not
 # silently omitted from a hand-maintained list.
 #
@@ -50,7 +50,7 @@ _LOCAL_SUITE_TO_SUMMARY_GATE: dict[str, str] = {
 #   infra class as ``e2e-tests`` (heavy timeout / disk). A dedicated full-stack
 #   compose job would add another e2e-class runner-minute bill for a thin smoke
 #   suite under ``tests/ui/``; a future gate may instead piggyback on the
-#   existing ``e2e-tests`` pre-start (map many-to-one) rather than spawn a
+#   existing in-network ``e2e-tests`` job (map many-to-one) rather than spawn a
 #   second compose bring-up.
 # - ``admin-ui-tests`` runs ``tests/admin/`` against bare Postgres via
 #   ``_pytest`` — no browser, no compose app stack. Mapping ``ui`` →
@@ -66,7 +66,7 @@ _LOCAL_SUITE_TO_SUMMARY_GATE: dict[str, str] = {
 #
 # Removal recipe (when product wants Summary gating — tracked on #2161):
 # 1. Add CI job (suggested name ``ui-tests``) that runs Playwright against the
-#    E2E compose stack (mirror ``e2e-tests`` pre-start / ``ADCP_TESTING`` +
+#    E2E compose stack (mirror the in-network ``e2e-tests`` job / ``ADCP_TESTING`` +
 #    ``playwright install chromium`` or image bake) — or map ``ui`` onto an
 #    existing full-stack job that already exercises ``tests/ui`` / ``tox -e ui``.
 # 2. Add that job to ``summary.needs`` + the Summary result-check step.
@@ -79,9 +79,20 @@ _LOCAL_SUITE_TO_SUMMARY_GATE: dict[str, str] = {
 # 6. Until step 5: keep the one-line STATUS pointer in ``run_all_tests.sh`` at
 #    the ``ui`` suite row (local/in-network only — not ``admin-ui-tests``).
 #
+# ``quality`` is ``pytest tests/quality`` (slow ratchets, including baseline
+# slack). ``quality-gate`` runs the over-baseline hook scripts via
+# ``make quality-ci``; it does not run this tox env, so mapping the suite onto
+# that job would be a false Summary gate. Introduced on #1721.
+# see #1721
+#
+# ``storyboard`` has a CI job (``storyboard-conformance`` runs
+# ``./run_all_tests.sh storyboard``) that is deliberately absent from
+# ``summary.needs`` until the ledger is re-verified.
+# see #1858
+#
 # Registry is suite → owning GitHub issue (Path A live owner while ungated).
 # see #2161 — Path A ui-tests Summary gate (Path B docs: #1924 / #1966)
-UNGATED_LOCAL_SUITES: dict[str, int] = {"ui": 2161}
+UNGATED_LOCAL_SUITES: dict[str, int] = {"ui": 2161, "quality": 1721, "storyboard": 1858}
 
 # CI-only gates that are not ALL_SUITES entries but must still floor Summary.
 _EXTRA_SUMMARY_GATES = frozenset(
@@ -492,18 +503,18 @@ class TestCISuiteCoverage:
             "TestNoSkippedTests.test_no_skip_decorators is the declared single source of truth for skip enforcement."
         )
 
-    def test_e2e_job_prestarts_stack_with_adcp_testing(self):
-        """E2E CI must pre-start compose; pytest must not cold-build under --timeout.
+    def test_e2e_job_runs_in_network(self):
+        """E2E CI runs inside the compose network via ``./run_all_tests.sh e2e``.
 
-        Regression: clearing ADCP_TESTING forced docker_services_e2e into the
-        standalone build+up path inside pytest setup, which pytest-timeout=300
-        killed on cold runners (~40 setup ERRORs). Inheritance alone is not
-        durable — the pytest step must pin ADCP_TESTING=true.
+        Host pytest cannot resolve ``counterparty.adcp-e2e.dev`` (compose-only
+        DNS). The job must not grow a host "build and start, then pytest" step.
+        ``run_all_tests.sh`` owns TLS, the creative-agent image, and compose.
+        ``DELIVERY_WEBHOOK_INTERVAL`` stays a compose default, not a step env.
         """
         workflow = load_ci_workflow()
         workflow_env = workflow.get("env") or {}
         assert _is_adcp_testing_true(workflow_env.get("ADCP_TESTING")), (
-            "workflow env must set ADCP_TESTING true (pytest inherits when step omits it)."
+            "workflow env must set ADCP_TESTING true (compose defaults it for adcp-server)."
         )
 
         job = workflow["jobs"]["e2e-tests"]
@@ -511,99 +522,37 @@ class TestCISuiteCoverage:
         assert steps, "e2e-tests must declare steps (empty job is a vacuous pass)."
 
         step_names = [s.get("name") for s in steps]
-        assert "Build and start E2E stack" in step_names, "e2e-tests must pre-start the compose stack before pytest."
+        assert "Build and start E2E stack" not in step_names, (
+            "e2e-tests must not restore the host pre-start step; E2E stays in-network."
+        )
+        assert "Run E2E suite in-network" in step_names, "e2e-tests must run ./run_all_tests.sh e2e."
         free_idx, _ = _find_free_disk_step(steps)
         _assert_free_disk_action_reclaims_runner()
 
-        prestart = next(s for s in steps if s.get("name") == "Build and start E2E stack")
-        prestart_run = str(prestart.get("run", ""))
-        prestart_env = prestart.get("env") or {}
-        job_env = job.get("env") or {}
-        assert "ensure-test-tls.sh" in prestart_run, (
-            "Pre-start must call scripts/dev/ensure-test-tls.sh before compose build/up "
-            "(tls-proxy bind-mounts .test-tls/; empty dir fails nginx)."
+        run_idx = step_names.index("Run E2E suite in-network")
+        assert free_idx < run_idx, (
+            "Free disk space must run before 'Run E2E suite in-network' "
+            f"(found Free disk at {free_idx}, run at {run_idx})."
         )
-        assert "creative-agent-stack.sh build" in prestart_run, "Pre-start must build the pinned creative-agent image."
-        # Overlay may be literal -f flags in the run script OR job-level COMPOSE_FILE
-        # (docker compose native multi-file, colon-separated).
-        compose_file = str(job_env.get("COMPOSE_FILE", "") or prestart_env.get("COMPOSE_FILE", ""))
-        assert "docker-compose.e2e.ports.yml" in prestart_run or "docker-compose.e2e.ports.yml" in compose_file, (
-            "Pre-start must overlay docker-compose.e2e.ports.yml via run -f flags or "
-            "job/step COMPOSE_FILE (host curl/pytest ports)."
+        run_step = steps[run_idx]
+        assert str(run_step.get("run", "")).strip() == "./run_all_tests.sh e2e", (
+            "e2e-tests must invoke ./run_all_tests.sh e2e (in-network), not host pytest."
         )
-        sales_port = str(job_env.get("ADCP_SALES_PORT", "") or prestart_env.get("ADCP_SALES_PORT", ""))
-        assert sales_port, "job/step must set ADCP_SALES_PORT for host health curl."
-        webhook_port = str(job_env.get("WEBHOOK_CAPTURE_PORT", "") or prestart_env.get("WEBHOOK_CAPTURE_PORT", ""))
-        assert webhook_port, (
-            "job/step must pin WEBHOOK_CAPTURE_PORT for webhook-capture readback "
-            "(docker-compose.e2e.ports.yml publishes host port; default 8090)."
+        run_env = run_step.get("env") or {}
+        image = str(run_env.get("CREATIVE_AGENT_GHCR_IMAGE", ""))
+        assert image.startswith("ghcr.io/"), (
+            f"Run E2E suite in-network must set CREATIVE_AGENT_GHCR_IMAGE to a ghcr.io image (got {image!r})."
         )
-        assert webhook_port != sales_port, (
-            f"WEBHOOK_CAPTURE_PORT ({webhook_port!r}) must differ from ADCP_SALES_PORT ({sales_port!r}) "
-            "— 8080 readback hits proxy/nginx, not webhook-capture (404)."
-        )
-        assert "CREATIVE_AGENT_GHCR_IMAGE" in prestart_env, (
-            "Pre-start must set CREATIVE_AGENT_GHCR_IMAGE (CI owns the only cold-build path)."
-        )
-        assert "ghcr.io" in str(prestart_env.get("CREATIVE_AGENT_GHCR_IMAGE", "")), (
-            "CREATIVE_AGENT_GHCR_IMAGE must point at ghcr.io for pin-keyed pull preference."
-        )
-        # Token match — substring "up -d --wait" falsely matches "--wait-timeout" alone.
-        assert _shell_has_flag(prestart_run, "--wait"), (
-            "Pre-start must use compose up --wait as its own flag (healthcheck gate)."
-        )
-        assert _shell_has_flag(prestart_run, "--wait-timeout"), "Pre-start must budget --wait-timeout for migrations."
-        assert _shell_flag_value(prestart_run, "--wait-timeout") == "600", (
-            "Pre-start --wait-timeout must be 600 (adjacent argv; comment tokens do not count)."
-        )
-        assert _shell_has_non_comment_substr(prestart_run, "curl -sf", "/health"), (
-            "Pre-start must curl /health after up --wait on a non-comment line."
-        )
-        assert _is_adcp_testing_true(prestart_env.get("ADCP_TESTING")), "Pre-start must set ADCP_TESTING=true."
-        # Interval ownership: compose declares the service default; CI must not
-        # re-export a fourth launcher copy (review 4954112613 / #1667 pre-start).
-        assert "DELIVERY_WEBHOOK_INTERVAL" not in prestart_env, (
-            "Pre-start must not set DELIVERY_WEBHOOK_INTERVAL; default lives in "
+        assert "DELIVERY_WEBHOOK_INTERVAL" not in run_env, (
+            "The in-network step must not set DELIVERY_WEBHOOK_INTERVAL; default lives in "
             "docker-compose.e2e.yml (${DELIVERY_WEBHOOK_INTERVAL:-5})."
         )
         compose_e2e = _E2E_COMPOSE.read_text(encoding="utf-8")
         assert "DELIVERY_WEBHOOK_INTERVAL: ${DELIVERY_WEBHOOK_INTERVAL:-5}" in compose_e2e, (
-            "docker-compose.e2e.yml must default DELIVERY_WEBHOOK_INTERVAL to 5 "
-            "so CI pre-start verify-only path does not depend on a launcher re-export."
+            "docker-compose.e2e.yml must default DELIVERY_WEBHOOK_INTERVAL to 5."
         )
         assert int(job.get("timeout-minutes") or 0) >= 40, (
-            f"e2e-tests timeout-minutes must be >= 40 to cover --wait-timeout 600 (got {job.get('timeout-minutes')!r})."
-        )
-
-        pytest_steps = [
-            s for s in steps if "pytest" in str(s.get("uses", "")).lower() or "tests/e2e" in str(s.get("with", {}))
-        ]
-        assert pytest_steps, "e2e-tests must invoke pytest on tests/e2e/."
-        pytest_env = pytest_steps[0].get("env") or {}
-        # Explicit pin — do not treat "key absent → inherits workflow" as sufficient.
-        assert "ADCP_TESTING" in pytest_env, (
-            "e2e-tests pytest must set ADCP_TESTING explicitly "
-            "(absent key makes the inheritance path untested / vacuous)."
-        )
-        assert _is_adcp_testing_true(pytest_env["ADCP_TESTING"]), (
-            f"e2e-tests pytest must keep ADCP_TESTING=true (got {pytest_env['ADCP_TESTING']!r}); "
-            "empty/false forces fixture cold-build under pytest-timeout."
-        )
-        # GHCR preference belongs on pre-start build, not verify-only pytest.
-        assert "CREATIVE_AGENT_GHCR_IMAGE" not in pytest_env, (
-            "CREATIVE_AGENT_GHCR_IMAGE must not sit only on verify-only pytest "
-            "(move/keep it on the pre-start build step)."
-        )
-        extra = str(pytest_steps[0].get("with", {}).get("extra_args", ""))
-        assert "--timeout=300" in extra, "e2e-tests must keep per-test --timeout=300 on test bodies."
-        assert "timeout_func_only=true" in extra, (
-            "e2e-tests must keep timeout_func_only=true (300s applies to bodies, not fixtures)."
-        )
-
-        pre_idx = step_names.index("Build and start E2E stack")
-        pytest_idx = steps.index(pytest_steps[0])
-        assert free_idx < pre_idx < pytest_idx, (
-            f"Order must be Free disk → pre-start → pytest (got {free_idx}, {pre_idx}, {pytest_idx})."
+            f"e2e-tests timeout-minutes must be >= 40 (got {job.get('timeout-minutes')!r})."
         )
 
     def test_e2e_compose_proxy_waits_for_adcp_healthy(self):

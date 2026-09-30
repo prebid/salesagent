@@ -388,7 +388,8 @@ jobs:
           CREATIVE_AGENT_GHCR_IMAGE: ghcr.io/${{ github.repository }}/adcp-creative-agent
           # No host uvx in this job; the dedicated Security Audit check owns the
           # uv-secure scan.
-          RUN_ALL_SKIP_AUDIT: 1      - name: Cleanup Docker services
+          RUN_ALL_SKIP_AUDIT: 1
+      - name: Cleanup Docker services
         if: always()
         run: |
           docker compose down -v 2>/dev/null || true

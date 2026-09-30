@@ -27,6 +27,14 @@
 #                        Dockerfile.test; browser drives proxy:8000
 #                        NOTE: local/in-network only until Summary gating — see
 #                        tests/unit/test_architecture_ci_suite_coverage.py (#2161).
+#   quality           -> no DB; slow ratchets (mypy --check-untyped-defs, pylint
+#                        R0801) including baseline slack. Not a Summary job:
+#                        quality-gate runs the hook scripts, not this tox env.
+#                        see tests/unit/test_architecture_ci_suite_coverage.py (#1721).
+#   storyboard        -> adcp-server-storyboard. CI job storyboard-conformance
+#                        runs this suite and is report-only (not Summary) until
+#                        the ledger is re-verified. see
+#                        tests/unit/test_architecture_ci_suite_coverage.py (#1858).
 #
 # Per-suite DB split: integration/bdd/admin use the runner's DATABASE_URL
 # (/adcp_test); e2e/ui override it to E2E_DATABASE_URL (/adcp) in their tox envs.
