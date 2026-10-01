@@ -20,8 +20,10 @@ import functools
 import importlib.util
 import os
 import re
+import shutil
 import subprocess
 import sys
+import uuid
 import warnings
 from collections.abc import Callable, Iterable, Iterator
 from pathlib import Path
@@ -1895,3 +1897,39 @@ def assert_scanned_paths_exist(paths: Iterable[str], *, why: str) -> None:
     """
     missing = sorted(p for p in paths if not (REPO_ROOT / p).exists())
     assert not missing, f"scanned path(s) {missing} no longer exist. {why}"
+
+
+# ---------------------------------------------------------------------------
+# ast-grep probes
+# ---------------------------------------------------------------------------
+
+AST_GREP_CONFIG = "sgconfig.yml"
+AST_GREP_RULE_DIR = ".ast-grep"
+
+
+def stage_ast_grep_root(tmp_dir: Path) -> Path:
+    """A disposable project root holding the REAL ``sgconfig.yml`` and ``.ast-grep/`` rules.
+
+    A probe module written under it at the repo-relative path a rule's ``files:`` glob
+    covers is matched exactly as it would be in the live tree: ast-grep resolves the glob
+    against the directory holding the config, and the config and rule files are the
+    committed ones, copied. The probe is never written into ``src/`` or ``tests/``
+    themselves. There it is a file every other guard's scan can list and then fail to
+    read once the probe's own case deletes it — under xdist a race between workers, seen
+    as ``FileNotFoundError`` on ``_synthetic_identity_probe_*.py`` in
+    ``test_transport_agnostic_impl`` (CI run 36858146603).
+    """
+    root = tmp_dir / "ast-grep-root"
+    root.mkdir()
+    shutil.copy2(repo_root() / AST_GREP_CONFIG, root / AST_GREP_CONFIG)
+    shutil.copytree(repo_root() / AST_GREP_RULE_DIR, root / AST_GREP_RULE_DIR)
+    return root
+
+
+def write_ast_grep_probe(root: Path, rel_dir: str, source: str, *, stem: str = "_synthetic_probe") -> str:
+    """Write *source* at a unique path under *rel_dir* inside *root*; return it relative to *root*."""
+    rel_path = f"{rel_dir}/{stem}_{uuid.uuid4().hex}.py"
+    path = root / rel_path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(source)
+    return rel_path
