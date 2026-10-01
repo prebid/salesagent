@@ -26,18 +26,42 @@ raises loudly instead of dispatching somewhere wrong.
 ```
 tests/bdd/
 ├── features/
-│   └── BR-ADMIN-ACCOUNTS.feature    # Gherkin scenarios
+│   ├── BR-ADMIN-ACCOUNTS.feature          # Gherkin scenarios
+│   └── BR-ADMIN-TENANT-SCOPING.feature    # tenant-scoped route authorization (#2203)
 ├── steps/domain/
-│   └── admin_accounts.py            # step definitions
+│   ├── admin_accounts.py            # step definitions
+│   └── admin_tenant_scoping.py      # step definitions
 ├── test_admin_accounts.py           # scenarios() binding
-└── conftest.py                      # T-ADMIN- parametrization, marker, ENV_ROUTES row
+├── test_admin_tenant_scoping.py     # scenarios() binding
+└── conftest.py                      # T-ADMIN- parametrization, marker, ENV_ROUTES rows
 
 tests/harness/
-└── admin_accounts.py                # AdminTransport, AdminAccountEnv, _AdminResponse
+├── admin_accounts.py                # AdminTransport, AdminAccountEnv, _AdminResponse
+└── admin_tenant_scoping.py          # AdminTenantScopingEnv (AdminAccountEnv subclass)
 
 tests/helpers/
-└── admin_session.py                 # admin_auth_session() for the Flask client
+├── admin_session.py                   # admin_auth_session() for the Flask client
+└── admin_tenant_scoping_contract.py   # #2203 contract classes, written once
+
+tests/admin/
+└── test_tenant_scoped_routes_auth.py  # collects them in-process
+
+tests/e2e/
+└── test_admin_tenant_scoping_e2e.py   # the same classes over the live stack (non-BDD)
 ```
+
+`BR-ADMIN-TENANT-SCOPING` is claimed by a predicate `ENV_ROUTES` row ahead of the
+`ADMIN` bucket (`tag="admin-tenant-scoping"`, pinned in `EXPECTED_WIRED_ROUTES`) because
+it needs its own harness. Like `BR-ADMIN-ACCOUNTS`, it runs on both admin transports:
+its builder, `_build_admin_tenant_scoping_env`, returns the in-process env through
+`AdminTenantScopingEnv.integration()` for `admin_integration` and the live-stack env at
+`e2e_config.base_url` for `e2e_admin`. `tests/unit/test_bdd_admin_transport_parametrization.py`
+checks every admin builder on both transports.
+
+The `tests/e2e` module above is a separate, non-BDD run of the contract classes, written
+before `AdminTransport.E2E` existed. It now overlaps the BDD `e2e_admin` leg; deleting it,
+as BR-ADMIN-ACCOUNTS' own `test_admin_bdd_e2e.py` was deleted, is
+https://github.com/prebid/salesagent/issues/2235.
 
 ## Add an admin feature
 
@@ -192,7 +216,8 @@ Flask `test_client` against `create_app()`, in process, no Docker
 posts form data to `/test/auth` and keeps the session cookie; anything but `200`
 or `302` raises (`:251-265`). pytest collects it only when
 `BDD_E2E_ENABLED=true`, and the per-worker address comes from the `e2e_stack`
-fixture by way of `_build_admin_env`.
+fixture by way of the admin builders (`_build_admin_env`,
+`_build_admin_tenant_scoping_env`).
 
 ## How conftest handles admin scenarios
 
@@ -202,13 +227,15 @@ fixture by way of `_build_admin_env`.
    branch uses (`tests/bdd/conftest.py:4379-4387`, `:4104-4135`). It derives the
    pytest ids from the enum values, because `tox.ini`'s `-k` selectors match on
    them.
-2. **One registry row builds the env.** `ENV_ROUTES["ADMIN"]`
-   (`tests/bdd/conftest.py:5061`) names `_build_admin_env` (`:4782-4806`), and
-   `_run_env_route` is the single consumer. That builder is the only one that
-   passes `base_url=` rather than `e2e_config=`, because the admin env needs the
-   address and nothing else from `E2EConfig`;
-   `tests/unit/test_bdd_admin_transport_parametrization.py` machine-checks that
-   asymmetry.
+2. **A registry row builds the env.** `ENV_ROUTES["ADMIN"]`
+   (`tests/bdd/conftest.py:5683`) names `_build_admin_env` (`:5308-5339`); the
+   `admin-tenant-scoping` predicate row ahead of it (`:5930`) names
+   `_build_admin_tenant_scoping_env` (`:5342-5364`) for `T-ADMIN-SCOPE-*`.
+   `_run_env_route` is the single consumer. These two builders are the only ones
+   that pass `base_url=` rather than `e2e_config=`, because the admin env needs
+   the address and nothing else from `E2EConfig`;
+   `tests/unit/test_bdd_admin_transport_parametrization.py` checks that every
+   builder an admin scenario resolves to builds the env its transport names.
 3. **The conftest applies the `admin` entity marker automatically** to any
    scenario carrying a `T-ADMIN-` tag (`tests/bdd/conftest.py:3833-3834`), so
    `make test-entity ENTITY=admin` picks it up.
