@@ -5,6 +5,9 @@ These fixtures are for testing the admin web interface.
 """
 
 import os
+from collections.abc import Iterator
+from contextlib import contextmanager
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -13,6 +16,7 @@ import pytest
 # test_product_creation_integration.py) can access them. Both fixtures are
 # defined in tests/conftest_db.py (shared across suites).
 from tests.conftest_db import factory_session, integration_db  # noqa: F401
+from tests.harness.admin_tenant_scoping import SSO_LOGINS
 
 
 @pytest.fixture
@@ -34,6 +38,43 @@ def admin_client(monkeypatch):
     app.config["SESSION_COOKIE_PATH"] = "/"
     with app.test_client() as client:
         yield client
+
+
+@contextmanager
+def _seeded_scoping_env(**options: Any) -> Iterator[Any]:
+    """``AdminTenantScopingEnv.integration(**options)`` with the target tenant seeded."""
+    from tests.harness.admin_tenant_scoping import AdminTenantScopingEnv
+
+    with AdminTenantScopingEnv.integration(**options) as env:
+        env.seed_target_tenant()
+        yield env
+
+
+@pytest.fixture
+def scoping_env(integration_db):  # noqa: F811 — fixture parameter, not a redefinition
+    """``AdminTenantScopingEnv`` on the Flask test_client, target tenant seeded (#2203, #2204).
+
+    The e2e twin is the ``scoping_env`` fixture in tests/e2e/test_admin_tenant_scoping_e2e.py;
+    the contract classes in tests/helpers/admin_tenant_scoping_contract.py run against either.
+    """
+    with _seeded_scoping_env() as env:
+        yield env
+
+
+@pytest.fixture(params=SSO_LOGINS)
+def sso_scoping_env(request, integration_db):  # noqa: F811 — fixture parameter, not a redefinition
+    """The same env, with the caller signing in through OIDC or Google OAuth (#2204)."""
+    with _seeded_scoping_env(login=request.param) as env:
+        yield env
+
+
+@pytest.fixture
+def super_admin_scoping_env(integration_db):  # noqa: F811 — fixture parameter, not a redefinition
+    """An OIDC caller whose email is in ``SUPER_ADMIN_EMAILS`` (#2204, AC4 as amended)."""
+    from tests.harness.admin_tenant_scoping import MEMBER_EMAIL
+
+    with _seeded_scoping_env(login="oidc", super_admin_email=MEMBER_EMAIL) as env:
+        yield env
 
 
 @pytest.fixture
