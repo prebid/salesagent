@@ -63,7 +63,7 @@ _FEATURES_DIR = _REPO_ROOT / "tests" / "bdd" / "features"
 # tenant-scoping builder went unguarded. The expected counts are the anchor that
 # says the discovery and the regex below see every scenario.
 _ADMIN_FEATURES = sorted(p.name for p in _FEATURES_DIR.glob("*.feature") if "@T-ADMIN-" in p.read_text())
-_EXPECTED_ADMIN_SCENARIO_COUNTS = {"BR-ADMIN-ACCOUNTS.feature": 13, "BR-ADMIN-TENANT-SCOPING.feature": 10}
+_EXPECTED_ADMIN_SCENARIO_COUNTS = {"BR-ADMIN-ACCOUNTS.feature": 13, "BR-ADMIN-TENANT-SCOPING.feature": 11}
 _BDD_CONFTEST = _REPO_ROOT / "tests" / "bdd" / "conftest.py"
 
 # The two admin transports the feature file itself declares. Ids are the pytest

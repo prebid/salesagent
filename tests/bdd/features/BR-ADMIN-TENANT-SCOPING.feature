@@ -1,16 +1,18 @@
 # Hand-authored feature — not compiled from adcp-req
-# Admin UI BDD scenarios for tenant scoping of admin routes (prebid/salesagent#2203)
+# Admin UI BDD scenarios for tenant scoping of admin routes (prebid/salesagent#2203, #2204)
 
 Feature: BR-ADMIN-TENANT-SCOPING Tenant-scoped admin routes prove membership
   As a publisher operating one tenant
   I want every admin route that names my tenant in its URL to check that the caller belongs to it
-  So that a logged-in user of another tenant cannot read my revenue, catalogue or policy pages
+  So that a logged-in user of another tenant cannot read my revenue, catalogue, policy pages or GAM reports
 
   # A route that takes <tenant_id> from the URL must prove the caller belongs to
   # that tenant. Four admin routes carried only require_auth(), which checks that
-  # somebody is logged in. The one component that proves membership is require_tenant_access
+  # somebody is logged in (#2203). The six GAM reporting routes carried a private copy of
+  # require_auth and a private tenant check that answered 500 to every ordinary login
+  # (#2204). The one component that proves membership is require_tenant_access
   # (src/admin/utils/helpers.py); every outcome below is that decorator's contract:
-  #   - anonymous        -> JSON 401 on the three api_mode routes, redirect to the
+  #   - anonymous        -> JSON 401 on the api_mode routes, redirect to the
   #                         tenant login page on the HTML route
   #   - non-member       -> 403 (JSON {"error": "Access denied"} on the API routes)
   #   - inactive member  -> 403, same shape
@@ -36,10 +38,16 @@ Feature: BR-ADMIN-TENANT-SCOPING Tenant-scoped admin routes prove membership
     And the target tenant's stored data is unchanged
 
     Examples:
-      | route                   |
-      | revenue chart API       |
-      | products API            |
-      | product suggestions API |
+      | route                       |
+      | revenue chart API           |
+      | products API                |
+      | product suggestions API     |
+      | GAM reporting API           |
+      | GAM advertiser summary API  |
+      | GAM principal reporting API |
+      | GAM country breakdown API   |
+      | GAM ad unit breakdown API   |
+      | GAM principal summary API   |
 
   @T-ADMIN-SCOPE-002 @auth @edge-case
   Scenario Outline: Anonymous callers of the policy rules page are sent to the tenant login
@@ -62,10 +70,16 @@ Feature: BR-ADMIN-TENANT-SCOPING Tenant-scoped admin routes prove membership
     And the target tenant's stored data is unchanged
 
     Examples:
-      | route                   |
-      | revenue chart API       |
-      | products API            |
-      | product suggestions API |
+      | route                       |
+      | revenue chart API           |
+      | products API                |
+      | product suggestions API     |
+      | GAM reporting API           |
+      | GAM advertiser summary API  |
+      | GAM principal reporting API |
+      | GAM country breakdown API   |
+      | GAM ad unit breakdown API   |
+      | GAM principal summary API   |
 
   @T-ADMIN-SCOPE-004 @auth @edge-case
   Scenario Outline: A member of another tenant receives 403 from the policy rules page
@@ -88,10 +102,16 @@ Feature: BR-ADMIN-TENANT-SCOPING Tenant-scoped admin routes prove membership
     And the target tenant's stored data is unchanged
 
     Examples:
-      | route                   |
-      | revenue chart API       |
-      | products API            |
-      | product suggestions API |
+      | route                       |
+      | revenue chart API           |
+      | products API                |
+      | product suggestions API     |
+      | GAM reporting API           |
+      | GAM advertiser summary API  |
+      | GAM principal reporting API |
+      | GAM country breakdown API   |
+      | GAM ad unit breakdown API   |
+      | GAM principal summary API   |
 
   @T-ADMIN-SCOPE-006 @auth @edge-case
   Scenario Outline: An inactive membership in the target tenant receives 403 from the policy rules page
@@ -136,3 +156,21 @@ Feature: BR-ADMIN-TENANT-SCOPING Tenant-scoped admin routes prove membership
       | method |
       | GET    |
       | POST   |
+
+  @T-ADMIN-SCOPE-011 @auth @main-flow
+  Scenario Outline: An active member reaches the GAM reporting handlers
+    # The target runs the mock adapter, so each handler's first answer is its own refusal
+    # to report: an answer only a caller the guard let through can see.
+    Given the caller is an active member of the target tenant
+    When the caller sends GET to the <route> of the target tenant
+    Then the page returns status 400
+    And the JSON response has "error" as "<error>"
+
+    Examples:
+      | route                       | error                                                               |
+      | GAM reporting API           | GAM reporting is only available for tenants using Google Ad Manager |
+      | GAM advertiser summary API  | GAM reporting is only available for tenants using Google Ad Manager |
+      | GAM principal reporting API | Principal does not have a GAM advertiser ID configured              |
+      | GAM country breakdown API   | GAM reporting is only available for tenants using Google Ad Manager |
+      | GAM ad unit breakdown API   | GAM reporting is only available for tenants using Google Ad Manager |
+      | GAM principal summary API   | Principal does not have a GAM advertiser ID configured              |

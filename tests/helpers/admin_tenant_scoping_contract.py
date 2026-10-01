@@ -1,13 +1,14 @@
-"""The authorization contract of prebid/salesagent#2203, written once for every transport.
+"""The authorization contract of prebid/salesagent#2203 and #2204, written once for every transport.
 
 ``GET /api/tenant/<tenant_id>/revenue-chart``, ``GET /api/tenant/<tenant_id>/products``,
-``GET /api/tenant/<tenant_id>/products/suggestions`` and ``GET,POST
-/tenant/<tenant_id>/policy/rules`` take the tenant from the URL, so each must prove the
-caller is an active member of that tenant. ``require_tenant_access``
+``GET /api/tenant/<tenant_id>/products/suggestions``, ``GET,POST
+/tenant/<tenant_id>/policy/rules`` (#2203) and the six GAM reporting routes (#2204, the
+``ROUTES`` rows in tests/harness/admin_tenant_scoping.py) take the tenant from the URL, so each
+must prove the caller is an active member of that tenant. ``require_tenant_access``
 (``src/admin/utils/helpers.py``) is the component that does, and every expectation below is
 its observable contract:
 
-* anonymous        -> JSON 401 ``{"error": "Authentication required"}`` on the three
+* anonymous        -> JSON 401 ``{"error": "Authentication required"}`` on the
                       ``api_mode`` routes; redirect to the tenant login page on the HTML route
 * other tenant     -> 403 (JSON ``{"error": "Access denied"}`` on the API routes)
 * inactive member  -> 403, same shape (``is_active=False`` row in the requested tenant)
@@ -29,6 +30,8 @@ import pytest
 
 from tests.harness.admin_tenant_scoping import (
     ACTIVE_BUY_BUDGET,
+    GAM_ADMITTED,
+    GAM_ROUTE_NAMES,
     ROUTE_CASE_PARAMS,
     AdminTenantScopingEnv,
     assert_anonymous_rejected,
@@ -124,3 +127,12 @@ class TestActiveMemberUnchanged:
 
         assert response.status_code == 302
         assert redirect_path(response) == f"/tenant/{scoping_env.target.tenant_id}/policy/"
+
+    @pytest.mark.parametrize("route", GAM_ROUTE_NAMES)
+    def test_gam_route_reaches_its_handler(self, scoping_env: AdminTenantScopingEnv, route: str) -> None:
+        """The member gets the handler's own first answer, which only a caller past the guard can see."""
+        scoping_env.login_with_target_membership(is_active=True)
+
+        response = scoping_env.send("GET", route)
+
+        assert (response.status_code, response.get_json()) == GAM_ADMITTED[route]

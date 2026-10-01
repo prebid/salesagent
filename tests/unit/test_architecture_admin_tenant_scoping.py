@@ -46,7 +46,6 @@ _INLINE_DEAD_ROLE_CHECK = "#2233: inline session['role'] viewer/tenant_admin che
 _INLINE_SESSION_TENANT_CHECK = "#2233: inline session['tenant_id'] == tenant_id compare instead of the decorator"
 _ISSUE_2234 = "#2234: GAM OAuth initiation proves the tenant exists, not that the caller belongs to it"
 _PR_2075 = "PR #2075 (open) adds require_tenant_access(api_mode=True) to publisher partners; remove when it merges"
-_ISSUE_2204 = "#2204: the module-local bare @require_auth in gam_reporting_api has to be removed first"
 
 # (endpoint, rule) -> why it may skip the decorator. One line each; only ever shrinks.
 EXEMPT: dict[tuple[str, str], str] = {
@@ -83,21 +82,6 @@ EXEMPT: dict[tuple[str, str], str] = {
         "publisher_partners.get_publisher_properties",
         "/tenant/<tenant_id>/publisher-partners/<int:partner_id>/properties",
     ): _PR_2075,
-    ("gam_reporting_api.get_gam_reporting", "/api/tenant/<tenant_id>/gam/reporting"): _ISSUE_2204,
-    (
-        "gam_reporting_api.get_advertiser_summary",
-        "/api/tenant/<tenant_id>/gam/reporting/advertiser/<advertiser_id>/summary",
-    ): _ISSUE_2204,
-    (
-        "gam_reporting_api.get_principal_reporting",
-        "/api/tenant/<tenant_id>/principals/<principal_id>/gam/reporting",
-    ): _ISSUE_2204,
-    ("gam_reporting_api.get_country_breakdown", "/api/tenant/<tenant_id>/gam/reporting/countries"): _ISSUE_2204,
-    ("gam_reporting_api.get_ad_unit_breakdown", "/api/tenant/<tenant_id>/gam/reporting/ad-units"): _ISSUE_2204,
-    (
-        "gam_reporting_api.get_principal_summary",
-        "/api/tenant/<tenant_id>/principals/<principal_id>/gam/reporting/summary",
-    ): _ISSUE_2204,
 }
 
 _FIX_HINT = (
