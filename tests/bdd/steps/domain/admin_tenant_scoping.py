@@ -2,10 +2,9 @@
 
 Steps for the four routes that take ``<tenant_id>`` from the URL. The harness
 (``AdminTenantScopingEnv``) is provided by the ``_harness_env`` fixture in
-tests/bdd/conftest.py. The generic admin Then steps (``the JSON response returns
-status``, ``the JSON response has "key" as "value"``, ``the page returns status``)
-come from tests/bdd/steps/domain/admin_accounts.py and read the same
-``ctx["admin_page"]`` key.
+tests/bdd/conftest.py. The generic admin Then steps (``the page returns status``,
+``the JSON response has "key" as "value"``) come from
+tests/bdd/steps/domain/admin_accounts.py and read the same ``ctx["admin_page"]`` key.
 
 """
 

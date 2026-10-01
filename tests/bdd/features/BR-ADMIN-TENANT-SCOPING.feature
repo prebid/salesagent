@@ -20,10 +20,9 @@ Feature: BR-ADMIN-TENANT-SCOPING Tenant-scoped admin routes prove membership
   # The caller's session is always held against a tenant that is NOT the target,
   # so the target tenant's membership row is the only thing that decides.
   #
-  # Transports:
-  #   - integration: Flask test_client (in-process, no Docker) — tests/bdd
-  #   - e2e: requests.Session against Docker stack (full deployment) —
-  #     tests/e2e/test_admin_tenant_scoping_e2e.py drives the same harness
+  # Transports (both run here, chosen at collection like BR-ADMIN-ACCOUNTS):
+  #   - integration: Flask test_client (in-process, no Docker)
+  #   - e2e: requests.Session against Docker stack (full deployment)
 
   Background:
     Given a target tenant with one catalogue product and one active media buy
