@@ -494,11 +494,12 @@ providing coverage in the CI smoke-tests job before unit tests run.
 
 **File:** `tests/unit/test_architecture_no_request_session_default.py`
 
-**What it enforces:** A Flask session lookup — `session.get("key", default)` or
-`session.pop("key", default)` anywhere under `src/` — never defaults to a value
-the request supplied: a `request.*` expression, a parameter of the enclosing
-function (route arguments arrive that way), or a name bound from `request.*`
-in that function. Nor is such a lookup followed by `or request.<anything>`.
+**What it enforces:** A Flask session lookup — `session.get`, `session.pop` or
+`session.setdefault` with a string key, anywhere under `src/` — never defaults
+(positionally or by `default=`) to a value the request supplied: a `request.*`
+expression, a parameter of the enclosing function (route arguments arrive that
+way), or a name bound from `request.*` in that function. Nor is such a lookup
+followed by `or <any of those>`.
 
 **Why it matters:** The default is taken exactly when the request carries no
 session, which is the request that must not be trusted.
@@ -513,11 +514,14 @@ harmless fallback in review and failed nothing at runtime.
 For every function the guard collects its parameters and every name assigned
 from an expression rooted at `request`. It then walks the module with
 `walk_with_enclosing_function` and flags two shapes. First, a call to
-`.get`/`.pop` on `session`, `flask_session` or `<module>.session` whose first
-argument is a string constant (which is what separates the Flask session from
-SQLAlchemy's `Session.get(Model, pk)`) and whose default mentions one of those
-names or is itself rooted at `request`. Second, an `or` expression whose left
-operand is such a lookup and whose right operand is rooted at `request`.
+`.get`/`.pop`/`.setdefault` on `session`, `flask_session` or `<module>.session`
+whose first argument is a string constant (which is what separates the Flask
+session from SQLAlchemy's `Session.get(Model, pk)`) and whose default — the
+second positional argument or the `default=` keyword, which Flask's session
+accepts on `pop` and `setdefault` — mentions one of those names or is itself
+rooted at `request`. Second, an `or` expression in which such a lookup is
+followed by an operand that mentions one of those names or is rooted at
+`request`.
 A default computed from the session itself — `session.get("user_name",
 email.split("@")[0].title())` with `email = session["user"]` — is not flagged.
 
@@ -526,7 +530,7 @@ email.split("@")[0].title())` with `email = session["user"]` — is not flagged.
 | Test | What it checks |
 |------|---------------|
 | `test_no_request_supplied_session_default` | No violation under `src/` beyond `KNOWN_VIOLATIONS` (empty) |
-| `test_detector_catches_known_bad` | The detector fires on a route-parameter default, a name bound from `request.args`, a `request.args.get(...)` default, the `or request...` form, and the `flask_session` alias |
+| `test_detector_catches_known_bad` | The detector fires on a route-parameter default, a name bound from `request.args`, a `request.args.get(...)` default, a `default=` keyword, `setdefault`, the `or request...` form, `or` with a request-bound name or a route parameter, and the `flask_session` alias |
 | `test_detector_ignores_session_derived_defaults_and_orm_sessions` | Literal and session-derived defaults, `session.pop(...) or session.get(...)`, and `db_session.get(Tenant, pk)` are not flagged |
 
 #### No allowlist

@@ -108,6 +108,21 @@ def test_member_connects_gam_with_the_state_it_was_issued(
     assert _persisted(bound_factory_session, own_tenant.tenant_id) == ("google_ad_manager", True, _REFRESH_TOKEN)
 
 
+def test_each_flow_is_issued_a_fresh_unguessable_state(admin_client, member, own_tenant, gam_oauth_configured):
+    """Pins that ``state`` is random: a constant would pass every other test here.
+
+    With a predictable ``state``, a callback carrying someone else's authorization
+    code is accepted in any member session that has started the flow.
+    """
+    log_in(admin_client, member)
+
+    first = start_flow(admin_client, own_tenant.tenant_id)
+    second = start_flow(admin_client, own_tenant.tenant_id)
+
+    assert first != second
+    assert own_tenant.tenant_id not in (first, second)
+
+
 @pytest.mark.parametrize("named", ["own", "other"], ids=["own tenant id", "other tenant id"])
 def test_callback_without_a_started_flow_writes_nothing(
     named, admin_client, member, own_tenant, other_tenant, gam_oauth_configured, token_exchange, bound_factory_session

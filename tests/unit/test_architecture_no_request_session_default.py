@@ -7,7 +7,9 @@ a victim tenant. The default of a session lookup is taken exactly when the reque
 carries no session, which is the request that must not be trusted — so the default
 may never be something the request supplied: a ``request.*`` expression, a route
 parameter, or a name bound from ``request.*``. The ``session.get(...) or
-request.args.get(...)`` spelling is the same fallback written with ``or``.
+request.args.get(...)`` spelling is the same fallback written with ``or``, as are
+``session.pop(..., default=state)``, ``session.setdefault(..., state)`` and
+``session.pop(..., None) or state``.
 """
 
 from __future__ import annotations
@@ -42,16 +44,23 @@ def _is_flask_session(node: ast.expr) -> bool:
 
 
 def _is_session_lookup(node: ast.AST) -> bool:
-    """``session.get(<str>, ...)`` or ``session.pop(<str>, ...)`` — a string key rules out ``Session.get(Model, pk)``."""
+    """``session.get/pop/setdefault(<str>, ...)`` — a string key rules out ``Session.get(Model, pk)``."""
     return (
         isinstance(node, ast.Call)
         and isinstance(node.func, ast.Attribute)
-        and node.func.attr in {"get", "pop"}
+        and node.func.attr in {"get", "pop", "setdefault"}
         and _is_flask_session(node.func.value)
         and bool(node.args)
         and isinstance(node.args[0], ast.Constant)
         and isinstance(node.args[0].value, str)
     )
+
+
+def _lookup_default(node: ast.Call) -> ast.expr | None:
+    """The lookup's default, positional or ``default=`` (Flask's session takes the keyword on pop/setdefault)."""
+    if len(node.args) > 1:
+        return node.args[1]
+    return next((kw.value for kw in node.keywords if kw.arg == "default"), None)
 
 
 def _is_request_rooted(node: ast.expr) -> bool:
@@ -85,19 +94,15 @@ def _request_names_by_function(tree: ast.Module) -> dict[str, set[str]]:
 def _violations(tree: ast.Module) -> Iterator[tuple[ast.AST, str]]:
     request_names = _request_names_by_function(tree)
     for node, enclosing in walk_with_enclosing_function(tree):
-        if (
-            _is_session_lookup(node)
-            and len(node.args) > 1
-            and _mentions_request(node.args[1], request_names[enclosing])
-        ):
+        default = _lookup_default(node) if _is_session_lookup(node) else None
+        if default is not None and _mentions_request(default, request_names[enclosing]):
             yield node, enclosing
-        elif (
-            isinstance(node, ast.BoolOp)
-            and isinstance(node.op, ast.Or)
-            and _is_session_lookup(node.values[0])
-            and any(_is_request_rooted(value) for value in node.values[1:])
-        ):
-            yield node, enclosing
+        elif isinstance(node, ast.BoolOp) and isinstance(node.op, ast.Or):
+            first = next((i for i, v in enumerate(node.values) if _is_session_lookup(v)), None)
+            if first is not None and any(
+                _mentions_request(v, request_names[enclosing]) for v in node.values[first + 1 :]
+            ):
+                yield node, enclosing
 
 
 def _lineno_violations(tree: ast.Module) -> list[int]:
@@ -116,6 +121,16 @@ def test_detector_catches_known_bad() -> None:
             "request expression": 'def f():\n    return session.get("t", request.args.get("t"))\n',
             "or request": 'def f():\n    return session.get("t") or request.args.get("t")\n',
             "flask_session alias": 'def f(x):\n    return flask_session.get("t", x)\n',
+            "keyword default": (
+                'def f():\n    state = request.args.get("state")\n    return session.pop("t", default=state)\n'
+            ),
+            "or name bound from request": (
+                'def f():\n    state = request.args.get("state")\n    return session.pop("t", None) or state\n'
+            ),
+            "or route parameter": 'def f(tenant_id):\n    return session.get("t") or tenant_id\n',
+            "setdefault": (
+                'def f():\n    state = request.args.get("state")\n    return session.setdefault("t", state)\n'
+            ),
         },
     )
 
