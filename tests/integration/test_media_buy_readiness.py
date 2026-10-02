@@ -12,6 +12,7 @@ from src.admin.services.media_buy_readiness_service import MediaBuyReadinessServ
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Creative, CreativeAssignment, MediaBuy, Principal, Tenant
 from tests.factories.principal import plaintext_token_for
+from tests.utils.database_helpers import vhost_for
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -21,7 +22,15 @@ def test_tenant(integration_db, request):
     """Create a test tenant (requires integration_db fixture)."""
     tenant_id = f"test_readiness_{request.node.name[-20:]}"  # Truncate to avoid long names
     with get_db_session() as session:
-        tenant = Tenant(tenant_id=tenant_id, name="Test Tenant", subdomain="test", is_active=True, ad_server="mock")
+        # Required (NOT NULL) and UNIQUE. Nothing routes to this host; it exists to satisfy the column.
+        tenant = Tenant(
+            tenant_id=tenant_id,
+            name="Test Tenant",
+            subdomain="test",
+            virtual_host=vhost_for(tenant_id),
+            is_active=True,
+            ad_server="mock",
+        )
         session.add(tenant)
         session.commit()
 

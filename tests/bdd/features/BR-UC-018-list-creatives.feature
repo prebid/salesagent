@@ -117,19 +117,32 @@ Feature: BR-UC-018 List Creatives
     Given no tenant can be resolved from the request context
     When the Buyer Agent sends a list_creatives request
     Then the error is compliant with the AdCP error spec
-    And the operation should fail with error code "AUTH_MISSING"
-    And the error code should be "AUTH_MISSING"
+    And the operation should fail with error code "TENANT_UNDEFINED"
+    And the error code should be "TENANT_UNDEFINED"
+    And the error recovery should be "terminal"
     And the error should include a "suggestion" field
-    # Was AUTH_REQUIRED, and before that this feature's header lists TENANT_REQUIRED —
-    # a code enums/error-code.json does not carry at 3.1.1. The pinned enum DOES carry
-    # AUTH_MISSING, whose own enumMetadata suggestion is "provide credentials via the auth
-    # header and retry", and that is what the request expresses: this Given sends NO
-    # HEADERS AT ALL, so the seller is told neither who is calling nor which tenant. There
-    # being no pinned code for an unresolvable tenant, the seller reports the
-    # authentication state it can see, which is the same one the ext-a scenario asserts.
+    # Was AUTH_MISSING, and before that AUTH_REQUIRED, and before that TENANT_REQUIRED — a
+    # code enums/error-code.json does not carry at 3.1.1. AUTH_MISSING was reached by
+    # reasoning that with no pinned code for an unresolvable tenant, the seller should report
+    # the authentication state it can see. It reports the state it is actually in instead.
+    #
+    # This Given sends NO HEADERS AT ALL, so the deployment cannot tell WHICH seller the
+    # request addresses. It therefore cannot apply any seller's authentication policy, and
+    # saying "you presented no credentials" asserts a check it never performed — for a
+    # request that would be refused identically with a perfectly valid bearer.
+    # CONFIGURATION_ERROR is pinned, its enumMetadata recovery is "terminal", and its
+    # suggestion is the one production emits: a buyer cannot fix a seller-side deployment
+    # that serves no seller at the host it was dialed on, and MUST NOT auto-retry.
+    #
+    # Two sibling scenarios on the SAME Given already grade exactly this, so the three now
+    # agree rather than two agreeing and this one dissenting: BR-UC-010 @T-UC-010-ext-a
+    # ("a request naming no seller is refused") and BR-UC-013 @T-UC-013-051 ("valid
+    # credentials but unresolvable tenant"). Which seller a request names is outside the
+    # spec's model, so what a deployment answers when it cannot tell is the seller's own
+    # contract; mirror it upstream in adcp-req.
     # POST-F1: Buyer knows the operation failed
-    # POST-F2: Error explains tenant context could not be determined
-    # POST-F3: Suggestion advises ensuring credentials map to a valid tenant
+    # POST-F2: Error explains the seller could not be determined
+    # POST-F3: Suggestion directs the report to a human at the seller
 
   @T-UC-018-ext-c @extension @ext-c @error
   Scenario Outline: Validation failure -- <description>

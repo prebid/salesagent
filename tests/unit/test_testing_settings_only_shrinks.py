@@ -15,8 +15,8 @@ FIELDS that exist to be forked on. The properties are the readers; these are the
 
 ``ProvisioningSettings`` is deliberately not covered. Its three fields — seed a demo
 tenant, seed sample data, skip migrations — are facts an operator asks of a fresh
-deployment, read once at init, and none of them asks whether a suite is running. They lived
-on ``TestingSettings`` and that was the confusion worth removing: a class name implying
+deployment, read once at init, and none of them asks whether a suite is running. Keeping
+them off ``TestingSettings`` is what lets this pin mean something: a class name implying
 everything inside is a test artifact hides which fields are actually defects.
 """
 
@@ -31,19 +31,11 @@ EXPECTED_TESTING_FIELDS: frozenset[str] = frozenset(
         # loopback check while a suite runs. Goes when the test environments' loopback
         # origins are reachable without it — the same work ADCP_OUTBOUND_ALLOW_PRIVATE needs.
         "adcp_testing",
-        # One reader: src/admin/app.py:351, deciding whether the test-credential login
-        # blueprint is COMPOSED. Goes when first-run admin setup has an answer that is not a
-        # test flag (salesagent-091d8). Today that blueprint is the only non-SSO path to a
-        # first admin session and the deployment docs tell operators to use it.
-        "adcp_auth_test_mode",
-        # Read at ONE site, test_auth.py:63,68,73, as that blueprint's credential table.
-        # These go with the blueprint, not before it.
-        "test_super_admin_email",
-        "test_super_admin_password",
-        "test_tenant_admin_email",
-        "test_tenant_admin_password",
-        "test_tenant_user_email",
-        "test_tenant_user_password",
+        # A field goes by giving the behavior a real input, which is the direction this pin
+        # exists to allow. No credential flag is needed for admin access: a test that needs
+        # an admin session signs one (tests/helpers/admin_session), and a deployment reaches
+        # its first admin through its identity provider, with per-tenant Setup Mode covering
+        # the interval before SSO is enabled.
     }
 )
 
@@ -87,7 +79,7 @@ def test_provisioning_is_not_a_test_flag() -> None:
 
 # There is no test asserting that each field carries a reason. The one written here checked
 # that every field NAME appeared twice in this module, which grades text repetition rather
-# than substance -- padding the file would satisfy it, and grouping six credentials under one
-# honest comment failed it. Whether an entry's reason is any good is a review property, not a
-# machine-checkable one, and a guard that grades the spelling of a comment is the shape this
-# repo already has notes about avoiding.
+# than substance -- padding the file would satisfy it, and one honest comment covering a
+# group of related fields failed it. Whether an entry's reason is any good is a review
+# property, not a machine-checkable one, and a guard that grades the spelling of a comment is
+# the shape this repo already has notes about avoiding.

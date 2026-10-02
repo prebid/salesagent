@@ -19,7 +19,7 @@ from tests.integration.conftest import (
     add_required_setup_data,
     create_test_product_with_pricing,
 )
-from tests.utils.database_helpers import create_tenant_with_timestamps
+from tests.utils.database_helpers import create_tenant_with_timestamps, vhost_for
 
 
 # Test fixtures
@@ -69,6 +69,7 @@ class TestSessionManagement:
                     tenant_id=tenant_id,
                     name=name,
                     subdomain=tenant_id.lower(),
+                    virtual_host=vhost_for(tenant_id.lower()),
                     authorized_emails=[],
                     policy_settings={},
                     created_at=now,
@@ -97,6 +98,7 @@ class TestSessionManagement:
                 tenant_id="test3",
                 name="Test 3",
                 subdomain="test3",
+                virtual_host="test3.adcp.test",
                 authorized_emails=[],
                 policy_settings={},
                 created_at=now,
@@ -122,7 +124,12 @@ class TestSessionManagement:
             tenant1, created1 = get_or_create(
                 session,
                 Tenant,
-                defaults={"name": "Created Tenant", "authorized_emails": [], "policy_settings": {}},
+                defaults={
+                    "name": "Created Tenant",
+                    "authorized_emails": [],
+                    "policy_settings": {},
+                    "virtual_host": "test4.adcp.test",
+                },
                 tenant_id="test4",
                 subdomain="test4",
             )
@@ -201,6 +208,7 @@ class TestJSONValidation:
                 tenant_id="json_test",
                 name="JSON Test",
                 subdomain="jsontest",
+                virtual_host="json-test.adcp.test",
                 authorized_emails=["test@example.com"],  # Valid array
                 authorized_domains=["example.com"],  # Valid array
                 auto_approve_format_ids=["display_300x250"],  # Valid array
@@ -228,6 +236,7 @@ class TestJSONValidation:
                 tenant_id="test_tenant",
                 name="Test",
                 subdomain="test",
+                virtual_host="json-principal.adcp.test",
                 authorized_emails=[],
                 policy_settings={},
                 created_at=now,
@@ -256,7 +265,14 @@ class TestJSONValidation:
         with get_db_session() as session:
             # Create tenant and principal first (required for foreign key)
 
-            tenant = Tenant(tenant_id="test", name="Test Tenant", subdomain="test", ad_server="mock", is_active=True)
+            tenant = Tenant(
+                tenant_id="test",
+                name="Test Tenant",
+                subdomain="test",
+                virtual_host="workflow-comments.adcp.test",
+                ad_server="mock",
+                is_active=True,
+            )
             session.add(tenant)
             principal = Principal.with_token(
                 plaintext_token_for("test"),
@@ -306,6 +322,7 @@ class TestIntegration:
                     tenant_id="workflow_test",
                     name="Workflow Test",
                     subdomain="workflow",
+                    virtual_host="workflow-test.adcp.test",
                     authorized_emails=["admin@workflow.com"],
                     authorized_domains=["workflow.com"],
                     auto_approve_format_ids=["display_300x250", "video_16x9"],

@@ -2,6 +2,8 @@
 
 from unittest.mock import MagicMock, patch
 
+from tests.utils.database_helpers import vhost_for
+
 
 def test_inventory_sync_checks_gam_inventory_not_products():
     """Test that inventory sync status checks GAMInventory table, not Products."""
@@ -28,7 +30,7 @@ def test_inventory_sync_checks_gam_inventory_not_products():
         mock_tenant.line_item_name_template = None
         mock_tenant.slack_webhook_url = None
         mock_tenant.enable_axe_signals = False
-        mock_tenant.virtual_host = None
+        mock_tenant.virtual_host = vhost_for(tenant_id)
 
         # Mock scalars().first() for tenant query
         mock_db.scalars.return_value.first.return_value = mock_tenant
@@ -89,7 +91,7 @@ def test_inventory_sync_incomplete_when_no_gam_inventory():
         mock_tenant.line_item_name_template = None
         mock_tenant.slack_webhook_url = None
         mock_tenant.enable_axe_signals = False
-        mock_tenant.virtual_host = None
+        mock_tenant.virtual_host = vhost_for(tenant_id)
 
         # Mock scalars().first() for tenant query
         mock_db.scalars.return_value.first.return_value = mock_tenant

@@ -28,22 +28,18 @@ already require a live stack to collect.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import subprocess
-import tarfile
-import urllib.error
-import urllib.request
 from pathlib import Path
 from typing import Any
 
 import pytest
 
 from scripts.audit import ledger, storyboard_spec
-from scripts.setup.init_database_ci import CI_TEST_SUBDOMAIN, CI_TEST_TOKEN
-from scripts.setup.storyboard_signing import STORYBOARD_VIRTUAL_HOST
+from scripts.setup.seed_storyboard_tenant import STORYBOARD_TOKEN, STORYBOARD_VIRTUAL_HOST
 from tests.storyboard import collected, corrected_storyboards, corrected_vectors
+from tests.storyboard.bundle import materialize_bundle as _materialize_bundle
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _RUNNER_DIR = Path(__file__).parent / "runner"
@@ -89,24 +85,22 @@ _PROTOCOLS: tuple[str, ...] = ("mcp", "a2a")
 # than the service on plaintext :8080 — and A2A is why the scheme has to be real. A2A is
 # card-first: the runner reads the RPC endpoint off `/.well-known/agent-card.json` rather
 # than being told it, and `src/app.py`'s `get_protocol` renders **https** for any host
-# that is not loopback. Dialed plaintext, the card published
-# `https://adcp-server-storyboard:8080/a2a` — TLS to a plaintext port — so every
-# card-derived call failed with `fetch failed`: 25 checks on run sa-0c74d963, one of them
-# the capability probe the runner SELECTS storyboards from, which is why that axis
-# executed 25 storyboards where MCP executed 44 and passed 3 where MCP passed 33. The card
-# was right and the origin was wrong. This front forwards `Host` verbatim and sets
-# `X-Forwarded-Proto`, the signal `get_protocol` prefers, so what it publishes is what it
-# speaks.
+# that is not loopback. Dialed on plaintext, the card therefore publishes an https URL for
+# a plaintext port and every card-derived call fails with `fetch failed` — including the
+# capability probe the runner SELECTS storyboards from, so the axis executes a fraction of
+# the storyboards its sibling does. The card is right and the origin is wrong. This front
+# forwards `Host` verbatim and sets `X-Forwarded-Proto`, the signal `get_protocol` prefers,
+# so what it publishes is what it speaks.
 #
 # MCP takes its endpoint directly (`/mcp/`, trailing slash included — FastMCP mounts it
 # that way). A2A takes the BASE url: the SDK appends `/.well-known/...` verbatim, so a
 # `/a2a` suffix would ask for `/a2a/.well-known/agent-card.json`, which 404s.
 #
-# The ORIGIN is imported, not spelled here. `scripts/setup/storyboard_signing.py` writes it
-# onto the tenant as its `virtual_host`, which is what makes a BEARER-LESS signed vector
-# resolve a tenant at all — those probes carry no `x-adcp-tenant`, so `_detect_tenant` has
-# only the Host. Two literals of it is a posture nothing enforces and 20+ negative vectors
-# answered 200, with the two spellings looking identical in review.
+# The ORIGIN is imported, not spelled here. `scripts/setup/seed_storyboard_tenant.py`
+# writes it onto the tenant as its `virtual_host`, which is what makes a BEARER-LESS signed
+# vector resolve a tenant at all — those probes carry no `x-adcp-tenant`, so the Host is the
+# only thing left to name a tenant with. Two literals of it is a posture nothing enforces
+# and 20+ negative vectors answered 200, with the two spellings looking identical in review.
 _DEFAULT_AGENT_URLS: dict[str, str] = {
     "mcp": f"https://{STORYBOARD_VIRTUAL_HOST}/mcp/",
     "a2a": f"https://{STORYBOARD_VIRTUAL_HOST}",
@@ -122,34 +116,49 @@ _AUTH_TOKEN_ENV = "STORYBOARD_AUTH_TOKEN"
 _COMPLIANCE_DIR_ENV = "STORYBOARD_COMPLIANCE_DIR"
 _SCHEMA_ROOT_ENV = "STORYBOARD_SCHEMA_ROOT"
 
+
 # WHICH SELLER the credential belongs to, as the `-H KEY=VALUE` the runner sends on every
-# request. Without it the credential is rejected: a token is only ever verified INSIDE the
-# tenant the request addresses, and nothing at this origin addresses one. `_detect_tenant`
-# (src/core/resolved_identity.py) tries the Host as a virtual_host and then its first label
-# as a subdomain; the stack seeds neither a virtual_host nor a `storyboard` subdomain
-# (scripts/setup/init_database_ci.py seeds `ci-test` and `iso-test`), and the
-# localhost-to-"default" fallback does not apply to a dotted alias. So no tenant was
-# identified, the token was looked up in none, and every credentialed step answered
-# AUTH_INVALID -> 401: 26 checks on run innet_140926_2318. (The A2A axis reports the same 26
-# steps failing one layer earlier, in the runner's own SSRF guard, so it is blocked on
-# something else as well; this is the whole of the MCP axis's credential failure.)
+# request. A token is only ever verified INSIDE the tenant a request addresses, so a request
+# that names no tenant has no tenant to look the token up in.
 #
-# The value is the seeded SUBDOMAIN, not the tenant_id: the seeder mints the id as a fresh
-# uuid4 per database, so the subdomain is the only stable spelling, and `_detect_tenant`
-# tries the hint as a subdomain before taking it as an id. It is IMPORTED from the seeding
-# script rather than spelled again here -- that script is what makes the value true in the
-# database, and a second literal of it is a silent 401 the day either one moves. It names
-# the tenant whose principal holds `ci-test-token` above, the same tenant every other
-# in-network suite addresses (tests/e2e/utils.py, through tests/helpers/credentials.py).
+# There are two ways to name one, and the storyboard uses both: the `Host` it dials
+# (`STORYBOARD_VIRTUAL_HOST`, the front the tenant declares and its agent card publishes)
+# and this header. The header is the one that still works when Host routing is what broke,
+# which is the only reason it is here.
 #
-# NOT a change of origin, and not a second seeded tenant. The pinned runner SDK carries this
-# for exactly this case: `-H, --header K=V  Extra HTTP header on every request ... Common
-# use: -H x-adcp-tenant=<id> for tenant routing behind a reverse proxy` (bin/adcp.js), and
-# its storyboard options type documents the header as "Forwarded into `AgentConfig.headers`,
-# so MCP and A2A transports both see them" — one spelling, both graded axes, one origin. It
-# softens no graded check: the pinned compliance tree says nothing about tenant routing, so
-# no storyboard step grades how a buyer selects a seller.
-_TENANT_ROUTING_HEADER = f"x-adcp-tenant={CI_TEST_SUBDOMAIN}"
+# The token comes from the seeding script rather than being spelled again, because that
+# script is what makes it true in the database. The two move together: a principal belongs
+# to one tenant, so the storyboard's token is valid only inside the storyboard's tenant.
+#
+# The pinned runner SDK carries the header for exactly this case: `-H, --header K=V  Extra
+# HTTP header on every request ... Common use: -H x-adcp-tenant=<id> for tenant routing
+# behind a reverse proxy` (bin/adcp.js), forwarded into `AgentConfig.headers` so MCP and A2A
+# both see it. It softens no graded check: the pinned compliance tree says nothing about
+# tenant routing, so no storyboard step grades how a buyer selects a seller.
+def _tenant_routing_header() -> str:
+    """``x-adcp-tenant=<the seeded tenant's id>``, resolved when the runner is invoked.
+
+    The header names a tenant by its id, literally. The seeded id is a fresh uuid4 per
+    seed and the seeding runs in a separate process (tox ``commands_pre``), so it cannot
+    be a constant here — it is asked for at call time, through the same function the
+    resolver uses to turn a ``Host`` into a tenant. One source of truth: whatever the
+    seeder wrote is what the runner sends.
+
+    Raises rather than degrading. A header that resolves nothing leaves the run passing on
+    ``Host`` alone, which is indistinguishable from success until the day ``Host`` routing
+    is what broke — and this header exists to be the other way in.
+    """
+    from src.core.config_loader import tenant_id_for
+
+    tenant_id = tenant_id_for(virtual_host=STORYBOARD_VIRTUAL_HOST)
+    if tenant_id is None:
+        raise RuntimeError(
+            f"no active tenant is served at {STORYBOARD_VIRTUAL_HOST!r}, so the storyboard "
+            "runner has no tenant to name. Run scripts.setup.seed_storyboard_tenant first, "
+            "and check DATABASE_URL points at the stack's database rather than the suite's."
+        )
+    return f"x-adcp-tenant={tenant_id}"
+
 
 # Where each lives INSIDE the extracted bundle. The bundle root comes from
 # storyboard_spec.adcp_home(); only the leaf differs, so neither the version nor
@@ -229,95 +238,6 @@ def _webhook_port(protocol: str) -> str:
     """
     base = int(os.environ.get(_WEBHOOK_PORT_ENV, _DEFAULT_WEBHOOK_PORT))
     return str(base + _PROTOCOLS.index(protocol))
-
-
-# The pinned bundle is a release asset of the spec repo, not something this repo vendors.
-_BUNDLE_REPO = "adcontextprotocol/adcp"
-_BUNDLE_URL = "https://github.com/{repo}/releases/download/v{version}/{asset}"
-_BUNDLE_FETCH_TIMEOUT = 120
-
-
-def _materialize_bundle() -> str | None:
-    """Put the pinned compliance tree on disk, fetching the release asset if needed.
-
-    THE GRADING SUITE RESOLVES ITS OWN BUNDLE. It used to require that a separate step had
-    already downloaded and extracted the tree: ``adcp_home()`` looks for
-    ``tests/storyboard/runner/adcp-<version>/``, which is gitignored, and otherwise falls
-    through to ``~/projects/adcp`` -- one maintainer's personal clone. Any environment that
-    did not run ``.github/actions/_adcp-bundle`` first resolved to a path that has never
-    existed, every check de-collected, and the job exited 0 having graded nothing (measured:
-    run innet_080926_1118, storyboard.json summary {'passed': 1, 'skipped': 1}).
-
-    Three sources, first hit wins, so every environment lands somewhere:
-
-    1. The extracted tree. Nothing to do.
-    2. A tarball already beside the runner -- what the CI action leaves behind, and what a
-       second run in the same container reuses.
-    3. The pinned release asset, over plain https. The version comes from the installed SDK,
-       so the asset cannot disagree with the code under audit, and the archive is public: no
-       ``gh``, no token, no environment variable pointing anywhere.
-
-    The checksum is verified BEFORE extracting. A corrupt or truncated archive that unpacks
-    far enough to look like a tree would otherwise grade a buyer contract against whatever it
-    contained.
-
-    Returns a reason string when the tree cannot be produced, or None on success. Callers
-    treat that reason as a FAILURE, never a skip.
-    """
-    version = storyboard_spec.pinned_version(_REPO_ROOT)
-    target = _RUNNER_DIR / f"adcp-{version}"
-    if target.is_dir():
-        return None
-
-    archive = _RUNNER_DIR / f"{version}.tgz"
-    checksum = _RUNNER_DIR / f"{version}.tgz.sha256"
-    if not archive.is_file() or not checksum.is_file():
-        fetch_failure = _fetch_bundle(version, archive, checksum)
-        if fetch_failure is not None:
-            return fetch_failure
-
-    expected = checksum.read_text(encoding="utf-8").split()[0]
-    digest = hashlib.sha256(archive.read_bytes()).hexdigest()
-    if digest != expected:
-        return f"bundle checksum mismatch for {archive}: expected {expected}, got {digest}"
-
-    with tarfile.open(archive, "r:gz") as tar:
-        _safe_extract(tar, _RUNNER_DIR)
-    if not target.is_dir():
-        return f"bundle extracted, but {target} is not a directory"
-    return None
-
-
-def _fetch_bundle(version: str, archive: Path, checksum: Path) -> str | None:
-    """Download the pinned release asset and its checksum. Returns a reason on failure."""
-    _RUNNER_DIR.mkdir(parents=True, exist_ok=True)
-    for path, asset in ((archive, archive.name), (checksum, checksum.name)):
-        url = _BUNDLE_URL.format(repo=_BUNDLE_REPO, version=version, asset=asset)
-        try:
-            with urllib.request.urlopen(url, timeout=_BUNDLE_FETCH_TIMEOUT) as response:  # noqa: S310 - fixed https URL
-                body = response.read()
-        except (urllib.error.URLError, TimeoutError, OSError) as exc:
-            return (
-                f"could not fetch {url}: {exc}. Run .github/actions/_adcp-bundle's two "
-                f"commands, or place {archive.name} beside the runner"
-            )
-        path.write_bytes(body)
-    return None
-
-
-def _safe_extract(tar: tarfile.TarFile, dest: Path) -> None:
-    """Extract *tar* under *dest*, refusing any member that escapes it.
-
-    The archive is a published artifact rather than buyer input, so this is not a defence
-    against an attacker. It keeps a malformed archive from scattering files across the repo,
-    which is the failure that is hard to diagnose afterwards.
-    """
-    root = dest.resolve()
-    for member in tar.getmembers():
-        if (root / member.name).resolve().is_relative_to(root):
-            continue
-        raise RuntimeError(f"refusing tar member outside {root}: {member.name}")
-    tar.extractall(dest)  # noqa: S202 - every member checked above
 
 
 def _unresolvable_bundle_paths() -> list[str]:
@@ -519,7 +439,7 @@ def _run_storyboard_runner(protocol: str) -> dict[str, Any]:
     protocol surfaces.
     """
     agent_url = os.environ.get(_agent_url_env(protocol), _DEFAULT_AGENT_URLS[protocol])
-    auth_token = os.environ.get(_AUTH_TOKEN_ENV, CI_TEST_TOKEN)
+    auth_token = os.environ.get(_AUTH_TOKEN_ENV, STORYBOARD_TOKEN)
     summary_path = _summary_path(protocol)
     cmd = [
         str(_ADCP_BIN),
@@ -531,7 +451,7 @@ def _run_storyboard_runner(protocol: str) -> dict[str, Any]:
         "--auth",
         auth_token,
         "-H",
-        _TENANT_ROUTING_HEADER,
+        _tenant_routing_header(),
         "--allow-http",
         "--compliance-version",
         storyboard_spec.pinned_version(_REPO_ROOT),
@@ -566,6 +486,7 @@ def _run_storyboard_runner(protocol: str) -> dict[str, Any]:
         timeout=700,
         env={**os.environ, **webhook_env, **tls_env},
     )
+    _publish_runner_record(protocol, result)
     if not summary_path.exists():
         pytest.fail(
             f"storyboard runner ({protocol}) did not produce a summary (exit={result.returncode}): "
@@ -588,6 +509,86 @@ def _graded_total(summary: dict[str, Any]) -> int:
     failure is a verdict.
     """
     return sum(int(summary.get(key, 0)) for key in ("passed", "failed"))
+
+
+#: Per-protocol floor on the runner's own ``passed`` count, the one number no pytest
+#: outcome can carry. See :func:`_below_pass_floor`.
+_PASS_FLOOR_PATH = _REPO_ROOT / ".storyboard-pass-floor"
+
+
+def _pass_floor(protocol: str) -> int:
+    """The recorded floor for *protocol*. Refuses rather than defaulting.
+
+    A missing file and a misspelt key both used to answer 0, which is a floor no run can
+    breach — the one direction this exists to catch, with infinite slack. Neither is a
+    state to tolerate: the file is committed, so its absence means the checkout is
+    broken, and a key the file does not carry means nobody set a floor for a protocol
+    this suite grades. Both are the path being wrong, not a value being absent.
+    """
+    if not _PASS_FLOOR_PATH.is_file():
+        raise FileNotFoundError(
+            f"{_PASS_FLOOR_PATH} is committed and missing from this checkout, so there is no floor "
+            f"to grade {protocol!r} against. A default of 0 is a floor nothing can breach."
+        )
+    recorded = json.loads(_PASS_FLOOR_PATH.read_text(encoding="utf-8"))
+    if protocol not in recorded:
+        raise KeyError(
+            f"{_PASS_FLOOR_PATH.name} records no floor for {protocol!r} (it has {sorted(recorded)}). "
+            "Record one from a measured run; a missing key must not read as a floor of 0."
+        )
+    return int(recorded[protocol])
+
+
+def _below_pass_floor(protocol: str, summary: dict[str, Any]) -> dict[str, Any] | None:
+    """One synthetic FAILING check when *protocol* graded fewer passes than the floor.
+
+    THE HOLE THIS CLOSES. A parametrized item exists only for a FAILURE or a SKIP:
+    ``_collect_checks`` builds them from ``summary["failures"]`` and
+    ``summary["skip_causes"]``, because the runner publishes no per-check pass record,
+    so a passing check has no id to carry. The item count therefore moves INVERSELY
+    to health, and the pass count reaches pytest through nothing at all.
+
+    So a check that regresses from PASS to SKIP makes the suite greener: its failing
+    item never existed, its skip item does not fail, and the only trace is a number in
+    a JSON artifact. 30 passes could become 5 with every item still xfail-or-skip and
+    CI still green. ``agent_reachability`` catches only the total collapse to zero.
+
+    Only reached when the runner graded SOMETHING: a run that graded nothing is
+    ``agent_reachability``'s case, and reporting both would double-count one cause.
+
+    ONE-DIRECTIONAL, deliberately. A surplus does not fail; it prints in the
+    scoreboard so the floor gets raised on purpose. The mypy and duplication ratchets
+    fail on slack because their counts are deterministic -- this one is a live run
+    against a real stack, where one environment-dependent skip cause moves the number,
+    and a ratchet that manufactures a red for GOOD news teaches people to edit the
+    file without reading it.
+    """
+    # Only a session that actually DIALLED an agent has a pass count worth flooring.
+    # The ledger-fitness module drives this same collection through a stub runner
+    # (``stub://`` urls, a handful of synthetic checks) to grade the fitness join; a
+    # recorded floor against a stub that grades 1 is not a regression, it is a category
+    # error, and it changed that module's expected outcome counts when this landed.
+    if not str(summary.get("agent_url", "")).startswith("http"):
+        return None
+    floor = _pass_floor(protocol)
+    passed = int(summary.get("passed", 0))
+    if passed >= floor:
+        return None
+    return {
+        "protocol": protocol,
+        "track": "_runner",
+        "storyboard_id": ledger.PASS_FLOOR_STORYBOARD_ID,
+        "step_id": ledger.PASS_FLOOR_STEP_ID,
+        "status": "fail",
+        "reason": (
+            f"graded {passed} passing checks against {summary.get('agent_url')}, "
+            f"below the recorded floor of {floor}. Either a check regressed (look at "
+            f"skip_causes: a pass that became a SKIP removes its own failing item and "
+            f"shows up nowhere else), or the floor in {_PASS_FLOOR_PATH.name} is stale "
+            f"and lowering it is a deliberate decision."
+        ),
+        "reason_kind": "below_pass_floor",
+    }
 
 
 def _no_graded_checks(protocol: str, summary: dict[str, Any]) -> dict[str, Any]:
@@ -619,6 +620,26 @@ def _no_graded_checks(protocol: str, summary: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _publish_runner_record(protocol: str, result: subprocess.CompletedProcess[str]) -> None:
+    """Publish the runner's OWN output, in full, beside the summary.
+
+    ``--summary-output`` writes a digest: counts, plus the failures enumerated and the skip
+    causes truncated to a sample. It cannot answer which checks PASSED, so two runs with
+    the same totals are indistinguishable from two runs that passed different checks --
+    and comparing a branch against main means comparing the SETS, not the counts.
+
+    ``--json`` already makes the runner emit its complete per-check record on stdout, and
+    that record was captured and dropped on the floor: read only to quote 2000 characters
+    into a failure message. Written here whatever the exit code, because a run that died
+    is exactly when the record is worth having.
+    """
+    out = _REPO_ROOT / "test-results"
+    out.mkdir(parents=True, exist_ok=True)
+    (out / f"storyboard_run_{protocol}.json").write_text(result.stdout)
+    if result.stderr:
+        (out / f"storyboard_run_{protocol}.stderr.log").write_text(result.stderr)
+
+
 def _publish_summary(protocol: str, summary: dict[str, Any]) -> None:
     """Copy the runner's summary into ``test-results/`` so it leaves the box.
 
@@ -648,8 +669,21 @@ def _scoreboard(protocol: str, summary: dict[str, Any]) -> str:
         f"passed={summary.get('passed')} failed={summary.get('failed')} "
         f"skipped={summary.get('skipped')} not_selected={summary.get('not_selected_count')} "
         f"storyboards_executed={len(summary.get('storyboards_executed', []))} "
+        f"floor={_pass_floor(protocol)}{_surplus_note(protocol, summary)} "
         f"agent_url={summary.get('agent_url')}"
     )
+
+
+def _surplus_note(protocol: str, summary: dict[str, Any]) -> str:
+    """`` (+N, raise the floor)`` when this run beat the recorded floor.
+
+    The other half of the floor, and deliberately a PRINT rather than a failure: a
+    surplus is good news, and a ratchet that reds the build for good news gets its
+    file edited without being read. Named here so raising it is a decision someone
+    makes on seeing the number, not a thing nobody knows to do.
+    """
+    surplus = int(summary.get("passed", 0)) - _pass_floor(protocol)
+    return f" (+{surplus}, raise the floor)" if surplus > 0 else ""
 
 
 def _drain_grading_replay_rows() -> None:
@@ -725,7 +759,13 @@ def _collect_checks(protocol: str) -> list[dict[str, Any]]:
                 }
             )
     if _graded_total(summary) == 0:
+        # The total collapse. Reported by ``agent_reachability`` alone: the floor below
+        # would also fire here, and two failing checks for one cause reads as two
+        # problems. The floor covers "graded FEWER than before", which only means
+        # anything once the runner graded something at all.
         checks.append(_no_graded_checks(protocol, summary))
+    elif (breach := _below_pass_floor(protocol, summary)) is not None:
+        checks.append(breach)
     return checks
 
 

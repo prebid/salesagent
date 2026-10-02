@@ -26,6 +26,7 @@ def test_product_deletion_with_pricing_options(integration_db):
             tenant_id="test_tenant_delete",
             name="Test Tenant Delete",
             subdomain="test-delete",
+            virtual_host="test-delete-pricing.adcp.test",
         )
         session.add(tenant)
         session.flush()
@@ -100,6 +101,7 @@ def test_pricing_option_direct_deletion_bypasses_trigger_due_to_cascade(integrat
             tenant_id="test_tenant_cascade",
             name="Test Tenant Cascade",
             subdomain="test-cascade",
+            virtual_host="test-cascade.adcp.test",
         )
         session.add(tenant)
         session.flush()

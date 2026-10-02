@@ -41,29 +41,23 @@ flowchart LR
 ## Evidence that MCP and A2A grade identically
 
 The AdCP conformance storyboards run once per protocol against the same
-deployment. On run `test-results/innet_150926_0801` (AdCP 3.1.1, runner
-`@adcp/sdk` 14.0.0-rc.35) the two summaries — `storyboard/summary_mcp.json` and
-`storyboard/summary_a2a.json` — carry the same verdict:
-
-| Field | mcp | a2a |
-| --- | --- | --- |
-| `passed` | 30 | 30 |
-| `failed` | 21 | 21 |
-| `skipped` | 249 | 249 |
-| `not_selected_count` | 0 | 0 |
+deployment, and the two summaries an in-network run writes —
+`storyboard/summary_mcp.json` and `storyboard/summary_a2a.json` — carry the same
+verdict: equal `passed`, `failed`, `skipped` and `not_selected_count`.
 
 The agreement is stronger than the counts. A key-by-key comparison of the two
-files finds exactly three differing fields: `agent_url`, `tested_at`, and
-`total_duration_ms`. Every graded field matches, including `failures` entry for
-entry in the same order and `skipped_by_reason` bucket for bucket. Reproduce the
-comparison with:
+files differs only in `agent_url`, `tested_at`, and `total_duration_ms`. Every
+graded field matches, including `failures` entry for entry in the same order and
+`skipped_by_reason` bucket for bucket. Check it on any in-network run
+(`test-results/innet_*`, last 10 kept) with:
 
 ```bash
 uv run python -c "
-import json
-a = json.load(open('test-results/innet_150926_0801/storyboard/summary_a2a.json'))
-m = json.load(open('test-results/innet_150926_0801/storyboard/summary_mcp.json'))
-print(sorted(k for k in a if a[k] != m.get(k)))"
+import json, sys
+run = sys.argv[1]
+a = json.load(open(f'{run}/storyboard/summary_a2a.json'))
+m = json.load(open(f'{run}/storyboard/summary_mcp.json'))
+print(sorted(k for k in a if a[k] != m.get(k)))" test-results/<run>
 ```
 
 The remaining failures are seller gaps, not protocol gaps: the runner grades
@@ -158,8 +152,8 @@ which graded zero checks for that reason.
 
 A dynamic route serves the card at `/.well-known/agent-card.json` and
 advertises the tenant's **stored** host, resolved from the request `Host` header
-(`src/app.py:416`, `:435`). It deliberately does not build the URL from
-`Host` / `Apx-Incoming-Host` / `X-Forwarded-Proto`: the signed-request check
+(`src/app.py:416`, `:435`). It deliberately does not build the URL from the
+request's own headers: the signed-request check
 compares the URL a counterparty invoked against the published URL, and two
 derivations mean two chances to disagree about a scheme, a port, or a trailing
 slash.

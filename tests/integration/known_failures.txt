@@ -29,9 +29,6 @@
 # --- Cluster A (salesagent-e30o7.1) ------------------------------------------------
 # A half-seeded tenant trips validate_setup_complete, which runs for every
 # create_media_buy caller now. Production is correct; seed the rows the gate reads.
-tests/integration/test_create_media_buy_behavioral.py::TestExtensionObligations::test_currency_not_supported_by_gam
-tests/integration/test_create_media_buy_behavioral.py::TestPostconditionObligations::test_error_response_contains_recovery_guidance
-tests/integration/test_create_media_buy_behavioral.py::TestProposalBasedObligations::test_proposal_based_product_validation
 
 # --- Cluster B (salesagent-e30o7.2) ------------------------------------------------
 # Production raises a typed AdCP error at a real raise site; the test expected a success
@@ -48,136 +45,94 @@ tests/integration/test_create_media_buy_behavioral.py::TestProposalBasedObligati
 # tests/bdd/conftest.py and observed on one transport, so they grade nothing yet, and the
 # two @invariant scenarios for zero budget and all-or-nothing persistence are absent from
 # the artifact entirely — absence there is not evidence of liveness either way.
-tests/integration/test_create_media_buy_behavioral.py::TestExtensionObligations::test_product_with_no_pricing_options
-tests/integration/test_create_media_buy_behavioral.py::TestExtensionObligations::test_proposal_budget_amount_zero_rejected
-tests/integration/test_create_media_buy_behavioral.py::TestMaxDailySpendExceeded::test_max_daily_spend_exceeded
-tests/integration/test_create_media_buy_behavioral.py::TestMaxDailySpendExceeded::test_max_daily_spend_same_day_flight_uses_min_one_day
-tests/integration/test_create_media_buy_behavioral.py::TestPostconditionObligations::test_system_state_unchanged_on_failure
-tests/integration/test_idempotency_race.py::TestRaceLoserPayloadRules::test_different_payload_under_a_stored_key_conflicts
 
 # --- Cluster C (salesagent-e30o7.3) ------------------------------------------------
 # The test holds a name production no longer has: TenantContext is a typed model not a
 # dict, format_validation_error lost context=, tenant.config is gone in favour of
 # per-field columns, and response.context is a dict on the wire.
-tests/integration/test_account_mcp_context_bypass.py::TestBDDTransportBypass::test_list_accounts_context_through_dispatch
-tests/integration/test_account_mcp_context_bypass.py::TestMCPContextThroughRealPipeline::test_mcp_pipeline_forwards_context_to_the_response
-tests/integration/test_creative_formats_validation_b.py::TestMultiFieldValidationErrors::test_multi_field_errors_formatted_with_per_field_messages
-tests/integration/test_creative_formats_validation_b.py::TestNonIntegerDimensionValues::test_formatted_error_identifies_dimension_field
-tests/integration/test_creative_sync_transport.py::TestGeminiKeyMissing::test_generative_no_gemini_key_fails[a2a]
-tests/integration/test_creative_sync_transport.py::TestGeminiKeyMissing::test_generative_no_gemini_key_fails[mcp]
-tests/integration/test_creative_sync_transport.py::TestGeminiKeyMissing::test_generative_no_gemini_key_fails[rest]
-tests/integration/test_tenant_utils.py::test_account_approval_mode_round_trips_through_tenant_context
 
 # --- Cluster D (salesagent-e30o7.4) ------------------------------------------------
 # The test hands a resolved identity to a wire transport, which has no spelling for one.
 # The obligation (a public tool serves a caller with no credential) is real and its
 # SUCCESS side has no BDD scenario — write that, then drop these.
-tests/integration/test_creative_formats_discovery.py::TestAuthOptionalForDiscovery::test_a2a_returns_formats_with_no_auth_token
-tests/integration/test_creative_formats_discovery.py::TestAuthOptionalForDiscovery::test_a2a_with_no_auth_token_via_call_via
-tests/integration/test_creative_formats_protocol.py::TestTenantContextFromA2AHeaders::test_a2a_different_tenants_get_different_catalogs
-tests/integration/test_creative_formats_protocol.py::TestTenantContextFromA2AHeaders::test_a2a_uses_tenant_from_identity
 
 # --- Cluster E (salesagent-e30o7.5) ------------------------------------------------
 # The fixture puts the database in a state the schema refuses — these fail inside
 # psycopg2 on a constraint, not on an assertion. Not an id-scheme problem: integration_db
 # creates a uuid-named database per test, so these are within-test collisions.
-tests/integration/test_idempotency_race.py::TestDegradedFallbackScopeRules::test_degraded_path_conflicts_on_mutated_payload
-tests/integration/test_idempotency_race.py::TestDegradedFallbackScopeRules::test_post_ttl_retry_rejects_idempotency_expired
-tests/integration/test_idempotency_race.py::TestRaceSeamThroughEntrypoint::test_retry_after_lost_cache_row_fails_closed_via_backstop
-tests/integration/test_media_buy_v3.py::TestCreateMediaBuyPrincipalResolution::test_principal_not_found_returns_error
 
 # --- Cluster F (salesagent-e30o7.6) ------------------------------------------------
 # The assertion target is a mock of OUR collaborator, which hard rule 5 forbids.
 # "expected call not found" is a refactor the test noticed, not a buyer-visible change;
 # grade the outcome instead.
-tests/integration/test_create_media_buy_behavioral.py::TestCreativeUploadFailure::test_creative_upload_failure_raises_tool_error
-tests/integration/test_create_media_buy_behavioral.py::TestInlineCreativeObligations::test_inline_creatives_uploaded_and_assigned
-tests/integration/test_create_media_buy_behavioral.py::TestMainFlowObligations::test_auto_approval_determination
 
 # --- Cluster G (salesagent-e30o7.7) ------------------------------------------------
 # An adapter that must hold no vendor client when unconfigured. "dry_run" is the tell:
 # that channel through create_media_buy is gone, so a test named for it may be asserting
-# a mode that no longer exists. Both remaining entries are exactly that: Kevel and
-# Triton now refuse to construct at all without credentials (base.py _require_config),
-# so "a dry-run adapter holds no vendor client" has no subject left to grade.
-#
-# Graduated: the three test_require_vendor_refuses_an_unconfigured_client entries. They
-# were ledgered because the test asserted the vendor name through exc.internal_detail as
-# a str, an API #1721 retyped to BaseException | None (the non-wire CAUSE). The merge
-# re-expressed the same obligation on exc.details.provider, which require_vendor really
-# populates from its argument (src/adapters/vendor_http.py:127) — so the entries are
-# stale, not passing vacuously.
-tests/integration/test_vendor_egress.py::test_a_dry_run_adapter_holds_no_vendor_client[kevel]
-tests/integration/test_vendor_egress.py::test_a_dry_run_adapter_holds_no_vendor_client[triton]
-#
-# Graduated: the test_webhook_refusal_reaches_both_seats sub-32 entry. It was ledgered
-# because the rehydration refusal's operator log line stringified exc.internal_detail,
-# which #1721 made pydantic's own ValidationError: that text names no scheme unless the
-# objection was about schemes, and for a short credential it renders input_value — the
-# BUYER'S CREDENTIAL — into an ERROR log. The line now composes from the refusal's own
-# structured facts (field + details.rejected_value, src/core/context_manager.py), which
-# is where from_stash deliberately puts the scheme. A production fix, not a stale entry.
+# a mode that no longer exists.
 
 # --- Cluster H (salesagent-e30o7.8) ------------------------------------------------
 # A response field, status or envelope production now produces differently. Spec question
 # first. ONE ENTRY HERE MAY BE A PRODUCTION DEFECT: test_no_token_rest_wire_emits_auth_missing
 # gets a SUCCESS payload, so if list_accounts really answers an unauthenticated REST
 # caller that is a bug in its own right, not a ledger entry. Check it first.
+
+# --- Cluster I (salesagent-091d8) --- GRADUATED, cluster empty -----------------------
+# Both entries are gone. They were the two template-scanner tests whose verdict depended on
+# ADCP_AUTH_TEST_MODE: the box set it, so create_app composed the test-credential login
+# blueprint and url_for('test_auth.test_auth') resolved; a laptop did not, so the same
+# tests failed. The flag, the blueprint and the endpoint are deleted, so there is no
+# url_for() left for the scanner to demand and no environment in which it can disagree.
+
+# --- Cluster J (GH #2189) -----------------------------------------------------------
+# Owned by an OPEN PR, not by this epic. These three publish their own liveness artifact
+# by re-running a slice of the BDD suite, so they grade a 9-scenario subrun and then
+# assert against it -- which is the mechanism #2189 ("read what the run published instead
+# of re-running it") removes. Verified to reproduce locally and on CI alike.
+#
+# I first left them out of the ledger on the grounds that they are not this epic's to fix.
+# That conflated fixing with recording: a test red for a known, owned reason is exactly
+# what a ledger is for, and excluding them left CI red for a reason no reader could find.
+# They come out when #2189 lands, and its author does not need to touch this file --
+# strict xfail means they fail here the moment they start passing.
+tests/integration/test_account_mcp_context_bypass.py::TestBDDTransportBypass::test_list_accounts_context_through_dispatch
+tests/integration/test_account_mcp_context_bypass.py::TestMCPContextThroughRealPipeline::test_mcp_pipeline_forwards_context_to_the_response
 tests/integration/test_admin_media_buy_reject_webhook.py::TestAdminMediaBuyRejectWebhook::test_approve_webhook_echoes_buyer_request_context
 tests/integration/test_bdd_dispatch_seam.py::TestCallViaForwardsReqWholeAndTheEnvUnpacksIt::test_a_format_ids_filter_still_reaches_the_tool[mcp]
 tests/integration/test_bdd_dispatch_seam.py::TestCallViaForwardsReqWholeAndTheEnvUnpacksIt::test_a_format_ids_filter_still_reaches_the_tool[rest]
+tests/integration/test_create_media_buy_behavioral.py::TestCreativeUploadFailure::test_creative_upload_failure_raises_tool_error
+tests/integration/test_create_media_buy_behavioral.py::TestExtensionObligations::test_currency_not_supported_by_gam
+tests/integration/test_create_media_buy_behavioral.py::TestExtensionObligations::test_product_with_no_pricing_options
+tests/integration/test_create_media_buy_behavioral.py::TestExtensionObligations::test_proposal_budget_amount_zero_rejected
+tests/integration/test_create_media_buy_behavioral.py::TestInlineCreativeObligations::test_inline_creatives_uploaded_and_assigned
+tests/integration/test_create_media_buy_behavioral.py::TestMainFlowObligations::test_auto_approval_determination
+tests/integration/test_create_media_buy_behavioral.py::TestMaxDailySpendExceeded::test_max_daily_spend_exceeded
+tests/integration/test_create_media_buy_behavioral.py::TestMaxDailySpendExceeded::test_max_daily_spend_same_day_flight_uses_min_one_day
+tests/integration/test_create_media_buy_behavioral.py::TestPostconditionObligations::test_error_response_contains_recovery_guidance
+tests/integration/test_create_media_buy_behavioral.py::TestPostconditionObligations::test_system_state_unchanged_on_failure
+tests/integration/test_create_media_buy_behavioral.py::TestProposalBasedObligations::test_proposal_based_product_validation
 tests/integration/test_create_media_buy_pending_approval_wire.py::test_config_approval_create_emits_submitted_not_confirmed
 tests/integration/test_create_media_buy_pending_approval_wire.py::test_submitted_create_replays_verbatim_without_second_workflow_step
+tests/integration/test_creative_formats_discovery.py::TestAuthOptionalForDiscovery::test_a2a_returns_formats_with_no_auth_token
+tests/integration/test_creative_formats_discovery.py::TestAuthOptionalForDiscovery::test_a2a_with_no_auth_token_via_call_via
+tests/integration/test_creative_formats_protocol.py::TestTenantContextFromA2AHeaders::test_a2a_different_tenants_get_different_catalogs
+tests/integration/test_creative_formats_protocol.py::TestTenantContextFromA2AHeaders::test_a2a_uses_tenant_from_identity
+tests/integration/test_creative_formats_validation_b.py::TestMultiFieldValidationErrors::test_multi_field_errors_formatted_with_per_field_messages
+tests/integration/test_creative_formats_validation_b.py::TestNonIntegerDimensionValues::test_formatted_error_identifies_dimension_field
+tests/integration/test_creative_sync_transport.py::TestGeminiKeyMissing::test_generative_no_gemini_key_fails[a2a]
+tests/integration/test_creative_sync_transport.py::TestGeminiKeyMissing::test_generative_no_gemini_key_fails[mcp]
+tests/integration/test_creative_sync_transport.py::TestGeminiKeyMissing::test_generative_no_gemini_key_fails[rest]
 tests/integration/test_delivery_poll_behavioral.py::TestPrincipalNotFoundReturnsError::test_principal_not_found_returns_error_in_response
 tests/integration/test_delivery_poll_behavioral.py::TestSimulationReachesFinalThroughRealHook::test_mock_time_in_flight_reports_active_and_scheduled
 tests/integration/test_delivery_poll_behavioral.py::TestSimulationReachesFinalThroughRealHook::test_mock_time_past_flight_reaches_completed_and_final
-tests/integration/test_harness_wire_response.py::TestWireResponseIsRealWire::test_rest_wire_response_is_the_http_body
+tests/integration/test_idempotency_race.py::TestDegradedFallbackScopeRules::test_degraded_path_conflicts_on_mutated_payload
+tests/integration/test_idempotency_race.py::TestDegradedFallbackScopeRules::test_post_ttl_retry_rejects_idempotency_expired
+tests/integration/test_idempotency_race.py::TestRaceLoserPayloadRules::test_different_payload_under_a_stored_key_conflicts
+tests/integration/test_idempotency_race.py::TestRaceSeamThroughEntrypoint::test_retry_after_lost_cache_row_fails_closed_via_backstop
 tests/integration/test_list_accounts_auth_missing_wire.py::TestListAccountsNoTokenEmitsAuthMissing::test_no_token_rest_wire_emits_auth_missing
 tests/integration/test_mcp_client_util.py::TestExhaustedFailureReachesTheRegistryClassified::test_seam_failure_surfaces_as_the_mapped_envelope[connection-level]
 tests/integration/test_mcp_client_util.py::TestExhaustedFailureReachesTheRegistryClassified::test_seam_failure_surfaces_as_the_mapped_envelope[tool-level]
-
-# --- Cluster I (salesagent-091d8) -- GRADUATED, no entries --------------------------
-# The two test_template_url_validation.py rows came off by fixing the SCANNER'S
-# COMPOSITION, not by setting a flag and not by weakening an assertion.
-#
-# What they actually recorded was a fork in the app under test: create_app registers the
-# test-credential login blueprint only when adcp_auth_test_mode and not is_production
-# (src/admin/app.py:351), the module built its app from the ambient environment, and the
-# regex scanners cannot see the {% if test_mode %} guard that login.html:77,87 puts around
-# url_for('test_auth.test_auth'). So the verdict reported which environment the run
-# happened in -- green on the box, red wherever the flag is off -- and a strict xfail on an
-# environment fact can only ever be red where it is enforced.
-#
-# The module now composes that conditional blueprint unconditionally, which removes the
-# fork and is the stricter of the two readings: every template branch is scanned, including
-# the ones that render only under test mode. Nothing is excused.
-#
-# This does NOT discharge salesagent-091d8. That issue asks how a first admin reaches a
-# fresh deployment before SSO exists -- a production composition question about the
-# test-credential blueprint's existence, which this scanner never graded and still does not.
-# It stays open.
-
-# --- Cluster J (GH #2189) -- GRADUATED, no entries ----------------------------------
-# Graduated at the #1721 re-merge: the three test_bdd_scenario_liveness_real_run.py
-# entries. #1721 ledgered them as red for a known, owned reason, and on that tree they
-# were: the module froze WHICH UC-006 and UC-005 storyboard scenarios are ledgered and
-# which are live, and five UC-006 scenarios had graduated out from under the frozen list
-# (production now derives the per-creative status from the row's review state and refuses
-# a policy-violating creative with the pin's PROVENANCE_* codes), so the module went on
-# demanding xfails that no longer happen.
-#
-# This branch fixed that in the same file: both graders now read the live routing map
-# (tests/bdd/conftest.py::_XFAIL_TAGS) instead of a frozen id list, so a graduation moves
-# the expectation in the commit that removes the route. That is a repair, not a rename --
-# the ledgered/live partition is still graded exactly, and the ledgered half must still
-# carry the routing map's own reason text verbatim.
-#
-# MEASURED on the merged tree, not inferred from the repair: all three XPASS(strict)
-# against this ledger and the module's fourth test passes
-# (3 failed [XPASS strict], 1 passed in 117.16s, real Postgres). Keeping the entries would
-# turn three green tests red, which is the one thing a strict ledger exists to prevent.
-# The pin in tests/unit/test_integration_ledger_state.py drops with them.
-#
-# #2189 ("read what the run published instead of re-running it") still owns the re-run
-# mechanism these tests use. Removing that mechanism is a refactor of passing tests, and a
-# ledger of failures is not where a refactor is tracked.
+tests/integration/test_media_buy_v3.py::TestCreateMediaBuyPrincipalResolution::test_principal_not_found_returns_error
+tests/integration/test_tenant_utils.py::test_account_approval_mode_round_trips_through_tenant_context
+tests/integration/test_vendor_egress.py::test_a_dry_run_adapter_holds_no_vendor_client[kevel]
+tests/integration/test_vendor_egress.py::test_a_dry_run_adapter_holds_no_vendor_client[triton]

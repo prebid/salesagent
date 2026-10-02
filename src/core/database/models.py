@@ -34,7 +34,7 @@ from sqlalchemy import (
     UniqueConstraint,
     text,
 )
-from sqlalchemy.orm import DeclarativeBase, Mapped, backref, mapped_column, relationship
+from sqlalchemy.orm import DeclarativeBase, Mapped, backref, mapped_column, relationship, validates
 from sqlalchemy.sql import func
 
 from src.core.billing_policy import BILLING_PARTY_VALUES
@@ -69,7 +69,11 @@ class Tenant(Base, JSONValidatorMixin):
     tenant_id: Mapped[str] = mapped_column(String(50), primary_key=True)
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     subdomain: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
-    virtual_host: Mapped[str | None] = mapped_column(Text, nullable=True)
+    virtual_host: Mapped[str] = mapped_column(Text, nullable=False)
+    #: ``virtual_host`` with its port removed, derived by ``hostname_of`` and stored so the
+    #: unique key below is a PLAIN COLUMN. Maintained by ``_fold_virtual_host``; never
+    #: assigned directly.
+    virtual_host_name: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
@@ -171,18 +175,18 @@ class Tenant(Base, JSONValidatorMixin):
 
     # Relationships
     products = relationship("Product", back_populates="tenant", cascade="all, delete-orphan")
-    # No `principals` collection. It had no reader, and a relationship traversal is the
+    # No `principals` collection. It has no reader, and a relationship traversal is the
     # one way to reach Principal rows without importing the class — which is what the
     # TID251 ban on `src.core.database.models.Principal` outside the four repository
     # modules exists to prevent. Deleting a tenant still deletes its principals: the
     # DATABASE does it, because alembic revision 390461e816ea sets the
-    # principals.tenant_id foreign key to ON DELETE CASCADE. Before that revision the
-    # migrated schema had NO ACTION — the `ondelete="CASCADE"` declared on the mapped
-    # column never altered the constraint `initial_schema` had already created — and this
-    # collection's `cascade="all, delete-orphan"` was the only thing deleting them, which
-    # is why the constraint had to change when the collection went. The hard-delete path
-    # in src/admin/tenant_management_api.py also deletes principals explicitly through
-    # PrincipalRepository.delete_all; that is now belt-and-braces, not the guarantee.
+    # principals.tenant_id foreign key to ON DELETE CASCADE. That revision is the
+    # guarantee, not the `ondelete="CASCADE"` on the mapped column — a declared ondelete
+    # does not alter a constraint an earlier migration already created, so the schema
+    # keeps whatever the creating revision wrote until a revision alters it. The
+    # hard-delete path in src/admin/tenant_management_api.py also deletes principals
+    # explicitly through PrincipalRepository.delete_all; that is belt-and-braces, not the
+    # guarantee.
     # Principal.tenant survives: the other direction yields a tenant, not a principal.
     users = relationship("User", back_populates="tenant", cascade="all, delete-orphan")
     accounts = relationship("Account", back_populates="tenant", cascade="all, delete-orphan")
@@ -216,11 +220,60 @@ class Tenant(Base, JSONValidatorMixin):
 
     __table_args__ = (
         Index("idx_subdomain", "subdomain"),
-        Index("ix_tenants_virtual_host", "virtual_host", unique=True),
+        # UNIQUE on the host's NAME, port aside, because that is the key routing resolves
+        # by: the same tenant answers at `host` and at `host:8443`
+        # (@T-TENANTID-host-with-port). A unique index on the RAW column admitted `host` and
+        # `host:8443` as two rows, and then BOTH matched `Host: host` while `.first()` chose
+        # between them with no ORDER BY. Indexing the expression the lookup compares makes
+        # that pair unrepresentable and the comparison sargable, which is the same fix.
+        Index("ux_tenants_virtual_host_name", "virtual_host_name", unique=True),
     )
 
     # JSON validators are inherited from JSONValidatorMixin
     # No need for duplicate validators here
+
+    @validates("virtual_host")
+    def _fold_virtual_host(self, _key: str, value: str | None) -> str:
+        """``virtual_host`` is PRESENT and ALL LOWERCASE, whatever the assignment was handed.
+
+        A tenant declares the host it is served at, always. There are exactly two ways to
+        name a tenant (#2191) — ``Host`` against this column, and the ``x-adcp-tenant``
+        literal id — so a tenant holding no host is not merely unpublishable, it is
+        UNREACHABLE by ``Host`` at all, addressable only through a header no proxy sends.
+        The alternative is a reader inventing a host on the tenant's behalf, which puts a
+        string nothing on the network serves onto that tenant's agent card (#1845).
+
+        Two mechanisms, and each catches what the other cannot. This hook fires on every
+        ASSIGNMENT — construction with the keyword, and the later ``tenant.virtual_host = x``
+        the settings form does — so a path that names the field gets an immediate ValueError
+        rather than a constraint violation at flush, and it is the only thing that can refuse
+        a blank string, since SQL has no opinion about ``"   "``. A path that omits the field
+        ENTIRELY never assigns, so no validator can see it; ``nullable=False`` is what refuses
+        that one, at flush. Neither alone makes a host-less tenant unrepresentable.
+
+        A ``Host`` names a DNS name and DNS is case-insensitive (RFC 7230 §5.4), so
+        ``Probe-Case.Example.test`` and ``probe-case.example.test`` are one host — but the
+        column is ``Text`` and SQL comparison is not case-folding, so storing the first
+        and being asked for the second is a miss. Such a row is invisible to every reader
+        that answers "which tenant serves this request", leaving the tenant reachable only
+        through the ``x-adcp-tenant`` literal-id path (#2191).
+
+        Normalising HERE rather than at each assignment is what makes the mismatch
+        unrepresentable: the admin settings form, the storyboard seed script and anything
+        added later all write through this hook, so there is no second spelling to keep in
+        step. The routing lookups in ``TenantLookupRepository`` fold the column as well,
+        which is what resolves a row that was stored mixed-case before this hook existed.
+        """
+        from src.core.http_utils import hostname_of, validate_virtual_host
+
+        try:
+            host = validate_virtual_host(value)
+        except ValueError as exc:
+            raise ValueError(f"tenant {self.tenant_id!r}: {exc}") from exc
+        # The hostname is derived here, by stdlib, and stored, so the unique key below is a
+        # plain column and nothing takes a URL apart in SQL.
+        self.virtual_host_name = hostname_of(host)
+        return host
 
     @property
     def gemini_api_key(self) -> str | None:
@@ -246,14 +299,45 @@ class Tenant(Base, JSONValidatorMixin):
         self._gemini_api_key = encrypt_api_key(value)
 
     @property
-    def primary_domain(self) -> str | None:
-        """Get primary domain for this tenant (virtual_host), or None if unconfigured.
+    def agent_url(self) -> str:
+        """Where this tenant's agent is reachable: its canonical ORIGIN, scheme included.
 
-        Never fabricates a <subdomain>.example.com placeholder (salesagent-piyo) --
-        callers (e.g. admin/blueprints/inventory_profiles.py) rely on None to signal
-        "no real domain configured" and refuse to proceed.
+        The ONE accessor. A caller that wants an agent URL reads this name, so "put a scheme
+        in front of a host" has no spelling left anywhere — a hardcoded ``https://`` has
+        nothing to concatenate from, because nobody reaches for the column (#1845). The
+        derivation stays in :func:`src.core.agent_identity.canonical_agent_url`, which this
+        delegates to: one place computes, one name reads.
+
+        Always a string, and never a fallback: ``virtual_host`` is mandatory, so a tenant
+        always has a URL. A caller wanting one for a tenant it does not hold is a different
+        bug than a missing default here.
         """
-        return self.virtual_host
+        from src.core.agent_identity import canonical_agent_url
+
+        return canonical_agent_url(self)
+
+    @property
+    def primary_domain(self) -> str:
+        """The publisher domain this tenant is known by — a HOSTNAME, never an origin.
+
+        ``virtual_host`` stores the origin the tenant is served at, port included, because
+        the agent card publishes that string and a card naming the wrong port sends every
+        client to a closed one. A publisher domain is a different part of the same fact:
+        AdCP constrains ``publisher_properties[].publisher_domain`` to a pattern admitting
+        no colon, so the port comes off here. Feeding an origin in fails every product of
+        such a tenant and answers INTERNAL_ERROR for the whole catalogue.
+
+        It is the ONE derivation of this value, so no caller can feed the colon through.
+
+        Always a string, because ``virtual_host`` is mandatory. Neither a fabricated domain
+        nor a ``None`` belongs here: a made-up host reaches buyers as the publisher's own
+        (#1845), and a ``None`` only moves the invention into every caller. A tenant declares
+        the host it is served at, so the domain it is known by follows from it and no caller
+        has anything to decide.
+        """
+        from src.core.http_utils import hostname_of
+
+        return hostname_of(self.virtual_host)
 
     @property
     def is_gam_tenant(self) -> bool:
@@ -276,9 +360,8 @@ class Tenant(Base, JSONValidatorMixin):
         return False
 
 
-# CreativeFormat model removed - table dropped in migration f2addf453200 (Oct 13, 2025)
-# Creative formats are now fetched from creative agents via AdCP protocol
-# Historical note: Previously stored format definitions locally, now use AdCP list_creative_formats
+# There is no CreativeFormat model and no formats table: creative formats are fetched from
+# creative agents over AdCP (list_creative_formats), never stored locally.
 
 
 class Product(Base, JSONValidatorMixin):
@@ -441,7 +524,8 @@ class Product(Base, JSONValidatorMixin):
         # Convert product's authorization to AdCP publisher_properties format
         if self.properties:
             return ensure_selection_type(self.properties)
-        elif self.property_ids:
+
+        if self.property_ids:
             # AdCP 2.0.0 by_id variant
             return [
                 {
@@ -450,7 +534,7 @@ class Product(Base, JSONValidatorMixin):
                     "selection_type": "by_id",
                 }
             ]
-        elif self.property_tags:
+        if self.property_tags:
             # AdCP 2.0.0 by_tag variant
             return [
                 {
@@ -468,31 +552,30 @@ class Product(Base, JSONValidatorMixin):
     def publisher_domain(self) -> str:
         """The domain this product's inventory is published under.
 
-        A DOMAIN, with no port. ``virtual_host`` is the tenant's own HOST and may carry one
-        (an e2e or staging front rarely sits on 443), but every consumer of this value reads
-        it as a bare domain: the pinned ``publisher_properties`` schema fixes a domain
-        pattern that a colon fails, and a verifier resolves the publisher's adagents.json at
-        ``https://<publisher_domain>/.well-known/adagents.json``, where a port is not part of
-        the name either. So the port is dropped rather than propagated — the alternative is a
-        value no schema accepts and no fetch resolves.
+        A DOMAIN, with no port. A tenant's ``virtual_host`` is the HOST it is served at and
+        may carry one (an e2e or staging front rarely sits on 443), but every consumer of
+        this value reads it as a bare domain: the pinned ``publisher_properties`` schema
+        fixes a domain pattern that a colon fails, and a verifier resolves the publisher's
+        adagents.json at ``https://<publisher_domain>/.well-known/adagents.json``, where a
+        port is not part of the name either. Measured: a tenant served at
+        ``storyboard.adcp.test:8443`` emitted that whole string, which knocked out the
+        matching member of the ``publisher_properties`` union and made ``get_products``
+        answer ``INTERNAL_ERROR`` for the entire catalogue — a 500-class answer to a
+        well-formed request, three frames from anything naming the port.
 
-        Measured: a tenant whose ``virtual_host`` was ``storyboard.adcp.test:8443`` produced
-        ``publisher_domain`` values that failed the pattern, which knocked out the matching
-        member of the ``publisher_properties`` union and surfaced as an ``INTERNAL_ERROR``
-        from ``get_products`` — a 500-class answer to a well-formed request, three frames
-        from anything naming the port.
+        The projection is ``Tenant.primary_domain``'s and is not repeated here: one name
+        drops the port, and this one names the publisher a PRODUCT is sold by. All three
+        ``effective_properties`` variants read this, so a fix cannot land on one of them and
+        leave the others emitting the unusable value.
 
-        One derivation, where there were three copies of it inline above. They were already
-        identical, and a fix applied to one of them would have left the other two emitting
-        the unusable value.
+        ``"unknown"`` covers exactly one case, an UNLOADED ``self.tenant`` — a different
+        question from the tenant having no domain, which cannot arise because
+        ``virtual_host`` is mandatory. What this never does is FABRICATE a domain: a
+        made-up host on a reserved TLD reaches a buyer as the publisher's own (#1845).
         """
-        if not (hasattr(self, "tenant") and self.tenant):
+        if not getattr(self, "tenant", None):
             return "unknown"
-        host = self.tenant.virtual_host or f"{self.tenant.subdomain}.example.com"
-        # rpartition, not split: an IPv6 literal authority is bracketed (``[::1]:8443``) and
-        # splitting on the first colon would truncate the address itself.
-        domain, _, port = host.rpartition(":")
-        return domain if domain and port.isdigit() else host
+        return self.tenant.primary_domain
 
     @property
     def effective_property_tags(self) -> list[str] | None:
@@ -713,8 +796,8 @@ class Principal(Base, JSONValidatorMixin):
         DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
     )
 
-    # Relationships. `tenant` has no back_populates any more: the collection it paired
-    # with, Tenant.principals, is deleted (salesagent-3cs7o.26). This direction stays —
+    # Relationships. `tenant` has no back_populates: Tenant declares no `principals`
+    # collection to pair with. This direction stays —
     # it yields a TENANT row from a principal, which is not the traversal the ban on
     # importing this class is about, and every ORM factory in tests/factories builds its
     # parent row through exactly this attribute.
@@ -1331,10 +1414,10 @@ class MediaBuy(Base):
 
         A row built with ``confirmed_at`` already set never passed
         ``_stamp_confirmation_if_needed``, and one built with a chosen ``revision``
-        never took part in the concurrency protocol the token exists for. Both were
-        previously reachable and only *detected*, by an AST fixture that had to know
-        every spelling of a constructor call; a spelling it did not know was a silent
-        hole, and ``MediaBuy(**kwargs)`` was one, because a double-star call carries a
+        never took part in the concurrency protocol the token exists for. Neither can be
+        caught by *detecting* the shape instead: an AST fixture has to know every spelling
+        of a constructor call, and a spelling it does not know is a silent hole.
+        ``MediaBuy(**kwargs)`` is one of those, because a double-star call carries a
         single keyword whose ``arg`` is ``None``.
 
         Raising here removes the shape instead of recognising it, so no spelling has to
@@ -1416,8 +1499,8 @@ class MediaBuy(Base):
     #: the advertiser's display name and joinedloads this through MediaBuyRepository. A
     #: tool must not traverse it — a tool reads `identity.principal`, and reaching a
     #: Principal row off a media buy is the traversal the TID251 ban on the ORM class
-    #: cannot see. Tenant.principals was deleted for that reason (salesagent-3cs7o.26);
-    #: this one survives because the admin UI genuinely reads it.
+    #: cannot see. This relationship exists only because the admin UI genuinely reads it;
+    #: ``Tenant`` declares no ``principals`` relationship for the same reason.
     principal = relationship(
         "Principal",
         foreign_keys=[tenant_id, principal_id],

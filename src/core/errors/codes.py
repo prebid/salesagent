@@ -155,6 +155,24 @@ class AppErrorCode(StrEnum):
             status=500,
         ),
     )
+    TENANT_UNDEFINED = (
+        "TENANT_UNDEFINED",
+        CodeEntry(
+            recovery=Recovery.TERMINAL,
+            suggestion=(
+                "Check the agent URL you dialled against the one this seller published to you; "
+                "this deployment answers for no seller at that address"
+            ),
+            message="No seller is served at the address this request named",
+            # 421 Misdirected Request (RFC 9110 S15.5.20): "the request was directed at a
+            # server that is unable or unwilling to produce an authoritative response for
+            # the target URI's origin". That is this condition exactly. NOT 500 -- nothing
+            # on the seller's side is broken for the case that actually dominates here, a
+            # caller naming a host this deployment serves for nobody -- and not 404, which
+            # would answer for a resource within a seller this request never identified.
+            status=421,
+        ),
+    )
     MEDIA_BUY_REJECTED = (
         "MEDIA_BUY_REJECTED",
         CodeEntry(

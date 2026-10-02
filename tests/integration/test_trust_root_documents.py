@@ -298,7 +298,7 @@ class TestCanonicalAgentUrlIsTheOneIdentity:
             env.setup_default_data()
             tenant, _ = _seed(env, "c")
 
-            assert _construct_agent_url(tenant.tenant_id, None) == canonical_agent_url(tenant), (
+            assert _construct_agent_url(tenant.tenant_id) == canonical_agent_url(tenant), (
                 "_construct_agent_url must return the canonical agent URL, not a PRODUCTION-flag / "
                 "localhost-port derivation of its own"
             )

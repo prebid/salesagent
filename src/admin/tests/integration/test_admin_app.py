@@ -4,7 +4,6 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-import src.core.config as config_module
 from src.admin.app import create_app
 
 
@@ -140,28 +139,6 @@ class TestAdminAppIntegration:
         mock_is_super_admin.return_value = True
         response = authenticated_client.get("/settings")
         assert response.status_code == 200
-
-    def test_test_auth_disabled_by_default(self, client):
-        """Test that test auth endpoints are disabled by default."""
-        response = client.post("/test/auth", data={"email": "test@example.com", "password": "test123"})
-        assert response.status_code == 404
-
-    def test_test_auth_enabled_with_env_var(self, monkeypatch):
-        """Test that test auth works when enabled.
-
-        The path is selected when the app is composed, so the app is built after the
-        environment is set; the cached settings object is dropped so the build reads it.
-        """
-        monkeypatch.setenv("ADCP_AUTH_TEST_MODE", "true")
-        monkeypatch.setattr(config_module, "_settings", None)
-        app = create_app({"TESTING": True, "SECRET_KEY": "test_secret_key", "WTF_CSRF_ENABLED": False})
-        client = app.test_client()
-
-        response = client.post("/test/auth", data={"email": "test_super_admin@example.com", "password": "test123"})
-        assert response.status_code == 302  # Redirect after login
-
-        with client.session_transaction() as sess:
-            assert sess.get("user") == "test_super_admin@example.com"
 
 
 class TestTenantBlueprintIntegration:

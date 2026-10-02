@@ -1,7 +1,7 @@
 # RCA: the DTO boundary — how many shapes a payload takes between wire and DB
 
-Repo `/Users/konst/projects/salesagent-1210`, branch `feature/spec-gaps-1210`.
-SDK: `adcp==6.6.0` at `/Users/konst/projects/salesagent-1210/.venv/lib/python3.12/site-packages/adcp`
+Repo `.`, branch `feature/spec-gaps-1210`.
+SDK: `adcp==6.6.0` at `.venv/lib/python3.12/site-packages/adcp`
 (`pyproject.toml:10`). Everything below is file:line + quoted source; anything I could not
 check is marked **unverified**.
 

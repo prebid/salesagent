@@ -216,6 +216,10 @@ def _seed_lifecycle_test_data():
             tenant_id=GAM_LIFECYCLE_TENANT_ID,
             name="GAM Lifecycle Test Tenant",
             subdomain="gam-lifecycle-test",
+            # Required (NOT NULL) and UNIQUE. This tenant is addressed by x-adcp-tenant and
+            # nothing routes to it by Host, so the value exists to satisfy the column; it is
+            # under *.adcp.test, the convention the storyboard seed established.
+            virtual_host="gam-lifecycle-test.adcp.test",
             created_at=datetime.now(UTC),
             updated_at=datetime.now(UTC),
             creative_auto_approve_threshold=0.8,

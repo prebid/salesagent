@@ -100,11 +100,22 @@ def init_db(exit_on_error=False):
             # Create default tenant
             from datetime import UTC, datetime
 
+            from src.core.agent_identity import deployment_virtual_host
+
+            # The deployment declares where it answers; see deployment_virtual_host. None
+            # means a production install declaring nothing, which gets no tenant rather than
+            # one holding a host it does not serve.
+            virtual_host = deployment_virtual_host()
+            if virtual_host is None:
+                print("⚠️  No default tenant created: set ADCP_AGENT_URL or SALES_AGENT_DOMAIN, then re-run.")
+                return
+
             now = datetime.now(UTC)
             default_tenant = Tenant(
                 tenant_id="default",
                 name="Default Publisher",
-                subdomain="default",  # Proper subdomain routing
+                subdomain="default",  # An internal identifier; virtual_host is what routes
+                virtual_host=virtual_host,
                 is_active=True,
                 billing_plan="standard",
                 ad_server="mock",

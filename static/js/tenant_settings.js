@@ -7,8 +7,7 @@
  * - data-active-adapter: Active adapter name
  * - data-a2a-port: A2A server port
  * - data-is-production: Production environment flag
- * - data-virtual-host: Virtual host for production
- * - data-subdomain: Subdomain for production
+ * - data-virtual-host: the host this tenant is served at
  */
 
 // Get configuration from data attributes
@@ -27,11 +26,24 @@ const config = (function() {
         a2aPort: configEl.dataset.a2aPort || '8091',
         mcpPort: configEl.dataset.mcpPort || '8080',
         isProduction: configEl.dataset.isProduction === 'true',
-        virtualHost: configEl.dataset.virtualHost || '',
-        subdomain: configEl.dataset.subdomain || '',
-        salesAgentDomain: configEl.dataset.salesAgentDomain || 'sales-agent.example.com'
+        virtualHost: configEl.dataset.virtualHost || ''
     };
 })();
+
+// The one place a client-facing origin is built. A tenant is served at the host it
+// declares (virtual_host) and nowhere else — the second origin derived from a
+// subdomain of SALES_AGENT_DOMAIN went with the subdomain strategy
+//. In production with no declared host there IS no URL to hand
+// out, so this returns null and the caller says so rather than naming a host nothing
+// serves.
+function agentOrigin(devPort) {
+    if (!config.isProduction) {
+        return `http://localhost:${devPort}`;
+    }
+    return config.virtualHost ? `https://${config.virtualHost}` : null;
+}
+
+const NO_DOMAIN_HINT = 'Configure this agent\'s domain in Settings before sharing a URL.';
 
 // Navigation
 document.querySelectorAll('.settings-nav-item').forEach(item => {
@@ -1037,13 +1049,11 @@ function checkTokenStatus() {
 
 // Generate A2A registration code
 function generateA2ACode() {
-    const agentUri = config.isProduction
-        ? `https://${config.virtualHost}`
-        : `http://localhost:${config.a2aPort}`;
-
-    const agentUriAlt = config.isProduction
-        ? `https://${config.subdomain}.${config.salesAgentDomain}`
-        : `http://localhost:${config.a2aPort}`;
+    const agentUri = agentOrigin(config.a2aPort);
+    if (!agentUri) {
+        document.getElementById('a2a-code-output').textContent = NO_DOMAIN_HINT;
+        return;
+    }
 
     const code = `
 # A2A Registration Code
@@ -1356,20 +1366,11 @@ function copyA2AConfig(principalId, principalName) {
         return;
     }
 
-    // Determine the A2A server URL (without /a2a suffix)
-    let a2aUrl;
-    if (config.isProduction) {
-        // Production: Use subdomain or virtual host
-        if (config.subdomain) {
-            a2aUrl = `https://${config.subdomain}.${config.salesAgentDomain}`;
-        } else if (config.virtualHost) {
-            a2aUrl = `https://${config.virtualHost}`;
-        } else {
-            a2aUrl = `https://${config.salesAgentDomain}`;
-        }
-    } else {
-        // Development: Use localhost with configured port
-        a2aUrl = `http://localhost:${config.a2aPort}`;
+    // The A2A server URL (without /a2a suffix)
+    const a2aUrl = agentOrigin(config.a2aPort);
+    if (!a2aUrl) {
+        alert(NO_DOMAIN_HINT);
+        return;
     }
 
     // Create the A2A configuration JSON with name field
@@ -1413,21 +1414,13 @@ function copyMCPConfig(principalId, principalName) {
         return;
     }
 
-    // Determine the MCP server URL
-    let mcpUrl;
-    if (config.isProduction) {
-        // Production: Use subdomain or virtual host
-        if (config.subdomain) {
-            mcpUrl = `https://${config.subdomain}.${config.salesAgentDomain}/mcp`;
-        } else if (config.virtualHost) {
-            mcpUrl = `https://${config.virtualHost}/mcp`;
-        } else {
-            mcpUrl = `https://${config.salesAgentDomain}/mcp`;
-        }
-    } else {
-        // Development: Use localhost with configured MCP port
-        mcpUrl = `http://localhost:${config.mcpPort}/mcp`;
+    // The MCP server URL
+    const mcpOrigin = agentOrigin(config.mcpPort);
+    if (!mcpOrigin) {
+        alert(NO_DOMAIN_HINT);
+        return;
     }
+    const mcpUrl = `${mcpOrigin}/mcp`;
 
     // Create the MCP configuration JSON with name field
     const mcpConfig = {

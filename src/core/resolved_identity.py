@@ -43,15 +43,22 @@ class TransportProtocol(StrEnum):
 
 
 class PublicIdentity(BaseModel):
-    """Whoever reached a PUBLIC tool: a resolved caller, or nobody.
+    """Whoever reached a PUBLIC tool: a resolved caller, or nobody. The TENANT is always there.
 
     The resolver builds one for a registry row that does not require a credential
     (``get_products``, ``list_creative_formats``, ``get_adcp_capabilities``). A presented
     credential that resolves fills ``principal``; an absent one leaves it ``None``, and the
     tool branches on that itself. A presented credential that does NOT resolve never reaches
     the tool: the resolver refuses it with AUTH_INVALID on every row, public or protected.
-    A protected tool never sees this type: it takes :class:`ResolvedIdentity`, whose fields
-    are not optional.
+    A protected tool never sees this type: it takes :class:`ResolvedIdentity`, whose
+    ``principal`` is not optional either.
+
+    Only the CALLER can be absent. ``tenant`` is required on this type, so no application
+    path holds an undefined tenant: a request naming no seller this deployment serves is
+    refused CONFIGURATION_ERROR before any identity is built (``_addressed_tenant``), and
+    ``identity_of`` refuses a stored id whose tenant does not load. That asymmetry is the
+    design: an anonymous buyer is a real caller of a public tool, a sellerless request is
+    not a request.
 
     Immutable after creation; the identity does not change during request processing.
     """
@@ -62,19 +69,22 @@ class PublicIdentity(BaseModel):
 
     # Both fields are ``InstanceOf``: an identity is BUILT from the resolved types, never
     # from a dict. Pydantic would otherwise coerce ``{"tenant_id": "d"}`` into a
-    # TenantContext (``strict=True`` does not refuse a dict for a nested model), and that
-    # coercion is how test code kept constructing identities from dicts after the type was
-    # made one type. A dict now fails validation at construction.
+    # TenantContext -- ``strict=True`` does not refuse a dict for a nested model -- so
+    # ``InstanceOf`` is what makes a dict fail validation at construction.
     #
     # The principal the credential resolved to, built once from the row the lookup
     # selected. None for the anonymous caller.
     principal: InstanceOf[Principal] | None = None
-    # The tenant the request names, its row loaded by the resolver. ONE type, never a
-    # dict: the annotation used to be ``Any``, commented "TenantContext | dict | None
-    # (transitional)", and that union is how dict-shaped tenant handling spread.
-    tenant: InstanceOf[TenantContext] | None = None
+    # The tenant the request names, its row loaded by the resolver. ONE type, never a dict.
+    #
+    # REQUIRED. There is no path in the application with an undefined tenant: each of the
+    # three construction sites resolves one or raises CONFIGURATION_ERROR first
+    # (``_addressed_tenant`` for a request, the explicit refusal in ``identity_of`` for
+    # stored-id work). An optional here would make every reader check for a ``None`` that
+    # cannot arrive; mypy refuses the construction instead.
+    tenant: InstanceOf[TenantContext]
     # No ``protocol`` field: the transport is a label the boundary holds for its own
-    # observability record (``invoke_tool``'s parameter), and nothing read it off the
+    # observability record (``invoke_tool``'s parameter), and nothing reads it off the
     # identity. A field with no reader on an identity built for stored-id work
     # (``identity_of``) could only claim a transport that never carried the request.
     #
@@ -88,17 +98,18 @@ class PublicIdentity(BaseModel):
         return self.principal.principal_id if self.principal is not None else None
 
     @property
-    def tenant_id(self) -> str | None:
-        return self.tenant.tenant_id if self.tenant is not None else None
+    def tenant_id(self) -> str:
+        return self.tenant.tenant_id
 
     def replay_scope(self) -> tuple[str, str, str | None] | None:
         """``(tenant_id, principal_id, account_id)`` the idempotency cache keys on, or None.
 
-        A caller that resolved no tenant or no principal has no scope to be cached under.
+        An ANONYMOUS caller has no scope to be cached under. Only the principal can be
+        absent -- the tenant is always resolved -- so that is the one question asked.
         Polymorphic rather than an ``isinstance`` at the boundary: the type that knows what
         it carries answers.
         """
-        if self.tenant is None or self.principal is None:
+        if self.principal is None:
             return None
         return self.tenant.tenant_id, self.principal.principal_id, None
 
@@ -122,17 +133,14 @@ class ResolvedIdentity(PublicIdentity):
     :class:`AccountIdentity` instead and never sees the None.
     """
 
+    # ``tenant`` is not redeclared: it is already required on the parent, so a redeclaration
+    # would only restate it. ``principal`` is the one this type narrows.
     principal: InstanceOf[Principal]
-    tenant: InstanceOf[TenantContext]
     account: InstanceOf[Account] | None = None
 
     @property
     def principal_id(self) -> str:
         return self.principal.principal_id
-
-    @property
-    def tenant_id(self) -> str:
-        return self.tenant.tenant_id
 
     def replay_scope(self) -> tuple[str, str, str | None]:
         return self.tenant_id, self.principal_id, self.account.account_id if self.account is not None else None
@@ -156,7 +164,7 @@ from src.core.http_utils import get_header_case_insensitive as _get_header_case_
 def _extract_auth_token(headers: Mapping[str, str]) -> str | None:
     """The Bearer value in ``Authorization``, or None when nothing was presented.
 
-    ``Authorization: Bearer`` only. The ``x-adcp-auth`` alias is gone: pinned 3.1.1
+    ``Authorization: Bearer`` only. The ``x-adcp-auth`` alias is NOT accepted: pinned 3.1.1
     L2/authentication.mdx:71 says the credential MUST be carried in ``Authorization`` and
     that sellers MUST NOT require non-canonical aliases, and :153 says the alias is not
     recognized on the A2A surface at all. Accepting it was explicitly optional, so
@@ -227,47 +235,43 @@ def _signature_credential(
 
 
 def _detect_tenant(headers: Mapping[str, str]) -> str | None:
-    """The tenant_id this request names, by four header strategies. NO row is loaded.
+    """The tenant_id this request NAMES, or ``None``. NO row is loaded.
 
     Identification only. The token check is scoped by tenant_id, so which tenant cannot be
     deferred; the row is loaded once by ``TenantContext.load`` after the tenant is known.
 
-    Every strategy used to call a ``get_tenant_by_*`` helper ending in
-    ``serialize_tenant_to_dict``, so identification loaded the entire row -- which
-    ``resolve_identity`` then discarded, re-querying it on first field access. One indexed
-    column per strategy instead.
+    TWO WAYS IN, and a request that uses neither names no seller:
 
-    Strategy order, unchanged:
-    1. Host header -> virtual host, then subdomain
-    2. x-adcp-tenant header -> subdomain, then the literal id
-    3. Apx-Incoming-Host -> virtual host
-    4. localhost -> the "default" tenant
+    1. ``Host`` -> ``tenants.virtual_host``. What a deployment resolves by, and what every
+       proxy in front of this app already forwards verbatim.
+    2. ``x-adcp-tenant`` -> the tenant_id, LITERALLY. For a caller addressing a tenant
+       explicitly rather than by the host it is served at: the test suites, the CLI, a
+       support tool. Unverified — an id naming no tenant fails at the principal lookup that
+       is scoped by it.
+
+    TWO means two, and a second spelling of either is not a redundancy: two readers of one
+    fact disagree, and then one request resolves to two different tenants depending on which
+    one asked. A proxy that has to rewrite the host does it BEFORE the app, so that what
+    arrives here is the ``Host``.
+
+    ``None`` means the request names no seller, and nothing downstream carries that state:
+    the sole caller, ``_addressed_tenant``, turns it into CONFIGURATION_ERROR, which the
+    pinned enum classifies ``terminal`` (BR-UC-010 T-UC-010-ext-a grades it). A protected
+    tool presenting no credential is refused AUTH_MISSING one step earlier, before detection
+    runs at all. Identification is the whole job here; answering with a tenant the request
+    never named would be worse than refusing.
+
+    Nothing in the pinned spec asks for any of this — a request is addressed to an agent's
+    URL, and the mapping from that to a tenant is the seller's own business — so these two
+    ways in are ours to choose, and two is the whole set.
     """
     from src.core.config_loader import tenant_id_for
 
     host = _get_header_case_insensitive(headers, "host") or ""
-
-    tenant_id = tenant_id_for(virtual_host=host)
-    if not tenant_id and "." in host:
-        subdomain = host.split(".")[0]
-        if subdomain not in ["localhost", "adcp-sales-agent", "www", "admin"]:
-            tenant_id = tenant_id_for(subdomain=subdomain)
+    tenant_id = tenant_id_for(virtual_host=host) if host else None
 
     if not tenant_id:
-        hint = _get_header_case_insensitive(headers, "x-adcp-tenant")
-        if hint:
-            # The hint is a subdomain when one matches, and otherwise taken as the id
-            # itself -- unverified, exactly as before. An id that names no tenant fails
-            # later, at the principal lookup that is scoped by it.
-            tenant_id = tenant_id_for(subdomain=hint) or hint
-
-    if not tenant_id:
-        apx_host = _get_header_case_insensitive(headers, "apx-incoming-host")
-        if apx_host:
-            tenant_id = tenant_id_for(virtual_host=apx_host)
-
-    if not tenant_id and host.split(":")[0] in ["localhost", "127.0.0.1", "localhost.localdomain"]:
-        tenant_id = tenant_id_for(subdomain="default")
+        tenant_id = _get_header_case_insensitive(headers, "x-adcp-tenant")
 
     return tenant_id
 
@@ -352,9 +356,7 @@ def _resolve_identity(
 
     The leading underscore is the design, not a style choice. This is the ONE identity
     resolution in the tree and ``src/core/tools/_boundary.invoke_tool`` is its only caller;
-    a transport that wanted to resolve its own has no public name to reach for. Four of them
-    used to, and they disagreed twice -- A2A refusing a credential on a public task that MCP
-    and REST served, and REST's discovery dependency hardcoding require_valid_token=False.
+    a transport that wanted to resolve its own has no public name to reach for.
     ``ruff-boundary.toml`` bans importing it outside the boundary, so the privacy is enforced
     at lint time rather than by convention.
 
@@ -397,8 +399,7 @@ def _resolve_identity(
 
     POSTCONDITION, relied on by every caller: when ``require_valid_token`` is True this
     either returns an identity with a resolved ``principal_id`` or raises. Callers do not
-    need their own "no token" or "no principal" guards, and the ones that had them have
-    been removed -- they were three transports answering one question three ways.
+    need their own "no token" or "no principal" guards.
 
     Both errors are typed only. Rendering them as HTTP -- 401 and a ``WWW-Authenticate``
     challenge -- is the transport's job, in its own framework's terms.
@@ -430,40 +431,42 @@ def _resolve_identity(
     presented_signature = _carries_signature(exchange)
 
     # Step 2: the seller this request addresses, identified from the host and loaded. The
-    # tenant comes first because a principal is a row in a tenant: a credential is only
-    # ever verified inside the tenant the request reached, never looked up across tenants.
+    # tenant comes first because a principal is a row in a tenant: a credential is only ever
+    # verified inside the tenant the request reached, never looked up across tenants.
     #
-    # IT ALSO COMES BEFORE EVERY REFUSAL, which is the ordering the composition rule forces
-    # and the one thing this function must not get wrong. security.mdx @ v3.1.1 :1268 makes
-    # ``request_signature_required`` the answer an UNAUTHENTICATED caller earns on a
-    # ``required_for`` operation, and "unauthenticated" is defined at :1224 to include a
-    # caller presenting a bearer this seller does not accept. Whether the operation is in
-    # that bucket is SELLER data, so it cannot be known before the tenant row is read --
-    # which is exactly why the ASGI middleware #1291 replaced resolved its own tenant. The
-    # merge that folded the middleware into this function dropped that ordering, and
-    # ``negative/001``/``negative/027`` of the pinned conformance corpus caught it: both were
-    # answered on the bearer (AUTH_MISSING / AUTH_INVALID) with the checklist never run.
+    # IT ALSO COMES BEFORE EVERY REFUSAL, which is the ordering the composition rule forces.
+    # security.mdx @ v3.1.1 :1268 makes ``request_signature_required`` the answer an
+    # UNAUTHENTICATED caller earns on a ``required_for`` operation, and "unauthenticated" is
+    # defined at :1224 to include a caller presenting a bearer this seller does not accept.
+    # Whether the operation is in that bucket is SELLER data, so it cannot be known before the
+    # tenant row is read. ``negative/001`` and ``negative/027`` of the pinned conformance
+    # corpus grade it: both are answered on the bearer, with the checklist never run, when a
+    # refusal precedes the lookup.
     #
-    # The cost this pays is a tenant lookup for an anonymous caller, which the earlier
-    # ordering avoided. That saving was never available to a seller that enforces signing:
-    # the posture has to be read to answer the request at all.
-    tenant_id = _detect_tenant(headers)
-    tenant: TenantContext | None = TenantContext.load(tenant_id) if tenant_id else None
+    # It RAISES rather than returning None -- a request naming no seller this deployment
+    # serves gets CONFIGURATION_ERROR -- so every step below has a tenant, and none of them
+    # checks for one. That refusal is the same whether or not the request carried a bearer or
+    # a signature: a deployment that cannot tell which seller a request is for has nothing to
+    # verify a credential against.
+    #
+    # The cost is a tenant lookup for an anonymous caller. A seller that enforces signing
+    # never had that saving available: the posture has to be read to answer the request.
+    tenant = _addressed_tenant(headers)
 
     # Step 3: the SELLER's policy. A public tool's row does not require a credential, but
     # the tenant it addresses may (brand_manifest_policy "require_auth" on get_products,
     # BR-UC-001 INV-1). The policy is seller data, so it can only be asked once the tenant
-    # is loaded; the answer is the same AUTH_MISSING the row-level check mints below.
-    if not require_valid_token and tenant is not None and credential_required_for is not None:
+    # is loaded; the answer is the same AUTH_MISSING the row-level check mints above.
+    if not require_valid_token and credential_required_for is not None:
         require_valid_token = credential_required_for(tenant)
 
-    # Step 4: the token to its principal, inside that tenant. No tenant, no lookup.
+    # Step 4: the token to its principal, inside that tenant.
     #
     # Resolved, NOT yet refused on. ``bearer_rejected`` is latched here rather than re-read
     # after step 4b, because a signature may establish a principal below and the AUTH_INVALID
     # question is about the BEARER alone.
     principal: Principal | None = None
-    if auth_token and tenant is not None:
+    if auth_token:
         principal = get_principal_from_token(auth_token, tenant.tenant_id)
     bearer_rejected = bool(auth_token) and principal is None
 
@@ -492,11 +495,11 @@ def _resolve_identity(
     # The pinned enum (3.1/enums/error-code.json, AUTH_INVALID) keys the MUST on one thing --
     # "an `Authorization` header was present but verification failed" -- and names no task.
     # The public-task carve-out in compliance/3.1.1/universal/security.yaml is "return 200
-    # WITHOUT credentials by design": it covers the absent credential, which the check below
+    # WITHOUT credentials by design": it covers the absent credential, which the check above
     # lets through, and says nothing about a presented one. A public tool used to take a
     # rejected credential as absent and serve the caller anonymously; the storyboard's own
     # narrative calls an agent that 200s a bad credential one that "is ignoring credentials
-    # entirely". (No tenant means no lookup ran, which is the same outcome: nothing resolved.)
+    # entirely".
     if bearer_rejected:
         from src.core.exceptions import AdCPAuthenticationError
 
@@ -511,8 +514,9 @@ def _resolve_identity(
     # One check rather than the two this used to be (the row's declaration, then the seller's
     # policy): ``require_valid_token`` now carries both by the time it is read.
     #
-    # ``require_valid_token`` is the TOOL's declaration (``ToolSpec.auth``) travelling down
-    # from the boundary, never a transport's own opinion. A discovery tool passes False and
+    # ``require_valid_token`` is the TOOL's declaration, derived by
+    # ``ToolSpec.requires_credential()``, travelling down from the boundary and never a
+    # transport's own opinion. A discovery tool passes False and
     # still resolves anonymously. It is here so that all transports get it, MCP included --
     # MCP had none, carried a principal-less identity into the tool, and _impl code grew its
     # own AdCPAuthRequiredError raises to compensate.
@@ -541,7 +545,7 @@ def _resolve_identity(
     # this is the one place the postcondition can still fail -- the signature verified but
     # named nobody this seller onboarded, which is a credential that did not resolve. Same
     # answer as a token that did not: AUTH_INVALID.
-    if tenant is None or principal is None:
+    if principal is None:
         from src.core.exceptions import AdCPAuthenticationError
 
         raise AdCPAuthenticationError()
@@ -590,3 +594,74 @@ def identity_of(tenant_id: str, principal_id: str, account_id: str | None = None
         return ResolvedIdentity(principal=principal, tenant=tenant)
     account_ref = AccountReference(root=AccountReferenceById(account_id=account_id))
     return AccountIdentity(principal=principal, tenant=tenant, account=_load_account(account_ref, tenant_id, principal))
+
+
+def _addressed_tenant(headers: Mapping[str, str]) -> TenantContext:
+    """The seller this request addresses, or a refusal.
+
+    There are two ways to say which seller a request is for -- the ``Host`` the seller
+    declares it is served at, and an explicit ``x-adcp-tenant``. A request that does
+    neither, or that names something this deployment does not serve, is not a request with
+    a missing field: there is no seller to apply any rule of, including the rule that would
+    reject it. So it is refused here, at the point the question is asked, with the code the
+    pinned enum gives a seller-side deployment fault -- ``CONFIGURATION_ERROR``, which that
+    enum classifies ``terminal``: the buyer has no lever, and MUST NOT auto-retry.
+
+    What the request named travels in ``internal_detail`` -- the server's record -- and not
+    in the wire envelope. ``details.rejected_value`` is defined by ``core/error.json`` as
+    "the offending value the buyer supplied", and putting a buyer-supplied value inside an
+    envelope whose recovery says the buyer has no lever makes the envelope argue with
+    itself; the pinned error-handling text additionally gives this code no ``details``
+    shape. The operator still gets the host or tenant that reached a deployment serving
+    neither, which is who the value was ever for.
+    """
+    from src.core.exceptions import AdCPTenantUndefinedError
+
+    tenant_id = _detect_tenant(headers)
+    tenant = TenantContext.load(tenant_id) if tenant_id else None
+    if tenant is None:
+        named = _get_header_case_insensitive(headers, "x-adcp-tenant") or _get_header_case_insensitive(headers, "host")
+        # Raised FROM the LookupError, not handed to ``internal_detail``: the boundary logs
+        # ``exc_info=error``, which formats the error's ``__cause__`` chain, and an attribute
+        # is not in that chain -- so the attribute form writes the host nowhere at all. The
+        # operator needs the address that was dialled; the buyer must not be told it back.
+        raise AdCPTenantUndefinedError() from LookupError(
+            f"request named {named!r}; this deployment serves no tenant at it"
+        )
+    return tenant
+
+
+def public_identity_for(headers: Mapping[str, str]) -> PublicIdentity:
+    """The tenant a request names, with no caller. For a root endpoint outside ``serve``.
+
+    The third sanctioned entry into this module's one resolution, after
+    ``_resolve_identity`` (a tool request) and ``identity_of`` (server-initiated work).
+    It exists for the A2A agent card, served at the one ROOT path ``AGENT_CARD_PATH``
+    declares -- ``/.well-known/agent-card.json``, which A2A fixes (§8.2, §14.3). The card
+    answers before any AdCP exchange, and therefore cannot be a
+    registry row: it carries no AdCP envelope, and a row for it would advertise itself as
+    a skill on the card it serves. What it does need is the same answer to "which tenant
+    is this request for" that every tool gets -- so it asks here rather than deriving one
+    of its own.
+
+    A derivation of its own would disagree with this one. A request may name its tenant by
+    ``x-adcp-tenant`` alone -- a storyboard run does, because a token only verifies inside a
+    tenant -- so a card reading the ``Host`` by itself describes a different seller than
+    every tool call on the same request, and the agent disagrees with itself about its own
+    identity. ``ruff-boundary.toml`` names this disease on ``_detect_tenant``: "a caller
+    that detects its own tenant is a second tenant resolver, and the two WILL disagree".
+
+    NO CREDENTIAL IS READ, and that is deliberate rather than a simplification.
+    ``_resolve_identity`` raises ``AUTH_INVALID`` for a credential that was presented and
+    rejected, even where none is required. Routed through it, a client holding a stale
+    token would be answered 401 by the card -- the one document that tells it which
+    version to speak and where to send a request, i.e. how to authenticate at all. So
+    discovery stays anonymous: the returned identity's ``principal`` is always ``None``,
+    and a caller wanting the principal too is making a tool call and goes through
+    ``serve``.
+
+    A request naming no tenant this deployment serves is REFUSED, by the same
+    ``_addressed_tenant`` every tool goes through: the caller gets CONFIGURATION_ERROR
+    rather than a card describing nobody.
+    """
+    return PublicIdentity(principal=None, tenant=_addressed_tenant(headers))

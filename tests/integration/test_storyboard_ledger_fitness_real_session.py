@@ -80,10 +80,8 @@ pytestmark = [pytest.mark.integration]
 LEDGER = LEDGER_PATH
 
 # The nested-session rig (which module is collected, the runner stub, the
-# outcome parser) lives in ``tests/helpers/storyboard_session.py``: the
-# collection-gate grader
-# (``tests/integration/test_storyboard_collection_gate_real_session.py``) drives
-# the same sessions, and two copies of it would be two things to keep true.
+# outcome parser) lives in ``tests/helpers/storyboard_session.py``, so a second
+# grader driving the same sessions shares it instead of keeping a copy true.
 _SYNTHETIC_REASON = "synthetic failure injected by the ledger-fitness grader"
 
 # Bundle materialization's last resort is an HTTPS download of the pinned release
@@ -149,11 +147,11 @@ def _write_ledger(tmp_path: Path, entries: list[ledger.LedgerCheckId]) -> dict[s
 def test_production_ledger_matches_its_pin() -> None:
     """The production ledger still agrees with ``EXPECTED_LEDGER``.
 
-    The cases below no longer read that file, so nothing else in this module would
-    notice it drifting from its pin. Comparing sets, not lengths, so the failure names
-    the entries that moved instead of just the arithmetic. Both sides as NODEIDs:
-    ``LedgerCheckId.format()`` emits the bracket CONTENT (``mcp::core::…``), while
-    ``EXPECTED_LEDGER`` holds full pytest nodeids.
+    The cases below read a ledger of their own, so nothing else in this module would
+    notice the production file drifting from its pin. Comparing sets, not lengths, so the
+    failure names the entries that moved instead of just the arithmetic. Both sides as
+    NODEIDs: ``LedgerCheckId.format()`` emits the bracket CONTENT (``mcp::core::…``),
+    while ``EXPECTED_LEDGER`` holds full pytest nodeids.
     """
     actual = load_ledger_nodeids(LEDGER)
     only_ledger = sorted(actual - EXPECTED_LEDGER)
@@ -180,10 +178,10 @@ def _run_storyboard_session(
     supplied per case rather than one of them being ambient.
 
     Unconfigured means the pinned bundle does not RESOLVE, so the two overrides point
-    at a path that does not exist. Removing them instead would no longer work: the
-    conformance gate derives the paths when they are unset, and the derivation finds
-    the in-repo bundle that CI extracts -- the nested session would flip to configured
-    and shell out toward an agent that is not there.
+    at a path that does not exist. Removing them instead does not work: the conformance
+    gate derives the paths when they are unset, and the derivation finds the in-repo
+    bundle that CI extracts -- the nested session would flip to configured and shell out
+    toward an agent that is not there.
 
     Both branches stub bundle MATERIALIZATION, whose last resort is an HTTPS fetch of
     the pinned release asset. Unstubbed, the unconfigured case would reach the network

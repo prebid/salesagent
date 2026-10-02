@@ -192,6 +192,8 @@ class TestDatabaseHealthIntegration:
                     tenant_id=f"perf_test_tenant_{i}",
                     name=f"Performance Test Tenant {i}",
                     subdomain=f"perf-test-{i}",
+                    # Required (NOT NULL) and UNIQUE. Nothing routes to this host; it exists to satisfy the column.
+                    virtual_host=f"perf-test-{i}.adcp.test",
                     billing_plan="test",
                     created_at=now,
                     updated_at=now,

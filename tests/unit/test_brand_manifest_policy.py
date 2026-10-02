@@ -21,16 +21,17 @@ from tests.factories.principal import PrincipalFactory
 logger = logging.getLogger(__name__)
 
 
-def _make_identity(principal_id=None, tenant=None):
+def _make_identity(principal_id, tenant):
     """The identity a get_products call arrives with.
 
     ``get_products`` is a PUBLIC tool, so it takes a ``PublicIdentity``: whoever reached
     it, or nobody. ``principal_id=None`` is the anonymous caller — a principal-less
-    identity, not a ``ResolvedIdentity`` whose id is None.
+    identity, not a ``ResolvedIdentity`` whose id is None. *tenant* has no default,
+    because the type has none: there is no tenant-less identity to build.
     """
     return PrincipalFactory.make_public_identity(
         principal_id=principal_id,
-        tenant_id=tenant.get("tenant_id") if tenant else None,
+        tenant_id=tenant["tenant_id"],
         tenant=tenant,
     )
 
@@ -153,23 +154,17 @@ async def test_require_brand_policy_accepts_with_brand_manifest():
         assert response is not None
 
 
-# test_require_auth_policy_rejects_no_auth is REMOVED. It built an anonymous identity
-# against a tenant whose brand_manifest_policy is "require_auth" and asserted
-# _get_products_impl raised AdCPAuthenticationError itself.
-#
-# Neither half is constructible now. The anonymous caller of a public tool is a
-# PublicIdentity, not a ResolvedIdentity with a None principal -- ResolvedIdentity.principal
-# is a required field -- and the seller policy is no longer read here at all:
-# src/core/tools/products.py:214 says so in as many words, and the refusal is minted by the
-# resolver, which asks ToolSpec.requires_credential(tenant) once the tenant row is loaded
-# (registry.py:195). ruff-boundary.toml bans raising AUTH_MISSING / AUTH_INVALID anywhere
-# but the resolver, so this implementation could not raise it if a guard were written back in.
+# The "require_auth" refusal is NOT gradeable at this level, and no test here attempts it.
+# The anonymous caller of a public tool is a PublicIdentity, not a ResolvedIdentity with a
+# None principal (ResolvedIdentity.principal is a required field), and _get_products_impl
+# does not read the seller policy at all: the refusal is minted by the resolver, which asks
+# ToolSpec.requires_credential(tenant) once the tenant row is loaded (registry.py:195).
+# ruff-boundary.toml bans raising AUTH_MISSING / AUTH_INVALID anywhere but the resolver, so
+# this implementation could not raise it even if a guard were written here.
 #
 # The obligation (BR-UC-001 INV-1: a require_auth seller makes get_products need a caller)
 # is graded where it is decided -- the resolver, for every transport at once -- by the
 # transport-blind auth scenarios asserting the AUTH_MISSING wire envelope.
-#
-# Same removal, same reason, as tests/unit/test_media_buy.py:3869.
 
 
 @pytest.mark.asyncio

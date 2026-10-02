@@ -70,27 +70,21 @@ def _auth_session(client, tenant_id):
         sess["test_tenant_id"] = tenant_id
 
 
-_TEMPLATE_GAP_REASON = (
-    "Production gap: authorized_properties_list.html template does not exist, so "
-    "src/admin/blueprints/authorized_properties.py:list_authorized_properties raises "
-    "TemplateNotFound, which is swallowed by the route's broad except clause "
-    "(authorized_properties.py:327-330) and 302-redirects to the tenant dashboard. "
-    "See follow-up: feat: implement authorized_properties_list page (server-side rendering). "
-    "Will xpass once the template lands."
-)
+# Graduated: authorized_properties_list.html now exists, so the route renders instead of
+# raising TemplateNotFound into its own broad except and 302-ing to the dashboard. The page
+# was unreachable AND broken — no template in the tree and no link to it — which the xfail
+# recorded as "will xpass once the template lands".
 
 
 class TestAuthorizedPropertiesListPage:
     """Test the authorized properties list page."""
 
-    @pytest.mark.xfail(strict=True, reason=_TEMPLATE_GAP_REASON)
     def test_list_page_returns_200(self, client, test_tenant):
         """GET /tenant/<tid>/authorized-properties returns 200."""
         _auth_session(client, test_tenant)
         response = client.get(f"/tenant/{test_tenant}/authorized-properties")
         assert response.status_code == 200
 
-    @pytest.mark.xfail(strict=True, reason=_TEMPLATE_GAP_REASON)
     def test_list_page_shows_existing_property(self, client, test_tenant):
         """After creating a property, the list page shows it."""
         _auth_session(client, test_tenant)

@@ -44,7 +44,7 @@ When complete, services are running at **http://localhost:8000**:
 | A2A Server | http://localhost:8000/a2a |
 | Health Check | http://localhost:8000/health |
 
-**Test login:** Click "Log in to Dashboard" on the login page (password: `test123`).
+**Log in:** with Google, as one of the `SUPER_ADMIN_EMAILS` addresses. There is no password login.
 
 ## Manual Setup
 
@@ -188,7 +188,6 @@ The `.env` file is created from `.env.template` during setup. Key variables:
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `ADCP_AUTH_TEST_MODE` | `true` | Enables test login (disable for production) |
 | `CREATE_DEMO_TENANT` | `false` | Creates sample data on first startup |
 | `ENVIRONMENT` | `development` | `development` = strict validation, `production` = lenient |
 | `CONDUCTOR_PORT` | `8000` | Nginx proxy port |

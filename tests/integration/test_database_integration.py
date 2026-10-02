@@ -8,8 +8,6 @@ import psycopg2
 import pytest
 from psycopg2.extras import DictCursor
 
-from tests.factories.principal import plaintext_token_for
-
 # Get database URL from environment
 DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql://adcp_user:secure_password_change_me@localhost:5479/adcp")
 
@@ -32,23 +30,10 @@ def test_settings_queries(integration_db):
 
     # Create test data first
     from src.core.database.database_session import get_db_session
-    from src.core.database.models import Principal, Tenant
+    from tests.utils.database_helpers import seed_tenant_with_principal
 
     with get_db_session() as session:
-        # Create tenant
-        tenant = Tenant(tenant_id=tenant_id, name="Test Tenant", subdomain="test-tenant")
-        session.add(tenant)
-
-        # Create principal
-        principal = Principal.with_token(
-            plaintext_token_for("test_principal"),
-            tenant_id=tenant_id,
-            principal_id="test_principal",
-            name="Test Principal",
-            platform_mappings={"mock": {"advertiser_id": "test-advertiser"}},
-        )
-        session.add(principal)
-        session.commit()
+        seed_tenant_with_principal(session, tenant_id)
 
     try:
         # Connect to real database

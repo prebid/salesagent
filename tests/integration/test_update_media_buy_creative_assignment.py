@@ -25,10 +25,12 @@ def test_update_media_buy_assigns_creatives_to_package(integration_db):
 
     with get_db_session() as session:
         # Create tenant
+        # Required (NOT NULL) and UNIQUE. Nothing routes to this host; it exists to satisfy the column.
         tenant = Tenant(
             tenant_id="test_tenant",
             name="Test Org",
             subdomain="test",
+            virtual_host="test-tenant.adcp.test",
         )
         session.add(tenant)
 
@@ -186,6 +188,7 @@ def test_update_media_buy_replaces_creatives(integration_db):
             tenant_id="test_tenant",
             name="Test Org",
             subdomain="test",
+            virtual_host="test-tenant.adcp.test",
         )
         session.add(tenant)
 
@@ -364,6 +367,7 @@ def test_creative_assignments_with_weights(integration_db):
             tenant_id="test_tenant",
             name="Test Org",
             subdomain="test",
+            virtual_host="test-tenant.adcp.test",
         )
         session.add(tenant)
 
@@ -519,7 +523,12 @@ def test_creative_assignments_replaces_all(integration_db):
     from src.core.database.models import MediaBuy, Principal, Product, PropertyTag, Tenant
 
     with get_db_session() as session:
-        tenant = Tenant(tenant_id="test_tenant", name="Test Org", subdomain="test")
+        tenant = Tenant(
+            tenant_id="test_tenant",
+            name="Test Org",
+            subdomain="test",
+            virtual_host="test-tenant.adcp.test",
+        )
         session.add(tenant)
 
         property_tag = PropertyTag(

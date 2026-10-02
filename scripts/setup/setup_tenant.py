@@ -58,6 +58,7 @@ def create_tenant(args):
             tenant_id=tenant_id,
             name=args.name,
             subdomain=subdomain,
+            virtual_host=args.virtual_host,
             ad_server=args.adapter,
             enable_axe_signals=True,
             auto_approve_format_ids=auto_approve_format_ids,
@@ -208,6 +209,14 @@ def main():
     parser.add_argument("name", help='Tenant display name (e.g., "New York Times")')
     parser.add_argument("--tenant-id", help="Tenant ID (default: generated from name)")
     parser.add_argument("--subdomain", help="Subdomain (default: same as tenant ID)")
+    parser.add_argument(
+        "--virtual-host",
+        required=True,
+        help="The host this tenant is served at, port included when not the scheme's "
+        'default (e.g. "nytimes.example.com" or "nytimes.example.com:8443"). The agent '
+        "card publishes this string verbatim, and it is the only way a request can name "
+        "the tenant.",
+    )
     parser.add_argument(
         "--adapter", choices=["mock", "google_ad_manager", "kevel"], default="mock", help="Primary ad server adapter"
     )

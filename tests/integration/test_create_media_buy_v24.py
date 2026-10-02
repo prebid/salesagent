@@ -74,6 +74,8 @@ class TestCreateMediaBuyV24Format:
                 tenant_id="test_tenant_v24",
                 name="Test V24 Tenant",
                 subdomain="testv24",
+                # Required (NOT NULL) and UNIQUE. Nothing routes to this host; it exists to satisfy the column.
+                virtual_host="test-tenant-v24.adcp.test",
                 ad_server="mock",
                 is_active=True,
                 human_review_required=False,

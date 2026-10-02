@@ -89,7 +89,7 @@ _DUPLICATE_THRESHOLD = 2
 # grade the adapter channel alone, which its "advisory warning" twin does not. Both were listed
 # above as claims a shared body failed to distinguish -- the bodies now distinguish them, so
 # the groups are gone rather than merged.
-_DUPLICATE_GROUP_BASELINE = 22
+_DUPLICATE_GROUP_BASELINE = 21
 
 # Steps exempt from the 3+ identical-body scan (load-bearing: each suppresses a
 # cluster that would otherwise fail test_no_excessive_duplicate_step_bodies).
@@ -114,7 +114,7 @@ _ALLOWED_DUPLICATES: set[str] = set()
 #
 # So the MEMBER count is ratcheted too, two-sided, in the same shape. Together the two numbers
 # carry both sides' obligation: no new group, and no group growing.
-_DUPLICATE_MEMBER_BASELINE = 45
+_DUPLICATE_MEMBER_BASELINE = 43
 
 
 def _is_step_decorated(func: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:

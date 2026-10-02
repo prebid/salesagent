@@ -26,6 +26,7 @@ from src.core.schemas import UpdateMediaBuyRequest, UpdateMediaBuyResponse, Upda
 from src.core.schemas.account import Account
 from src.core.tools.media_buy_update import _update_media_buy_impl
 from tests.factories.principal import PrincipalFactory, plaintext_token_for
+from tests.utils.database_helpers import vhost_for
 
 # Note: _verify_principal is now internal to _update_media_buy_impl
 # Tests that used _verify_principal directly will need to test through the public API
@@ -59,6 +60,7 @@ def test_tenant_setup(integration_db):
             tenant_id=tenant_id,
             name="Test Update Persist Tenant",
             subdomain="test-update-persist",
+            virtual_host=vhost_for(tenant_id),
             ad_server="mock",
             is_active=True,
             human_review_required=False,

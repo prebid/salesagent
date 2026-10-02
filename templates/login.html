@@ -4,15 +4,6 @@
 
 {% block content %}
 <div class="card" style="max-width: 400px; margin: 4rem auto; text-align: center;">
-    {% if test_mode %}
-    <div style="background: #2563eb; color: white; padding: 1rem; margin: -2rem -2rem 1rem -2rem; border-radius: 4px 4px 0 0;">
-        {% if single_tenant_mode %}
-        Setup Mode - Configure authentication below
-        {% else %}
-        Setup Mode - Configure OAuth to enable production login
-        {% endif %}
-    </div>
-    {% endif %}
 
     {% if tenant_context %}
         <h2>{{ tenant_name or tenant_context }} Sales Agent Dashboard</h2>
@@ -37,12 +28,12 @@
         {% endif %}
     {% endwith %}
 
-    {% if not test_mode and not oauth_configured %}
+    {% if not oauth_configured %}
     <div style="margin: 2rem 0; padding: 1.5rem; background: #fff3cd; border-radius: 4px;">
         <p style="margin: 0; color: #856404;">
             <strong>Authentication not configured.</strong><br>
-            Set <code>ADCP_AUTH_TEST_MODE=true</code> for test access, or configure OAuth credentials
-            (<code>GOOGLE_CLIENT_ID</code>/<code>GOOGLE_CLIENT_SECRET</code> or generic OIDC).
+            Configure OAuth credentials (<code>GOOGLE_CLIENT_ID</code>/<code>GOOGLE_CLIENT_SECRET</code>
+            or generic OIDC) to sign in.
         </p>
     </div>
     <p style="color: #666; font-size: 13px; margin-top: 1rem;">
@@ -62,62 +53,6 @@
     </div>
     {% endif %}
 
-    {% if test_mode %}
-    <div style="margin: 2rem 0; padding: 2rem 0; border-top: 1px solid #ddd;">
-        <h3 style="margin-bottom: 1rem;">{% if oidc_enabled %}Setup Access{% elif single_tenant_mode %}Quick Start{% else %}Setup Login{% endif %}</h3>
-        {% if oidc_enabled %}
-        <p style="color: #666; font-size: 13px; margin-bottom: 1rem;">
-            Test credentials for verifying setup. <strong>Disable setup mode in Settings &rarr; Users & Access when ready.</strong>
-        </p>
-        {% endif %}
-
-        <div style="display: flex; flex-direction: column; gap: 0.75rem;">
-            {% if not single_tenant_mode %}
-            <!-- Super Admin button (multi-tenant only) -->
-            <form method="POST" action="{{ url_for('test_auth.test_auth') }}" style="margin: 0;">
-                <input type="hidden" name="email" value="test_super_admin@example.com">
-                <input type="hidden" name="password" value="test123">
-                <button type="submit" class="btn" style="width: 100%; background: #2563eb;">
-                    Log in as Super Admin
-                </button>
-            </form>
-            {% endif %}
-
-            <!-- Admin button -->
-            <form method="POST" action="{{ url_for('test_auth.test_auth') }}" style="margin: 0;">
-                <input type="hidden" name="email" value="test_tenant_admin@example.com">
-                <input type="hidden" name="password" value="test123">
-                {% if tenant_context %}
-                <input type="hidden" name="tenant_id" value="{{ tenant_context }}">
-                {% elif tenant_id %}
-                <input type="hidden" name="tenant_id" value="{{ tenant_id }}">
-                {% endif %}
-                <button type="submit" class="btn" style="width: 100%; background: {% if oidc_enabled %}#6b7280{% elif single_tenant_mode %}#2563eb{% else %}#6b7280{% endif %};">
-                    {% if oidc_enabled %}Log in with Test Credentials{% elif single_tenant_mode %}Log in to Dashboard{% else %}Log in as Tenant Admin{% endif %}
-                </button>
-            </form>
-        </div>
-
-        {% if not tenant_id and not tenant_context and not single_tenant_mode %}
-        <p style="font-size: 12px; color: #666; margin-top: 1rem;">
-            <strong>Note:</strong> Tenant Admin requires an account. Use a tenant-specific URL or create one first.
-        </p>
-        {% endif %}
-
-        {% if single_tenant_mode and not oidc_enabled %}
-        <div style="margin-top: 1.5rem; padding: 1rem; background: #f0f9ff; border: 1px solid #bae6fd; border-radius: 4px; text-align: left;">
-            <p style="margin: 0 0 0.5rem 0; color: #0369a1; font-size: 13px;">
-                <strong>Next step:</strong> Configure SSO in Settings &rarr; Users & Access.
-            </p>
-            <p style="margin: 0.5rem 0 0 0; font-size: 12px;">
-                <a href="https://github.com/prebid/salesagent/blob/main/docs/deployment/environment-variables.md#authentication" target="_blank" style="color: #0066cc;">
-                    View authentication setup guide
-                </a>
-            </p>
-        </div>
-        {% endif %}
-    </div>
-    {% endif %}
 
     {% if single_tenant_mode %}
     <p style="color: #666; font-size: 14px; margin-top: 2rem;">
@@ -143,8 +78,7 @@
     <div style="margin-top: 3rem; padding-top: 2rem; border-top: 1px solid #eee;">
         <p style="color: #666; font-size: 13px;">
             <strong>Tenant Access:</strong> Use your tenant-specific URL<br>
-            <code>https://[tenant-subdomain].{{ sales_agent_domain }}</code><br>
-            <code>https://[agent-name].adcontextprotocol.org</code>
+            <code>https://[your-configured-domain]</code>
         </p>
     </div>
     {% endif %}

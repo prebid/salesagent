@@ -73,6 +73,8 @@ def test_tenant(integration_db):
             tenant_id="test_tenant",
             name="Test Tenant",
             subdomain="test",
+            # A tenant declares the host it is served at; the column refuses NULL.
+            virtual_host="test-tenant.adcp.test",
             ad_server="mock",
             enable_axe_signals=True,
             auto_approve_format_ids=[],
@@ -113,6 +115,9 @@ class TestTenantManagementAPIIntegration:
         tenant_data = {
             "name": "Test Sports Publisher",
             "subdomain": "test-sports",
+            # Required: a tenant declares the host it is served at, and the API refuses a
+            # payload that names none (400) before it reaches anything these cases grade.
+            "virtual_host": "test-sports.adcp.test",
             "ad_server": "google_ad_manager",
             "gam_refresh_token": "1//test-refresh-token",
             "creator_email": "test@sports.com",  # Required for access control
@@ -143,6 +148,7 @@ class TestTenantManagementAPIIntegration:
         tenant_data = {
             "name": "Test News Publisher",
             "subdomain": "test-news",
+            "virtual_host": "test-news.adcp.test",
             "ad_server": "google_ad_manager",
             "gam_refresh_token": "1//test-refresh-token-full",
             "gam_network_code": "123456789",
@@ -181,6 +187,7 @@ class TestTenantManagementAPIIntegration:
             json={
                 "name": "Test AuthList Publisher",
                 "subdomain": "test-authlist",
+                "virtual_host": "test-authlist.adcp.test",
                 "ad_server": "mock",
                 "authorized_emails": ["ops@authlist.com"],
                 "authorized_domains": ["authlist.com"],
@@ -226,6 +233,7 @@ class TestTenantManagementAPIIntegration:
         tenant_data = {
             "name": "First Claimant",
             "subdomain": "contested-subdomain",
+            "virtual_host": "first-claimant.adcp.test",
             "ad_server": "mock",
             "creator_email": "first@example.com",
         }
@@ -233,10 +241,18 @@ class TestTenantManagementAPIIntegration:
 
         assert client.post("/api/v1/tenant-management/tenants", headers=headers, json=tenant_data).status_code == 201
 
+        # A DIFFERENT virtual_host on the second claim, deliberately: ix_tenants_virtual_host
+        # is UNIQUE too, so reusing the first host would collide on THAT index and this case
+        # would grade the wrong constraint. The subdomain must be the only thing contested.
         response = client.post(
             "/api/v1/tenant-management/tenants",
             headers=headers,
-            json={**tenant_data, "name": "Second Claimant", "creator_email": "second@example.com"},
+            json={
+                **tenant_data,
+                "name": "Second Claimant",
+                "virtual_host": "second-claimant.adcp.test",
+                "creator_email": "second@example.com",
+            },
         )
 
         assert response.status_code == 409
@@ -267,6 +283,7 @@ class TestTenantManagementAPIIntegration:
             json={
                 "name": "Test Detail Publisher",
                 "subdomain": "test-detail",
+                "virtual_host": "test-detail.adcp.test",
                 "ad_server": "google_ad_manager",
                 "gam_refresh_token": "1//test-detail-token",
                 "creator_email": "test@detail.com",
@@ -304,6 +321,7 @@ class TestTenantManagementAPIIntegration:
             json={
                 "name": "Test Update Publisher",
                 "subdomain": "test-update",
+                "virtual_host": "test-update.adcp.test",
                 "ad_server": "google_ad_manager",
                 "gam_refresh_token": "1//test-update-token",
                 "creator_email": "test@update.com",
@@ -348,6 +366,7 @@ class TestTenantManagementAPIIntegration:
             json={
                 "name": "Test Delete Publisher",
                 "subdomain": "test-delete",
+                "virtual_host": "test-delete.adcp.test",
                 "ad_server": "mock",
                 "creator_email": "test@delete.com",
             },

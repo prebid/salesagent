@@ -28,6 +28,7 @@ class TestDeliverySimulatorRestart:
                 tenant_id="test_tenant_restart",
                 name="Test Tenant for Restart",
                 subdomain="test-restart",
+                virtual_host="test-tenant-restart.adcp.test",
                 ad_server="mock",  # Required for delivery simulator
             )
             session.add(tenant)

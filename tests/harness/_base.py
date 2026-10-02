@@ -938,14 +938,34 @@ class BaseTestEnv:
         ``x-adcp-tenant`` carries the tenant_id on every leg. ``_detect_tenant`` tries it as a
         subdomain and then takes it as the literal id, so it resolves either way.
         """
-        values: dict[str, Any] = {"tenant": self._tenant_id}
+        values: dict[str, Any] = {"tenant": self._tenant_id, "host": self._tenant_virtual_host()}
         if "token" not in overrides:
             values["token"] = self._principal_token()
-        unknown = set(overrides) - {"token", "tenant"}
+        unknown = set(overrides) - {"token", "tenant", "host"}
         if unknown:
-            raise TypeError(f"credential() takes token and tenant, not {sorted(unknown)}")
+            raise TypeError(f"credential() takes token, tenant and host, not {sorted(unknown)}")
         values.update(overrides)
         return credential_headers(**values)
+
+    def _tenant_virtual_host(self) -> str | None:
+        """The host this env's tenant answers on, READ off the row.
+
+        Read rather than derived: ``virtual_host`` is its own column with its own sequence
+        (tests/factories/CLAUDE.md — deriving one independent column from another invents a
+        shape constraint on the source), so the only truthful answer is what was persisted.
+
+        ``None`` in unit mode and when no row exists, and ``credential_headers`` then falls
+        back to ``x-adcp-tenant``: unit mode substitutes the resolver's database reads
+        outright, so there is no Host lookup for a Host to satisfy.
+        """
+        if not self.use_real_db or not self._session:
+            return None
+        from sqlalchemy import select
+
+        from src.core.database.models import Tenant
+
+        self._commit_factory_data()
+        return self._session.scalars(select(Tenant.virtual_host).filter_by(tenant_id=self._tenant_id)).first()
 
     def _principal_token(self) -> str | None:
         """The token the env principal presents, or ``None`` when no such principal exists.
@@ -2408,12 +2428,13 @@ class BaseTestEnv:
             # no bytes on a wire and carry their credential another way, so they did not
             # see it — the four legs were not running the same scenario.
             #
-            # ``x-adcp-tenant`` is the load-bearing header there, not the bearer:
-            # ``resolved_identity._detect_tenant`` resolves a tenant from Host -> virtual
-            # host/subdomain, ``x-adcp-tenant``, ``Apx-Incoming-Host`` or a localhost
-            # fallback, NEVER from the auth token, and the in-process ``TestClient`` sends
-            # ``Host: testserver``, which matches no virtual host, no subdomain and is not
-            # localhost. The bearer rides along because production sends it and the SIGNED
+            # The tenant hint is the load-bearing header there, not the bearer:
+            # ``resolved_identity._detect_tenant`` resolves a tenant from ``Host`` matched
+            # against ``tenants.virtual_host``, or from ``x-adcp-tenant`` as a literal
+            # tenant id, and from nothing else — never from the auth token. The in-process
+            # ``TestClient`` sends ``Host: testserver``, which matches no tenant, so a
+            # request that states neither is refused CONFIGURATION_ERROR before any
+            # credential is examined. The bearer rides along because production sends it and the SIGNED
             # branch below already does (security.mdx :1269 — an unsigned request carrying
             # a valid bearer is a spec-correct 200).
             return client.post(endpoint, json=body, headers=credential)
@@ -2695,6 +2716,36 @@ class BaseTestEnv:
             f"{type(self).__name__} does not implement get_rest_client(). REST dispatch requires IntegrationEnv."
         )
 
+    def fetch_agent_card(
+        self,
+        *,
+        path: str,
+        host: str | None = None,
+        tenant: str | None = None,
+        host_resolves_nothing: bool = False,
+    ) -> Any:
+        """GET the agent card at *path*, naming the seller by *host* or by *tenant*.
+
+        The card is not a registry tool, so it is not reachable through ``call_via``: it is a
+        root endpoint that answers before any AdCP exchange and carries no envelope. A
+        scenario still has to grade it on every transport, so the per-transport HOW lives
+        here, which is where the BDD rules put it.
+
+        In-process the card comes off the same ASGI app the REST dispatcher uses, so all
+        three in-process transports fetch one route; on e2e it is a real HTTP GET against the
+        live stack.
+
+        Returns the ``requests``/``httpx`` style response, so a step can read
+        ``status_code``, ``json()`` and ``text`` the same way on either side.
+        """
+        headers = credential_headers(host=host, tenant=tenant, host_resolves_nothing=host_resolves_nothing)
+        if self.is_e2e:
+            import httpx
+
+            assert self.e2e_config is not None, "fetch_agent_card()'s e2e branch needs env.e2e_config"
+            return httpx.get(f"{self.e2e_config.base_url}{path}", headers=headers, timeout=30)
+        return self.get_rest_client().get(path, headers=headers)
+
     def _commit_factory_data(self) -> None:
         """Flush pending session state before calling production code.
 
@@ -2706,20 +2757,20 @@ class BaseTestEnv:
         if self._session:
             self._session.commit()
 
-    def _seed_e2e_identity(self) -> None:
-        """Seed tenant + principal into the server DB for discovery scenarios (e2e).
+    def _seed_identity(self) -> None:
+        """Seed the tenant + principal this env PRESENTS, so the seller it names exists.
 
-        Discovery scenarios (list_creative_formats, get_products) never run a
-        Given step that creates a tenant/principal — in-process they don't need
-        one (identity is a mock). Over e2e the live HTTP server authenticates the
-        request against its own DB, so the buyer's tenant/principal/token MUST
-        exist there or auth fails before the handler runs.
+        Discovery scenarios (list_creative_formats, get_products) never run a Given step
+        that creates a tenant, and EVERY real-database env needs one regardless of mode: a
+        request naming a tenant no row matches is REFUSED (TENANT_UNDEFINED), because a
+        deployment that cannot tell which seller a request is for has no rule to apply.
+        Seeding here is what keeps an env from addressing a phantom tenant by accident;
+        "identity is a mock, so no row is needed" holds only for a mocked resolver.
 
-        Called from ``__enter__`` in e2e mode. Delegates to the idempotent
-        ``setup_default_data`` (get-or-create) so it shares ONE seeding path and
-        envs that also call ``setup_default_data()`` themselves don't
-        double-create. Seeds the SAME ``tenant_id`` / ``principal_id`` the env
-        presents, so the token ``credential()`` later reads is the seeded row's.
+        Delegates to the idempotent ``setup_default_data`` (get-or-create) so there is ONE
+        seeding path and an env that calls it itself does not double-create. Seeds the SAME
+        ``tenant_id`` / ``principal_id`` the env presents, so the token ``credential()``
+        later reads is the seeded row's.
         """
         if not self._session:
             return
@@ -2838,11 +2889,19 @@ class BaseTestEnv:
 
             self._configure_mocks()
 
-            # 3. E2E discovery-path seeding: the live server authenticates against
-            #    its own DB, so seed tenant/principal even for scenarios that never
-            #    run a tenant-creating Given step. Idempotent; no-op in-process.
+            # 3. E2E discovery-path seeding: the live server authenticates against its own
+            #    DB, so seed tenant/principal even for scenarios that never run a
+            #    tenant-creating Given step. Idempotent.
+            #
+            #    SCOPED TO E2E ON PURPOSE. Seeding for every real-database env creates the
+            #    default principal in EVERY test, and the factory derives a principal's
+            #    token from its principal_id alone while `principals.token_hash` is
+            #    globally unique -- so a test that then creates the same principal_id under
+            #    its own tenant violates that constraint. Measured: 449 failures, all
+            #    `duplicate key ... principals_token_hash_key`. A test that dispatches
+            #    without creating a tenant calls `setup_default_data()` itself.
             if self.use_real_db and self.is_e2e:
-                self._seed_e2e_identity()
+                self._seed_identity()
 
             # 4. Subclass setup that needs the entered base and configured mocks.
             self._enter_post()
@@ -3072,7 +3131,7 @@ class IntegrationEnv(BaseTestEnv):
         Returns (tenant, principal) ORM instances. Uses self._tenant_id
         and self._principal_id from constructor. Idempotent: reuses existing
         rows rather than re-creating, so it is safe to call after the e2e
-        discovery-path auto-seed (``_seed_e2e_identity``) already created them.
+        ``__enter__`` auto-seed (``_seed_identity``) already created them.
 
         Extra ``tenant_kwargs`` are tenant policy columns the live e2e_rest
         server reads from the shared DB (e.g. ``human_review_required``).

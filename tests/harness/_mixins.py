@@ -595,11 +595,15 @@ def _fetch_from_live_server(
 def _publishable_origin_headers(host: str) -> dict[str, str]:
     """Headers that address a per-tenant document GET at *host*.
 
-    ``Apx-Incoming-Host`` rather than ``Host``: :func:`route_landing_page` gives the
-    proxy header precedence, and over e2e the request crosses nginx, which is free to
-    rewrite ``Host``.
+    ``Host``, because that is the only host input the application has. A vendor proxy
+    header is edge configuration: ``config/nginx/nginx-multi-tenant.conf`` folds
+    ``Apx-Incoming-Host`` into ``Host`` and drops it, so a request that arrives through
+    that edge is indistinguishable from one that named the host directly, and nothing
+    under ``src/`` reads the vendor header at all. Addressing the app with it instead
+    reaches the in-process legs — which have no edge in front of them — as no host at
+    all, and every document 404s for want of a tenant.
     """
-    return {"Apx-Incoming-Host": host}
+    return {"Host": host}
 
 
 def _write_publishable_origin(env: Any) -> str:

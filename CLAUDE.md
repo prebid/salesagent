@@ -474,7 +474,11 @@ The Prebid Sales Agent is a Python application with the following components:
 - **MCP Server**: FastMCP tools for AI agents (via nginx at `/mcp/`)
 - **Admin UI**: Google OAuth secured interface (via nginx at `/admin/` or `/tenant/<name>`)
 - **A2A Server**: python-a2a agent-to-agent communication (via nginx at `/a2a`)
-- **Multi-Tenant**: Database-backed isolation with subdomain routing
+- **Multi-Tenant**: Database-backed isolation. A request names its tenant in one of two ways, and a
+  request that names neither is refused with `CONFIGURATION_ERROR`: the `Host`, matched against the
+  `virtual_host` the tenant declares, or an explicit `x-adcp-tenant` header carrying the tenant id.
+  Every tenant declares a `virtual_host`; the column refuses `NULL`, and no code derives a host from
+  a subdomain.
 - **PostgreSQL**: Production-ready with Docker deployment
 - All services are accessed through the nginx proxy at **http://localhost:8000**
 

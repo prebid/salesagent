@@ -136,6 +136,7 @@ def test_a_seller_that_does_not_verify_refuses_nothing() -> None:
     tenant = TenantContext(
         tenant_id="t-unsupported",
         name="Not A Verifier",
+        virtual_host=AN_AGENT_HOST,
         capability_declarations={"request_signing": {"supported": False}},
     )
     assert (

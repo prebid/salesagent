@@ -52,14 +52,15 @@ from adcp.types.generated_poc.enums.task_status import TaskStatus as LibraryTask
 from google.protobuf import json_format, struct_pb2
 
 from src.a2a_server.context_builder import EXCHANGE_STATE_KEY
-from src.core.domain_config import get_a2a_server_url
 from src.core.exceptions import AdcpFailure
+from src.core.helpers import enum_value
 from src.core.resolved_identity import TransportProtocol
 from src.core.signing.capture import HttpExchange
 from src.core.tools._boundary import failure_response, serve
 from src.core.tools._wire import to_wire
 from src.core.tools.registry import TOOLS
 from src.core.version import get_version
+from src.services.seller_capabilities import SellerCapabilities
 
 logger = logging.getLogger(__name__)
 
@@ -399,18 +400,16 @@ class AdCPRequestHandler(RequestHandler):
         raising it is the correct thing to do here and is what an A2A client
         should be able to react to precisely.
 
-        A client sees the spec's ``-32001``. It saw ``-32603`` for as long as the routes
-        carried ``enable_v0_3_compat=True``: requests dispatched through
-        ``a2a.compat.v0_3.jsonrpc_adapter``, whose ``handle_request`` ended in a bare
-        ``except Exception -> CoreInternalError`` with no ``A2AError -> code`` mapping —
-        the mapping the SDK's own dispatcher performs. That adapter is gone (#1670), so
-        raising the right type now surfaces the right code, and the live-server test that
-        pinned ``-32603`` under a strict xfail has graduated.
+        A client sees the spec's ``-32001``, because the SDK's own dispatcher maps
+        ``A2AError -> code``. The routes must not carry ``enable_v0_3_compat=True``: that
+        dispatches through ``a2a.compat.v0_3.jsonrpc_adapter``, whose ``handle_request``
+        ends in a bare ``except Exception -> CoreInternalError`` with no such mapping, so
+        every raise here would reach the client as ``-32603`` (#1670).
 
         The requested id rides both the message and structured ``data``, and both reach a
-        client for the same reason: the compat adapter that rebuilt the error as
-        ``CoreInternalError(message=str(e))`` — dropping ``data`` and returning
-        ``data: null`` on the real route — is no longer in the path.
+        client. The same compat adapter would rebuild the error as
+        ``CoreInternalError(message=str(e))``, dropping ``data`` and returning
+        ``data: null`` on the real route.
 
         Shared by ``on_get_task`` and ``on_cancel_task`` so both surface the
         same error.
@@ -507,7 +506,7 @@ class AdCPRequestHandler(RequestHandler):
         — a webhook is a declared field of the AdCP request itself, ``push_notification_config``
         on the tool's own schema, which on this transport travels in the DataPart like every
         other request field. So the A2A push-notification capability is declined WHOLESALE:
-        the agent card advertises ``push_notifications=False`` (``create_agent_card``, :571)
+        the agent card advertises ``push_notifications=False`` (``render_agent_card``)
         and the four ``tasks/pushNotificationConfig/*`` methods above refuse.
 
         This envelope field was the one entry point that did neither. ``on_message_send``
@@ -593,65 +592,60 @@ def _derived_skills() -> list[AgentSkill]:
     ]
 
 
-def create_agent_card() -> AgentCard:
-    """Create the agent card describing capabilities.
+def render_agent_card(seller: SellerCapabilities) -> AgentCard:
+    """*seller* rendered as an A2A agent card.
 
-    Returns:
-        AgentCard with Prebid Sales Agent capabilities
+    A RENDERER: it decides shape, never content. Every claim a buyer could act on
+    comes off ``seller`` — the interface URL, the AdCP version, the protocols this
+    seller supports — which is the same object ``get_adcp_capabilities`` renders, so
+    the card and the tool cannot describe one seller two ways. A literal here would be
+    exactly that drift: a hardcoded ``protocols_supported`` states as fact what the
+    capabilities tool derives from ``tenants.capability_declarations``.
+
+    What IS declared here is declared honestly, because it describes this A2A server
+    rather than the seller: ``push_notifications=False`` is the same fact as the four
+    ``tasks/pushNotificationConfig/*`` handlers that decline, and the input/output
+    modes are A2A message framing. A tenant cannot change either, so neither belongs
+    to the seller description.
     """
-    # Use configured domain for agent card
-    # Note: This will be overridden dynamically in the endpoint handlers
-    # Fallback to localhost if SALES_AGENT_DOMAIN not configured
-    server_url = get_a2a_server_url() or "http://localhost:8091/a2a"
-
     from a2a.types import AgentCapabilities
     from adcp import get_adcp_spec_version
 
-    # Get sales agent version from package metadata or pyproject.toml
-    sales_agent_version = get_version()
-
-    # Create AdCP extension (AdCP 2.5 spec)
-    # As of adcp 2.12.1, get_adcp_spec_version() returns the protocol version (e.g., "2.5.0")
-    # Previously it returned the schema version (e.g., "v1"), but this was fixed upstream
-    protocol_version = get_adcp_spec_version()
     adcp_extension = AgentExtension(
-        uri=f"https://adcontextprotocol.org/schemas/{protocol_version}/protocols/adcp-extension.json",
+        uri=f"https://adcontextprotocol.org/schemas/{get_adcp_spec_version()}/protocols/adcp-extension.json",
         description="AdCP protocol version and supported domains",
         params=_dict_to_struct(
             {
-                "adcp_version": protocol_version,
-                "protocols_supported": ["media_buy"],  # Only media_buy protocol is currently supported
+                # The pin itself, which is the SOURCE the seller description's
+                # adcp.supported_versions is derived from (SUPPORTED_ADCP_VERSIONS ->
+                # the pinned SDK) -- so this is the same fact, not a second derivation.
+                # Read here rather than unwrapped from seller.adcp: those entries are
+                # optional root models, and defensive .root unwrapping is banned.
+                "adcp_version": get_adcp_spec_version(),
+                "protocols_supported": [enum_value(p) for p in seller.supported_protocols],
             }
         ),
     )
 
-    # Create the agent card with minimal required fields
-    agent_card = AgentCard(
+    return AgentCard(
         name="Prebid Sales Agent",
         description="AI agent for programmatic advertising campaigns via AdCP protocol",
-        version=sales_agent_version,
+        version=get_version(),
         supported_interfaces=[
             # protocol_binding is REQUIRED in practice, not decorative. An A2A 1.x client
             # selects its interface with `i.protocolBinding?.toUpperCase() === "JSONRPC"`
             # (@a2a-js/sdk pick_interface.ts), so a card that omits it matches NOTHING: the
             # client finds no usable interface and reports the agent UNREACHABLE, having
-            # never sent a request. Measured against @adcp/sdk 14.0.0-rc.35, whose runner
-            # graded 0 checks for exactly this reason.
-            AgentInterface(url=server_url, protocol_binding="JSONRPC", protocol_version="1.0"),
+            # never sent a request — @adcp/sdk 14.0.0-rc.35's conformance runner grades
+            # zero checks against such a card.
+            AgentInterface(url=seller.agent_url, protocol_binding="JSONRPC", protocol_version="1.0"),
         ],
-        capabilities=AgentCapabilities(
-            push_notifications=False,
-            extensions=[adcp_extension],
-        ),
+        capabilities=AgentCapabilities(push_notifications=False, extensions=[adcp_extension]),
         default_input_modes=["message"],
         default_output_modes=["message"],
         skills=_derived_skills(),
-        documentation_url="https://github.com/your-org/adcp-sales-agent",
     )
 
-    return agent_card
 
-
-# Standalone execution removed — A2A is now integrated into the unified
-# FastAPI app (src/app.py) via add_routes_to_app(). The AdCPRequestHandler
-# and create_agent_card() are imported by src/app.py.
+# There is no standalone entry point: A2A is served by the unified FastAPI app
+# (src/app.py), which imports AdCPRequestHandler and render_agent_card from here.

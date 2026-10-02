@@ -779,11 +779,23 @@ def find_raw_select_violations(
         tree = safe_parse(py_file)
         if tree is None:
             continue
+        # An ALIASED import hid the model from this guard: `from ...models import Tenant as
+        # ModelTenant` then `select(ModelTenant)` reads as a name no model set contains, so
+        # four raw selects in one function went unseen and its allowlist row looked fixed.
+        # Resolve the local name back to the imported one before judging it (#2128).
+        aliased: dict[str, str] = {
+            alias.asname: alias.name
+            for imp in ast.walk(tree)
+            if isinstance(imp, ast.ImportFrom)
+            for alias in imp.names
+            if alias.asname
+        }
         for node in ast.walk(tree):
             if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 continue
             for call in iter_call_expressions(node):
                 model_name = select_call_model_name(call)
+                model_name = aliased.get(model_name, model_name) if model_name else model_name
                 if model_name and model_name in model_names:
                     violations.append((rel_path, node.name, model_name, call.lineno))
                     break  # One violation per function is enough

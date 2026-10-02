@@ -1,6 +1,6 @@
 # RCA: Unit-test absurdity audit (tests/unit)
 
-Repo: `/Users/konst/projects/salesagent-1210`, branch `feature/spec-gaps-1210`, 2026-08-19.
+Repo: `.`, branch `feature/spec-gaps-1210`, 2026-08-19.
 Method: Pass 1 names-only (AST), Pass 2 body verification of a sample per flagged category,
 Pass 3 delete-vs-migrate split, Pass 4 the inverse. No test file was modified.
 
