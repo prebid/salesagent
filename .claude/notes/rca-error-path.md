@@ -1,8 +1,8 @@
 # RCA: the literal error path, and what the adcp SDK already supplies
 
 Scope: `adcp==6.6.0` installed at
-`/Users/konst/projects/salesagent-1210/.venv/lib/python3.12/site-packages/adcp`,
-repo at `/Users/konst/projects/salesagent-1210` (branch `feature/spec-gaps-1210`).
+`.venv/lib/python3.12/site-packages/adcp`,
+repo at `.` (branch `feature/spec-gaps-1210`).
 Everything below is quoted from those two trees. Anything I could not verify is
 marked **unverified**.
 

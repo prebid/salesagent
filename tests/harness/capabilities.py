@@ -148,7 +148,11 @@ class CapabilitiesEnv(IntegrationEnv):
     RESPONSE_MODEL = GetAdcpCapabilitiesResponse
 
     EXTERNAL_PATCHES: dict[str, str] = {
-        "adapter": "src.core.tools.capabilities.get_adapter_class_for_tenant",
+        # The adapter CLASS resolver is imported by the service that assembles the
+        # response (src/services/seller_capabilities.py), not by the tool module —
+        # `src.core.tools.capabilities` is the controller and binds only the audit
+        # logger it calls itself.
+        "adapter": "src.services.seller_capabilities.get_adapter_class_for_tenant",
         "audit_logger": "src.core.tools.capabilities.log_tool_activity",
     }
 
@@ -523,7 +527,7 @@ class CapabilitiesEnv(IntegrationEnv):
         """Override the seller's declared adcp.idempotency posture.
 
         In-process only: monkeypatches get_idempotency_posture() at its module
-        seam (src.core.idempotency_policy -- src.core.tools.capabilities
+        seam (src.core.idempotency_policy -- src.services.seller_capabilities
         ._build_adcp_block re-imports it per call). The overridden posture
         still flows through the REAL IdempotencyPosture.check_bounds()/
         to_sdk_union() production code -- only the input posture is
@@ -550,8 +554,9 @@ class CapabilitiesEnv(IntegrationEnv):
     def break_tenant_config_db(self) -> None:
         """Make the capabilities DB reads fail — production degrades to placeholder.
 
-        Patches CapabilitiesUoW at the capabilities module seam, so BOTH reads it owns
-        fail: the publisher partners (placeholder domain) and, since #1291 D1, the
+        Patches CapabilitiesUoW at the seller-capabilities service seam — the module
+        that assembles the response and therefore opens the session — so BOTH reads it
+        owns fail: the publisher partners (placeholder domain) and, since #1291 D1, the
         signing-key backing (keyless posture, no identity block). Registered with
         ``_guard``, so it is stopped on ctx-independent env teardown along with
         everything else — including when a later ``__enter__`` step raises.
@@ -559,7 +564,7 @@ class CapabilitiesEnv(IntegrationEnv):
         declares E2EUnsupportedSetup).
         """
         patcher = patch(
-            "src.core.tools.capabilities.CapabilitiesUoW",
+            "src.services.seller_capabilities.CapabilitiesUoW",
             side_effect=Exception("tenant config DB failure (harness)"),
         )
         self.mock["tenant_config_uow"] = patcher.start()

@@ -44,7 +44,7 @@ Each tenant configures their own SSO provider in the Admin UI (**Users & Access*
 **Setup flow:**
 
 1. Start the system. The first startup creates a default tenant with Setup Mode enabled.
-2. Log in with test credentials (Setup Mode enables them for new tenants).
+2. Log in with Google as one of the `SUPER_ADMIN_EMAILS` addresses.
 3. Configure SSO in **Users & Access** - supports Google, Microsoft, or any OIDC provider (Okta, Auth0, Keycloak, and others) as Custom OIDC.
 4. Test your SSO login.
 5. Disable Setup Mode once SSO is working.
@@ -53,10 +53,11 @@ See the [SSO setup guide](../user-guide/sso-setup.md) for detailed instructions.
 
 ### Setup Mode (per-tenant)
 
-New tenants start with `auth_setup_mode=true`, which enables test credentials:
-
-- Email: `test_super_admin@example.com`
-- Password: `test123`
+New tenants start with `auth_setup_mode=true`. Setup Mode lets a tenant complete an OIDC
+login *before* its SSO is enabled, so you can verify a provider before committing to it.
+It grants no credentials of its own — the first administrator signs in with the
+deployment's own OAuth (`GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` or the generic
+`OAUTH_*` variables) plus `SUPER_ADMIN_EMAILS`.
 
 Once SSO is configured and tested, disable Setup Mode from the Users & Access page. After that, only SSO authentication works for that tenant.
 
@@ -64,7 +65,6 @@ Once SSO is configured and tested, disable Setup Mode from the Users & Access pa
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `ADCP_AUTH_TEST_MODE` | `false` | Enable test authentication globally. **Deprecated - use per-tenant Setup Mode instead.** |
 
 ### Legacy: environment variable OAuth
 
@@ -163,7 +163,7 @@ For GAM adapter integration:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `ADCP_MULTI_TENANT` | `false` | Enable multi-tenant mode with subdomain routing |
+| `ADCP_MULTI_TENANT` | `false` | Enable multi-tenant mode, where the `Host` selects the tenant |
 | `SALES_AGENT_DOMAIN` | - | Base domain for tenant subdomains (for example, `sales-agent.example.com`). Also scopes session cookies across subdomains. |
 | `ADMIN_DOMAIN` | - | Domain where the Admin UI is accessible (for example, `admin.sales-agent.example.com`) |
 | `SUPER_ADMIN_DOMAIN` | - | Email domain whose users get super admin access |
@@ -281,6 +281,6 @@ You usually don't need to set the following variables:
 ## Related documentation
 
 - [Single-tenant deployment](single-tenant.md) - the default deployment mode
-- [Multi-tenant setup](multi-tenant.md) - subdomain routing and per-tenant domains
+- [Multi-tenant setup](multi-tenant.md) - host-based tenant routing and per-tenant domains
 - [Security and authentication](../security.md) - how secrets and sessions are handled
 - [Architecture guide](../development/architecture.md) - deployment topology and component map

@@ -15,9 +15,122 @@ from src.core.database.models import (
     CurrencyLimit,
     Principal,
     Product,
+    PropertyTag,
     Tenant,
 )
 from tests.factories.principal import plaintext_token_for
+
+#: The suffix every fixture-minted host carries. ``.test`` is reserved by RFC 2606 precisely
+#: so it can never resolve, and ``adcp.test`` is the convention
+#: ``scripts/setup/seed_storyboard_tenant.py`` established and the wildcard test certificate
+#: already covers. Deliberately NOT ``.example.com``: a fixture host is not a real origin and
+#: must not read like one.
+TEST_VHOST_SUFFIX = "adcp.test"
+
+
+def vhost_for(tenant_id: str) -> str:
+    """A fixture host for *tenant_id* — the one derivation, called rather than copied.
+
+    ``tenants.virtual_host`` is NOT NULL and ``ix_tenants_virtual_host`` is UNIQUE, so every
+    fixture tenant needs a host and no two may share one. Deriving it from the tenant_id
+    satisfies both at once, and doing it HERE means the convention has one definition: this
+    expression was inlined at two dozen call sites before it was extracted, which is the
+    shape CLAUDE.md names a defect rather than a style preference.
+
+    Underscores become hyphens because a tenant_id may hold them and a DNS label may not.
+    Nothing routes to the result — a fixture addresses its tenant directly, by id — so this is
+    a value that satisfies a column, not a claim about where anything is served.
+    """
+    return f"{tenant_id.replace('_', '-')}.{TEST_VHOST_SUFFIX}"
+
+
+def add_product_prerequisites(
+    session,
+    tenant_id: str,
+    *,
+    min_package_budget: float = 100.0,
+    max_daily_package_spend: float = 10000.0,
+    tag_description: str = "All inventory",
+) -> None:
+    """The two rows a product cannot exist without, added to *session*.
+
+    CLAUDE.md states the chain: ``Tenant -> CurrencyLimit (USD, required for budget
+    validation) -> PropertyTag ("all_inventory", required for property_tags references)``,
+    and a product requires BOTH. Spelling it out per test file is one logical operation
+    repeated, and pylint's R0801 ratchet caught it as such the moment two of those blocks
+    became identical.
+
+    The budget floors are parameters because callers genuinely differ on them — a test
+    grading minimum-spend refusal needs a floor its request can fall under — and folding
+    them to one value would change what those tests grade.
+
+    Adds, does not commit: the caller is mid-transaction with more rows to come.
+    """
+    session.add(
+        CurrencyLimit(
+            tenant_id=tenant_id,
+            currency_code="USD",
+            min_package_budget=min_package_budget,
+            max_daily_package_spend=max_daily_package_spend,
+        )
+    )
+    session.add(
+        PropertyTag(
+            tenant_id=tenant_id,
+            tag_id="all_inventory",
+            name="All Inventory",
+            description=tag_description,
+        )
+    )
+
+
+def seed_tenant_with_principal(
+    session,
+    tenant_id: str = "default",
+    *,
+    principal_id: str = "test_principal",
+    name: str = "Test Tenant",
+    subdomain: str = "test-tenant",
+) -> None:
+    """One tenant and one principal that can authenticate against it, COMMITTED.
+
+    The pair a raw-SQL smoke test needs before it can query anything: two scripts asked for
+    exactly this, byte for byte, which is how R0801 found them.
+
+    Commits, unlike the other seeders here, because its callers close the ORM session and
+    then reconnect with psycopg2 — the rows have to be visible to a different connection.
+    """
+    session.add(create_tenant_with_timestamps(tenant_id=tenant_id, name=name, subdomain=subdomain))
+    session.add(
+        Principal.with_token(
+            plaintext_token_for(principal_id),
+            tenant_id=tenant_id,
+            principal_id=principal_id,
+            name="Test Principal",
+            platform_mappings={"mock": {"advertiser_id": "test-advertiser"}},
+        )
+    )
+    session.commit()
+
+
+def seed_tenant_with_product_prerequisites(
+    session,
+    tenant_id: str,
+    *,
+    name: str = "Test Tenant",
+    subdomain: str | None = None,
+    **tenant_kwargs: Any,
+) -> Tenant:
+    """A tenant AND :func:`add_product_prerequisites` for it, for the common case."""
+    tenant = create_tenant_with_timestamps(
+        tenant_id=tenant_id,
+        name=name,
+        subdomain=subdomain if subdomain is not None else tenant_id.replace("_", "-"),
+        **tenant_kwargs,
+    )
+    session.add(tenant)
+    add_product_prerequisites(session, tenant_id)
+    return tenant
 
 
 @contextmanager
@@ -93,6 +206,10 @@ def create_tenant_with_timestamps(
     # Ensure we have required timestamp fields
     kwargs.setdefault("created_at", now)
     kwargs.setdefault("updated_at", now)
+    # A tenant declares the host it is served at. Defaulted here for the same reason the
+    # timestamps are — a caller grading something else should not have to name it — and a
+    # caller that IS grading the host passes its own.
+    kwargs.setdefault("virtual_host", vhost_for(tenant_id))
 
     return Tenant(tenant_id=tenant_id, name=name, subdomain=subdomain, billing_plan=billing_plan, **kwargs)
 

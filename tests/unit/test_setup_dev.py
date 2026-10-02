@@ -282,7 +282,7 @@ class TestRenderEnvFromTemplate:
             "# ============================================\n"
             "# [OPTIONAL] Authentication\n"
             "# ============================================\n"
-            "# ADCP_AUTH_TEST_MODE=false\n"
+            "# SUPER_ADMIN_EMAILS=\n"
             "\n"
             "# ============================================\n"
             "# [OPTIONAL] Advanced Settings\n"

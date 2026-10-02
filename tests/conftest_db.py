@@ -250,6 +250,8 @@ def test_tenant(db_session):
         tenant_id=f"test_tenant_{unique_id}",
         name=f"Test Tenant {unique_id}",
         subdomain=f"test_{unique_id}",
+        # Required (NOT NULL) and UNIQUE, so it carries the same unique_id the rest does.
+        virtual_host=f"test-{unique_id}.adcp.test",
         is_active=True,
         ad_server="mock",
         created_at=now,

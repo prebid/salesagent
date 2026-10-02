@@ -1,21 +1,17 @@
 """Central FastAPI application.
 
 Mounts all sub-applications (MCP, A2A, Admin) into a single process.
-Replaces the previous multi-process architecture where MCP, A2A, and Admin
-ran as separate processes behind nginx.
 """
 
 import asyncio
 import json
 import logging
-import re
 from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
 from typing import Any
 
 from a2a.server.request_handlers.response_helpers import agent_card_to_dict
 from a2a.server.routes import create_jsonrpc_routes
-from a2a.server.routes.agent_card_routes import create_agent_card_routes
 from a2a.types import AgentCard as A2AAgentCard
 from a2wsgi import WSGIMiddleware
 from fastapi import FastAPI, Request
@@ -28,23 +24,21 @@ from starlette.routing import Route
 
 from src.a2a_server.adcp_a2a_server import (
     AdCPRequestHandler,
-    create_agent_card,
+    render_agent_card,
     restore_a2a_integer_types,
 )
 from src.a2a_server.context_builder import AdCPCallContextBuilder
 from src.admin.app import create_app
-from src.core.agent_identity import agent_identity_for_tenant_id
+from src.core.agent_identity import AGENT_CARD_PATH
 from src.core.auth_middleware import AuthChallengeResponder
 from src.core.config import load_settings
-from src.core.domain_config import get_a2a_server_url, get_sales_agent_domain
 from src.core.domain_routing import route_landing_page
 from src.core.errors.issues import issues_from_validation_error
 from src.core.exceptions import AdCPInvalidRequestError, AdCPSalesAgentError
-from src.core.http_utils import get_header_case_insensitive as _get_header_case_insensitive
 from src.core.http_utils import path_from_asgi_scope
 from src.core.lifecycle import run_all_shutdown_callbacks
 from src.core.main import mcp
-from src.core.resolved_identity import TransportProtocol
+from src.core.resolved_identity import TransportProtocol, public_identity_for
 from src.core.signing.capture import SignedExchangeCapture
 from src.core.tools._boundary import failure_response
 from src.core.tools._wire import to_wire
@@ -54,6 +48,7 @@ from src.routes.api_v1 import router as api_v1_router
 from src.routes.health import debug_router as health_debug_router
 from src.routes.health import router as health_router
 from src.routes.well_known import router as well_known_router
+from src.services.seller_capabilities import describe_seller
 
 logger = logging.getLogger(__name__)
 
@@ -103,11 +98,7 @@ async def app_lifespan(app: FastAPI):
     # async close callback via ``src.core.lifecycle.register_shutdown`` at first
     # construction. This lifespan only drains the registry — it never references a
     # concrete service, which is what lets producers come and go without touching
-    # it. The webhook service was the last producer and no longer has anything to
-    # close: each delivery now builds and discards a transport pinned to its own
-    # destination, so no pooled session survives a request (the leak this drained
-    # was item #3 of the production OOM-cycle investigation, GH #1264).
-    # Per-callback errors are logged and swallowed inside
+    # it. Per-callback errors are logged and swallowed inside
     # ``run_all_shutdown_callbacks`` so they cannot mask the yielded exit.
     await run_all_shutdown_callbacks()
 
@@ -119,8 +110,8 @@ async def app_lifespan(app: FastAPI):
 # SSE stream, and that is what lets a refused credential be answered the same way it is on
 # A2A: read the AdCP code off the outgoing body, lift the status to 401. Under SSE it could
 # not be, because streamable-HTTP sends http.response.start -- 200, text/event-stream --
-# before the tool is dispatched, so the status was already on the wire before the error
-# existed. That asymmetry was a property of the RESPONSE MODE, not of MCP.
+# before the tool is dispatched, so the status is already on the wire before the error
+# exists. That asymmetry is a property of the RESPONSE MODE, not of MCP.
 #
 # Costs nothing this seller uses: nothing in src/ streams MCP output (no report_progress,
 # no partial results), the tools are request/response, and MCP's streamable-HTTP transport
@@ -142,10 +133,10 @@ app = FastAPI(
 #
 # There is deliberately no auth gate in front of this. A middleware here cannot know which
 # tool is being called: the name is inside the JSON-RPC body, and a middleware that parsed
-# it would be re-implementing a fragment of the transport's own parsing and reading
-# ToolSpec.auth a second time -- exactly the drift building-tools.md says the single
-# registry exists to prevent ("auth is a property of the tool, not of a transport ... what
-# makes 'MCP soft-returns where A2A hard-refuses' unrepresentable").
+# it would be re-implementing a fragment of the transport's own parsing and asking
+# ``ToolSpec.requires_credential`` a second time. The credential policy is a property of
+# the tool, not of a transport, which is what makes "MCP soft-returns where A2A
+# hard-refuses" unrepresentable.
 #
 # So auth is decided where the tool IS known -- inside ``serve``, which reads the registry
 # row's declaration for the named tool, the same way it does for A2A and REST. The RENDERING
@@ -160,6 +151,18 @@ app.mount("/mcp", mcp_app)
 # ---------------------------------------------------------------------------
 
 
+def _recorded_operation(path: str) -> tuple[TransportProtocol, str]:
+    """The ``(protocol, operation)`` a non-tool route's failure is recorded under.
+
+    A path, not a per-route ``except``. The agent card is served on both of its declared
+    paths and is an A2A surface, so its faults belong to one operation rather than to one
+    per URL; every other non-tool route is REST and names itself by its path.
+    """
+    if path in _AGENT_CARD_PATHS:
+        return TransportProtocol.A2A, "agent_card"
+    return TransportProtocol.REST, path
+
+
 def _envelope_response(request: Request, exc: Exception) -> JSONResponse:
     """Answer an exception raised OUTSIDE ``serve`` with the failure response, recorded unscoped.
 
@@ -170,8 +173,16 @@ def _envelope_response(request: Request, exc: Exception) -> JSONResponse:
     No WWW-Authenticate here. A 401 MUST name a scheme the caller can authenticate with
     (RFC 7235; graded by the storyboard's security_baseline), and AuthChallengeResponder
     attaches it app-wide by reading the code off this very body.
+
+    THE ONE PLACE a non-tool route's failure is built. Every app-level handler funnels here
+    -- typed, ValueError, PermissionError and the catch-all -- so a route does not catch for
+    itself: the agent card's route used to, purely to label its record, and a route holding
+    its own ``except`` reports one identity for the faults it catches and another for the
+    ones that escape it. The operation is DATA, resolved from the path below, so the label
+    and the handling stay one thing.
     """
-    response = failure_response(TransportProtocol.REST, request.url.path, exc)
+    protocol, operation = _recorded_operation(request.url.path)
+    response = failure_response(protocol, operation, exc)
     return JSONResponse(status_code=response.http_status, content=to_wire(response))
 
 
@@ -229,8 +240,8 @@ async def request_validation_error_handler(request: Request, exc: RequestValidat
     """
     # FastAPI prefixes every loc with the request LOCATION ("body"/"query"/"path"). That is
     # a framework detail, not part of the buyer's document, so it is stripped once here --
-    # for the issues[] pointers as well as for ``field``, which used to strip it alone and
-    # left issues reading "/body/idempotency_key" where the pin wants "/idempotency_key".
+    # for the issues[] pointers as well as for ``field``. The pin wants
+    # "/idempotency_key", never "/body/idempotency_key".
     errors = [
         {**e, "loc": tuple(e.get("loc", ())[1:])}
         if e.get("loc") and str(e["loc"][0]) in ("body", "query", "path")
@@ -245,9 +256,9 @@ async def request_validation_error_handler(request: Request, exc: RequestValidat
     raw_loc = [str(p) for p in first.get("loc", ())]
     loc = raw_loc[1:] if raw_loc and raw_loc[0] in ("body", "query", "path") else raw_loc
     # JSONPath-lite, so an ARRAY INDEX is bracketed: core/error.json's own example is
-    # 'packages[0].targeting'. Dot-joining every segment produced 'packages.0.package_id'
-    # here while mcp and a2a produced 'packages[0].package_id' for the identical rejection
-    # -- one buyer-facing pointer per transport, from a formatting detail.
+    # 'packages[0].targeting', and that is what mcp and a2a emit for the same rejection.
+    # Dot-joining every segment would give 'packages.0.package_id' here -- one
+    # buyer-facing pointer per transport, from a formatting detail.
     field = _jsonpath_lite(loc) or None
     # A rejection raised by request-schema validation is, by construction, a
     # SCHEMA-constraint violation: FastAPI only ever raises it for what the
@@ -255,9 +266,9 @@ async def request_validation_error_handler(request: Request, exc: RequestValidat
     # {"minimum": 1} and unit an enum, so interval=0 and unit="weeks" are
     # schema violations, not business-rule ones). INVALID_REQUEST is the code
     # for that per 3.1/enums/error-code.json, and it is what MCP and A2A
-    # already emit for the same payload -- this path previously special-cased
-    # the attribution_window family to VALIDATION_ERROR, which made one request
-    # answer with two different codes depending on the transport it arrived on.
+    # already emit for the same payload. No family of fields is special-cased
+    # to another code: that would make one request answer with two different
+    # codes depending on the transport it arrived on.
     # Cross-field rules JSON Schema cannot express (a "campaign"-unit Duration
     # must have interval == 1) are NOT reached here: they are enforced after
     # the model validates, and correctly raise AdCPValidationError there.
@@ -322,10 +333,10 @@ def _restore_a2a_wire_integers(
     async def _wrapped(request: Request) -> Response:
         response = await endpoint(request)
         if isinstance(response, JSONResponse) and response.body:
-            # Integer restoration ONLY. This used to also lift an auth refusal to 401 and
-            # attach the challenge -- a second copy of AuthChallengeResponder, living in a
-            # function whose job is protobuf number coercion. The responder is app-wide
-            # middleware now and answers this route like every other.
+            # Integer restoration ONLY: this function's job is protobuf number coercion.
+            # Lifting an auth refusal to 401 and attaching the challenge belongs to
+            # AuthChallengeResponder, app-wide middleware that answers this route like
+            # every other.
             fixed = restore_a2a_integer_types(json.loads(bytes(response.body)))
             headers = {k: v for k, v in response.headers.items() if k.lower() != "content-length"}
             return JSONResponse(fixed, status_code=response.status_code, headers=headers)
@@ -339,8 +350,9 @@ def _restore_a2a_wire_integers(
     return _wrapped
 
 
-# Create the A2A application and add routes
-_agent_card = create_agent_card()
+# Create the A2A application and add routes. There is deliberately no module-level
+# card: a card describes a TENANT, so it is built per request from that tenant's
+# seller description.
 _request_handler = AdCPRequestHandler()
 
 # Build A2A routes using a2a-sdk 1.0 route factories
@@ -373,20 +385,18 @@ _a2a_rpc_routes = [
     Route(path=route.path, endpoint=_restore_a2a_wire_integers(route.endpoint), methods=list(route.methods or []))
     for route in _a2a_rpc_routes_raw
 ]
-_a2a_card_routes = create_agent_card_routes(
-    agent_card=_agent_card,
-    card_url="/.well-known/agent-card.json",
-)
-
-# Add routes directly to the FastAPI app
-for route in _a2a_rpc_routes + _a2a_card_routes:
+# The card's routes are NOT taken from the SDK factory. It mounts one static path from
+# one static card, which states twice what is declared elsewhere once -- which paths serve
+# the card (_AGENT_CARD_PATHS, below) and what the card says (the seller description). The
+# card routes are derived from that declaration instead, so there is nothing to reconcile.
+for route in _a2a_rpc_routes:
     app.routes.append(route)
-logger.info("A2A routes added: /a2a, /.well-known/agent-card.json")
+logger.info("A2A routes added: /a2a")
 
 
 @app.api_route("/a2a/", methods=["GET", "POST", "OPTIONS"])
 async def a2a_trailing_slash_redirect() -> RedirectResponse:
-    """Preserve historical /a2a/ compatibility.
+    """Serve the trailing-slash spelling of /a2a.
 
     The admin root fallback mount would otherwise catch `/a2a/` and hand it to
     Flask, which returns 404. Redirecting here keeps A2A owned by FastAPI.
@@ -396,148 +406,73 @@ async def a2a_trailing_slash_redirect() -> RedirectResponse:
 
 
 # ---------------------------------------------------------------------------
-# Dynamic agent card endpoints — override SDK defaults to support
-# tenant-specific URLs based on request headers.
+# Agent card endpoints — one card per tenant, built per request from that
+# tenant's seller description.
 # ---------------------------------------------------------------------------
 
 
-_VALID_HOSTNAME_RE = re.compile(
-    r"^[a-zA-Z0-9]([a-zA-Z0-9\-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9\-]*[a-zA-Z0-9])?)*(\:\d{1,5})?$"
-)
+def _create_dynamic_agent_card(request: Request) -> A2AAgentCard:
+    """This tenant's agent card.
 
+    Two calls and a render, and deliberately nothing else. Which tenant comes from
+    the resolver's own seam, the same answer every tool request gets; what the card
+    SAYS comes from the one service ``get_adcp_capabilities`` renders from, so the
+    two cannot describe the same seller differently. Neither the URL nor any field
+    is derived here.
 
-def _is_valid_hostname(value: str) -> bool:
-    """Validate that a string is a safe hostname (with optional port). Rejects path traversal and injection chars."""
-    return bool(value) and len(value) <= 253 and _VALID_HOSTNAME_RE.match(value) is not None
+    A request naming no tenant this deployment serves is refused by the resolver, and that
+    is the only refusal: ``public_identity_for`` raises for an unresolved tenant, and a
+    resolved tenant always declares the host it is served at, so ``seller.agent_url`` is
+    always a string here and there is nothing left for this handler to check.
 
-
-def _card_with_url(server_url: str):
-    """A copy of the static agent card advertising *server_url* as its interface."""
-    dynamic_card = A2AAgentCard()
-    dynamic_card.CopyFrom(_agent_card)
-    if dynamic_card.supported_interfaces:
-        dynamic_card.supported_interfaces[0].url = server_url
-    return dynamic_card
-
-
-def _canonical_a2a_url(headers) -> str | None:
-    """The tenant's canonical A2A endpoint URL for this Host, or None.
-
-    Resolves the Host to a tenant and reads that tenant's STORED host, so the
-    card advertises the same string brand.json's A2A ``agents[].url`` carries —
-    the byte-equal match at security.mdx step 5 compares the URL a counterparty
-    invoked against what we published, and two derivations means two chances to
-    disagree on a scheme, a port or a trailing slash.
-
-    Returns None when the Host routes to no tenant, which is the only case where
-    the caller still has to derive something from headers.
+    The published URL comes from stored state, never from a request header. On a direct
+    connection every header is attacker-supplied, so deriving the host from one would let
+    a caller sending ``Host: evil.example.com`` read back
+    ``supportedInterfaces[0].url == "https://evil.example.com/a2a"``.
     """
-    routing = route_landing_page(dict(headers))
-    if not routing.tenant:
-        return None
-    identity = agent_identity_for_tenant_id(routing.tenant["tenant_id"])
-    return identity.endpoints["a2a"] if identity else None
+    return render_agent_card(describe_seller(public_identity_for(request.headers)))
 
 
-def _create_dynamic_agent_card(request: Request):
-    """Create agent card with the tenant's canonical A2A URL.
+# The path the agent card is served on. ONE, and this set is the declaration: every card
+# route derives from it, the landing page links to it, and the e2e suite reads it as the
+# authority, so there is nothing for a second list to diverge from.
+#
+# /.well-known/agent-card.json is the path A2A FIXES (§8.2, §14.3) and what the a2a-sdk
+# factory mounts. Two others were served and are deleted:
+#   * /.well-known/agent.json — named by AdCP's own guide (a2a-guide.mdx:782), and the one
+#     @adcp/sdk's buildCardUrls() tries first. Dropping it is safe for discovery because
+#     that client falls back: it loops both paths, breaks on the first success, and throws
+#     only if neither answers (SingleAgentClient.js:423-440). A buyer following the AdCP
+#     guide without that fallback gets a 404 — the deprecation is filed upstream.
+#   * /agent.json — no specification named it, no conformance artifact fetched it, nothing
+#     in this repo read it and nothing advertised it.
+_AGENT_CARD_PATHS = {AGENT_CARD_PATH}
 
-    When the Host routes to a tenant, the URL comes from that tenant's stored
-    host (:func:`canonical_agent_url`) — NOT from ``Apx-Incoming-Host`` /
-    ``Host`` / ``X-Forwarded-Proto``, which is the reverse-proxy routing state
-    security.mdx step 10 forbids deriving identity from. The header ladder below
-    survives only as the no-tenant fallback, where there is nothing stored to
-    read.
+
+def _install_agent_card_routes():
+    """Serve the card on every declared path, from the one handler.
+
+    One closure serves all of them, so their bodies are byte-identical by construction
+    rather than by convention. Appending at import time is safe because
+    _install_admin_mounts() re-appends the Flask "" catch-all during lifespan startup,
+    after this runs.
     """
-
-    def get_protocol(hostname: str) -> str:
-        # Prefer the scheme the edge proxy terminated and forwarded
-        # (X-Forwarded-Proto, set by our nginx) — the authoritative signal for the
-        # client-facing scheme. Fall back to a hostname heuristic only when the
-        # header is absent (e.g. direct, non-proxied access). This matches how the
-        # admin app already trusts X-Forwarded-Proto, and fixes the agent card
-        # advertising https for an http-only reverse proxy.
-        forwarded_proto = _get_header_case_insensitive(request.headers, "X-Forwarded-Proto")
-        if forwarded_proto:
-            # May be a comma-separated proxy chain; the first hop is client-facing.
-            proto = forwarded_proto.split(",")[0].strip().lower()
-            if proto in ("http", "https"):
-                return proto
-        return "http" if hostname.startswith("localhost") or hostname.startswith("127.0.0.1") else "https"
-
-    server_url = _canonical_a2a_url(request.headers)
-    if server_url is not None:
-        return _card_with_url(server_url)
-
-    apx_incoming_host = _get_header_case_insensitive(request.headers, "Apx-Incoming-Host")
-    if apx_incoming_host and not _is_valid_hostname(apx_incoming_host):
-        logger.warning(f"Invalid Apx-Incoming-Host header value, ignoring: {apx_incoming_host!r}")
-        apx_incoming_host = None
-    if apx_incoming_host:
-        protocol = get_protocol(apx_incoming_host)
-        server_url = f"{protocol}://{apx_incoming_host}/a2a"
-    else:
-        host = _get_header_case_insensitive(request.headers, "Host") or ""
-        if host and not _is_valid_hostname(host):
-            logger.warning(f"Invalid Host header value, ignoring: {host!r}")
-            host = ""
-        sales_domain = get_sales_agent_domain()
-        if host and host != sales_domain:
-            protocol = get_protocol(host)
-            server_url = f"{protocol}://{host}/a2a"
-        else:
-            server_url = get_a2a_server_url() or "http://localhost:8080/a2a"
-
-    return _card_with_url(server_url)
-
-
-# Override the SDK's static agent card endpoints with dynamic ones.
-# We replace routes by matching path — SDK routes were added above.
-
-_AGENT_CARD_PATHS = {"/.well-known/agent-card.json", "/.well-known/agent.json", "/agent.json"}
-
-
-def _replace_routes():
-    """Replace SDK agent card routes with dynamic versions that read request headers."""
 
     async def dynamic_agent_card(request: Request):
-        # to_thread: the card now reads the tenant's stored host from the
+        # to_thread: resolving the tenant and describing the seller both hit the
         # database, and this endpoint is unauthenticated.
+        # NO ``except`` HERE. The app-level handlers answer every fault this route can
+        # raise, typed or not, through the one builder in ``_envelope_response`` -- which
+        # records a card path as ``(A2A, agent_card)``. A route that caught for itself
+        # answered the faults it named and let the rest escape to a different identity.
         card = await asyncio.to_thread(_create_dynamic_agent_card, request)
         return JSONResponse(agent_card_to_dict(card))
 
-    replaced_paths: set[str] = set()
-    new_routes = []
-    for route in app.routes:
-        path = getattr(route, "path", None)
-        if path in _AGENT_CARD_PATHS:
-            new_routes.append(Route(path, dynamic_agent_card, methods=["GET", "OPTIONS"]))
-            replaced_paths.add(path)
-        else:
-            new_routes.append(route)
-
-    # The SDK's route factory mounts exactly ONE path (a2a-sdk's
-    # AGENT_CARD_WELL_KNOWN_PATH), so a pass that only REPLACES leaves every other
-    # declared path unrouted -- /.well-known/agent.json (the path AdCP's own guide
-    # names, and the one the tenant landing page publishes a link to) and
-    # /agent.json both 404'd. Create what there was nothing to replace, reusing the
-    # SAME handler and methods: one closure serves every path, so their bodies are
-    # byte-identical by construction rather than by convention. Sorted for a
-    # deterministic route table. Appending at import time is safe because
-    # _install_admin_mounts() re-appends the Flask "" catch-all during lifespan
-    # startup, after this runs.
-    for path in sorted(_AGENT_CARD_PATHS - replaced_paths):
-        new_routes.append(Route(path, dynamic_agent_card, methods=["GET", "OPTIONS"]))
-        replaced_paths.add(path)
-
-    app.router.routes = new_routes
-
-    missing = _AGENT_CARD_PATHS - replaced_paths
-    if missing:
-        logger.warning(f"_replace_routes: expected SDK routes not found for paths: {sorted(missing)}")
+    for path in sorted(_AGENT_CARD_PATHS):
+        app.routes.append(Route(path, dynamic_agent_card, methods=["GET", "OPTIONS"]))
 
 
-_replace_routes()
+_install_agent_card_routes()
 
 # ---------------------------------------------------------------------------
 # A2A messageId compatibility middleware (body rewriting, unrelated to auth)
@@ -598,7 +533,7 @@ def _openapi_with_rest_components() -> dict[str, Any]:
 
     The REST routes advertise their DTOs through ``openapi_extra`` with ``$ref``s aimed at
     ``#/components/schemas/<Model>``; FastAPI only populates ``components/schemas`` for models
-    it validates itself, and it no longer validates those bodies (``serve`` does). So the
+    it validates itself, and it does not validate those bodies (``serve`` does). So the
     models the refs name are merged in here, once, from the same DTOs -- one declaration,
     published in one place, resolvable from the document root.
     """
@@ -675,9 +610,9 @@ async def _handle_landing_page(request: Request):
     if result.type == "admin":
         return RedirectResponse(url="/admin/login", status_code=302)
 
-    if result.type in ("custom_domain", "subdomain") and result.tenant:
+    if result.type == "custom_domain" and result.tenant:
         try:
-            html_content = await asyncio.to_thread(generate_tenant_landing_page, result.tenant, result.effective_host)
+            html_content = await asyncio.to_thread(generate_tenant_landing_page, result.tenant)
             return HTMLResponse(content=html_content)
         except Exception as e:
             logger.error(f"Error generating landing page: {e}", exc_info=True)

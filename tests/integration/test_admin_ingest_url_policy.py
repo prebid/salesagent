@@ -305,6 +305,11 @@ def test_create_tenant_refuses_blocked_webhook_url(field, label, management_api_
         json={
             "name": "Refused Tenant",
             "subdomain": "refusedtenant",
+            # Supplied so the egress policy is the ONLY thing that can refuse this
+            # request. A tenant declares the host it is served at, so a payload without
+            # one is refused for that instead — with a 400 and no echo, which is what
+            # the sibling test below asserts, so it would have passed vacuously.
+            "virtual_host": "refusedtenant.adcp.test",
             "ad_server": "mock",
             field: METADATA_URL,
         },
@@ -332,6 +337,11 @@ def test_create_tenant_refusal_does_not_echo_the_reason(management_api_client, m
         json={
             "name": "Refused Tenant",
             "subdomain": "refusedtenant",
+            # Supplied so the egress policy is the ONLY thing that can refuse this
+            # request. A tenant declares the host it is served at, so a payload without
+            # one is refused for that instead — with a 400 and no echo, which is what
+            # the sibling test below asserts, so it would have passed vacuously.
+            "virtual_host": "refusedtenant.adcp.test",
             "ad_server": "mock",
             "slack_webhook_url": METADATA_URL,
         },

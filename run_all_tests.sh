@@ -744,6 +744,12 @@ case ",$SUITES," in
             else
                 _missing_reports="$_missing_reports storyboard(no-runner-summary-${_protocol})"
             fi
+            # The runner's OWN full record (--json on stdout). The summary beside it is a
+            # digest that names no passing check, so comparing two runs check-by-check
+            # needs this. Best-effort: its absence is not a missing report.
+            for _record in "storyboard_run_${_protocol}.json" "storyboard_run_${_protocol}.stderr.log"; do
+                [ -f "test-results/$_record" ] && cp "test-results/$_record" "$RESULTS_DIR/$STORYBOARD_SUBDIR/$_record" || true
+            done
         done
         ;;
 esac

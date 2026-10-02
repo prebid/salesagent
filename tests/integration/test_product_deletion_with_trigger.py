@@ -19,10 +19,12 @@ def test_product_deletion_cascades_pricing_options(integration_db):
     """Test that deleting a product cascades to pricing_options despite trigger."""
     with get_db_session() as session:
         # Create test tenant
+        # Required (NOT NULL) and UNIQUE. Nothing routes to this host; it exists to satisfy the column.
         tenant = Tenant(
             tenant_id="test_trigger",
             name="Test Trigger Tenant",
             subdomain="test-trigger",
+            virtual_host="test-trigger.adcp.test",
             is_active=True,
         )
         session.add(tenant)
@@ -145,6 +147,7 @@ def test_trigger_still_blocks_manual_deletion_of_last_pricing_option(integration
             tenant_id="test_trigger_2",
             name="Test Trigger Tenant 2",
             subdomain="test-trigger-2",
+            virtual_host="test-trigger-2.adcp.test",
             is_active=True,
         )
         session.add(tenant)
@@ -215,6 +218,7 @@ def test_product_deletion_with_multiple_pricing_options(integration_db):
             tenant_id="test_trigger_3",
             name="Test Trigger Tenant 3",
             subdomain="test-trigger-3",
+            virtual_host="test-trigger-3.adcp.test",
             is_active=True,
         )
         session.add(tenant)

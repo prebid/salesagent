@@ -23,6 +23,7 @@ from src.core.database.models import (
 )
 from src.core.database.repositories import TenantLookupRepository
 from src.core.database.repositories.principal import PrincipalRepository
+from src.core.http_utils import validate_virtual_host
 
 logger = logging.getLogger(__name__)
 
@@ -127,11 +128,21 @@ def create_tenant():
         try:
             data = request.get_json()
 
-            # Validate required fields
-            required_fields = ["name", "subdomain", "ad_server"]
+            # Validate required fields. virtual_host is among them because it is the only
+            # way a request can name the tenant being created, and nothing derives one.
+            required_fields = ["name", "subdomain", "ad_server", "virtual_host"]
             for field in required_fields:
                 if field not in data:
                     return jsonify({"error": f"Missing required field: {field}"}), 400
+
+            # Presence is not shape. The key being there admits "" and "https://evil.com",
+            # which the column refuses at assignment -- and that ValueError reached the
+            # generic handler below as 500 "Failed to create tenant", telling the caller the
+            # SELLER broke about a value the caller chose, with no field named.
+            try:
+                data["virtual_host"] = validate_virtual_host(data["virtual_host"])
+            except ValueError as exc:
+                return jsonify({"error": str(exc), "field": "virtual_host"}), 400
 
             if blocked := _webhook_url_refusal(data):
                 return blocked
@@ -171,6 +182,7 @@ def create_tenant():
                 tenant_id=tenant_id,
                 name=data["name"],
                 subdomain=data["subdomain"],
+                virtual_host=data["virtual_host"],
                 ad_server=data["ad_server"],
                 is_active=data.get("is_active", True),
                 billing_plan=data.get("billing_plan", "standard"),
@@ -200,8 +212,15 @@ def create_tenant():
             # helper invokes `conflict` on both paths, so the check has to be a
             # real query: a callable that unconditionally answered 409 would
             # answer 409 before ever writing.
-            def subdomain_taken():
-                if TenantLookupRepository(db_session).find_by_subdomain(data["subdomain"]):
+            # The pre-check has to see every collision the INSERT can cause, which is this
+            # helper's stated corollary: a duplicate host trips
+            # `ux_tenants_virtual_host_name`, so a subdomain-only check would report a taken
+            # host as free and let it reach the `except` below as a 500.
+            def host_or_subdomain_taken():
+                lookup = TenantLookupRepository(db_session)
+                if lookup.find_by_virtual_host(data["virtual_host"]):
+                    return jsonify({"error": "virtual_host already in use", "field": "virtual_host"}), 409
+                if lookup.find_by_subdomain(data["subdomain"]):
                     return jsonify({"error": "Subdomain already exists"}), 409
                 return None
 
@@ -210,9 +229,9 @@ def create_tenant():
             # are ever staged.
             conflict = resolve_or_write(
                 db_session,
-                conflict=subdomain_taken,
+                conflict=host_or_subdomain_taken,
                 write=lambda: db_session.add(new_tenant),
-                constraint="tenants_subdomain_key",
+                constraint=("tenants_subdomain_key", "ux_tenants_virtual_host_name"),
             )
             if conflict is not None:
                 return conflict
@@ -294,10 +313,12 @@ def create_tenant():
                 "tenant_id": tenant_id,
                 "name": data["name"],
                 "subdomain": data["subdomain"],
-                "admin_ui_url": (
-                    f"http://{data['subdomain']}.localhost:{get_settings().runtime.adcp_sales_port}"
-                    f"/admin/tenant/{tenant_id}"
-                ),
+                # The DEPLOYMENT's admin URL plus this tenant's path. It used to be built
+                # from the subdomain -- the last site deriving a URL from that column, which
+                # nothing routes by (#2191): a tenant is named by its Host against
+                # virtual_host or by its id. `admin_ui_url` is where the admin UI actually
+                # answers, and the tenant is a path under it, not a host beside it.
+                "admin_ui_url": f"{get_settings().runtime.admin_ui_url.rstrip('/')}/admin/tenant/{tenant_id}",
             }
 
             if principal_token:

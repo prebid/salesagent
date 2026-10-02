@@ -5,13 +5,15 @@ from datetime import UTC, datetime
 from decimal import Decimal
 
 from flask import Blueprint, flash, redirect, render_template, request, session, url_for
-from sqlalchemy import or_, select
+from sqlalchemy import select
 
+from src.admin.blueprints.core import get_tenant_from_hostname
+from src.core.config import get_settings
 from src.core.database.database_session import get_db_session
 from src.core.database.integrity import resolve_or_write
 from src.core.database.models import AdapterConfig, CurrencyLimit, Tenant, User
+from src.core.database.repositories import TenantLookupRepository
 from src.core.database.repositories.principal import PrincipalRepository
-from src.core.domain_config import extract_subdomain_from_host, get_sales_agent_domain, is_sales_agent_domain
 
 logger = logging.getLogger(__name__)
 
@@ -22,30 +24,12 @@ public_bp = Blueprint("public", __name__)
 @public_bp.route("/signup")
 def landing():
     """Public landing page for self-service signup."""
-    # Only allow signup on main domain, not tenant subdomains
-    host = request.headers.get("Host", "")
-    approximated_host = request.headers.get("Apx-Incoming-Host")
-
-    # Check if we're on a tenant subdomain
-    with get_db_session() as db_session:
-        # Check Approximated host first
-        if approximated_host:
-            tenant = db_session.scalars(select(Tenant).filter_by(virtual_host=approximated_host)).first()
-            if tenant:
-                # On a tenant domain - redirect to login instead
-                flash("Signup is only available at the main site.", "info")
-                return redirect(url_for("auth.login"))
-
-        # Check subdomain routing
-        if is_sales_agent_domain(host) and not host.startswith("admin."):
-            tenant_subdomain = extract_subdomain_from_host(host)
-            sales_domain = get_sales_agent_domain()
-            if tenant_subdomain and tenant_subdomain != sales_domain.split(".")[0]:
-                tenant = db_session.scalars(select(Tenant).filter_by(subdomain=tenant_subdomain)).first()
-                if tenant:
-                    # On a tenant subdomain - redirect to login instead
-                    flash("Signup is only available at the main site.", "info")
-                    return redirect(url_for("auth.login"))
+    # Signup belongs at the main site, so a host that BELONGS to a tenant goes to that
+    # tenant's login instead. Which tenant a host names is the admin plane's one lookup,
+    # asked here rather than re-derived.
+    if get_tenant_from_hostname():
+        flash("Signup is only available at the main site.", "info")
+        return redirect(url_for("auth.login"))
 
     # If user is already authenticated, redirect to their dashboard
     if "user" in session:
@@ -95,6 +79,43 @@ def signup_onboarding():
     )
 
 
+def _self_serve_wildcard_domain() -> str | None:
+    """The domain a self-serve tenant may be named under, or None when there is none.
+
+    A signing-up publisher cannot know where this deployment answers, so signup is the one
+    creation path that DERIVES a host — and it may only do so where the derived name is
+    true by construction of the deployment. ``config/nginx/nginx-multi-tenant.conf`` serves
+    ``*.${SALES_AGENT_DOMAIN}`` and lets the app pick the tenant from the ``Host``, so those
+    two settings TOGETHER are what make ``f"{subdomain}.{domain}"`` a host something
+    actually serves.
+
+    On a single-tenant install nginx is ``server_name _`` with no wildcard, and the same
+    expression is fiction — which is precisely what #1845 published. So this answers None
+    there and the signup is refused rather than a host invented.
+    """
+    runtime = get_settings().runtime
+    if runtime.adcp_multi_tenant and runtime.sales_agent_domain:
+        return runtime.sales_agent_domain
+    return None
+
+
+def _signup_refusal(publisher_name: str, wildcard_domain: str | None) -> str | None:
+    """Why this signup cannot proceed, or None when it can.
+
+    ``wildcard_domain`` is required for the reason :func:`_self_serve_wildcard_domain`
+    gives: without it there is no host this tenant could be named at that the deployment
+    actually serves, and signup is the one path that would otherwise derive one.
+    """
+    if not publisher_name:
+        return "Publisher name is required"
+    if wildcard_domain is None:
+        return (
+            "Self-serve signup needs a multi-tenant deployment with SALES_AGENT_DOMAIN "
+            "configured. Ask an administrator to create this tenant."
+        )
+    return None
+
+
 @public_bp.route("/signup/provision", methods=["POST"])
 def provision_tenant():
     """Provision new tenant from signup form."""
@@ -114,8 +135,9 @@ def provision_tenant():
         adapter_type = request.form.get("adapter", "mock").strip()
 
         # Validation
-        if not publisher_name:
-            flash("Publisher name is required", "error")
+        wildcard_domain = _self_serve_wildcard_domain()
+        if refusal := _signup_refusal(publisher_name, wildcard_domain):
+            flash(refusal, "error")
             return redirect(url_for("public.signup_onboarding"))
 
         # Generate random subdomain and tenant ID (prevents subdomain squatting)
@@ -127,10 +149,7 @@ def provision_tenant():
 
         # Ensure uniqueness (extremely rare collision, but check anyway)
         with get_db_session() as db_session:
-            stmt = select(Tenant).filter(or_(Tenant.subdomain == subdomain, Tenant.tenant_id == tenant_id))
-            existing_tenant = db_session.scalars(stmt).first()
-
-            if existing_tenant:
+            if TenantLookupRepository(db_session).find_by_id_or_subdomain(tenant_id, subdomain):
                 # Collision detected (astronomically rare), retry with new UUID
                 tenant_id = str(uuid.uuid4())
                 subdomain = tenant_id[:8]
@@ -149,6 +168,8 @@ def provision_tenant():
                 tenant_id=tenant_id,
                 name=publisher_name,
                 subdomain=subdomain,
+                # The wildcard vhost nginx really serves — see _self_serve_wildcard_domain.
+                virtual_host=f"{subdomain}.{wildcard_domain}",
                 ad_server=adapter_type,
                 is_active=True,
                 billing_plan="standard",

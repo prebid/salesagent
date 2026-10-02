@@ -40,10 +40,12 @@ class TestTenantDashboard:
         """Test dashboard loads correctly with media buys using correct field names."""
         # Create test tenant
         with get_db_session() as db_session:
+            # Required (NOT NULL) and UNIQUE. Nothing routes to this host; it exists to satisfy the column.
             tenant = Tenant(
                 tenant_id="test_dashboard",
                 name="Test Dashboard Tenant",
                 subdomain="test-dashboard",
+                virtual_host="test-dashboard.adcp.test",
                 is_active=True,
                 # Use new schema fields
                 enable_axe_signals=True,
@@ -101,6 +103,7 @@ class TestTenantDashboard:
                 tenant_id="test_metrics",
                 name="Test Metrics Tenant",
                 subdomain="test-metrics",
+                virtual_host="test-metrics.adcp.test",
                 is_active=True,
             )
             db_session.add(tenant)
@@ -157,6 +160,7 @@ class TestTenantDashboard:
                 tenant_id="test_config",
                 name="Test Config Tenant",
                 subdomain="test-config",
+                virtual_host="test-config.adcp.test",
                 is_active=True,
                 # New schema fields
                 enable_axe_signals=True,
@@ -216,7 +220,13 @@ class TestTenantDashboard:
         """Test dashboard loads correctly for tenant with no data."""
         # Create minimal tenant
         with get_db_session() as db_session:
-            tenant = Tenant(tenant_id="empty_tenant", name="Empty Tenant", subdomain="empty", is_active=True)
+            tenant = Tenant(
+                tenant_id="empty_tenant",
+                name="Empty Tenant",
+                subdomain="empty",
+                virtual_host="empty-tenant.adcp.test",
+                is_active=True,
+            )
             db_session.add(tenant)
             db_session.commit()
 

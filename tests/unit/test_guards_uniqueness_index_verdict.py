@@ -324,7 +324,7 @@ def test_unique_key_inventory_is_complete_and_untruncated():
     form_counts = {form: sum(1 for key in declared if key.kind == form) for form in EXPECTED_FORM_COUNTS}
     assert form_counts == EXPECTED_FORM_COUNTS, (
         "every declaration form is the ONLY form for at least one model — Tenant.subdomain and "
-        "Principal.token_hash are column-level only, ix_tenants_virtual_host is Index-only"
+        "Principal.token_hash are column-level only, ux_tenants_virtual_host_name is Index-only"
     )
 
     unusable = {(key.model, key.name) for key in keys if not key.usable}

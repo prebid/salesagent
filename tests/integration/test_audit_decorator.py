@@ -14,7 +14,13 @@ def test_decorator_logs_successful_action(integration_db):
     """Verify decorator creates audit log for successful action."""
     # Create test tenant
     with get_db_session() as db_session:
-        tenant = Tenant(tenant_id="test_tenant", name="Test Tenant", subdomain="test")
+        # Required (NOT NULL) and UNIQUE. Nothing routes to this host; it exists to satisfy the column.
+        tenant = Tenant(
+            tenant_id="test_tenant",
+            name="Test Tenant",
+            subdomain="test",
+            virtual_host="test-tenant.adcp.test",
+        )
         db_session.add(tenant)
         db_session.commit()
 
@@ -50,7 +56,12 @@ def test_decorator_logs_successful_action(integration_db):
 def test_decorator_filters_password_fields(integration_db):
     """Verify decorator excludes password fields from audit logs."""
     with get_db_session() as db_session:
-        tenant = Tenant(tenant_id="test_tenant_2", name="Test Tenant 2", subdomain="test2")
+        tenant = Tenant(
+            tenant_id="test_tenant_2",
+            name="Test Tenant 2",
+            subdomain="test2",
+            virtual_host="test-tenant-2.adcp.test",
+        )
         db_session.add(tenant)
         db_session.commit()
 
@@ -92,7 +103,12 @@ def test_decorator_filters_password_fields(integration_db):
 def test_decorator_filters_sensitive_json_fields(integration_db):
     """Verify decorator filters sensitive fields from JSON requests."""
     with get_db_session() as db_session:
-        tenant = Tenant(tenant_id="test_tenant_3", name="Test Tenant 3", subdomain="test3")
+        tenant = Tenant(
+            tenant_id="test_tenant_3",
+            name="Test Tenant 3",
+            subdomain="test3",
+            virtual_host="test-tenant-3.adcp.test",
+        )
         db_session.add(tenant)
         db_session.commit()
 
@@ -138,7 +154,12 @@ def test_decorator_filters_sensitive_json_fields(integration_db):
 def test_decorator_logs_failed_actions(integration_db):
     """Verify decorator logs exceptions and re-raises them."""
     with get_db_session() as db_session:
-        tenant = Tenant(tenant_id="test_tenant_4", name="Test Tenant 4", subdomain="test4")
+        tenant = Tenant(
+            tenant_id="test_tenant_4",
+            name="Test Tenant 4",
+            subdomain="test4",
+            virtual_host="test-tenant-4.adcp.test",
+        )
         db_session.add(tenant)
         db_session.commit()
 
@@ -173,7 +194,12 @@ def test_decorator_logs_failed_actions(integration_db):
 def test_decorator_truncates_long_values(integration_db):
     """Verify decorator truncates values longer than 100 characters."""
     with get_db_session() as db_session:
-        tenant = Tenant(tenant_id="test_tenant_5", name="Test Tenant 5", subdomain="test5")
+        tenant = Tenant(
+            tenant_id="test_tenant_5",
+            name="Test Tenant 5",
+            subdomain="test5",
+            virtual_host="test-tenant-5.adcp.test",
+        )
         db_session.add(tenant)
         db_session.commit()
 
@@ -208,7 +234,12 @@ def test_decorator_truncates_long_values(integration_db):
 def test_decorator_extracts_custom_details(integration_db):
     """Verify extract_details callback works correctly."""
     with get_db_session() as db_session:
-        tenant = Tenant(tenant_id="test_tenant_6", name="Test Tenant 6", subdomain="test6")
+        tenant = Tenant(
+            tenant_id="test_tenant_6",
+            name="Test Tenant 6",
+            subdomain="test6",
+            virtual_host="test-tenant-6.adcp.test",
+        )
         db_session.add(tenant)
         db_session.commit()
 
@@ -270,7 +301,12 @@ def test_decorator_skips_logging_without_tenant_id(integration_db):
 def test_decorator_handles_missing_session(integration_db):
     """Verify decorator handles missing session gracefully."""
     with get_db_session() as db_session:
-        tenant = Tenant(tenant_id="test_tenant_7", name="Test Tenant 7", subdomain="test7")
+        tenant = Tenant(
+            tenant_id="test_tenant_7",
+            name="Test Tenant 7",
+            subdomain="test7",
+            virtual_host="test-tenant-7.adcp.test",
+        )
         db_session.add(tenant)
         db_session.commit()
 

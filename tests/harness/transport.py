@@ -690,7 +690,7 @@ class TransportResult:
         # it is the finding: the seller waved through a request this scenario says it
         # must refuse. Diagnosing that as "the env has no signing capability" sends the
         # reader hunting a harness bug and past the defect, which is the failure mode
-        # this whole surface exists to end (a #1291 finding survived green CI for exactly that
+        # this whole surface exists to end (a misdiagnosis of this exact shape survived green CI for that
         # reason). Order matters: is_error is checkable on every transport, raw_response
         # is not.
         assert self.is_error, (

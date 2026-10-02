@@ -2,7 +2,7 @@
 
 Builds the tool -> address map from the THREE objects production itself uses to
 route real traffic: ``mcp.list_tools()`` (what a real MCP client sees),
-``create_agent_card()`` (what a real A2A buyer's discovery request receives),
+``_derived_skills()`` (the skills a real A2A buyer's discovery request receives),
 and ``app.routes`` (FastAPI's own dispatch table). There is no fourth,
 hand-maintained list of TOOLS to keep in sync — a tool registered on any of
 those three sites becomes resolvable through :data:`ADDRESS_TABLE`
@@ -39,6 +39,7 @@ from __future__ import annotations
 import re
 from collections.abc import Callable
 from dataclasses import dataclass
+from types import SimpleNamespace
 from typing import Any
 
 from tests.harness.transport import Transport
@@ -117,7 +118,7 @@ class AddressTable:
     module-import time).
 
     The three ``_index_*`` methods read production's own registration
-    objects by default (``src.core.main.mcp``, ``create_agent_card()``,
+    objects by default (``src.core.main.mcp``, ``_derived_skills()``,
     ``src.app.app``). Tests that need to prove the "derived, not
     hand-maintained" invariant directly — a NEW tool registered at test time
     becomes addressable with zero map edits — inject a throwaway
@@ -162,9 +163,12 @@ class AddressTable:
     def _index_a2a(self) -> None:
         agent_card_factory = self._agent_card_factory
         if agent_card_factory is None:
-            from src.a2a_server.adcp_a2a_server import create_agent_card
+            # _derived_skills, not a rendered card: a card describes a resolved
+            # TENANT now, and the A2A skill set does not vary by tenant -- it is
+            # derived from TOOLS, which is what this table indexes.
+            from src.a2a_server.adcp_a2a_server import _derived_skills
 
-            agent_card_factory = create_agent_card
+            agent_card_factory = lambda: SimpleNamespace(skills=_derived_skills())  # noqa: E731
 
         for skill in agent_card_factory().skills:
             for t in _A2A_FAMILY:

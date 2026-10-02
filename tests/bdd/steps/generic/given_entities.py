@@ -44,8 +44,22 @@ def given_seller_operational(ctx: dict) -> None:
 
 @given("a tenant is resolvable from the request context")
 def given_tenant_resolvable(ctx: dict) -> None:
-    """Tenant can be resolved from request context (Background)."""
+    """Seed the seller, so the sentence is true.
+
+    It used to set a ctx string and nothing else, which named a tenant without creating
+    one. A request addressing that id resolved anyway, through the loopback fallback to the
+    ``default`` tenant that #2259 removed — so the scenarios reading this Background were
+    served by a tenant they never mentioned, and once the fallback went they were refused
+    TENANT_UNDEFINED for want of a seller. That refusal is correct; the Background was
+    the thing that was wrong.
+
+    ``setup_default_data`` is get-or-create, so an env that already seeded (every e2e env,
+    via ``_seed_identity``) is unaffected, and it seeds the env's OWN tenant id — the one
+    ``env.credential()`` addresses — rather than the ctx string, which is what makes the
+    request resolve.
+    """
     ctx.setdefault("tenant_id", "test_tenant")
+    ctx["env"].setup_default_data()
 
 
 @given("a tenant exists with completed setup checklist")

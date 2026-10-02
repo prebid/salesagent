@@ -13,7 +13,7 @@ so a per-leg copy of the pair would be the duplication the project treats as a
 correctness defect (CLAUDE.md, DRY). ``e2e_rest`` is graded HERE TOO, by the
 third test, on the same env and through the same ``call_via`` seam — relocating
 it into a per-transport module of its own is exactly the cheapest-path failure
-that #1291 exists to undo.
+this whole epic exists to undo.
 
 WHY ``e2e_rest`` NEEDS ITS OWN TEST RATHER THAN A THIRD PARAMETRIZATION. Not
 because the property differs — it is the same property — but because the leg

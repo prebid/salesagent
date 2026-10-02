@@ -42,20 +42,18 @@ curl http://localhost:8000/health
 
 ## First-Time Setup
 
-1. Open http://localhost:8000/admin
-2. New tenants start in **Setup Mode** - test credentials work initially
-3. Log in with test credentials (see below)
-4. Configure SSO in **Users & Access** (see [SSO Setup Guide](user-guide/sso-setup.md))
-5. Test your SSO login works
-6. Disable Setup Mode to require SSO for all users
+1. Configure Google OAuth before you start: set `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`
+   and `SUPER_ADMIN_EMAILS` in `.env.secrets` (see
+   [Environment variables](deployment/environment-variables.md#authentication)). The login
+   page says so too, and offers nothing else.
+2. Open http://localhost:8000/admin
+3. Log in with Google as one of the `SUPER_ADMIN_EMAILS` addresses
+4. Configure per-tenant SSO in **Users & Access** (see [SSO Setup Guide](user-guide/sso-setup.md))
 
-### Setup Mode
-
-New tenants start with `auth_setup_mode=true`, which allows test credentials:
-- Click "Log in to Dashboard" button on the login page
-- Password: `test123`
-
-Once you've configured and tested SSO, disable Setup Mode from the Users & Access page. After that, only SSO authentication works.
+There is no password login. A route that accepted a fixed password existed for local use and
+is gone: it was composed only when a test-mode flag was set, which made the app under test a
+different app from the deployed one, and it minted an operator session from a default
+password.
 
 ## Local Testing with Demo Data
 
@@ -80,17 +78,25 @@ This demo data lets you explore features without configuring Google Ad Manager o
 
 All services are accessible through port 8000:
 
-| Service | URL |
-|---------|-----|
-| Admin UI | http://localhost:8000/ |
-| Admin UI (alternate) | http://localhost:8000/admin |
-| MCP Server | http://localhost:8000/mcp/ |
-| A2A Server | http://localhost:8000/a2a |
-| Health Check | http://localhost:8000/health |
+| Service | URL | Names a tenant how |
+|---------|-----|---|
+| Admin UI | http://localhost:8000/ | its own session |
+| Admin UI (alternate) | http://localhost:8000/admin | its own session |
+| MCP Server | http://localhost:8000/mcp/ | `x-adcp-tenant` header |
+| A2A Server | http://localhost:8000/a2a | `x-adcp-tenant` header |
+| Health Check | http://localhost:8000/health | no tenant needed |
 
 ## Connecting an AI Agent
 
 Once running, AI agents can connect via MCP:
+
+A request has to say WHICH seller it is for. Normally the `Host` does that — a tenant is
+served at the host it declares in `virtual_host` — but `localhost` declares no tenant, so a
+local call names the tenant explicitly with `x-adcp-tenant`. That is the same header the
+test suites use, so the local stack exercises the resolution path a deployment uses rather
+than a fourth one nothing else runs. A request naming no tenant is refused with
+`CONFIGURATION_ERROR`: the deployment cannot tell which seller it is for, and guessing one
+is how a caller ends up served another tenant's catalogue.
 
 ```python
 from fastmcp.client import Client, StreamableHttpTransport
@@ -98,7 +104,10 @@ from fastmcp.client import Client, StreamableHttpTransport
 # Get your token from Admin UI > Advertisers > View Token
 transport = StreamableHttpTransport(
     url="http://localhost:8000/mcp/",
-    headers={"Authorization": "Bearer your-principal-token"}
+    headers={
+        "Authorization": "Bearer your-principal-token",
+        "x-adcp-tenant": "default",  # which seller; over loopback the Host names none
+    },
 )
 
 async with Client(transport=transport) as client:
@@ -149,7 +158,8 @@ docker compose up -d
 ```
 
 ### "No tenant context" error
-- Ensure you're using the test login credentials
+- Ensure the request names a tenant: either a `Host` header matching the tenant's
+  `virtual_host`, or an `x-adcp-tenant` header carrying the tenant id
 - Check that migrations ran: `docker compose logs db-init`
 
 ### Port 8000 already in use

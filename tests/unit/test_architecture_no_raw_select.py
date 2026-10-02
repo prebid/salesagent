@@ -97,11 +97,8 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/admin/blueprints/auth.py", "login"),
     ("src/admin/blueprints/auth.py", "logout"),
     ("src/admin/blueprints/auth.py", "tenant_login"),
-    # Moved file, same violation: test_auth left auth.py for its own module, so the
-    # entry follows the code rather than being deleted as "fixed". The raw select is
-    # still there (src/admin/blueprints/test_auth.py:47).
-    ("src/admin/blueprints/test_auth.py", "test_auth"),
-    # _construct_agent_url removed — delegates to canonical_agent_url via TrustRootUoW
+    # _construct_agent_url removed — the agent URL is stored tenant state, reached
+    # through a repository instead of selected here
     ("src/admin/blueprints/authorized_properties.py", "_save_properties_batch"),
     ("src/admin/blueprints/authorized_properties.py", "create_property"),
     ("src/admin/blueprints/authorized_properties.py", "create_property_tag"),
@@ -113,7 +110,9 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/admin/blueprints/authorized_properties.py", "sync_properties_from_adagents"),
     ("src/admin/blueprints/authorized_properties.py", "upload_authorized_properties"),
     # create_tenant fixed — its duplicate check goes through TenantLookupRepository
-    ("src/admin/blueprints/core.py", "get_tenant_from_hostname"),
+    # get_tenant_from_hostname fixed — the admin plane's one host -> tenant lookup now goes
+    # through TenantLookupRepository.find_active_by_virtual_host, and public.landing and
+    # auth.login call it instead of each hand-rolling the same select (#2263)
     ("src/admin/blueprints/core.py", "index"),
     ("src/admin/blueprints/core.py", "reactivate_tenant"),
     ("src/admin/blueprints/core.py", "render_super_admin_index"),
@@ -178,7 +177,7 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/admin/blueprints/products.py", "get_product_inventory"),
     ("src/admin/blueprints/products.py", "list_products"),
     ("src/admin/blueprints/products.py", "unassign_inventory_from_product"),
-    ("src/admin/blueprints/public.py", "landing"),
+    # landing fixed — it asks core.get_tenant_from_hostname instead of selecting tenants
     ("src/admin/blueprints/public.py", "provision_tenant"),
     ("src/admin/blueprints/public.py", "signup_complete"),
     ("src/admin/blueprints/publisher_partners.py", "add_publisher_partner"),
@@ -218,6 +217,13 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/admin/blueprints/users.py", "update_role"),
     ("src/admin/blueprints/workflows.py", "list_workflows"),  # select(Tenant) — no tenant repo yet
     ("src/admin/blueprints/workflows.py", "review_workflow_step"),  # select(Context) — context lookup
+    # ── Alias-hidden, now visible (#2128) ──
+    # Both wrote `from ...models import X as ModelX` and then `select(ModelX)`, which the
+    # finder judged by the local name and so never counted. One of these had its row
+    # removed as fixed while all four of its raw selects remained. The finder resolves
+    # aliases now, so they are debt that shows rather than debt that hides.
+    ("src/routes/health.py", "debug_db_state"),
+    ("src/core/tools/media_buy_update.py", "_update_media_buy_impl"),
     # ── Admin services / utils ──
     ("src/admin/domain_access.py", "ensure_user_in_tenant"),
     ("src/admin/domain_access.py", "find_tenant_by_authorized_domain"),
@@ -248,15 +254,12 @@ ALLOWLIST: set[tuple[str, str]] = {
     # ── Core ──
     ("src/core/audit_logger.py", "log_operation"),
     ("src/core/audit_logger.py", "log_security_violation"),
-    ("src/core/config_loader.py", "ensure_default_tenant_exists"),
-    ("src/core/config_loader.py", "get_default_tenant"),
-    ("src/core/config_loader.py", "get_tenant_by_id"),
-    ("src/core/config_loader.py", "get_tenant_by_subdomain"),
-    ("src/core/config_loader.py", "get_tenant_by_virtual_host"),
+    # config_loader's tenant lookups fixed — every lookup it still has delegates to
+    # TenantLookupRepository, which owns every cross-tenant query on ``tenants`` (#2263).
+    # ensure_default_tenant_exists still CREATES the row; only its lookup moved.
     # add_message removed — now sa_update + jsonb_list_append, zero selects.
-    # _send_push_notifications removed — config lookup routes through
-    # PushNotificationConfigRepository. Each side removed one; the allowlist is
-    # the intersection, so neither survives.
+    # _send_push_notifications removed — its config lookup routes through
+    # PushNotificationConfigRepository.
     ("src/core/context_manager.py", "get_context"),
     ("src/core/context_manager.py", "get_context_status"),
     ("src/core/context_manager.py", "get_contexts_for_principal"),
@@ -279,8 +282,6 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/core/tools/media_buy_create.py", "execute_approved_media_buy"),
     ("src/core/tools/media_buy_list.py", "_fetch_creative_approvals"),
     # ── Routes ──
-    ("src/routes/health.py", "debug_db_state"),
-    ("src/routes/health.py", "debug_root_logic"),
     # ── Services ──
     ("src/services/auth_config_service.py", "delete_oidc_config"),
     ("src/services/auth_config_service.py", "disable_oidc"),

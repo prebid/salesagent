@@ -15,13 +15,10 @@ import pytest
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import (
-    CurrencyLimit,
     MediaBuy,
     MediaPackage,
     Principal,
     Product,
-    PropertyTag,
-    Tenant,
 )
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import (
@@ -35,6 +32,7 @@ from src.core.tools.media_buy_delivery import _get_media_buy_delivery_impl
 from tests.factories import PricingOptionFactory
 from tests.factories.media_buy import request_package
 from tests.factories.principal import PrincipalFactory, plaintext_token_for
+from tests.utils.database_helpers import add_product_prerequisites, create_tenant_with_timestamps
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -98,7 +96,10 @@ def _setup_base_state(session) -> dict:
     tenant_id = "test_tenant"
     principal_id = "test_principal"
 
-    tenant = Tenant(
+    # Through the shared builder rather than a hand-written Tenant(...): it supplies the
+    # timestamps and the host, and spelling the same row out here made it a byte-for-byte
+    # duplicate of tests/integration/conftest.py's tenant (pylint R0801).
+    tenant = create_tenant_with_timestamps(
         tenant_id=tenant_id,
         name="Test Tenant",
         subdomain="test",
@@ -109,27 +110,17 @@ def _setup_base_state(session) -> dict:
         human_review_required=False,
         policy_settings={},
         authorized_emails=["test@example.com"],
-        created_at=now,
-        updated_at=now,
     )
     session.add(tenant)
     session.flush()
 
-    currency_limit = CurrencyLimit(
-        tenant_id=tenant_id,
-        currency_code="USD",
+    add_product_prerequisites(
+        session,
+        tenant_id,
         min_package_budget=1.00,
         max_daily_package_spend=100000.00,
+        tag_description="All available inventory",
     )
-    session.add(currency_limit)
-
-    property_tag = PropertyTag(
-        tenant_id=tenant_id,
-        tag_id="all_inventory",
-        name="All Inventory",
-        description="All available inventory",
-    )
-    session.add(property_tag)
 
     principal = Principal.with_token(
         plaintext_token_for(principal_id),

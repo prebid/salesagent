@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+
+{% block title %}Upload Authorized Properties - {{ tenant.name }}{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+    <div class="row">
+        <div class="col-md-8">
+            <div class="d-flex justify-content-between align-items-center mb-4">
+                <div>
+                    <h2>Upload Authorized Properties</h2>
+                    <p class="text-muted">Add properties in bulk from a file</p>
+                </div>
+                <div>
+                    <a href="{{ url_for('authorized_properties.list_authorized_properties', tenant_id=tenant.tenant_id) }}"
+                       class="btn btn-outline-secondary">
+                        <i class="fas fa-arrow-left"></i> Back to Properties
+                    </a>
+                </div>
+            </div>
+
+            <div class="card mb-4">
+                <div class="card-body">
+                    <form method="POST"
+                          action="{{ url_for('authorized_properties.upload_authorized_properties', tenant_id=tenant.tenant_id) }}"
+                          enctype="multipart/form-data">
+                        <div class="form-group">
+                            <label for="file">Properties file</label>
+                            <input type="file"
+                                   class="form-control-file"
+                                   id="file"
+                                   name="file"
+                                   accept=".json,.csv"
+                                   required>
+                            <small class="form-text text-muted">
+                                JSON is supported today. A file is either an array of properties or an
+                                object with a <code>properties</code> key.
+                            </small>
+                        </div>
+                        <button type="submit" class="btn btn-primary">
+                            <i class="fas fa-upload"></i> Upload
+                        </button>
+                    </form>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-header">
+                    <h5 class="mb-0">File format</h5>
+                </div>
+                <div class="card-body">
+                    <p>Each property needs a type, a name, a publisher domain and at least one identifier:</p>
+                    <pre class="bg-light p-3"><code>[
+  {
+    "property_type": "website",
+    "name": "Example Sports",
+    "publisher_domain": "example.com",
+    "identifiers": [{"type": "domain", "value": "sports.example.com"}],
+    "tags": ["premium"]
+  }
+]</code></pre>
+                    <p class="mb-1"><strong>Property types:</strong></p>
+                    <p class="text-muted">
+                        {% for property_type in ['website', 'mobile_app', 'ctv_app', 'dooh', 'podcast', 'radio', 'streaming_audio'] %}
+                        <code>{{ property_type }}</code>{% if not loop.last %}, {% endif %}
+                        {% endfor %}
+                    </p>
+
+                    {% if existing_tags %}
+                    <p class="mb-1 mt-3"><strong>Tags available for this tenant:</strong></p>
+                    <p class="mb-0">
+                        {% for tag in existing_tags %}
+                        <span class="badge badge-secondary">{{ tag.tag_id }}</span>
+                        {% endfor %}
+                    </p>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

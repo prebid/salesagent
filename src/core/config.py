@@ -84,11 +84,11 @@ class RuntimeSettings(BaseSettings):
 
     @property
     def is_production(self) -> bool:
-        """One answer for the three spellings a deployment used to set.
+        """One answer for the three spellings a deployment can set.
 
-        ``PRODUCTION=true``, ``ENVIRONMENT=production`` and a Fly.io app name all meant
-        "this is production" to some site and not to others; security-sensitive checks
-        drifted on the difference. Any of the three is production.
+        ``PRODUCTION=true``, ``ENVIRONMENT=production`` and a Fly.io app name each mean
+        "this is production", so a security-sensitive check reading only one of them
+        disagrees with a check reading another. Any of the three is production.
         """
         return self.production or self.environment.lower() == "production" or bool(self.fly_app_name)
 
@@ -154,7 +154,7 @@ class TestingSettings(BaseSettings):
     it may only lose fields, which ``tests/unit/test_testing_settings_only_shrinks.py``
     pins. Nothing may be added.
 
-    Each field's production readers, and what has to happen before it can go:
+    The remaining field's production readers, and what has to happen before it can go:
 
     * ``adcp_testing`` -- one decision, ``webhook_validator.py:196``, which loosens
       ``EgressPolicy.check_registration``'s loopback check while a suite runs. The
@@ -163,33 +163,24 @@ class TestingSettings(BaseSettings):
       spelled out here: ``test_architecture_no_outbound_insecure_hatch`` counts a literal
       mention as a declaration site, which is the right reading for a flag that can
       disable the address gate, so naming it in prose would quietly widen its pin. The
-      seven properties on this class that used to fork on ``adcp_testing`` are already
-      pinned shrink-only (GH #2255).
-    * ``adcp_auth_test_mode`` -- one reader, ``src/admin/app.py:351``, deciding whether
-      the test-credential login blueprint is COMPOSED. It goes when first-run admin setup
-      has an answer that is not a test flag (salesagent-091d8): today that blueprint is
-      the only non-SSO path to a first admin session, and the deployment docs instruct
-      operators to use it.
-    * the six ``test_*`` credentials -- read at ONE site, ``test_auth.py:63,68,73``, as
-      that blueprint's credential table. They go with the blueprint.
+      seven properties on :class:`Settings` that still fork on ``adcp_testing`` are pinned
+      shrink-only (GH #2255).
+
+    A field leaves this class by giving the behavior a real input, never by keeping the flag
+    somewhere else. A test that needs an admin session signs one
+    (``tests/helpers/admin_session.py``), and a deployment reaches its first admin through
+    its identity provider, with per-tenant Setup Mode covering the interval before SSO is
+    switched on -- so no composition-time credential flag is needed for either.
 
     Provisioning facts a deployment legitimately sets -- seed a demo tenant, seed sample
-    data, skip migrations -- are NOT here; they are :class:`ProvisioningSettings`. They sat
-    in this class and that was the confusion worth removing: a name implying everything
-    inside is a test artifact hides which fields are actually defects, and a demo
-    deployment genuinely wants a demo tenant.
+    data, skip migrations -- are NOT here; they are :class:`ProvisioningSettings`. A name
+    implying everything inside is a test artifact would hide which fields are actually
+    defects, and a demo deployment genuinely wants a demo tenant.
     """
 
     model_config = _ENV
 
     adcp_testing: bool = False
-    adcp_auth_test_mode: bool = False
-    test_super_admin_email: str = "test_super_admin@example.com"
-    test_super_admin_password: str = "test123"
-    test_tenant_admin_email: str = "test_tenant_admin@example.com"
-    test_tenant_admin_password: str = "test123"
-    test_tenant_user_email: str = "test_tenant_user@example.com"
-    test_tenant_user_password: str = "test123"
 
 
 class ProvisioningSettings(BaseSettings):

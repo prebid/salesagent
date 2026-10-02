@@ -89,32 +89,31 @@ async def _deliver_sync_creatives_webhook(
     principal_id: str | None,
     # `Any`, not `str | None`: this is the ORM row's attribute, read before the
     # UoW closed, and the repository hands it back untyped. Narrowing it here
-    # would invent a type the extraction did not have and trip the
-    # check-untyped-defs ratchet (#1611) on a pure code move.
+    # would invent a type the caller does not have and trip the
+    # check-untyped-defs ratchet (#1611).
     step_context_id: Any,
 ) -> bool:
     """Build the protocol-shaped payload and push it to the buyer.
 
     This is the second half of :func:`_call_webhook_for_creative_status`, split out
-    so that function stays under the ADR-009 complexity ratchet (#1610). The split
-    is on the boundary the original code already documented: everything here runs
-    AFTER the UoW closes, which is why it takes the step's attributes as plain
-    values rather than the ORM row (a detached row would raise on attribute access).
+    so that function stays under the ADR-009 complexity ratchet (#1610). The split is on
+    the UoW boundary: everything here runs AFTER the UoW closes, which is why it takes the
+    step's attributes as plain values rather than the ORM row (a detached row would raise on
+    attribute access).
 
     Returns:
         True if the buyer's endpoint took the notification, False if the send failed.
     """
     service = get_protocol_webhook_service()
     try:
-        # The payload build used to live here, and the metadata was a hand-built
-        # dict carrying task_type alone. Both are now notify()'s job: it builds the
-        # one envelope, and it takes a typed context whose fields have to be named.
+        # The payload is not built here: notify() builds the one envelope, and it takes a
+        # typed context whose fields have to be named.
         #
-        # tenant_id and principal_id are the two that used to go missing. Both were
-        # in scope all along -- the caller raises without tenant_id, and the
-        # creative row carries principal_id -- but neither reached the dict, so
-        # records_delivery_log was False and every admin-originated delivery wrote
-        # no webhook_delivery_log row and said nothing about it (salesagent-pldmk.39).
+        # tenant_id and principal_id are the two a hand-built metadata dict drops. Both are
+        # in scope -- the caller raises without tenant_id, and the creative row carries
+        # principal_id -- and without them records_delivery_log is False, so an
+        # admin-originated delivery writes no webhook_delivery_log row and says nothing
+        # about it.
         await service.notify(
             push_notification_config,
             task=WebhookTaskContext(
@@ -392,11 +391,10 @@ def list_creatives(tenant_id, **kwargs):
     return redirect(url_for("creatives.review_creatives", tenant_id=tenant_id))
 
 
-@creatives_bp.route("/add/ai", methods=["GET"])
-@require_tenant_access()
-def add_ai(tenant_id, **kwargs):
-    """Show AI-assisted creative format discovery form."""
-    return render_template("creative_format_ai.html", tenant_id=tenant_id)
+# There is no AI creative-format page: creative_format_ai.html was never written, so a route
+# rendering it can only raise TemplateNotFound. The `analyze` endpoint below — the AI backend
+# such a page would post to — works and is left in place; whether the feature gets a front
+# end is a product decision rather than a cleanup.
 
 
 @creatives_bp.route("/analyze", methods=["POST"])

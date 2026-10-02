@@ -25,8 +25,6 @@ def log_tool_activity(identity: PublicIdentity, tool_name: str, start_time: floa
         principal_id = identity.principal_id
         tenant = identity.tenant
 
-        if not tenant:
-            return
         # The identity carries the principal the resolver loaded, name included; nothing
         # here loads a row.
         principal_name = identity.principal.name if identity.principal is not None else "Unknown"

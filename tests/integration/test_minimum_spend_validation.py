@@ -105,6 +105,7 @@ class TestMinimumSpendValidation:
                 tenant_id="test_minspend_tenant",
                 name="Test Minimum Spend Tenant",
                 subdomain="testminspend",
+                virtual_host="test-minspend.adcp.test",
                 ad_server="mock",  # Mock adapter is accepted in test environments
                 auth_setup_mode=False,  # Disable setup mode for production-ready auth
                 enable_axe_signals=True,

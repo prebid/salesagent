@@ -28,7 +28,6 @@ def _make_identity(tenant_id="test-tenant", **tenant_fields):
         principal_id="user-1",
         tenant_id=tenant_id,
         name="Test",
-        subdomain="test",
         ad_server="mock",
         advertising_policy=None,
         **tenant_fields,

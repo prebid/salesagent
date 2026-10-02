@@ -8,7 +8,7 @@ The obligations and their spec citations live in the feature file; what belongs 
 is why they are bound as a file of their own:
 
 * they are CROSS-transport claims, so grading them inside a per-transport module is
-  the exact failure #1291 exists to undo;
+  the exact failure this module exists to undo;
 * they run on ``sync_creatives`` because it is the lightest AdCP operation that
   accepts a ``push_notification_config`` on all three transports (the escalation's
   own trigger, security.mdx :1462-1465) — the operation is scenery, the enforcement

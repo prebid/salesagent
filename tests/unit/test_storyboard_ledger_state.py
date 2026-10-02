@@ -16,14 +16,17 @@ Per the Core Invariant, an entry must be seeded from a MEASURED in-network CI ru
 never re-derived/inferred (the architect review's HIGH finding: the runner's host-side
 numbers do not carry over to the in-network receiver topology).
 
-The ledger holds no entries, so the storyboard grades every check it collects.
-``EXPECTED_LEDGER`` is empty to match, and that emptiness is the pin: adding an entry to
-one file without the other fails this module.
+The ledger holds the measured gap surface, and ``EXPECTED_LEDGER`` pins it
+entry-for-entry: adding or removing a line in one file without the other fails this module.
+
+The pass count is floored separately, in ``.storyboard-pass-floor``, because no pytest
+outcome carries it: a check degrading from PASS to SKIP deletes its own failing item, so
+this module alone cannot catch it.
 
 RE-SEEDING is a standing rule, not a one-off: whenever a run seeds or retires
-entries, update the ledger file AND ``EXPECTED_LEDGER`` (in
-``tests/helpers/storyboard_ledger_pin.py``, which also carries the seed
-provenance) in the same change. Same discipline as the e2e_rest docstring — a
+entries, update all three in the same change — the ledger file, ``EXPECTED_LEDGER``
+(in ``tests/helpers/storyboard_ledger_pin.py``, which also carries the seed
+provenance), and the pass floor. Same discipline as the e2e_rest docstring — a
 removed entry that creeps back is a graduation regression; a genuine-gap entry
 deleted without landing the underlying fix is a silent gap-hiding regression.
 
