@@ -1,6 +1,6 @@
 """BDD scenario binding for product discovery with inventory profiles (#1162).
 
-Scenarios test that Product.effective_properties infers selection_type
+Scenarios test that Product.resolve_publisher_properties infers selection_type
 when inventory profile publisher_properties lack the discriminator.
 """
 

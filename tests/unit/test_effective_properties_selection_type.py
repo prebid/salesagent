@@ -1,22 +1,24 @@
 """Regression tests for GitHub issue #1162: selection_type inference on inventory profile path.
 
-Product.effective_properties must infer selection_type when inventory profile
+Product.resolve_publisher_properties must infer selection_type when inventory profile
 publisher_properties lack the discriminator required by AdCP 2.13.0+.
 
 These tests construct ORM model instances in memory (no database) and verify
-the effective_properties property returns normalized publisher_properties.
+the resolution returns normalized publisher_properties. A profile's selectors name their
+own publishers, so no authorized property is consulted and none is passed.
 """
 
-from unittest.mock import MagicMock, PropertyMock
+from unittest.mock import MagicMock
 
 from src.core.database.models import Product
+from tests.factories.product import authorized_refs
 
 
 def _make_product_with_profile(publisher_properties: list[dict]) -> MagicMock:
-    """Build a mock Product whose effective_properties calls the real property logic.
+    """Build a mock Product carrying an inventory profile with *publisher_properties*.
 
-    Uses a MagicMock with the real Product.effective_properties descriptor
-    to test the actual inference logic without SQLAlchemy instrumentation.
+    The tests call the real ``Product.resolve_publisher_properties`` on it, so the actual
+    inference logic runs without SQLAlchemy instrumentation.
     """
     profile = MagicMock()
     profile.publisher_properties = publisher_properties
@@ -28,9 +30,6 @@ def _make_product_with_profile(publisher_properties: list[dict]) -> MagicMock:
     product.property_ids = None
     product.property_tags = None
     product.tenant = None
-
-    # Wire the real property descriptor so we test actual production code
-    type(product).effective_properties = PropertyMock(side_effect=lambda: Product.effective_properties.fget(product))
     return product
 
 
@@ -44,7 +43,7 @@ class TestEffectivePropertiesSelectionTypeInference:
         without selection_type discriminator.
         """
         product = _make_product_with_profile([{"publisher_domain": "example.com", "property_ids": ["homepage"]}])
-        effective = product.effective_properties
+        effective = Product.resolve_publisher_properties(product, authorized_refs("example.com"))
 
         assert effective is not None
         assert len(effective) == 1
@@ -55,7 +54,7 @@ class TestEffectivePropertiesSelectionTypeInference:
     def test_profile_property_tags_without_selection_type_infers_by_tag(self):
         """Profile with property_tags but no selection_type should infer 'by_tag'."""
         product = _make_product_with_profile([{"publisher_domain": "example.com", "property_tags": ["premium"]}])
-        effective = product.effective_properties
+        effective = Product.resolve_publisher_properties(product, authorized_refs("example.com"))
 
         assert effective is not None
         assert len(effective) == 1
@@ -66,7 +65,7 @@ class TestEffectivePropertiesSelectionTypeInference:
     def test_profile_no_ids_no_tags_infers_all(self):
         """Profile with only publisher_domain (no IDs, no tags) should infer 'all'."""
         product = _make_product_with_profile([{"publisher_domain": "example.com"}])
-        effective = product.effective_properties
+        effective = Product.resolve_publisher_properties(product, authorized_refs("example.com"))
 
         assert effective is not None
         assert len(effective) == 1
@@ -90,7 +89,7 @@ class TestEffectivePropertiesSelectionTypeInference:
                 }
             ]
         )
-        effective = product.effective_properties
+        effective = Product.resolve_publisher_properties(product, authorized_refs("example.com"))
 
         assert effective is not None
         assert len(effective) == 1
@@ -107,7 +106,7 @@ class TestEffectivePropertiesSelectionTypeInference:
         product = _make_product_with_profile(
             [{"publisher_domain": "example.com", "property_tags": ["premium"], "selection_type": "by_tag"}]
         )
-        effective = product.effective_properties
+        effective = Product.resolve_publisher_properties(product, authorized_refs("example.com"))
 
         assert effective is not None
         assert len(effective) == 1
@@ -122,7 +121,7 @@ class TestEffectivePropertiesSelectionTypeInference:
         contain dots which fail the AdCP PropertyId regex validation.
         """
         product = _make_product_with_profile([{"publisher_domain": "example.com", "property_ids": ["weather.com"]}])
-        effective = product.effective_properties
+        effective = Product.resolve_publisher_properties(product, authorized_refs("example.com"))
 
         assert effective is not None
         assert len(effective) == 1

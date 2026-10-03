@@ -18,7 +18,8 @@ the tenant does not live at. The one place a host is still derived is
 bootstraps for itself and STORES its answer; see its own note for why deriving there
 is sound and deriving at publish time is not (#1845).
 
-Scope. This module is the DERIVATION and nothing else. The agent card reads it
+Scope. This module is the DERIVATION, plus the one comparison against it: whether a
+publisher's adagents.json entry names this agent (:func:`identifies_agent`). The agent card reads it
 through :mod:`src.services.seller_capabilities`, which is also what
 ``get_adcp_capabilities`` renders from, so the card and the tool cannot name
 different URLs for one seller. The trust-root documents that also build on this
@@ -32,11 +33,12 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Any, Protocol
 from urllib.parse import urlsplit
 
 from src.core.config import get_settings
 from src.core.domain_config import _get_protocol_for_domain
+from src.core.signing.canonical import origin_of
 
 # The paths a counterparty actually reaches this agent at, keyed by transport.
 # Values are what the running app resolves to AFTER any redirect it issues —
@@ -116,8 +118,74 @@ def agent_endpoint_urls(tenant: DeclaresHost) -> dict[str, str]:
     ``agents[]`` entry per member of this mapping, so the byte-equal match at
     ``security.mdx`` step 5 succeeds for a caller of either transport.
     """
-    origin = canonical_agent_url(tenant)
+    return _endpoint_urls_at(canonical_agent_url(tenant))
+
+
+def _endpoint_urls_at(origin: str) -> dict[str, str]:
     return {transport: origin + path for transport, path in AGENT_ENDPOINT_PATHS.items()}
+
+
+def identifies_agent(entry_url: object, agent_url: str) -> bool:
+    """Whether an adagents.json ``authorized_agents[].url`` names the agent at *agent_url*.
+
+    *agent_url* is the tenant's ``agent_url`` (its origin). The entry names this agent when
+    it canonicalizes to that origin or to one of the endpoints under it. The pinned spec
+    calls the entry the "Agent's API endpoint URL" (``adagents.mdx``), its seller-setup
+    example authorizes ``https://ads.streamhaus.example/mcp``, and
+    ``url-canonicalization.mdx`` keeps the path, so comparing against the origin alone
+    reads a publisher that wrote our MCP or A2A endpoint as authorizing nobody.
+
+    Both slash spellings of each endpoint count because the app answers at both: the
+    ``/mcp`` mount 307s to ``/mcp/`` and ``/a2a/`` 307s to ``/a2a`` (``src/app.py``). That
+    is a fact about where THIS agent is served, which is the only reason a path is
+    accepted. A path the app does not serve, another host, another scheme or another port
+    does not identify it.
+
+    Each side goes through ``src.core.schemas.canonical_agent_url``, the one
+    implementation of the canonicalization algorithm. An entry it refuses (no host, a
+    malformed authority) or a value that is not a string names nobody. A tenant
+    *agent_url* it refuses is not a publisher's mistake, so it raises ``ValueError``
+    rather than reading as "not authorized".
+    """
+    from src.core.schemas import canonical_agent_url as canonical_url
+
+    origin = origin_of(agent_url)
+    if origin is None:
+        raise ValueError(f"agent_url {agent_url!r} has no origin to compare adagents.json entries against")
+    served = {canonical_url(agent_url), canonical_url(origin)}
+    for endpoint in _endpoint_urls_at(origin).values():
+        bare = endpoint.rstrip("/")
+        served |= {canonical_url(bare), canonical_url(bare + "/")}
+    if not isinstance(entry_url, str) or not entry_url:
+        return False
+    try:
+        return canonical_url(entry_url) in served
+    except ValueError:
+        return False
+
+
+def adagents_scoped_to_agent(adagents_data: dict[str, Any], agent_url: str) -> dict[str, Any]:
+    """*adagents_data* with only the ``authorized_agents`` entries that name *agent_url*.
+
+    The SDK's ``verify_agent_authorization`` and ``get_properties_by_agent`` match an entry
+    by its URL with the scheme and a trailing slash dropped, so an entry naming our
+    ``/mcp`` endpoint never matches our origin. Projecting the document first lets them
+    keep their resolution (selectors, revocations, the union over entries) while
+    :func:`identifies_agent` alone decides which entries are ours: each kept entry carries
+    *agent_url* as its ``url``, and every other key of the document is unchanged.
+
+    A document whose ``authorized_agents`` is not a list is returned as is, so the SDK
+    refuses it exactly as it did before.
+    """
+    entries = adagents_data.get("authorized_agents")
+    if not isinstance(entries, list):
+        return adagents_data
+    ours = [
+        {**entry, "url": agent_url}
+        for entry in entries
+        if isinstance(entry, dict) and identifies_agent(entry.get("url"), agent_url)
+    ]
+    return {**adagents_data, "authorized_agents": ours}
 
 
 def agent_entry_id(tenant: DeclaresIdentity, transport: str) -> str:

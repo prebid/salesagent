@@ -193,18 +193,18 @@
                     <span style="font-weight: normal; color: #666; font-size: 0.85em; margin-left: 0.5rem;">({{ tags|length }} tag{{ 's' if tags|length != 1 else '' }})</span>
                 </div>
                 {% for tag in tags|sort %}
-                {% set is_selected = false %}
+                {% set selection = namespace(checked=false) %}
                 {% if selected_publisher_properties %}
                     {% for sp in selected_publisher_properties %}
                         {% if sp.publisher_domain == domain and sp.selection_type == 'by_tag' and tag in (sp.property_tags or []) %}
-                            {% set is_selected = true %}
+                            {% set selection.checked = true %}
                         {% endif %}
                     {% endfor %}
                 {% endif %}
                 <div class="property-item">
                     <input type="checkbox" name="selected_property_tags" value="{{ domain }}:{{ tag }}"
                            id="tag_{{ domain|replace('.', '_')|replace('-', '_') }}_{{ tag }}"
-                           {% if is_selected %}checked{% endif %}>
+                           {% if selection.checked %}checked{% endif %}>
                     <span class="tag-badge">{{ tag }}</span>
                 </div>
                 {% endfor %}
@@ -245,17 +245,17 @@
                     <span style="font-weight: normal; color: #666; font-size: 0.85em; margin-left: 0.5rem;">({{ props|length }} properties)</span>
                 </div>
                 {% for prop in props %}
-                {% set is_selected = false %}
+                {% set selection = namespace(checked=false) %}
                 {% if selected_publisher_properties %}
                     {% for sp in selected_publisher_properties %}
                         {% if sp.publisher_domain == domain and sp.selection_type == 'by_id' and prop.property_id in (sp.property_ids or []) %}
-                            {% set is_selected = true %}
+                            {% set selection.checked = true %}
                         {% endif %}
                     {% endfor %}
                 {% endif %}
                 <div class="property-item">
                     <input type="checkbox" name="selected_property_ids" value="{{ prop.property_id }}"
-                           id="prop_{{ prop.property_id }}" {% if is_selected %}checked{% endif %}>
+                           id="prop_{{ prop.property_id }}" {% if selection.checked %}checked{% endif %}>
                     <code class="property-id-badge">{{ prop.property_id }}</code>
                     <span class="property-name">{{ prop.name }}</span>
                 </div>

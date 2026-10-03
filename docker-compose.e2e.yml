@@ -357,6 +357,33 @@ services:
       ADCP_SIGNING_PER_KEYID_CAP_OVERRIDES: ${ADCP_SIGNING_PER_KEYID_CAP_OVERRIDES:-}
       ADCP_SIGNING_REPLAY_TTL_OVERRIDES: ${ADCP_SIGNING_REPLAY_TTL_OVERRIDES:-}
 
+  # The SAME seller deployed in production, on the SAME database as `adcp-server`. A server's
+  # posture is read once, where it starts, so a scenario whose Given says "the seller is
+  # deployed in production" cannot flip `adcp-server`; it is served here instead
+  # (E2EConfig.production_base_url, E2E_PRODUCTION_BASE_URL on the runner below).
+  # local-publisher-authorization.feature needs it: anywhere but production, partner sync
+  # verifies every partner without reading the publisher's adagents.json
+  # (Settings.publisher_auto_verify_allowed), so the check it grades only runs here.
+  # run_all_tests.sh starts one per worker as well, as `<project>-server-gwN-production`.
+  #
+  # Merged from the anchors, so it differs from adcp-server by exactly the lines below:
+  #   * PRODUCTION=true -- the posture.
+  #   * ADCP_RUN_BACKGROUND_SCHEDULERS=false -- adcp-server already sweeps this database;
+  #     a second sweep would deliver every scheduled webhook twice.
+  adcp-server-production:
+    <<: *adcp-server
+    # Healthy, not merely started: the entrypoint migrates on boot, and two servers
+    # migrating one database at once kill the loser (see adcp-server-storyboard).
+    depends_on:
+      postgres:
+        condition: service_healthy
+      adcp-server:
+        condition: service_healthy
+    environment:
+      <<: *adcp-server-env
+      PRODUCTION: "true"
+      ADCP_RUN_BACKGROUND_SCHEDULERS: "false"
+
   proxy:
     image: nginx:stable
     volumes:
@@ -653,6 +680,11 @@ services:
       # very file the generator wrote on the host.
       E2E_TLS_BASE_URL: ${E2E_TLS_BASE_URL:-https://proxy.adcp.test:8443}
       E2E_CA_BUNDLE: /app/.test-tls/ca.pem
+      # The same seller deployed in production, on the same database
+      # (adcp-server-production above). Direct on :8080, like the per-worker
+      # servers; under E2E_PER_WORKER the e2e_stack fixture swaps in the worker's
+      # own `<project>-server-gwN-production`.
+      E2E_PRODUCTION_BASE_URL: http://adcp-server-production:8080
       # The slice the allocator handed this stack (salesagent-mp53.9). The host
       # side uses it to CREATE the network; the runner needs it to ASSERT on it —
       # tests/e2e/test_webhook_capture_egress_gate_e2e.py checks that the capture
@@ -793,10 +825,20 @@ services:
     # the race. (Host runs use localhost, so they never hit DNS at all.)
     dns_opt:
       - single-request-reopen
-    # No network alias needed here anymore (GH #1299 deleted the last
-    # consumer, ADCP_WEBHOOK_HOST) — this runner reaches every other service it
-    # needs (postgres, proxy, webhook-capture) by plain service name, same as
-    # postgres:5432 above.
+    # This runner reaches every other service it needs (postgres, proxy,
+    # webhook-capture) by plain service name, same as postgres:5432 above. The
+    # one alias below is for the opposite direction: a publisher's adagents.json
+    # that a scenario serves from THIS container, which the live server fetches
+    # at publisher.adcp-e2e.dev:<the origin's own port>
+    # (tests/harness/publisher_authorization.py PUBLISHER_ORIGIN_HOST -- change
+    # the two together). The origin terminates TLS itself with the shared leaf,
+    # whose *.adcp-e2e.dev SAN covers the name, and this container's address is
+    # on the non-private subnet below, so the SDK's pinned dialer accepts it on
+    # its own terms. `dc run --use-aliases` (run_all_tests.sh) applies it.
+    networks:
+      default:
+        aliases:
+          - publisher.adcp-e2e.dev
     volumes:
       - .:/app
       # Restored with the removal of the `user:` pin above (Aug 2026), matching
@@ -950,13 +992,14 @@ networks:
   # COMPOSE_PROJECT_NAME="adcp-test-$$"), so the allocator hands each stack a
   # DISJOINT slice the same way it hands out host ports.
   #
-  # SIZED FROM THE PEAK CONTAINER COUNT, not guessed. A full run is NOT the 8
-  # services below: run_all_tests.sh provisions per-worker stacks when
+  # SIZED FROM THE PEAK CONTAINER COUNT, not guessed. A full run is NOT the 11
+  # services above: run_all_tests.sh provisions per-worker stacks when
   # E2E_WORKERS>0, and salesagent-remote-run defaults it to 8 on the CI box. Each
-  # worker adds TWO containers (`-server-gwN` and `-tls-gwN.adcp.test`), so peak
-  # is 8 + 2*8 = 24 containers plus the gateway.
+  # worker adds THREE containers (`-server-gwN`, its `-server-gwN-production`
+  # twin and `-tls-gwN.adcp.test`), so peak is 11 + 3*8 = 35 containers plus the
+  # gateway.
   #   /28 -> 13 usable  — TOO SMALL, fails partway into a full run
-  #   /27 -> 29 usable  — fits 24, only 5 spare
+  #   /27 -> 29 usable  — TOO SMALL since the production twins
   #   /26 -> 61 usable  — fits with headroom; 4 concurrent stacks per /24
   # /26 is the default because a stack that dies at container 14 of a 20-minute
   # run costs far more than the concurrency. Raise E2E_WORKERS and this must be

@@ -81,6 +81,8 @@ def tenant_with_prereqs(integration_db):
                 identifiers=[{"type": "domain", "value": "fmt-test.com"}],
                 tags=["all_inventory"],
                 publisher_domain="fmt-test",
+                # The product form selects only verified properties, which is what get_products sells.
+                verification_status="verified",
             )
         )
         session.commit()

@@ -950,6 +950,15 @@ class BaseTestEnv:
         values.update(overrides)
         return credential_headers(**values)
 
+    def publisher_address(self, publisher: str) -> str:
+        """The domain the seller fetches *publisher*'s adagents.json from: its name.
+
+        An env that serves a publisher's origin itself (``PublisherAdagentsMixin``) answers
+        with that origin's address instead, so a Given naming a publisher writes a row the
+        seller can actually reach on every transport.
+        """
+        return publisher
+
     def _tenant_virtual_host(self) -> str | None:
         """The host this env's tenant answers on, READ off the row.
 
@@ -2730,7 +2739,8 @@ class BaseTestEnv:
         tenant: str | None = None,
         host_resolves_nothing: bool = False,
     ) -> Any:
-        """GET the agent card at *path*, naming the seller by *host* or by *tenant*.
+        """GET the agent card, or another root document such as adagents.json, at *path*,
+        naming the seller by *host* or by *tenant*.
 
         The card is not a registry tool, so it is not reachable through ``call_via``: it is a
         root endpoint that answers before any AdCP exchange and carries no envelope. A

@@ -142,7 +142,7 @@
             <div class="form-group">
                 <label for="property_tags">Property Tags *</label>
                 <input type="text" id="property_tags" name="property_tags" placeholder="e.g., all_inventory, premium, sports">
-                <small style="color: #666;">Comma-separated list of tags. Example: all_inventory, premium, homepage</small>
+                <small style="color: #666;">Comma-separated list of tags. Example: all_inventory, premium, homepage. Each publisher whose authorized properties carry one of the tags is selected under its own domain.</small>
             </div>
         </div>
 
@@ -199,12 +199,6 @@
                         <li><code>property_ids</code> (array) OR <code>property_tags</code> (array): Specific properties or tags</li>
                     </ul>
                 </small>
-
-                {% if tenant and tenant.primary_domain %}
-                <button type="button" class="btn btn-sm btn-secondary mt-2" onclick="setDefaultProperties()">
-                    Use Default ({{ tenant.primary_domain }})
-                </button>
-                {% endif %}
             </div>
         </div>
 
@@ -424,17 +418,6 @@ function togglePropertyMode() {
     } else if (mode === 'full') {
         fullSection.style.display = 'block';
     }
-}
-
-// Set default properties
-function setDefaultProperties() {
-    const defaultProps = [
-        {
-            "publisher_domain": "{{ tenant.primary_domain if tenant and tenant.primary_domain else 'example.com' }}",
-            "property_tags": ["all_inventory"]
-        }
-    ];
-    document.getElementById('publisher_properties').value = JSON.stringify(defaultProps, null, 2);
 }
 
 // Inventory picker functions (reuse from product form)

@@ -1519,9 +1519,11 @@ class TestProductRepository:
         """
         with ProductUoW("uc001_tenant") as uow:
             assert uow.products is not None
+            assert uow.authorized_properties is not None
             products = uow.products.list_all()
+            authorized_properties = uow.authorized_properties.list_refs()
             for product in products:
-                schema = convert_product_model_to_schema(product)
+                schema = convert_product_model_to_schema(product, authorized_properties=authorized_properties)
                 assert schema.product_id == product.product_id
                 assert schema.name == product.name
                 assert len(schema.pricing_options) > 0

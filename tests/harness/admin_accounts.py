@@ -13,17 +13,14 @@ fixture supplies the address; both arrive as arguments.
 
 from __future__ import annotations
 
-import logging
 from enum import StrEnum
-from typing import Any
 
 from sqlalchemy import delete
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Account, Tenant
+from tests.harness.admin_client import AdminClient, AdminResponse
 from tests.utils.database_helpers import create_tenant_with_timestamps
-
-logger = logging.getLogger(__name__)
 
 
 class AdminTransport(StrEnum):
@@ -46,79 +43,6 @@ class AdminTransport(StrEnum):
 
     INTEGRATION = "admin_integration"  # Flask test_client, in-process
     E2E = "e2e_admin"  # requests.Session against the live stack
-
-
-class _CaseInsensitiveHeaders(dict):
-    """Header mapping that looks up regardless of case, on either transport.
-
-    HTTP header names are case-insensitive (RFC 9110 §5.1), and the two
-    transports genuinely differ: werkzeug hands back canonical ``Location``,
-    while the live server emits lowercase ``location`` (ASGI normalizes header
-    names). Both source objects model that correctly — werkzeug ``Headers`` and
-    requests ``CaseInsensitiveDict`` — but ``dict(response.headers)`` threw the
-    property away, so ``headers.get("Location")`` silently returned "" over real
-    HTTP and every redirect assertion read as "no redirect happened".
-    Six BR-ADMIN-ACCOUNTS scenarios failed on this the first
-    time they ran over the wire.
-    """
-
-    def __init__(self, headers: Any) -> None:
-        super().__init__({str(k).lower(): v for k, v in dict(headers).items()})
-
-    def get(self, key: str, default: Any = None) -> Any:
-        return super().get(key.lower(), default)
-
-    def __getitem__(self, key: str) -> Any:
-        return super().__getitem__(key.lower())
-
-    def __contains__(self, key: object) -> bool:
-        return super().__contains__(str(key).lower())
-
-
-class _AdminResponse:
-    """Unified response wrapper for Flask test_client and requests.Session.
-
-    Normalizes the response interface so step definitions don't need to
-    know which transport is active.
-    """
-
-    def __init__(self, status_code: int, data: bytes, headers: Any, json_data: Any = None) -> None:
-        self.status_code = status_code
-        self._data = data
-        self.headers = _CaseInsensitiveHeaders(headers)
-        self._json_data = json_data
-
-    @property
-    def data(self) -> bytes:
-        return self._data
-
-    def get_json(self) -> Any:
-        if self._json_data is not None:
-            return self._json_data
-        import json
-
-        return json.loads(self._data)
-
-    @classmethod
-    def from_flask(cls, response: Any) -> _AdminResponse:
-        """Wrap a Flask/werkzeug test response."""
-        return cls(
-            status_code=response.status_code,
-            data=response.data,
-            headers=dict(response.headers),
-        )
-
-    @classmethod
-    def from_requests(cls, response: Any) -> _AdminResponse:
-        """Wrap a requests.Response."""
-        return cls(
-            status_code=response.status_code,
-            data=response.content,
-            headers=dict(response.headers),
-            json_data=response.json()
-            if response.headers.get("content-type", "").startswith("application/json")
-            else None,
-        )
 
 
 class AdminAccountEnv:
@@ -162,14 +86,8 @@ class AdminAccountEnv:
             )
 
         self._mode = mode
-
-        # Integration mode: Flask app + test_client
-        self._app: Any = None
-        self._flask_client: Any = None
-
-        # E2E mode: requests.Session
-        self._session: Any = None
         self._base_url: str = base_url or ""
+        self._client: AdminClient | None = None
 
         self._tenant_id: str = tenant_id or self.DEFAULT_TENANT_ID
         self._created_account_ids: list[str] = []
@@ -182,14 +100,10 @@ class AdminAccountEnv:
     def __enter__(self) -> AdminAccountEnv:
         # Not a BaseTestEnv, so it keeps its own __enter__ — but it owes the same
         # guarantee. Python does not call __exit__ when __enter__ raises, so a
-        # failure in _ensure_tenant would strand the Flask client (integration)
-        # or the requests session (e2e) for the rest of the process. __exit__ is
-        # None-safe on every branch, so calling it here is what releases them.
+        # failure in _ensure_tenant would strand the admin client for the rest of
+        # the process. __exit__ is None-safe, so calling it here is what releases it.
         try:
-            if self._mode == "integration":
-                self._setup_integration()
-            else:
-                self._setup_e2e()
+            self._client = AdminClient(self._base_url if self._mode == "e2e" else None)
             self._ensure_tenant()
         except BaseException:
             self.__exit__(None, None, None)
@@ -198,136 +112,68 @@ class AdminAccountEnv:
 
     def __exit__(self, *exc: object) -> None:
         self._cleanup_accounts()
-        if self._mode == "integration" and self._flask_client is not None:
-            self._flask_client.__exit__(*exc)
-            self._flask_client = None
-        elif self._mode == "e2e" and self._session is not None:
-            self._session.close()
-            self._session = None
+        if self._client is not None:
+            self._client.close()
+            self._client = None
 
     @property
     def tenant_id(self) -> str:
         return self._tenant_id
 
-    # ── Setup ─────────────────────────────────────────────────────────────
-
-    def _setup_integration(self) -> None:
-        """Set up Flask test_client for integration transport."""
-        from src.admin.app import create_app
-
-        self._app = create_app()
-        self._app.config["TESTING"] = True
-        self._app.config["WTF_CSRF_ENABLED"] = False
-        self._app.config["SESSION_COOKIE_PATH"] = "/"
-        self._flask_client = self._app.test_client().__enter__()
-
-    def _setup_e2e(self) -> None:
-        """Set up requests.Session for e2e transport against the live stack.
-
-        ``base_url`` was supplied at construction — this env resolves no
-        addresses of its own.
-        """
-        import requests
-
-        self._session = requests.Session()
-        logger.info("Admin e2e transport: %s", self._base_url)
+    @property
+    def client(self) -> AdminClient:
+        """The admin client this env drives, open between ``__enter__`` and ``__exit__``."""
+        assert self._client is not None, "AdminAccountEnv is not entered"
+        return self._client
 
     # ── Auth ──────────────────────────────────────────────────────────────
 
     def authenticate(self, tenant_id: str | None = None) -> None:
         """Set up authenticated admin session."""
-        tid = tenant_id or self._tenant_id
-        if self._mode == "integration":
-            self._auth_integration(tid)
-        else:
-            self._auth_e2e(tid)
-
-    def _auth_integration(self, tenant_id: str) -> None:
-        """Session-based auth for Flask test_client."""
-        from tests.helpers.admin_session import admin_auth_session
-
-        admin_auth_session(self._flask_client, tenant_id)
-
-    def _auth_e2e(self, tenant_id: str) -> None:
-        """Cookie-based auth against the Docker stack — the session is SIGNED, not requested.
-
-        ``admin_session_cookie`` signs the same session a login would mint, so the test
-        states the session it needs instead of asking a password path to mint one.
-        """
-        from tests.helpers.admin_session import authenticate_http_session
-
-        assert self._session is not None
-        authenticate_http_session(self._session, self._base_url, tenant_id)
+        self.client.authenticate(tenant_id or self._tenant_id)
 
     def clear_auth(self) -> None:
         """Clear the authenticated session."""
-        if self._mode == "integration":
-            with self._flask_client.session_transaction() as sess:
-                sess.clear()
-        else:
-            # E2E: create a fresh session (drops cookies)
-            import requests
-
-            if self._session is not None:
-                self._session.close()
-            self._session = requests.Session()
+        self.client.clear_auth()
 
     # ── Routes ────────────────────────────────────────────────────────────
 
     def _url(self, path: str = "") -> str:
-        prefix = self._base_url if self._mode == "e2e" else ""
-        return f"{prefix}/tenant/{self._tenant_id}/accounts/{path}"
+        return f"/tenant/{self._tenant_id}/accounts/{path}"
 
-    def get_list_page(self, status_filter: str | None = None) -> _AdminResponse:
+    def get_list_page(self, status_filter: str | None = None) -> AdminResponse:
         """GET the accounts list page."""
         url = self._url()
         if status_filter:
             url += f"?status={status_filter}"
-        return self._get(url)
+        return self.client.request("get", url)
 
-    def get_create_page(self) -> _AdminResponse:
+    def get_create_page(self) -> AdminResponse:
         """GET the create account form."""
-        return self._get(self._url("create"))
+        return self.client.request("get", self._url("create"))
 
-    def post_create(self, form_data: dict[str, str]) -> _AdminResponse:
+    def post_create(self, form_data: dict[str, str]) -> AdminResponse:
         """POST the create account form, recording any row it created for cleanup."""
         before = self._account_ids_in_tenant()
-        response = self._post_form(self._url("create"), form_data)
+        response = self.client.request("post", self._url("create"), data=form_data)
         self._created_account_ids.extend(self._account_ids_in_tenant() - before)
         return response
 
-    def get_detail_page(self, account_id: str) -> _AdminResponse:
+    def get_detail_page(self, account_id: str) -> AdminResponse:
         """GET the account detail page."""
-        return self._get(self._url(account_id))
+        return self.client.request("get", self._url(account_id))
 
-    def get_edit_page(self, account_id: str) -> _AdminResponse:
+    def get_edit_page(self, account_id: str) -> AdminResponse:
         """GET the account edit form."""
-        return self._get(self._url(f"{account_id}/edit"))
+        return self.client.request("get", self._url(f"{account_id}/edit"))
 
-    def post_edit(self, account_id: str, form_data: dict[str, str]) -> _AdminResponse:
+    def post_edit(self, account_id: str, form_data: dict[str, str]) -> AdminResponse:
         """POST the account edit form."""
-        return self._post_form(self._url(f"{account_id}/edit"), form_data)
+        return self.client.request("post", self._url(f"{account_id}/edit"), data=form_data)
 
-    def post_status_change(self, account_id: str, new_status: str) -> _AdminResponse:
+    def post_status_change(self, account_id: str, new_status: str) -> AdminResponse:
         """POST a status change via JSON API."""
-        return self._post_json(self._url(f"{account_id}/status"), {"status": new_status})
-
-    # ── HTTP helpers ──────────────────────────────────────────────────────
-
-    def _get(self, url: str) -> _AdminResponse:
-        if self._mode == "integration":
-            return _AdminResponse.from_flask(self._flask_client.get(url))
-        return _AdminResponse.from_requests(self._session.get(url, allow_redirects=False))
-
-    def _post_form(self, url: str, data: dict[str, str]) -> _AdminResponse:
-        if self._mode == "integration":
-            return _AdminResponse.from_flask(self._flask_client.post(url, data=data, follow_redirects=False))
-        return _AdminResponse.from_requests(self._session.post(url, data=data, allow_redirects=False))
-
-    def _post_json(self, url: str, data: dict[str, Any]) -> _AdminResponse:
-        if self._mode == "integration":
-            return _AdminResponse.from_flask(self._flask_client.post(url, json=data))
-        return _AdminResponse.from_requests(self._session.post(url, json=data))
+        return self.client.request("post", self._url(f"{account_id}/status"), json={"status": new_status})
 
     # ── Data setup ────────────────────────────────────────────────────────
 

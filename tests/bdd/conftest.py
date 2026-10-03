@@ -90,11 +90,14 @@ pytest_plugins = [
     "tests.bdd.steps.domain.admin_accounts",
     "tests.bdd.steps.domain.uc_get_products_inventory",
     "tests.bdd.steps.domain.uc_get_products_pricing",
+    "tests.bdd.steps.domain.uc_get_products_publisher_domain",
+    "tests.bdd.steps.domain.admin_inventory_profiles",
     "tests.bdd.steps.domain.egress_ssrf",
     "tests.bdd.steps.domain.local_constraint_relaxations",
     "tests.bdd.steps.domain.local_context_echo",
     "tests.bdd.steps.domain.tenant_identification",
     "tests.bdd.steps.domain.agent_card_discovery",
+    "tests.bdd.steps.domain.publisher_authorization",
     "tests.bdd.steps.domain.pre_dispatch_refusals",
     "tests.bdd.steps.domain.codes_open_vocabulary",
     "tests.bdd.steps.domain.security_wire_safety",
@@ -4705,6 +4708,9 @@ def _uc010_wired_tags() -> frozenset[str]:
             # than for its real, cited reason (#1291).
             "T-UC-010-main-reporting-delivery",
             "T-UC-010-degradation-no-cascade",
+            # portfolio.publisher_domains: the verified publishers, or no portfolio at all
+            "T-UC-010-portfolio-verified-publishers",
+            "T-UC-010-portfolio-no-verified-publisher",
             "T-UC-010-main-timestamp",
             "T-UC-010-main-readonly",
             "T-UC-010-pricing",
@@ -4712,6 +4718,8 @@ def _uc010_wired_tags() -> frozenset[str]:
             "T-UC-010-conversion-caps",
             "T-UC-010-creative-caps",
             "T-UC-010-ext-b-schema-valid",
+            # portfolio under each failed dependency: named, or omitted, never a placeholder
+            "T-UC-010-ext-b-degradation",
             "T-UC-010-ext-a",
             "T-UC-010-account-require-operator-auth",
             "T-UC-010-account-authorization-endpoint",
@@ -4784,6 +4792,13 @@ def _uc010_wired_tags() -> frozenset[str]:
             "T-UC-010-local-unbacked-specialism",
             "T-UC-010-local-orphaned-specialism",
             "T-UC-010-local-unbacked-protocol",
+            # Batch 17 — the locally-added advertising-policy graders. Their feature was
+            # edited before it was wired, so it had never run; portfolio, and the policy
+            # inside it, now exists only for a seller some publisher has verified.
+            "T-UC-010-local-advertising-policy-declared",
+            "T-UC-010-local-advertising-policy-absent",
+            "T-UC-010-local-advertising-policy-empty-description",
+            "T-UC-010-local-advertising-policy-no-verified-publisher",
             # Batch 14 — account.sandbox boundary outline (#1721 M4). Was dormant
             # (no bound Given for "the tenant account is configured for
             # {boundary_point}"), citing #1855 (generic wiring) instead of the
@@ -5007,6 +5022,7 @@ def e2e_stack():
     # shared-server/shared-DB contention. Falls back to the shared stack when off.
     ca_bundle = os.environ.get("E2E_CA_BUNDLE")
     tls_base_url = os.environ.get("E2E_TLS_BASE_URL")
+    production_base_url = os.environ.get("E2E_PRODUCTION_BASE_URL")
     worker = os.environ.get("PYTEST_XDIST_WORKER")  # e.g. "gw3"
     if os.environ.get("E2E_PER_WORKER") == "1" and worker and worker.startswith("gw"):
         import re
@@ -5017,6 +5033,9 @@ def e2e_stack():
         proj = os.environ.get("COMPOSE_PROJECT_NAME", "")
         prefix = f"{proj}-" if proj else ""
         base_url = f"http://{prefix}server-{worker}:8080"
+        # Its production twin, on the same per-worker database (run_all_tests.sh).
+        if production_base_url:
+            production_base_url = f"http://{prefix}server-{worker}-production:8080"
         # Each worker's TLS sidecar carries its own DOTTED CONTAINER NAME for the
         # same reason — `docker compose run` cannot give it a network alias.
         if tls_base_url:
@@ -5062,6 +5081,7 @@ def e2e_stack():
         postgres_url=postgres_url,
         tls_base_url=tls_base_url,
         ca_bundle=ca_bundle,
+        production_base_url=production_base_url,
     )
 
 
@@ -5344,6 +5364,19 @@ def _build_product_env(e2e_config: object | None) -> AbstractContextManager:
     from tests.harness.product import ProductEnv
 
     return ProductEnv(e2e_config=e2e_config)
+
+
+def _build_admin_inventory_profile_env(e2e_config: object | None) -> AbstractContextManager:
+    """ProductEnv plus the operator's inventory-profile form and products page (#1845).
+
+    Serves both the admin feature (admin_integration / e2e_admin) and the publisher-domain
+    scenarios that save a profile through the form and read the product off get_products
+    on every buyer transport. The admin requests follow the env's own transport: in
+    process without ``e2e_config``, over the live stack with it.
+    """
+    from tests.harness.admin_inventory_profile import AdminInventoryProfileEnv
+
+    return AdminInventoryProfileEnv(e2e_config=e2e_config)
 
 
 def _build_capabilities_env(e2e_config: object | None) -> AbstractContextManager:
@@ -5994,9 +6027,29 @@ ENV_ROUTES: list[EnvRoute] = [
         env_builder=_build_capabilities_env,
         seed=_seed_tenant_and_principal,
     ),
+    # ── @pubauth (local publisher-authorization feature) ────────────────────
+    # A `when` row because its scenarios carry T-ADMIN-PUBAUTH-* tags, which detect_uc
+    # files under the ADMIN bucket -- whose env drives the accounts pages and serves no
+    # publisher's file. The seed is the tenant whose agent_url the publisher names.
+    EnvRoute(
+        tag="pubauth",
+        when=lambda m: "pubauth" in m,
+        env_builder=_env("tests.harness.publisher_authorization.PublisherAuthorizationEnv"),
+        seed=_seed_tenant_and_principal,
+    ),
     EnvRoute(
         tag="tenantid",
         when=lambda m: "tenantid" in m,
+        env_builder=_build_capabilities_env,
+        seed=_seed_tenant_and_principal,
+    ),
+    # ── @adagents (local trust-root adagents.json feature) ──────────────────
+    # The same shape as @agentcard: an unscoped row for T-ADAGENTS-* identity tags, the
+    # capabilities env for its in-process ASGI client, and a tenant declaring its own
+    # virtual_host, whose properties are what the document is built from.
+    EnvRoute(
+        tag="adagents",
+        when=lambda m: "adagents" in m,
         env_builder=_build_capabilities_env,
         seed=_seed_tenant_and_principal,
     ),
@@ -6089,6 +6142,24 @@ ENV_ROUTES: list[EnvRoute] = [
         # returns None for it and no coarse bucket claims it.
         when=lambda m: "pricing_option_announcement" in m,
         env_builder=_build_product_env,
+    ),
+    EnvRoute(
+        tag="get-products-publisher-domain",
+        # BR-UC-GET-PRODUCTS publisher_domain resolution (#1845): stores real authorized
+        # properties and products and reads publisher_properties back off get_products, so
+        # it takes the UC-GET-PRODUCTS branch. Like the pricing row above it carries its own
+        # identity tag, so detect_uc returns None for it and no coarse bucket claims it.
+        when=lambda m: "publisher_domain_resolution" in m,
+        env_builder=_build_admin_inventory_profile_env,
+    ),
+    EnvRoute(
+        tag="admin-inventory-profile-publishers",
+        # BR-ADMIN-INVENTORY-PROFILE-publishers (#1845): the inventory-profile form and the
+        # products page. Its T-ADMIN- tags parametrize it over the admin transports, and
+        # this row claims it before the ADMIN bucket, whose AdminAccountEnv has no
+        # factories or products.
+        when=lambda m: "admin_inventory_profile" in m,
+        env_builder=_build_admin_inventory_profile_env,
     ),
     EnvRoute(
         tag="security-wire-error-safety",

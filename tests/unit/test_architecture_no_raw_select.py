@@ -343,9 +343,8 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/services/property_discovery_service.py", "_batch_sync_tags"),
     ("src/services/property_verification_service.py", "_verify_property_async"),
     ("src/services/property_verification_service.py", "verify_all_properties"),
-    ("src/services/setup_checklist_service.py", "_check_critical_tasks"),
-    ("src/services/setup_checklist_service.py", "_check_optional_tasks"),
-    ("src/services/setup_checklist_service.py", "get_bulk_setup_status"),
+    # _check_critical_tasks, _check_optional_tasks and get_bulk_setup_status removed — the
+    # tenant, its auth config and its verified partners come through the repositories
     ("src/services/setup_checklist_service.py", "get_setup_status"),
 }
 

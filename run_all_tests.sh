@@ -220,7 +220,7 @@ scripts/creative-agent-stack.sh build
 # context: `dc up -d` would otherwise build it mid-bringup, after this step reported the
 # build done. Same Dockerfile, so it is a layer-cache hit, not a second real build.
 echo "Building image + bringing up the app stack in-network (project: $COMPOSE_PROJECT_NAME)..."
-dc build postgres adcp-server adcp-server-storyboard proxy tests
+dc build postgres adcp-server adcp-server-storyboard adcp-server-production proxy tests
 
 # Pre-create logs/ group-writable + setgid BEFORE anything else touches the
 # bind mount: adcp-server bind-mounts .:/app and creates logs/audit.log at
@@ -365,16 +365,17 @@ fi
 # tests/unit/test_architecture_e2e_origin_services_start.py pins the pairing in
 # both directions: every SNI-routed upstream is started, and every name started
 # here exists in compose. It matches the FIRST `dc up -d` line in this file.
-dc up -d postgres adcp-server adcp-server-storyboard proxy tls-proxy creative-pg creative-agent webhook-capture counterparty-origin
+dc up -d postgres adcp-server adcp-server-storyboard adcp-server-production proxy tls-proxy creative-pg creative-agent webhook-capture counterparty-origin
 
 echo "Waiting for Postgres + server health (in-network)..."
 deadline=$(( $(date +%s) + 360 ))
-pg=false srv=false sbs=false
+pg=false srv=false sbs=false prd=false
 while [ "$(date +%s)" -lt "$deadline" ]; do
     [ "$pg" = false ] && dc exec -T postgres pg_isready -U adcp_user >/dev/null 2>&1 && pg=true && echo "  Postgres ready"
     [ "$srv" = false ] && dc exec -T adcp-server curl -sf http://localhost:8080/health >/dev/null 2>&1 && srv=true && echo "  Server ready"
     [ "$sbs" = false ] && dc exec -T adcp-server-storyboard curl -sf http://localhost:8080/health >/dev/null 2>&1 && sbs=true && echo "  Storyboard server ready"
-    [ "$pg" = true ] && [ "$srv" = true ] && [ "$sbs" = true ] && break
+    [ "$prd" = false ] && dc exec -T adcp-server-production curl -sf http://localhost:8080/health >/dev/null 2>&1 && prd=true && echo "  Production server ready"
+    [ "$pg" = true ] && [ "$srv" = true ] && [ "$sbs" = true ] && [ "$prd" = true ] && break
     sleep 3
 done
 [ "$pg" = true ] || { echo "Postgres never became ready"; dc logs postgres; exit 1; }
@@ -410,6 +411,13 @@ done
     echo "       (the storyboard suite grades this agent, not the one behind proxy:8000;" >&2
     echo "        it runs the same image with ENVIRONMENT=production)" >&2
     dc logs --tail=120 adcp-server-storyboard >&2
+    exit 1
+}
+# Same fail-fast for the production twin. Without it every scenario whose Given deploys
+# the seller in production errors on a connection refusal that names no cause.
+[ "$prd" = true ] || {
+    echo "ERROR: adcp-server-production never became healthy within the 360s deadline — aborting" >&2
+    dc logs --tail=120 adcp-server-production >&2
     exit 1
 }
 
@@ -478,6 +486,11 @@ if [ "${E2E_WORKERS:-0}" -gt 0 ] 2>/dev/null; then
         psql_admin "CREATE DATABASE adcp_gw$i TEMPLATE adcp_e2e_template"
         dc run -d --no-deps --name "${COMPOSE_PROJECT_NAME}-server-gw$i" \
             -e DATABASE_URL="$_admin/adcp_gw$i?sslmode=disable" adcp-server >/dev/null
+        # Its production twin on the same database (docker-compose.e2e.yml's
+        # adcp-server-production says why one exists). Named under `-server-gw` so the
+        # cleanup above matches it.
+        dc run -d --no-deps --name "${COMPOSE_PROJECT_NAME}-server-gw$i-production" \
+            -e DATABASE_URL="$_admin/adcp_gw$i?sslmode=disable" adcp-server-production >/dev/null
         # Per-worker TLS sidecar (salesagent-tgzb). The DOTTED CONTAINER NAME is
         # the entire mechanism: `docker compose run` has no --network-alias, so
         # the container's own name is the only DNS label we control. Docker's
@@ -498,17 +511,19 @@ if [ "${E2E_WORKERS:-0}" -gt 0 ] 2>/dev/null; then
     # the first) and then abort with the count.
     _unhealthy=""
     for i in $(seq 0 $((N - 1))); do
-        wd=$(( $(date +%s) + 120 )); ok=false
-        while [ "$(date +%s)" -lt "$wd" ]; do
-            docker exec "${COMPOSE_PROJECT_NAME}-server-gw$i" curl -sf http://localhost:8080/health >/dev/null 2>&1 && ok=true && break
-            sleep 2
+        for w in "gw$i" "gw$i-production"; do
+            wd=$(( $(date +%s) + 120 )); ok=false
+            while [ "$(date +%s)" -lt "$wd" ]; do
+                docker exec "${COMPOSE_PROJECT_NAME}-server-$w" curl -sf http://localhost:8080/health >/dev/null 2>&1 && ok=true && break
+                sleep 2
+            done
+            if [ "$ok" = true ]; then
+                echo "    server-$w ready"
+            else
+                echo "    server-$w NOT ready"
+                _unhealthy="$_unhealthy $w"
+            fi
         done
-        if [ "$ok" = true ]; then
-            echo "    server-gw$i ready"
-        else
-            echo "    server-gw$i NOT ready"
-            _unhealthy="$_unhealthy gw$i"
-        fi
     done
     if [ -n "$_unhealthy" ]; then
         echo "ERROR: per-worker e2e server(s) never became healthy:$_unhealthy" >&2

@@ -185,13 +185,11 @@ tests/bdd/test_uc005_discover_creative_formats.py::test_format_id_with_agent_url
 #     get_adapter_class_for_tenant / get_targeting_capabilities_override
 #     (src/core/helpers/adapter_helpers.py) — a real production fault-
 #     injection surface, not a harness-only mock. They now pass on e2e_rest.
-#   - 3 DB-failure scenarios (schemavalid, adapter_and_db_fail, db_fail) move
-#     to an env-level E2EUnsupportedSetup declaration —
+#   - 3 DB-failure scenarios (schemavalid, adapter_and_db_fail, db_fail) were
+#     an env-level E2EUnsupportedSetup declaration, then GRADUATED:
 #     CapabilitiesEnv.break_tenant_config_db (tests/harness/capabilities.py)
-#     — no production DB fault hook exists to inject a TenantConfigUoW read
-#     failure over real HTTP. Surfaced as xfail by the conftest report hook,
-#     pinned in EXPECTED_UNSUPPORTED_DECLARATIONS
-#     (test_architecture_e2e_rest_escape_hatches.py), not listed here.
+#     now realizes the fault over e2e by renaming the table the live server's
+#     capabilities read hits, a real database failure with no production hook.
 #   - set_adapter_channels was in-process-only at the time of that note; #1871
 #     then gave it the same write-through (get_adapter_channels_override).
 # All three reads were deleted by a1b79d22d ("remove the testing-hook channel"),

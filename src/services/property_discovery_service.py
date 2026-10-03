@@ -19,10 +19,11 @@ from adcp import (
     get_all_properties,
     get_all_tags,
 )
-from adcp.adagents import get_properties_by_agent, normalize_url
+from adcp.adagents import get_properties_by_agent
 from sqlalchemy import select
 from sqlalchemy.sql import Select
 
+from src.core.agent_identity import adagents_scoped_to_agent
 from src.core.database.database_session import get_db_session
 from src.core.database.models import AuthorizedProperty, PropertyTag
 from src.services.adagents_error_messages import describe_adagents_error
@@ -125,14 +126,14 @@ def _extract_properties(
     method based on whether an agent_url is provided.
     """
     all_properties_from_file = adagents_data.get("properties", [])
+    if agent_url:
+        adagents_data = adagents_scoped_to_agent(adagents_data, agent_url)
 
     # Check if the relevant agent has no property restrictions
     authorized_agents = adagents_data.get("authorized_agents", [])
     has_unrestricted_agent = False
     for agent in authorized_agents:
         if not isinstance(agent, dict):
-            continue
-        if agent_url and normalize_url(agent.get("url", "")) != normalize_url(agent_url):
             continue
         has_property_ids = bool(agent.get("property_ids"))
         has_property_tags = bool(agent.get("property_tags"))

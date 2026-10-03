@@ -9,6 +9,9 @@ symptom surfaced storyboards later as a conformance gap rather than as a seeding
 
 The spec dict each seeder already writes is the input, unchanged; what moved here is the
 operation.
+
+A product names only the publishers of verified authorized properties (#1845), so the
+property backing a seeded catalogue is seeded here too: :func:`seed_verified_website`.
 """
 
 from __future__ import annotations
@@ -17,7 +20,7 @@ from typing import Any
 
 from sqlalchemy import select
 
-from src.core.database.models import PricingOption, Product
+from src.core.database.models import AuthorizedProperty, PricingOption, Product
 
 #: A product spec as the seeders write it: the Product's own fields plus a ``pricing``
 #: block. Kept a plain dict because that is what the seeders' literals already are -- and
@@ -67,6 +70,24 @@ def seed_product(session, tenant_id: str, spec: ProductSpec) -> bool:
             currency=pricing.get("currency", "USD"),
             is_fixed=pricing["is_fixed"],
             price_guidance=None,  # Not used for fixed-price products
+        )
+    )
+    return True
+
+
+def seed_verified_website(session, tenant_id: str, domain: str, name: str | None = None) -> bool:
+    """Give *tenant_id* a verified website property on *domain*, unless it already has it.
+
+    The row a seeder writes for a publisher it controls (``AuthorizedProperty.verified_website``),
+    its ``property_id`` the domain with dots as underscores. Returns True when it created the
+    row. Does NOT commit, for the same reason as :func:`seed_product`.
+    """
+    property_id = domain.replace(".", "_")
+    if session.scalars(select(AuthorizedProperty).filter_by(tenant_id=tenant_id, property_id=property_id)).first():
+        return False
+    session.add(
+        AuthorizedProperty.verified_website(
+            tenant_id=tenant_id, property_id=property_id, domain=domain, name=name or domain
         )
     )
     return True

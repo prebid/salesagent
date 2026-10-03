@@ -493,15 +493,12 @@ class TestPartialEnterUnwind:
         """
         from contextlib import suppress
 
-        for name in ("_fast_backoff", "_egress_hatches", "_origin_ctx", "_ssl_cert_file"):
+        for name in ("_fast_backoff", "_egress_hatches", "_ssl_cert_file"):
             resource = getattr(env, name, None)
             if resource is None:
                 continue
             with suppress(Exception):
-                if name == "_origin_ctx":
-                    resource.__exit__(None, None, None)
-                else:
-                    resource.stop()
+                resource.stop()
         with suppress(Exception):
             env.__exit__(None, None, None)
 
@@ -699,8 +696,8 @@ class TestPartialEnterUnwind:
 
         It is not a ``BaseTestEnv`` and keeps its own ``__enter__``; that makes
         it the one place the guarantee is hand-rolled rather than structural, so
-        it needs its own oracle. ``_setup_integration`` opens the test client
-        (an entered context manager) and ``_ensure_tenant`` then hits the
+        it needs its own oracle. ``__enter__`` opens the admin client (an
+        entered Flask test client) and ``_ensure_tenant`` then hits the
         database -- a failure there strands the client.
         """
         import pytest
@@ -715,9 +712,7 @@ class TestPartialEnterUnwind:
             ):
                 env.__enter__()
 
-            assert env._flask_client is None, (
-                "the Flask test client survived a failed __enter__ -- its context was never exited"
-            )
+            assert env._client is None, "the admin client survived a failed __enter__ -- it was never closed"
         finally:
             from contextlib import suppress
 

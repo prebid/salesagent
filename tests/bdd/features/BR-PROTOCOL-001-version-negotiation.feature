@@ -54,6 +54,7 @@ Feature: Inbound AdCP version negotiation applies to every tool
   # scenarios would be satisfied by a response that never reached the tool.
   Background:
     Given a tenant is configured for product discovery
+    And the seller is authorized for property "homepage" of publisher "example.com" tagged "premium"
     And an inventory profile with only domain "example.com"
     And a product linked to that inventory profile with pricing
 

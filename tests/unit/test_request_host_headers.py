@@ -39,9 +39,10 @@ class TestHostnameOf:
         """A contract both callers depend on, pinned here because neither can state it.
 
         ``_same_host`` compares this against a case-folded ``virtual_host`` column, and
-        ``Tenant.primary_domain`` feeds it to ``publisher_domain``, whose pinned pattern
-        (``^[a-z0-9]...``) admits no uppercase. A host stored with a capital matched no
-        spelling at all while only one of the two sides folded (PR #2191).
+        ``Tenant.virtual_host_name`` stores it as the key the adagents.json route looks up
+        properties by, whose ``publisher_domain`` pattern (``^[a-z0-9]...``) admits no
+        uppercase. A host stored with a capital matched no spelling at all while only one of
+        the two sides folded (PR #2191).
         """
         assert hostname_of("Probe-Case.AdCP.test:8443") == "probe-case.adcp.test"
         assert hostname_of("PROBE-CASE.ADCP.TEST") == "probe-case.adcp.test"

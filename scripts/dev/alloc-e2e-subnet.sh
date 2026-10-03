@@ -75,9 +75,9 @@
 # ----------
 # /26 (61 usable) sized from the PEAK container count, not the service count: a
 # full run provisions per-worker stacks when E2E_WORKERS>0 (8 on the CI box),
-# each adding TWO containers, so peak is 8 services + 2*8 sidecars = 24 plus a
-# gateway. /28 (13 usable) dies partway into a 20-minute run; /27 (29) fits with
-# 4 spare. /26 costs concurrency — four slices per /24 — which is the right
+# each adding THREE containers (a server, its production twin and a TLS
+# sidecar), so peak is 11 services + 3*8 = 35 plus a gateway. /28 (13 usable)
+# dies partway into a 20-minute run, and /27 (29) no longer fits. /26 costs concurrency — four slices per /24 — which is the right
 # trade: a stack that dies at container 14 wastes far more than a queued one.
 set -euo pipefail
 

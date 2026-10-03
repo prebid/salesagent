@@ -15,6 +15,7 @@ from flask import Blueprint, Response, jsonify, request
 from sqlalchemy import select
 
 from src.admin.utils.operator_errors import safe_error_message
+from src.core.agent_identity import adagents_scoped_to_agent
 from src.core.config import get_settings
 from src.core.database.database_session import get_db_session
 from src.core.database.integrity import resolve_or_write
@@ -375,6 +376,7 @@ def sync_publisher_partners(tenant_id: str) -> Response | tuple[Response, int]:
                     # egress seam -- see src/core/security/outbound_http.py's
                     # module docstring.
                     adagents_data = await fetch_adagents(domain, timeout=10.0)
+                    adagents_data = adagents_scoped_to_agent(adagents_data, agent_url)
 
                     # Check if agent is authorized
                     is_authorized = verify_agent_authorization(adagents_data, agent_url)
@@ -535,6 +537,7 @@ def get_publisher_properties(tenant_id: str, partner_id: int) -> Response | tupl
                     adagents_data = loop.run_until_complete(fetch_adagents(partner.publisher_domain, timeout=10.0))
                 finally:
                     loop.close()
+                adagents_data = adagents_scoped_to_agent(adagents_data, agent_url)
 
                 # Check if agent is authorized
                 is_authorized = verify_agent_authorization(adagents_data, agent_url)
