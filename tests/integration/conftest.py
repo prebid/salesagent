@@ -161,6 +161,28 @@ def admin_client(integration_db):
 
 
 @pytest.fixture
+def gam_oauth_configured(admin_client, monkeypatch):
+    """GAM OAuth is set up, and no authorization bypass is available.
+
+    ``require_tenant_access`` waves a ``test_user`` session through on the composed
+    test-login path, and ``is_super_admin`` waves through a configured email or
+    domain. Tests using this fixture never set ``test_user``, and the super-admin
+    lists are emptied here, so a pass proves membership. The values are set on the
+    live settings object the views read (the environment is loaded once).
+    """
+    from src.core.config import get_settings
+
+    auth = get_settings().auth
+    monkeypatch.setattr(auth, "super_admin_emails", "")
+    monkeypatch.setattr(auth, "super_admin_domains", "")
+    monkeypatch.setattr(auth, "gam_oauth_client_id", "gam-oauth-client.apps.googleusercontent.com")
+    monkeypatch.setattr(auth, "gam_oauth_client_secret", "GOCSPX-gam-oauth-client-secret")
+    # ``gam_authorize`` only tests ``current_app.oauth`` for presence; whether the
+    # module-level app registered a provider depends on the shell's GOOGLE_CLIENT_ID.
+    monkeypatch.setattr(admin_client.application, "oauth", object(), raising=False)
+
+
+@pytest.fixture
 def authenticated_admin_session(admin_client, integration_db):
     """Create an authenticated session for admin UI testing."""
     # Set up super admin configuration in database
