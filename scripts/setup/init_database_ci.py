@@ -181,7 +181,7 @@ def init_db_ci():
                     policy_settings=None,  # SQL NULL
                     signals_agent_config=None,  # SQL NULL
                     ai_policy=None,  # SQL NULL
-                    auto_approve_format_ids=["display_300x250", "display_728x90"],
+                    auto_approve_format_ids=["display_300x250_image", "display_728x90_image"],
                     human_review_required=False,
                     auth_setup_mode=False,  # Disable setup mode for CI (simulates SSO configured)
                     created_at=now,
@@ -391,9 +391,9 @@ def init_db_ci():
                     "name": "Premium Display Advertising",
                     "description": "High-impact display ads across premium content",
                     "formats": [
-                        {"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"},
-                        {"agent_url": "https://creative.adcontextprotocol.org", "id": "display_728x90"},
-                        {"agent_url": "https://creative.adcontextprotocol.org", "id": "display_160x600"},
+                        {"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250_image"},
+                        {"agent_url": "https://creative.adcontextprotocol.org", "id": "display_728x90_image"},
+                        {"agent_url": "https://creative.adcontextprotocol.org", "id": "display_160x600_image"},
                     ],
                     "targeting_template": {"geo": ["US"], "device_type": "any"},
                     "delivery_type": "guaranteed",
@@ -404,8 +404,8 @@ def init_db_ci():
                     "name": "Premium Video Advertising",
                     "description": "Pre-roll video ads with guaranteed completion rates",
                     "formats": [
-                        {"agent_url": "https://creative.adcontextprotocol.org", "id": "video_15s"},
-                        {"agent_url": "https://creative.adcontextprotocol.org", "id": "video_30s"},
+                        {"agent_url": "https://creative.adcontextprotocol.org", "id": "video_standard_15s"},
+                        {"agent_url": "https://creative.adcontextprotocol.org", "id": "video_standard_30s"},
                     ],
                     "targeting_template": {"geo": ["US"], "device_type": "any"},
                     "delivery_type": "guaranteed",
@@ -562,7 +562,7 @@ def init_db_ci():
                     policy_settings=None,
                     signals_agent_config=None,
                     ai_policy=None,
-                    auto_approve_format_ids=["display_300x250"],
+                    auto_approve_format_ids=["display_300x250_image"],
                     human_review_required=False,
                     auth_setup_mode=False,
                     created_at=now_iso,
@@ -646,7 +646,7 @@ def init_db_ci():
                     "name": "ISO Standard Display",
                     "description": "Standard display ads for isolation testing",
                     "formats": [
-                        {"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"},
+                        {"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250_image"},
                     ],
                     "targeting_template": {"geo": ["UK"], "device_type": "any"},
                     "delivery_type": "guaranteed",
