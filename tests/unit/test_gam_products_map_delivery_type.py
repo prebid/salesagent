@@ -46,14 +46,9 @@ def _make_db_session(product_mock):
     return mock_session
 
 
-def test_products_map_includes_delivery_type():
-    """products_map must include delivery_type so line item type selection works.
+def _run_create_media_buy(mock_product):
+    """Drive GoogleAdManager.create_media_buy with a mocked adapter; return the captured products_map."""
 
-    Bug: products_map was built as:
-        {"product_id": ..., "implementation_config": ...}
-    Missing delivery_type meant orders.py got None for product.get("delivery_type"),
-    making is_guaranteed always False, selecting wrong line item type.
-    """
     # Create a mock adapter
     mock_adapter = Mock(spec=GoogleAdManager)
     mock_adapter.tenant_id = "tenant_test"
@@ -69,12 +64,6 @@ def test_products_map_includes_delivery_type():
     mock_adapter._order_name_template = None
     mock_adapter._line_item_name_template = None
     mock_adapter.targeting_manager = Mock()
-
-    # Create a mock Product with delivery_type = "guaranteed"
-    mock_product = Mock()
-    mock_product.product_id = "prod_abc"
-    mock_product.delivery_type = "guaranteed"
-    mock_product.implementation_config = {"targeted_ad_unit_ids": ["12345"]}
 
     # Create a MediaPackage
     mock_package = Mock()
@@ -103,7 +92,7 @@ def test_products_map_includes_delivery_type():
     }
 
     # Capture what products_map is passed to create_line_items
-    captured_products_map = {}
+    captured_products_map: dict = {}
 
     def capture_create_line_items(**kwargs):
         captured_products_map.update(kwargs.get("products_map", {}))
@@ -127,6 +116,26 @@ def test_products_map_includes_delivery_type():
             package_pricing_info=package_pricing_info,
         )
 
+    return captured_products_map
+
+
+def test_products_map_includes_delivery_type():
+    """products_map must include delivery_type so line item type selection works.
+
+    Bug: products_map was built as:
+        {"product_id": ..., "implementation_config": ...}
+    Missing delivery_type meant orders.py got None for product.get("delivery_type"),
+    making is_guaranteed always False, selecting wrong line item type.
+    """
+    mock_product = Mock()
+    mock_product.product_id = "prod_abc"
+    mock_product.delivery_type = "guaranteed"
+    mock_product.implementation_config = {"targeted_ad_unit_ids": ["12345"]}
+    # Products without an inventory profile return their own config here (models.py).
+    mock_product.effective_implementation_config = {"targeted_ad_unit_ids": ["12345"]}
+
+    captured_products_map = _run_create_media_buy(mock_product)
+
     # Assert: products_map entry has exactly the keys that orders.py consumes.
     # orders.py reads: implementation_config (line 413), product_id (line 738), delivery_type (line 771).
     # If you add a new .get() in orders.py, add the key here too.
@@ -144,3 +153,28 @@ def test_products_map_includes_delivery_type():
     assert product_entry["product_id"] == "prod_abc"
     assert product_entry["delivery_type"] == "guaranteed"
     assert isinstance(product_entry["implementation_config"], dict)
+
+
+def test_products_map_uses_profile_config_when_product_has_inventory_profile():
+    """Inventory-profile targeting must reach GAM.
+
+    Product.effective_implementation_config builds targeted_* from the product's inventory
+    profile. The adapter used to read the raw implementation_config column instead, so a
+    profile-based product (empty column) produced a line item with no inventory targeting,
+    which orders.py rejects.
+    """
+    mock_product = Mock()
+    mock_product.product_id = "prod_abc"
+    mock_product.delivery_type = "guaranteed"
+    mock_product.implementation_config = None  # column is empty: targeting lives on the profile
+    mock_product.effective_implementation_config = {
+        "targeted_ad_unit_ids": [],
+        "targeted_placement_ids": ["32261394"],
+        "include_descendants": True,
+    }
+
+    captured_products_map = _run_create_media_buy(mock_product)
+
+    impl = captured_products_map["pkg_prod_abc_001"]["implementation_config"]
+    assert impl["targeted_placement_ids"] == ["32261394"]
+    assert impl["targeted_ad_unit_ids"] == []
