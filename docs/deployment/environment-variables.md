@@ -214,6 +214,7 @@ proxy headers, and the absence of verbose auth logging.
 |----------|---------|-------------|
 | `APPROXIMATED_API_KEY` | - | Approximated proxy service API key |
 | `APPROXIMATED_BACKEND_URL` | `adcp-sales-agent.fly.dev` | Backend address that Approximated proxies custom domains to |
+| `CREATIVE_AGENT_URL` | - | Base URL of the default creative agent, used instead of `https://creative.adcontextprotocol.org` (for example, a self-hosted reference agent at `https://<host>/api/creative-agent`). Set the agent's base URL, the `agent_url` its formats carry, not its MCP endpoint. The client dials this URL once and, when the answer is not MCP (a web page, a 403, a 404), connects to `<url>/mcp`. |
 
 ---
 

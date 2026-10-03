@@ -146,9 +146,9 @@ class TestCreateMCPClient:
         # A loopback port with nothing listening: resolves, fails fast, and the retry
         # budget is what is graded. It needs the private-range hatch because policy
         # refuses loopback addresses by default (https is required unconditionally now
-        # regardless of any hatch, salesagent-e6h0 -- hence the scheme flip above). NOT a live origin — call_mcp_tool never
-        # passes its timeout to the transport, so an origin that answers without speaking
-        # MCP hangs instead of failing (a bug adjacent to this ticket, not fixed here).
+        # regardless of any hatch, salesagent-e6h0 -- hence the scheme flip above). NOT a live origin:
+        # an origin that answers without speaking MCP is not retried at all
+        # (TestBaseUrlThatIsNotTheMcpEndpoint), so it could not grade a retry budget.
         agent_url = "https://localhost:9999/mcp"
 
         with pytest.raises(MCPConnectionError) as exc_info:
@@ -217,10 +217,9 @@ class TestErrorHandling:
         # Unchanged target: a loopback port with nothing listening, which fails fast.
         # It needs the private-range hatch because policy refuses loopback
         # addresses by default (https is required unconditionally now regardless of
-        # any hatch, salesagent-e6h0 -- hence the scheme flip above). NOT repointed at a live origin: call_mcp_tool accepts a timeout
-        # and never passes it to the transport, so an origin that ANSWERS but does not
-        # speak MCP hangs forever rather than timing out. That bug is adjacent to this
-        # ticket and not fixed here.
+        # any hatch, salesagent-e6h0 -- hence the scheme flip above). The timeout against
+        # an origin that answers but never completes the handshake is graded by
+        # TestBaseUrlThatIsNotTheMcpEndpoint.test_a_handshake_that_never_completes_is_bounded_by_the_timeout.
         agent_url = "https://localhost:9999/mcp"
 
         with pytest.raises(MCPConnectionError):
@@ -320,9 +319,8 @@ class TestRefusedAgentUrlIsNotDialled:
 
     # A correct refusal returns in microseconds — nothing is dialled. The bound
     # exists because the FAILING state is a hang, not a fast wrong answer:
-    # `call_mcp_tool` accepts a `timeout` and never passes it to the
-    # transport, so a client that reaches the wire waits out the OS connect
-    # timeout on an unroutable address, four times over. Without this the whole
+    # a client that reaches the wire waits out the handshake `timeout` on an
+    # unroutable address, on every attempt. Without this the whole
     # slice dies with no report instead of failing with one.
     @pytest.mark.timeout(60)
     @pytest.mark.parametrize("destination", ["local-origin-loopback", "cloud-metadata"])
@@ -723,3 +721,87 @@ class TestDialTimeRefusalIsNotRetriedOrLaundered:
         assert "stub-signals-agent" not in str(envelope), (
             f"the endpoint's name leaked onto the buyer's wire: {envelope}"
         )
+
+
+def _list_creative_formats() -> dict:
+    """A ``list_creative_formats`` tool that answers, so a dial that reaches it succeeds."""
+    return {"formats": []}
+
+
+@pytest.mark.asyncio
+class TestBaseUrlThatIsNotTheMcpEndpoint:
+    """An agent configured by its BASE url reaches ``/mcp`` after ONE try at the base.
+
+    A creative agent's ``agent_url`` is its identity: ``CREATIVE_AGENT_URL`` is the
+    reference agent's ``https://<host>/api/creative-agent`` and the public agent is
+    ``https://creative.adcontextprotocol.org``. The MCP endpoint is one path below,
+    so the seam dials the configured URL and falls back to ``<url>/mcp``. What the
+    base answers is not transient. The reference agent answers 403 (CSRF) and the
+    public agent answers ``200 text/html``. Neither is an MCP answer, and retrying
+    one changes nothing.
+
+    Before the fix the 403 cost three attempts and two backoff sleeps on every fetch,
+    and the HTML page hung the dial: the MCP transport reports an unexpected content
+    type to a session that never fails the pending ``initialize`` for it, and
+    ``call_mcp_tool`` applied no handshake timeout. The root hit count and the
+    recorded sleeps are the grade.
+    """
+
+    @pytest.mark.timeout(60)
+    @pytest.mark.parametrize(
+        "root_answer",
+        [
+            pytest.param((403, "text/html"), id="reference-agent-csrf-403"),
+            pytest.param((200, "text/html; charset=utf-8"), id="public-agent-html-page"),
+            pytest.param((404, "text/plain"), id="no-route-404"),
+        ],
+    )
+    async def test_the_base_is_tried_once_then_mcp_serves_the_call(
+        self, root_answer, mcp_origin_tls, monkeypatch, recorded_retry_sleeps
+    ):
+        set_flags(monkeypatch, private=True)
+        origin = mcp_origin_tls(root_answer=root_answer, list_creative_formats=_list_creative_formats)
+
+        result = await call_mcp_tool(agent_url=origin.root_url, tool="list_creative_formats", arguments={}, timeout=10)
+
+        assert result.structured_content == {"formats": []}
+        assert origin.invocations == ["list_creative_formats"]
+        assert origin.root_hits == ["POST"], (
+            f"the base url answered {root_answer}, not MCP, and was dialled {origin.root_hits}"
+        )
+        assert recorded_retry_sleeps == [], f"a non-MCP answer was retried with backoff: {recorded_retry_sleeps}"
+
+    @pytest.mark.timeout(60)
+    async def test_an_endpoint_that_never_answers_mcp_fails_fast(
+        self, local_origin_tls, monkeypatch, recorded_retry_sleeps
+    ):
+        """No fallback left and still no MCP answer: the caller gets ``MCPConnectionError``, not a hang."""
+        set_flags(monkeypatch, private=True)
+        local_origin_tls.respond_with(200, body=b"<!doctype html>", content_type="text/html")
+
+        with pytest.raises(MCPConnectionError):
+            # Ends in /mcp, so no fallback candidate is synthesised: one URL, answered with HTML.
+            await call_mcp_tool(agent_url=f"{local_origin_tls.base_url}/mcp", tool="noop", arguments={}, timeout=5)
+
+        assert local_origin_tls.paths == ["/mcp"], f"a non-MCP answer was retried: {local_origin_tls.paths}"
+        assert recorded_retry_sleeps == []
+
+    @pytest.mark.timeout(60)
+    async def test_a_handshake_that_never_completes_is_bounded_by_the_timeout(
+        self, local_origin_tls, monkeypatch, recorded_retry_sleeps
+    ):
+        """A JSON answer that is not JSON-RPC leaves ``initialize`` pending; ``timeout`` ends each attempt.
+
+        The content type is MCP's, so this is not refused as a non-MCP answer: it is
+        retried like any other failure that might clear, and each attempt is bounded.
+        """
+        set_flags(monkeypatch, private=True)
+        local_origin_tls.respond_with(200, body=b'{"ok": true}', content_type="application/json")
+
+        with pytest.raises(MCPConnectionError):
+            await call_mcp_tool(
+                agent_url=f"{local_origin_tls.base_url}/mcp", tool="noop", arguments={}, timeout=1, max_attempts=2
+            )
+
+        assert local_origin_tls.paths == ["/mcp", "/mcp"]
+        assert len(recorded_retry_sleeps) == 1
