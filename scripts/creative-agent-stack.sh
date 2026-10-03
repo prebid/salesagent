@@ -18,13 +18,12 @@
 set -euo pipefail
 
 # Pin to a known-good commit — bump deliberately, never to HEAD.
-# 467fd93d7711 = the v3.1.1 release tag (2026-06-30): the reference agent
-# matches the spec version this repo targets (SDK 6.6 / spec 3.1.1). The
-# previous pin ca70dd1e2a6c (2026-03-31) predated 3.1.1 and was chosen because
-# upstream HEAD then had broken migrations (community_points FK violation);
-# that fix (072b46e83) is an ancestor of v3.1.1, and the sealed-stack e2e +
-# bdd-in-network suites were re-vetted green against this pin before landing.
-ADCP_PIN="467fd93d7711"
+# 76b031a85eb8 = the v3.1.25 release tag (2026-10-01), the newest release on the
+# 3.1 line this repo targets. This pin is the AGENT only; the spec pin (schemas,
+# webhook vectors, feature @source) stays at v3.1.1. The previous pin
+# 467fd93d7711 (v3.1.1) emits pixel_tracker assets that v3.1.1's own
+# core/format.json does not admit (adcp#7338, fixed in v3.1.22).
+ADCP_PIN="76b031a85eb8"
 
 # The canonical local tag is pin-keyed so a cached image from a DIFFERENT pin
 # can never satisfy _ensure_image (a bare `adcp-creative-agent` image left by

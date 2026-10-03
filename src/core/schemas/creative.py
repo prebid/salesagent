@@ -64,6 +64,7 @@ from src.core.config import get_pydantic_extra_mode
 from src.core.schemas._base import (
     AdcpResponse,
     BuyerRequest,
+    Format,
     FormatId,
     NestedModelSerializerMixin,
     SalesAgentBaseModel,
@@ -669,6 +670,21 @@ class ListCreativeFormatsResponse(NestedModelSerializerMixin, LibraryListCreativ
     Protocol fields (status, task_id, message, context_id) are added by the
     protocol layer (MCP, A2A, REST) via ProtocolEnvelope wrapper.
     """
+
+    @field_validator("formats", mode="before")
+    @classmethod
+    def _parse_as_local_format(cls, v: Any) -> Any:
+        """Parse each format as the local Format, not the inherited library Format.
+
+        The library Format loses canonical_parameters.format_kind and .params (see
+        ProductFormatDeclaration), so a response re-parsed from its own wire dropped both.
+        The field is not redeclared as ``list[Format]`` because list is invariant and mypy
+        refuses the narrowing; a local Format is a library Format, so the inherited field
+        keeps the instance and NestedModelSerializerMixin serializes it by instance.
+        """
+        if isinstance(v, list):
+            return [Format.model_validate(f) if isinstance(f, dict) else f for f in v]
+        return v
 
 
 class ListCreativesRequest(BuyerRequest, LibraryListCreativesRequest):

@@ -29,6 +29,7 @@ from adcp import Error as _LibraryError
 from adcp.types import AccountReference as LibraryAccountReference
 from adcp.types import BrandReference as LibraryBrandReference
 from adcp.types import (
+    CanonicalFormatKind,
     ContextObject,
     # DeliveryStatus / MediaBuyStatus are no longer referenced by a declaration in
     # this module — Snapshot and GetMediaBuysMediaBuy inherit them from their library
@@ -82,6 +83,9 @@ from adcp.types.aliases import (
     UpdateMediaBuySuccessResponse as AdCPUpdateMediaBuySuccess,
 )
 from adcp.types.base import AdCPBaseModel as LibraryAdCPBaseModel
+from adcp.types.generated_poc.core.product_format_declaration import (
+    ProductFormatDeclaration as LibraryProductFormatDeclaration,
+)
 from adcp.types.generated_poc.core.version_envelope import AdcpVersionEnvelope
 from adcp.types.generated_poc.enums.creative_approval_status import (
     # Aliased to OUR name for this concept, not to the library's. Two reasons, both
@@ -1568,6 +1572,23 @@ class FormatReference(SalesAgentBaseModel):
     format_id: str = Field(..., serialization_alias="id", description="Format ID within that agent's format catalog")
 
 
+class ProductFormatDeclaration(LibraryProductFormatDeclaration):
+    """Format.canonical_parameters, with the two fields the generated class lacks.
+
+    3.1.1 core/product-format-declaration.json is a oneOf over format kinds, and every
+    branch requires ``format_kind`` and ``params``. adcp 6.6.0 generated only the shared
+    base properties and ignores extras, so parsing a creative agent's catalog dropped
+    both and served ``{"canonical_formats_only": false, "experimental": false}``, which
+    the pinned schema rejects. ``params`` is per-kind in the schema; it is carried as a
+    dict, as the SDK's own hand-written declaration (adcp.types.canonical_decl) does.
+    7.0.3 has the same gap; 8.0 (AdCP 3.2) generates the union. Delete this class when
+    the SDK pin carries the fix (adcontextprotocol/adcp-client-python#1275).
+    """
+
+    format_kind: CanonicalFormatKind
+    params: dict[str, Any]
+
+
 class Format(LibraryFormat):
     """Creative format definition per AdCP spec.
 
@@ -1578,6 +1599,11 @@ class Format(LibraryFormat):
     Note: All spec-defined fields are inherited from adcp.types.stable.Format.
     We only add internal fields here marked with exclude=True.
     """
+
+    # Narrowed to the local subclass above: the library type loses format_kind and params.
+    canonical_parameters: ProductFormatDeclaration | None = Field(
+        default=None, deprecated=True, description=LibraryFormat.model_fields["canonical_parameters"].description
+    )
 
     # Internal fields for backward compatibility and convenience
     # These are NOT part of the AdCP spec and are excluded from serialization

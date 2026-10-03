@@ -956,20 +956,21 @@ _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
     # innet_070926_0757: 68 failing rows, every one ending "-valid"; 16 others, every one
     # ending "-INVALID_REQUEST".
     #
-    # NOT our formats. tests/fixtures/creative_formats/reference_formats.json records its
-    # provenance as {'image': 'adcp-creative-agent', 'pin': '467fd93d7711'} -- captured from
-    # the REFERENCE creative agent at the v3.1.1 tag -- and 4 of the 16 files under the
-    # spec's own formats/canonical/ declare pixel_tracker assets. The spec's reference
-    # catalogue emits what the spec's response schema rejects.
+    # NOT our formats. tests/fixtures/creative_formats/reference_formats.json is captured
+    # from the REFERENCE creative agent (provenance pin 76b031a85eb8, the v3.1.25 tag; it was
+    # 467fd93d7711, v3.1.1, when this was ledgered, with the same 45 pixel_tracker formats),
+    # and 4 of the 16 files under the spec's own formats/canonical/ declare pixel_tracker
+    # assets. At v3.1.1 the spec's reference catalogue emits what the spec's response schema
+    # rejects.
     #
     # Checked against the newest upstream before ledgering, not assumed: v3.1.20 (latest
-    # stable) still admits the same 15, and v3.2.0-rc.1 restructures the oneOf into a nested
-    # item_type/asset_type discriminator and still admits the same 15 while its asset-union
-    # grows to 21. Refreshing the fixture or bumping the pin does not fix it.
+    # stable then) still admitted the same 15. adcp#7338 was then fixed by adcp PR #7421
+    # (merged 2026-09-11, first released in v3.1.22): core/format.json, which
+    # list-creative-formats-response.json $refs, now admits pixel_tracker, vast_tracker,
+    # daast_tracker, card and published_post. Bumping the AGENT pin does not fix it here.
     #
-    # Graduates when #7338 lands and the pin moves past it. NO PR IS PLANNED FROM HERE
-    # (decided 2026-09-09), so do not read this as work in flight — it graduates only if
-    # upstream fixes it independently. A local schema overlay was considered and rejected:
+    # Graduates when the SPEC pin (tests/fixtures/adcp_schemas_pinned, v3.1.1) moves to
+    # v3.1.22 or later. A local schema overlay was considered and rejected:
     # tests/helpers/adcp_pinned_schema.py deliberately RAISES on a name present in both the
     # pinned tree and schemas/, because two live definitions of one contract is the exact
     # condition that tree exists to avoid, and a copied format.json would freeze the whole
