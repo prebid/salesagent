@@ -31,7 +31,7 @@ from src.a2a_server.context_builder import AdCPCallContextBuilder
 from src.admin.app import create_app
 from src.core.agent_identity import AGENT_CARD_PATH
 from src.core.auth_middleware import AuthChallengeResponder
-from src.core.config import load_settings
+from src.core.config import Settings, load_settings
 from src.core.domain_routing import route_landing_page
 from src.core.errors.issues import issues_from_validation_error
 from src.core.exceptions import AdCPInvalidRequestError, AdCPSalesAgentError
@@ -47,6 +47,7 @@ from src.landing.landing_page import generate_fallback_landing_page
 from src.routes.api_v1 import router as api_v1_router
 from src.routes.health import debug_router as health_debug_router
 from src.routes.health import router as health_router
+from src.routes.health import tls_ask_router
 from src.routes.well_known import router as well_known_router
 from src.services.seller_capabilities import describe_seller
 
@@ -546,11 +547,21 @@ def _openapi_with_rest_components() -> dict[str, Any]:
     return schema
 
 
+def include_optional_routers(target: FastAPI, deployment: Settings) -> None:
+    """Mount the routes a deployment opts into, and no others.
+
+    The debug and reset routes, and the on-demand TLS gate, EXIST only where the deployment
+    allows them. Selected here, at composition, rather than answering 404 per request from
+    inside the route.
+    """
+    if deployment.debug_routes_enabled:
+        target.include_router(health_debug_router)
+    if deployment.runtime.tls_ask_enabled:
+        target.include_router(tls_ask_router)
+
+
 app.include_router(health_router)
-# The debug and reset routes EXIST only where the deployment allows them. Selected here,
-# at composition, rather than answering 404 per request from inside the route.
-if settings.debug_routes_enabled:
-    app.include_router(health_debug_router)
+include_optional_routers(app, settings)
 
 # Trust root (#1291 A3): /.well-known/{brand,adagents,jwks}.json and the signed
 # revocation list. Registered at import time so it is matched before
