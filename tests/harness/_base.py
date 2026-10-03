@@ -950,6 +950,15 @@ class BaseTestEnv:
         values.update(overrides)
         return credential_headers(**values)
 
+    def publisher_address(self, publisher: str) -> str:
+        """The domain the seller fetches *publisher*'s adagents.json from: its name.
+
+        An env that serves a publisher's origin itself (``PublisherAdagentsMixin``) answers
+        with that origin's address instead, so a Given naming a publisher writes a row the
+        seller can actually reach on every transport.
+        """
+        return publisher
+
     def _tenant_virtual_host(self) -> str | None:
         """The host this env's tenant answers on, READ off the row.
 

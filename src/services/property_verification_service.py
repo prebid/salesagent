@@ -17,6 +17,7 @@ from adcp import (
 )
 from sqlalchemy import select
 
+from src.core.agent_identity import adagents_scoped_to_agent
 from src.core.database.database_session import get_db_session
 from src.core.database.models import AuthorizedProperty
 from src.services.adagents_error_messages import describe_adagents_error
@@ -109,7 +110,7 @@ class PropertyVerificationService:
                 property_identifiers = property_obj.identifiers or []
 
                 is_authorized = verify_agent_authorization(
-                    adagents_data=adagents_data,
+                    adagents_data=adagents_scoped_to_agent(adagents_data, agent_url),
                     agent_url=agent_url,
                     property_type=property_obj.property_type,
                     property_identifiers=property_identifiers,

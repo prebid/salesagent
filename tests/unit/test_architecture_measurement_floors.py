@@ -80,6 +80,9 @@ EXPECTED_WIRED_ROUTES: frozenset[str] = frozenset(
         # through `env.fetch_agent_card` rather than `call_via`.
         "agentcard",
         "tenantid",
+        # A publisher's adagents.json naming this agent, graded through the three admin
+        # actions that read it. Pinned in the change that registered the route.
+        "pubauth",
         # BR-PROTOCOL-001: inbound version negotiation, graded on a tool that is not
         # get_adcp_capabilities. Pinned in the same change that registered the route.
         "protocol-version-negotiation",

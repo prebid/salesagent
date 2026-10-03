@@ -190,12 +190,17 @@ class E2EConfig:
         ca_bundle: ABSOLUTE path to the CA that signed the stack's leaf. Absolute
             because pytest does not always run from the repo root. ``None`` when
             there is no TLS listener to verify.
+        production_base_url: A second server on the SAME database, started with
+            ``PRODUCTION=true``. A server's posture is fixed where it starts, so a
+            scenario whose Given deploys the seller in production is served here.
+            ``None`` when the stack runs no production server.
     """
 
     base_url: str
     postgres_url: str
     tls_base_url: str | None = None
     ca_bundle: str | None = None
+    production_base_url: str | None = None
 
 
 # The two values TransportResult.envelope["status"] may take. A DERIVED enum,

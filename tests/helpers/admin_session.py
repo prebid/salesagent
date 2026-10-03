@@ -119,6 +119,28 @@ def drop_stated_session_cookie(session: Any) -> None:
             session.cookies.clear(cookie.domain, cookie.path, cookie.name)
 
 
+def admin_test_app() -> Any:
+    """The admin Flask app a test drives in process: ONE composition, every harness.
+
+    Composed from the settings object the process already holds (``get_settings()``), so a
+    deployment fact a Given patched onto that object -- production, say -- is the one the
+    app is composed and served under. Left to itself ``create_app`` calls ``load_settings()``,
+    which builds a fresh object from the environment and replaces the current one, dropping
+    any such patch.
+
+    ``TESTING`` makes Flask propagate a view's exception instead of rendering a 500, so a
+    harness sees the failure where it happened. ``WTF_CSRF_ENABLED`` is off so a form post
+    needs no token.
+    """
+    from src.admin.app import create_app
+    from src.core.config import get_settings
+
+    app = create_app(settings=get_settings())
+    app.config["TESTING"] = True
+    app.config["WTF_CSRF_ENABLED"] = False
+    return app
+
+
 def admin_auth_session(client: Any, tenant_id: str, *, auth_method: str | None = None) -> None:
     """Populate a super-admin test-mode session on a Flask test client.
 

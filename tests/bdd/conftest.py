@@ -95,6 +95,7 @@ pytest_plugins = [
     "tests.bdd.steps.domain.local_context_echo",
     "tests.bdd.steps.domain.tenant_identification",
     "tests.bdd.steps.domain.agent_card_discovery",
+    "tests.bdd.steps.domain.publisher_authorization",
     "tests.bdd.steps.domain.pre_dispatch_refusals",
     "tests.bdd.steps.domain.codes_open_vocabulary",
     "tests.bdd.steps.domain.security_wire_safety",
@@ -5007,6 +5008,7 @@ def e2e_stack():
     # shared-server/shared-DB contention. Falls back to the shared stack when off.
     ca_bundle = os.environ.get("E2E_CA_BUNDLE")
     tls_base_url = os.environ.get("E2E_TLS_BASE_URL")
+    production_base_url = os.environ.get("E2E_PRODUCTION_BASE_URL")
     worker = os.environ.get("PYTEST_XDIST_WORKER")  # e.g. "gw3"
     if os.environ.get("E2E_PER_WORKER") == "1" and worker and worker.startswith("gw"):
         import re
@@ -5017,6 +5019,9 @@ def e2e_stack():
         proj = os.environ.get("COMPOSE_PROJECT_NAME", "")
         prefix = f"{proj}-" if proj else ""
         base_url = f"http://{prefix}server-{worker}:8080"
+        # Its production twin, on the same per-worker database (run_all_tests.sh).
+        if production_base_url:
+            production_base_url = f"http://{prefix}server-{worker}-production:8080"
         # Each worker's TLS sidecar carries its own DOTTED CONTAINER NAME for the
         # same reason — `docker compose run` cannot give it a network alias.
         if tls_base_url:
@@ -5062,6 +5067,7 @@ def e2e_stack():
         postgres_url=postgres_url,
         tls_base_url=tls_base_url,
         ca_bundle=ca_bundle,
+        production_base_url=production_base_url,
     )
 
 
@@ -5992,6 +5998,16 @@ ENV_ROUTES: list[EnvRoute] = [
         tag="agentcard",
         when=lambda m: "agentcard" in m,
         env_builder=_build_capabilities_env,
+        seed=_seed_tenant_and_principal,
+    ),
+    # ── @pubauth (local publisher-authorization feature) ────────────────────
+    # A `when` row because its scenarios carry T-ADMIN-PUBAUTH-* tags, which detect_uc
+    # files under the ADMIN bucket -- whose env drives the accounts pages and serves no
+    # publisher's file. The seed is the tenant whose agent_url the publisher names.
+    EnvRoute(
+        tag="pubauth",
+        when=lambda m: "pubauth" in m,
+        env_builder=_env("tests.harness.publisher_authorization.PublisherAuthorizationEnv"),
         seed=_seed_tenant_and_principal,
     ),
     EnvRoute(

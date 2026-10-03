@@ -18,13 +18,11 @@ scanned — the same split ``AdminAccountEnv.get_account_from_db`` already uses.
 
 from __future__ import annotations
 
-from typing import Any
-
 from sqlalchemy import select
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import AuditLog, Principal
-from tests.helpers.admin_session import admin_auth_session
+from tests.harness.admin_client import AdminClient, AdminResponse
 
 
 class AdminPrincipalEnv:
@@ -33,23 +31,18 @@ class AdminPrincipalEnv:
     DEFAULT_TENANT_ID = "admin_principal_tenant"
 
     def __init__(self, *, tenant_id: str | None = None) -> None:
-        """Build the admin app up front. Deliberately NOT a context manager.
+        """Deliberately NOT a context manager.
 
         ``tests/harness/test_harness_base.py`` allows ``__enter__``/``__exit__`` in exactly
         two declared homes — ``BaseTestEnv``, which owns the one unwind guard, and
         ``AdminAccountEnv``, a named and separately tested exception — and that list only
         shrinks, so a third home is not the way to add an env. The rule is also right here
-        on its own terms: this env acquires nothing that needs releasing. It constructs a
-        Flask app and hands out short-lived test clients from ``with`` blocks that close
-        themselves, so there is no resource for an unwind guard to protect and the
-        lifecycle methods would have been ceremony around a plain constructor.
+        on its own terms: this env acquires nothing that needs releasing. Each request
+        opens a short-lived :class:`AdminClient` and closes it before returning, so there
+        is no resource for an unwind guard to protect and the lifecycle methods would have
+        been ceremony around a plain constructor.
         """
-        from src.admin.app import create_app
-
         self._tenant_id = tenant_id or self.DEFAULT_TENANT_ID
-        self._app: Any = create_app()
-        self._app.config["TESTING"] = True
-        self._app.config["WTF_CSRF_ENABLED"] = False
 
     @property
     def tenant_id(self) -> str:
@@ -87,15 +80,17 @@ class AdminPrincipalEnv:
         *,
         authenticated: bool,
         form: dict[str, str] | None = None,
-    ) -> Any:
+    ) -> AdminResponse:
         """POST the rotate-token route, with or without an admin session."""
-        with self._app.test_client() as client:
+        client = AdminClient()
+        try:
             if authenticated:
-                admin_auth_session(client, self._tenant_id)
-            return client.post(
-                f"/tenant/{self._tenant_id}/principal/{principal_id}/rotate-token",
-                data=form or {},
+                client.authenticate(self._tenant_id)
+            return client.request(
+                "post", f"/tenant/{self._tenant_id}/principal/{principal_id}/rotate-token", data=form or {}
             )
+        finally:
+            client.close()
 
     # ── reads ──────────────────────────────────────────────────────────────
 
