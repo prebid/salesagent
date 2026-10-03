@@ -341,8 +341,6 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/services/policy_service.py", "update_policies"),
     ("src/services/property_discovery_service.py", "_batch_sync_properties"),
     ("src/services/property_discovery_service.py", "_batch_sync_tags"),
-    ("src/services/property_verification_service.py", "_verify_property_async"),
-    ("src/services/property_verification_service.py", "verify_all_properties"),
     ("src/services/setup_checklist_service.py", "_check_critical_tasks"),
     ("src/services/setup_checklist_service.py", "_check_optional_tasks"),
     ("src/services/setup_checklist_service.py", "get_bulk_setup_status"),

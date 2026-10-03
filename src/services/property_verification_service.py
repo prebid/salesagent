@@ -6,7 +6,6 @@ database status tracking for property verification.
 
 import asyncio
 import logging
-from datetime import UTC, datetime
 
 from adcp import (
     AdagentsNotFoundError,
@@ -15,10 +14,8 @@ from adcp import (
     fetch_adagents,
     verify_agent_authorization,
 )
-from sqlalchemy import select
 
-from src.core.database.database_session import get_db_session
-from src.core.database.models import AuthorizedProperty
+from src.core.database.repositories.uow import AuthorizedPropertyUoW
 from src.services.adagents_error_messages import describe_adagents_error
 
 logger = logging.getLogger(__name__)
@@ -62,12 +59,10 @@ class PropertyVerificationService:
         try:
             logger.info(f"🔍 Starting verification - tenant: {tenant_id}, property: {property_id}, agent: {agent_url}")
 
-            with get_db_session() as session:
-                stmt = select(AuthorizedProperty).where(
-                    AuthorizedProperty.tenant_id == tenant_id,
-                    AuthorizedProperty.property_id == property_id,
-                )
-                property_obj = session.scalars(stmt).first()
+            with AuthorizedPropertyUoW(tenant_id) as uow:
+                properties = uow.authorized_properties
+                assert properties is not None
+                property_obj = properties.get_by_id(property_id)
 
                 if not property_obj:
                     logger.error(f"❌ Property not found: {property_id} in tenant {tenant_id}")
@@ -87,19 +82,19 @@ class PropertyVerificationService:
                 except AdagentsNotFoundError as e:
                     logger.error(f"❌ adagents.json not found (404): {e}")
                     error_msg = describe_adagents_error(e)
-                    self._update_verification_status(session, property_obj, "failed", error_msg)
+                    properties.record_verification(property_obj, "failed", error_msg)
                     return False, error_msg
 
                 except AdagentsTimeoutError as e:
                     logger.error(f"❌ Timeout fetching adagents.json: {e}")
                     error_msg = describe_adagents_error(e)
-                    self._update_verification_status(session, property_obj, "failed", error_msg)
+                    properties.record_verification(property_obj, "failed", error_msg)
                     return False, error_msg
 
                 except AdagentsValidationError as e:
                     logger.error(f"❌ Invalid adagents.json: {e}")
                     error_msg = describe_adagents_error(e)
-                    self._update_verification_status(session, property_obj, "failed", error_msg)
+                    properties.record_verification(property_obj, "failed", error_msg)
                     return False, error_msg
 
                 # Use adcp library to verify authorization
@@ -117,34 +112,17 @@ class PropertyVerificationService:
 
                 if is_authorized:
                     logger.info("✅ Agent verification successful!")
-                    self._update_verification_status(session, property_obj, "verified", None)
+                    properties.record_verification(property_obj, "verified", None)
                     return True, None
                 else:
                     error_msg = f"Agent {agent_url} not authorized for this property"
                     logger.error(f"❌ {error_msg}")
-                    self._update_verification_status(session, property_obj, "failed", error_msg)
+                    properties.record_verification(property_obj, "failed", error_msg)
                     return False, error_msg
 
         except Exception as e:
             logger.error(f"Error verifying property {property_id}: {e}")
             return False, f"Verification error: {str(e)}"
-
-    def _update_verification_status(
-        self, session, property_obj: AuthorizedProperty, status: str, error: str | None
-    ) -> None:
-        """Update the verification status of a property in the database.
-
-        Args:
-            session: Database session
-            property_obj: Property object to update
-            status: New verification status
-            error: Error message (if any)
-        """
-        property_obj.verification_status = status
-        property_obj.verification_checked_at = datetime.now(UTC)
-        property_obj.verification_error = error
-        property_obj.updated_at = datetime.now(UTC)
-        session.commit()
 
     def verify_all_properties(self, tenant_id: str, agent_url: str) -> dict[str, int | list[str]]:
         """Verify all pending properties for a tenant.
@@ -157,43 +135,40 @@ class PropertyVerificationService:
             Dictionary with verification results
         """
         # Use separate counters for type safety
-        total_checked = 0
         verified = 0
         failed = 0
         errors: list[str] = []
+        pending: list[tuple[str, str]] = []
 
         try:
-            with get_db_session() as session:
-                # Get all pending properties
-                stmt = select(AuthorizedProperty).where(
-                    AuthorizedProperty.tenant_id == tenant_id, AuthorizedProperty.verification_status == "pending"
-                )
-                pending_properties = session.scalars(stmt).all()
-
-                total_checked = len(pending_properties)
-
-                for property_obj in pending_properties:
-                    try:
-                        is_verified, error = self.verify_property(tenant_id, property_obj.property_id, agent_url)
-
-                        if is_verified:
-                            verified += 1
-                        else:
-                            failed += 1
-                            if error:
-                                errors.append(f"{property_obj.name}: {error}")
-
-                    except Exception as e:
-                        failed += 1
-                        errors.append(f"{property_obj.name}: {str(e)}")
-                        logger.error(f"Error verifying property {property_obj.property_id}: {e}")
-
+            # Read the pending properties and close this unit before verifying:
+            # each verification opens a unit of its own on the same scoped
+            # session, which would detach any row still held here (#1644).
+            with AuthorizedPropertyUoW(tenant_id) as uow:
+                assert uow.authorized_properties is not None
+                pending = uow.authorized_properties.list_pending()
         except Exception as e:
             logger.error(f"Error in bulk verification: {e}")
             errors.append(f"Bulk verification error: {str(e)}")
 
+        for property_id, name in pending:
+            try:
+                is_verified, error = self.verify_property(tenant_id, property_id, agent_url)
+
+                if is_verified:
+                    verified += 1
+                else:
+                    failed += 1
+                    if error:
+                        errors.append(f"{name}: {error}")
+
+            except Exception as e:
+                failed += 1
+                errors.append(f"{name}: {str(e)}")
+                logger.error(f"Error verifying property {property_id}: {e}")
+
         results: dict[str, int | list[str]] = {
-            "total_checked": total_checked,
+            "total_checked": len(pending),
             "verified": verified,
             "failed": failed,
             "errors": errors,
