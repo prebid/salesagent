@@ -132,19 +132,21 @@ def hostname_of(host: str) -> str:
     exactly what took the A2A conformance axis from 27 passing checks to zero.
 
     So the port is dropped where a HOSTNAME is what the reader needs, and nowhere else.
-    Two readers need one: the tenant routing lookups in ``TenantLookupRepository``, which
-    compare host to host so a request naming either form resolves; and
-    ``Tenant.primary_domain``, which feeds ``publisher_properties[].publisher_domain`` --
-    a field AdCP constrains to ``^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[...])*$``, admitting no
-    colon. Feeding the port into that pattern failed every product of such a tenant and
-    answered INTERNAL_ERROR for the whole catalogue, which is the defect that first named
-    these two jobs.
+    The ``Tenant.virtual_host`` validator stores this once as ``virtual_host_name``, and the
+    readers that need a hostname read that column or derive it here: the tenant routing
+    lookups in ``TenantLookupRepository``, which compare host to host so a request naming
+    either form resolves; the adagents.json route, which finds the properties on the
+    tenant's own host by it; and ``Tenant.primary_domain``, which feeds
+    ``publisher_properties[].publisher_domain`` -- a field AdCP constrains to
+    ``^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[...])*$``, admitting no colon. Feeding the port into
+    that pattern failed every product of such a tenant and answered INTERNAL_ERROR for the
+    whole catalogue, which is the defect that first named this job.
 
     Projecting a stored origin onto a hostname is not the defensive re-validation the
     architecture forbids: the column's contents are trusted exactly as stored, and what
     happens here is that one reader wants a different part of the same fact.
 
-    The answer is LOWERCASE -- ``urlsplit(...).hostname`` folds case -- and both callers
+    The answer is LOWERCASE -- ``urlsplit(...).hostname`` folds case -- and the readers
     depend on that: ``_same_host`` compares this against a case-folded ``virtual_host``
     column, and ``publisher_domain``'s pinned pattern (``^[a-z0-9]...``) admits no
     uppercase at all. Only this side folding is what took every tenant-routing reader dark

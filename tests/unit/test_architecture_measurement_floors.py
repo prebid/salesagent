@@ -80,6 +80,8 @@ EXPECTED_WIRED_ROUTES: frozenset[str] = frozenset(
         # through `env.fetch_agent_card` rather than `call_via`.
         "agentcard",
         "tenantid",
+        # The adagents.json served at the tenant's own host, fetched like the card.
+        "adagents",
         # BR-PROTOCOL-001: inbound version negotiation, graded on a tool that is not
         # get_adcp_capabilities. Pinned in the same change that registered the route.
         "protocol-version-negotiation",
