@@ -100,17 +100,11 @@ def generate_auto_name(
         "Nike Air Max Campaign - Q4 Holiday Push"
         "Acme Corp Brand Awareness - Premium Video"
     """
-    from src.services.ai import AIServiceFactory
+    from src.services.ai import AIServiceFactory, resolve_tenant_ai_config
 
     factory = AIServiceFactory()
 
-    # Handle backward compatibility: convert gemini_api_key to ai_config
-    effective_config = tenant_ai_config
-    if effective_config is None and tenant_gemini_key:
-        effective_config = {
-            "provider": "gemini",
-            "api_key": tenant_gemini_key,
-        }
+    effective_config = resolve_tenant_ai_config(tenant_ai_config, tenant_gemini_key)
 
     # Check if AI is enabled
     if not factory.is_ai_enabled(effective_config):

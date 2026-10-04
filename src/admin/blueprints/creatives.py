@@ -1074,7 +1074,7 @@ def _ai_review_creative_impl_inner(
     from src.core.database.repositories.product import ProductRepository
     from src.core.database.repositories.tenant_config import TenantConfigRepository
     from src.core.metrics import ai_review_confidence, record_ai_review
-    from src.services.ai import AIServiceFactory
+    from src.services.ai import AIServiceFactory, resolve_tenant_ai_config
     from src.services.ai.agents.review_agent import (
         create_review_agent,
         parse_confidence_score,
@@ -1105,15 +1105,7 @@ def _ai_review_creative_impl_inner(
         # Check AI availability - use factory to check tenant + platform config
         factory = AIServiceFactory()
 
-        # Build effective config from tenant settings
-        tenant_ai_config = tenant.ai_config if hasattr(tenant, "ai_config") else None
-
-        # Backward compatibility: use gemini_api_key if no ai_config
-        if not tenant_ai_config and tenant.gemini_api_key:
-            tenant_ai_config = {
-                "provider": "gemini",
-                "api_key": tenant.gemini_api_key,
-            }
+        tenant_ai_config = resolve_tenant_ai_config(tenant.ai_config, tenant.gemini_api_key)
 
         if not factory.is_ai_enabled(tenant_ai_config):
             return {

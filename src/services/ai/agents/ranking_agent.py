@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any
 from pydantic import BaseModel, Field
 
 from src.core.schemas import Product
+from src.services.ai.factory import run_agent
 
 if TYPE_CHECKING:
     from pydantic_ai import Agent
@@ -125,8 +126,11 @@ async def rank_products_async(
 
     Returns:
         ProductRankingResult with rankings for each product
+
+    Raises:
+        AIProviderError: The provider failed the call (see ``run_agent``).
     """
     prompt = build_ranking_prompt(custom_prompt, brief, products)
-    result = await agent.run(prompt)
+    result = await run_agent(agent, prompt)
     # pydantic-ai 1.x uses .output for structured data
     return result.output

@@ -415,6 +415,18 @@ def _find_wrapped[Wrapped: BaseException](
     return None
 
 
+def is_transport_failure(exc: BaseException) -> bool:
+    """True when *exc* is an ``_httpx.HTTPError`` raised by a vendor SDK's own httpx stack.
+
+    For the fixed-destination SDKs that dial outside this seam (the pydantic-ai providers,
+    see docs/security/outbound-egress.md). google-genai raises ``httpx.ConnectError``
+    unwrapped for an unreachable endpoint, so a caller that degrades on a provider failure
+    has to recognise it. Like :func:`wrapped_failure`, this answers the question without
+    handing the httpx type across the import ban.
+    """
+    return isinstance(exc, _httpx.HTTPError)
+
+
 def _allow_private() -> bool:
     """The operator's escape hatch for private destinations, read off the settings."""
     from src.core.config import get_settings

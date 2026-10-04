@@ -19,6 +19,7 @@ scenario passes with the flag off and grades the wrong arm.
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 #: Values that mean true in a Gherkin cell. Anything else is false, EXCEPT the
@@ -82,3 +83,11 @@ def drop_header_if(datatable: Any, first_cell: str) -> list[Any]:
     if datatable and str(datatable[0][0]).strip().lower() == first_cell.lower():
         return list(datatable[1:])
     return list(datatable)
+
+
+def quoted_list(text: str) -> list[str]:
+    """Parse '"a", "b"' / 'display, social' step fragments into a list."""
+    quoted = re.findall(r'"([^"]+)"', text)
+    if quoted:
+        return quoted
+    return [part.strip() for part in text.split(",") if part.strip()]

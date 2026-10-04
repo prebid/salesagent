@@ -17,7 +17,7 @@ from urllib.parse import urlsplit
 from pytest_bdd import given, parsers, then, when
 
 from tests.bdd.steps.domain.admin_accounts import _require_admin_page
-from tests.bdd.steps.domain.uc010_capabilities import _quoted_list
+from tests.bdd.steps.generic._table import quoted_list
 
 if TYPE_CHECKING:
     from tests.harness.publisher_authorization import PublisherAuthorizationEnv
@@ -131,7 +131,7 @@ def then_partnership_refused(ctx: dict, publisher: str) -> None:
 @then(parsers.parse('the tenant holds properties {names} from "{publisher}"'))
 def then_holds_properties(ctx: dict, names: str, publisher: str) -> None:
     held = sorted(prop.name for prop in _env(ctx).properties_from(publisher))
-    assert held == sorted(_quoted_list(names)), f"the tenant holds {held} from {publisher!r}"
+    assert held == sorted(quoted_list(names)), f"the tenant holds {held} from {publisher!r}"
 
 
 @then(parsers.parse('the tenant holds the fallback property from "{publisher}"'))
