@@ -302,9 +302,9 @@ class CreativeAgentRegistry:
     def __init__(self):
         """Initialize registry with empty cache and the deployment's default agent."""
         self._format_cache: dict[str, CachedFormats] = {}  # Key: normalized agent_url
-        # Default creative agent (always available). agent_url is the base URL; the MCP
-        # endpoint (/mcp) is appended by the client. CREATIVE_AGENT_URL lets CI point it at
-        # a containerized agent.
+        # Default creative agent (always available). agent_url is the base URL; the client
+        # dials it once and falls back to <url>/mcp when the answer is not MCP.
+        # CREATIVE_AGENT_URL lets CI point it at a containerized agent.
         self.DEFAULT_AGENT = CreativeAgent(
             agent_url=get_settings().integrations.creative_agent_url or PUBLIC_DEFAULT_AGENT_URL,
             name="AdCP Standard Creative Agent",

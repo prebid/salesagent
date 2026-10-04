@@ -33,6 +33,8 @@ from typing import Any
 
 import uvicorn
 from fastmcp import FastMCP
+from starlette.requests import Request
+from starlette.responses import Response
 
 # How long to wait for uvicorn to bind before declaring the fixture itself broken.
 _STARTUP_TIMEOUT_SECONDS = 20.0
@@ -44,10 +46,19 @@ class MCPOrigin:
 
     base_url: str = ""
     invocations: list[str] = field(default_factory=list)
+    # Methods of the requests the origin's ROOT ("/") received, when it was told to
+    # answer there (``run_mcp_origin(root_answer=...)``). A count of the attempts a
+    # client spent on a URL that is not the MCP endpoint.
+    root_hits: list[str] = field(default_factory=list)
 
     def invocations_of(self, tool: str) -> int:
         """How many times *tool*'s body actually ran."""
         return self.invocations.count(tool)
+
+    @property
+    def root_url(self) -> str:
+        """The origin's root: the agent's base URL, with MCP served one path below at ``/mcp``."""
+        return self.base_url.removesuffix("/mcp")
 
 
 def _recording(origin: MCPOrigin, name: str, handler: Callable[..., Any]) -> Callable[..., Any]:
@@ -76,18 +87,32 @@ def run_mcp_origin(
     tools: Mapping[str, Callable[..., Any]],
     certfile: Path | str,
     keyfile: Path | str,
+    root_answer: tuple[int, str] | None = None,
 ) -> Iterator[MCPOrigin]:
     """Serve *tools* as a real MCP endpoint at ``<base_url>`` until the block exits.
 
     The path ends in ``/mcp`` so the seam synthesises no ``/mcp`` fallback
     candidate — one URL, one attempt budget, so an attempt count means what the
     test says it means.
+
+    ``root_answer`` is ``(status, content_type)`` for every request to ``/``, the
+    shape of an agent whose base URL is a web page or a CSRF-guarded app rather
+    than the MCP endpoint (the public creative agent serves HTML there; the
+    reference agent answers 403). Each hit is recorded in ``origin.root_hits``.
     """
     origin = MCPOrigin()
 
     server_mcp = FastMCP(name="stub-mcp-origin")
     for name, handler in tools.items():
         server_mcp.tool(_recording(origin, name, handler), name=name)
+
+    if root_answer is not None:
+        status, content_type = root_answer
+
+        @server_mcp.custom_route("/", methods=["GET", "POST", "DELETE"])
+        async def root(request: Request) -> Response:
+            origin.root_hits.append(request.method)
+            return Response(b"<!doctype html><title>not mcp</title>", status_code=status, media_type=content_type)
 
     server = uvicorn.Server(
         uvicorn.Config(
