@@ -30,3 +30,24 @@ description = "test-fixture idempotency_key literals (request IDs, not secrets)"
 paths = ['''tests/.*\.py''']
 regexTarget = "line"
 regexes = ['''idempotency_key["']?\s*[:=]+\s*["'][A-Za-z0-9_.:-]{16,255}["']''']
+
+# Conformance-vector MANIFEST files, whole-file. Every value in them is the
+# SHA-256 of the fixture named by its key; generic-api-key fires on the two whose
+# key happens to contain "key" ("keys.json", "negative/017-key-revoked.json").
+# #1757 added the request-signing vectors and with them the first such manifest,
+# so the hook fails on any tree that merely CONTAINS main.
+#
+# This is a WHOLE-FILE allowlist, not a per-line one. A paths+regexes entry was
+# tried first to scope it to 64-hex values only; gitleaks ORs the two conditions,
+# so the path match allowlists the file regardless, and `condition = "AND"` did
+# not change that in the pinned version. A probe confirmed it: a non-hex
+# high-entropy value injected under a "key"-named field went undetected. Recorded
+# rather than described as narrower than it is.
+#
+# Acceptable because the file is GENERATED -- it is a digest index over the
+# vector directory, and nothing but digests is ever written to it. The sibling
+# keys.json holds the actual test key material and is deliberately NOT listed
+# here, so it stays graded.
+[[allowlists]]
+description = "conformance-vector MANIFEST digest index (generated; sibling keys.json stays graded)"
+paths = ['''tests/fixtures/adcp_conformance_vectors/.*/MANIFEST\.json''']

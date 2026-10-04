@@ -130,12 +130,20 @@ exit 0
 #:                             missing shared dependency hands the runner a
 #:                             scripts/ dir that cannot execute the checks it
 #:                             invokes.
+#:   ci/report_worker_profile.py  the runner's third post-collection check: it
+#:                             prints the per-suite parallelism table and fails
+#:                             only when a suite's workers disagree on what they
+#:                             collected. Same pure-stdlib reach, and the same
+#:                             absence problem -- `python3` on a path that does
+#:                             not exist exits nonzero, which the runner reads as
+#:                             a failed run.
 _REAL_HOST_SCRIPTS = (
     "scripts/creative-agent-stack.sh",
     "scripts/dev/alloc-e2e-subnet.sh",
     "scripts/check_truncated_reports.py",
     "scripts/report_suite_failures.py",
     "scripts/_suite_reports.py",
+    "scripts/ci/report_worker_profile.py",
 )
 
 #: Helper scripts run_all_tests.sh executes on the host that must NOT run for
