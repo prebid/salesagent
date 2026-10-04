@@ -1117,19 +1117,6 @@ def then_response_has_sandbox(ctx: dict) -> None:
     assert isinstance(sandbox, bool), f"Expected sandbox to be bool, got {type(sandbox).__name__}: {sandbox!r}"
 
 
-@then('the response should NOT contain an "errors" field')
-def then_no_errors_field(ctx: dict) -> None:
-    """Assert the response does not contain an 'errors' field at all.
-
-    Step text says 'NOT contain' — the key must be ABSENT, not merely null: an empty list
-    or a serialized null both mean the field exists. wire_absent encodes that distinction.
-
-    Asserted on the WIRE rather than on resp.model_dump(): a round-trip through the model
-    proves the serializer is self-consistent, not what the buyer actually received.
-    """
-    wire_absent(ctx, "errors")
-
-
 # Step 'the response should contain an "errors" array' is owned by
 # tests/bdd/steps/generic/then_media_buy.py, which grades the WIRE rejection
 # (``ctx["result"].assert_wire_error_is_schema_conformant()`` against pinned
@@ -1193,34 +1180,39 @@ def _assert_a2a_submitted_task_has_no_artifacts(ctx: dict) -> None:
     )
 
 
-@then(parsers.parse('the response should NOT contain "{field_name}" field'))
-def then_response_not_contain_field(ctx: dict, field_name: str) -> None:
-    """Assert the response does NOT contain a given field.
+@then(
+    parsers.re(
+        r'(?:the response should NOT contain "(?P<field_name>[a-z_]+)" field'
+        r"|(?P<path>[a-z_]+(?:\.[a-z_]+)+) should be omitted)"
+    )
+)
+def then_response_field_absent(ctx: dict, field_name: str | None, path: str | None) -> None:
+    """The ONE absence step: the member is not on the wire the buyer received.
 
-    BR-RULE-018 INV-1/INV-2: Success responses must not contain error fields,
-    and error responses must not contain success-specific fields. Both directions read
-    the REAL serialized wire — ``ctx["wire_response"]`` on success, the two-layer error
-    envelope on failure — never ``model_dump()``: media_buy_id and implementation_date
-    are not declared on UpdateMediaBuySubmitted, so a model-level check passes vacuously
-    and can never catch a wire regression (e.g. the A2A submitted payload leaking a
-    field). Absent-or-null on the wire satisfies "does NOT contain" (a null field is
-    not conveyed); a real value is a contract violation.
+    Two spellings, one assertion. ``the response should NOT contain "<field>" field`` names
+    a top-level key; ``<dotted.path> should be omitted`` names a nested member. On success
+    both go through :func:`wire_absent`, which reads the REAL serialized wire and fails on a
+    serialized ``null`` as well as on a value: an omitted member is not sent at all.
+
+    BR-RULE-018 INV-1/INV-2: success responses must not contain error fields, and error
+    responses must not contain success-specific fields (media_buy_id and
+    implementation_date are not declared on UpdateMediaBuySubmitted, so a model-level check
+    passes vacuously). ``media_buy.portfolio``: publisher_domains is REQUIRED+minItems:1
+    (pinned v3.1.1 get-adcp-capabilities-response.json) whenever portfolio is present, so a
+    seller with no verified publisher, or one whose lookup failed, omits portfolio.
+    ``media_buy.portfolio.advertising_policies``: the pinned member is
+    ``{"type": "string"}`` with no null arm.
     """
-    # Success-path response — assert against the buyer-facing serialized wire.
-    response = payload_or_none(ctx)
-    if response is not None:
-        data = wire_dict(ctx)
-        assert data.get(field_name) is None, (
-            f"Response should NOT contain '{field_name}' field on the wire (BR-RULE-018), "
-            f"but found: {data.get(field_name)!r}"
-        )
+    member = field_name or path
+    assert member is not None
+    if payload_or_none(ctx) is not None:
+        wire_absent(ctx, member)
         _assert_a2a_submitted_task_has_no_artifacts(ctx)
         return
     # Error-path response (BR-RULE-018 INV-2) — the envelope the buyer received.
     envelope = ctx["result"].error_envelope()
-    assert envelope.get(field_name) is None, (
-        f"Error envelope should NOT contain '{field_name}' field "
-        f"(BR-RULE-018 INV-2), but found: {envelope.get(field_name)!r}"
+    assert member not in envelope, (
+        f"Error envelope should NOT contain '{member}' (BR-RULE-018 INV-2), but found: {envelope[member]!r}"
     )
 
 

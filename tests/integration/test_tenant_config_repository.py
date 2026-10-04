@@ -185,19 +185,3 @@ class TestUpdateTenantProvesEveryKeyNamesAWritableAttribute:
 
             with pytest.raises(ValueError, match="primary_domain"):
                 repo.update_tenant(primary_domain="nope.example.test")
-
-
-class TestListPublisherDomains:
-    """list_publisher_domains returns sorted domain strings."""
-
-    def test_sorted_domains(self, integration_db):
-        with _RepoEnv() as env:
-            tenant = TenantFactory(tenant_id="tcr_dom")
-            PublisherPartnerFactory(tenant=tenant, publisher_domain="zebra.com")
-            PublisherPartnerFactory(tenant=tenant, publisher_domain="alpha.com")
-
-            session = env.get_session()
-            repo = TenantConfigRepository(session, "tcr_dom")
-            domains = repo.list_publisher_domains()
-
-        assert domains == ["alpha.com", "zebra.com"]

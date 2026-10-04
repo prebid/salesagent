@@ -378,7 +378,7 @@ Feature: BR-UC-003 Update Media Buy
     When the Buyer Agent sends the update_media_buy request
     Then the response is compliant with the update_media_buy success spec
     And the response should contain media_buy_id
-    And the response should NOT contain an "errors" field
+    And the response should NOT contain "errors" field
     # BR-RULE-018 INV-1: Success → no errors field
 
   @T-UC-003-atomic-error @invariant @BR-RULE-018

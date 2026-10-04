@@ -2739,7 +2739,8 @@ class BaseTestEnv:
         tenant: str | None = None,
         host_resolves_nothing: bool = False,
     ) -> Any:
-        """GET the agent card at *path*, naming the seller by *host* or by *tenant*.
+        """GET the agent card, or another root document such as adagents.json, at *path*,
+        naming the seller by *host* or by *tenant*.
 
         The card is not a registry tool, so it is not reachable through ``call_via``: it is a
         root endpoint that answers before any AdCP exchange and carries no envelope. A

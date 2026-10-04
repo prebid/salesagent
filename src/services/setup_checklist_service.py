@@ -18,11 +18,16 @@ from src.core.database.models import (
     CurrencyLimit,
     GAMInventory,
     Product,
-    PublisherPartner,
     Tenant,
-    TenantAuthConfig,
 )
+from src.core.database.repositories.principal_lookup import count_principals_by_tenant
 from src.core.database.repositories.signing_key import SigningKeyRepository
+from src.core.database.repositories.tenant_config import (
+    TenantConfigRepository,
+    count_verified_publisher_partners_by_tenant,
+)
+from src.core.database.repositories.tenant_counts import count_by_tenant
+from src.core.database.repositories.tenant_lookup import TenantLookupRepository
 from src.core.signing.posture import KeyBacking, signing_key_backed
 
 logger = logging.getLogger(__name__)
@@ -46,6 +51,12 @@ def _mock_adapter_config_state() -> tuple[bool, str]:
     if get_settings().mock_adapter_counts_as_configured:
         return True, "Mock adapter configured (test mode)"
     return False, "Mock adapter - Configure a real ad server for production"
+
+
+def _verified_publisher_count(session, tenant_id: str) -> int:
+    """How many of the tenant's publisher partners have verified it, through the one
+    repository read of "verified partners" that ``get_adcp_capabilities`` also uses."""
+    return len(TenantConfigRepository(session, tenant_id).list_publisher_partners(verified=True))
 
 
 def _is_multi_tenant_mode() -> bool:
@@ -171,77 +182,21 @@ class SetupChecklistService:
         now_utc = datetime.now(UTC)
 
         with get_db_session() as session:
-            # Bulk fetch all uncached tenants
-            stmt = select(Tenant).where(Tenant.tenant_id.in_(uncached_ids))
-            tenants = {t.tenant_id: t for t in session.scalars(stmt).all()}
+            tenants = TenantLookupRepository(session).find_by_ids(uncached_ids)
 
-            # Bulk count queries for all metrics (only for uncached tenants)
-            # Currency limits per tenant
-            currency_stmt = (
-                select(CurrencyLimit.tenant_id, func.count())
-                .where(CurrencyLimit.tenant_id.in_(uncached_ids))
-                .group_by(CurrencyLimit.tenant_id)
+            # One grouped count per metric, for the uncached tenants only
+            currency_counts = count_by_tenant(session, CurrencyLimit.tenant_id, uncached_ids)
+            budget_limit_counts = count_by_tenant(
+                session,
+                CurrencyLimit.tenant_id,
+                uncached_ids,
+                CurrencyLimit.max_daily_package_spend.isnot(None),
             )
-            currency_counts: dict[str, int] = {  # noqa: C416
-                tid: count for tid, count in session.execute(currency_stmt).all()
-            }
-
-            # Currency limits with budget controls per tenant
-            budget_stmt = (
-                select(CurrencyLimit.tenant_id, func.count())
-                .where(CurrencyLimit.tenant_id.in_(uncached_ids))
-                .where(CurrencyLimit.max_daily_package_spend.isnot(None))
-                .group_by(CurrencyLimit.tenant_id)
-            )
-            budget_limit_counts: dict[str, int] = {  # noqa: C416
-                tid: count for tid, count in session.execute(budget_stmt).all()
-            }
-
-            # Authorized properties per tenant
-            property_stmt = (
-                select(AuthorizedProperty.tenant_id, func.count())
-                .where(AuthorizedProperty.tenant_id.in_(uncached_ids))
-                .group_by(AuthorizedProperty.tenant_id)
-            )
-            property_counts: dict[str, int] = {  # noqa: C416
-                tid: count for tid, count in session.execute(property_stmt).all()
-            }
-
-            # GAM inventory per tenant
-            gam_stmt = (
-                select(GAMInventory.tenant_id, func.count())
-                .where(GAMInventory.tenant_id.in_(uncached_ids))
-                .group_by(GAMInventory.tenant_id)
-            )
-            gam_inventory_counts: dict[str, int] = {  # noqa: C416
-                tid: count for tid, count in session.execute(gam_stmt).all()
-            }
-
-            # Products per tenant
-            product_stmt = (
-                select(Product.tenant_id, func.count())
-                .where(Product.tenant_id.in_(uncached_ids))
-                .group_by(Product.tenant_id)
-            )
-            product_counts: dict[str, int] = {  # noqa: C416
-                tid: count for tid, count in session.execute(product_stmt).all()
-            }
-
-            # Principals per tenant
-            from src.core.database.repositories.principal_lookup import count_principals_by_tenant
-
-            principal_counts: dict[str, int] = count_principals_by_tenant(session, uncached_ids)
-
-            # Verified publisher partners per tenant
-            verified_publisher_stmt = (
-                select(PublisherPartner.tenant_id, func.count())
-                .where(PublisherPartner.tenant_id.in_(uncached_ids))
-                .where(PublisherPartner.is_verified == True)  # noqa: E712
-                .group_by(PublisherPartner.tenant_id)
-            )
-            verified_publisher_counts: dict[str, int] = {  # noqa: C416
-                tid: count for tid, count in session.execute(verified_publisher_stmt).all()
-            }
+            property_counts = count_by_tenant(session, AuthorizedProperty.tenant_id, uncached_ids)
+            gam_inventory_counts = count_by_tenant(session, GAMInventory.tenant_id, uncached_ids)
+            product_counts = count_by_tenant(session, Product.tenant_id, uncached_ids)
+            principal_counts = count_principals_by_tenant(session, uncached_ids)
+            verified_publisher_counts = count_verified_publisher_partners_by_tenant(session, uncached_ids)
 
             # Build status for each uncached tenant using pre-fetched data
             for tenant_id in uncached_ids:
@@ -432,8 +387,7 @@ class SetupChecklistService:
         # 2. SSO Configuration - Critical for single-tenant deployments, optional for multi-tenant
         # In multi-tenant mode, the platform manages authentication centrally
         if not _is_multi_tenant_mode():
-            auth_config_stmt = select(TenantAuthConfig).filter_by(tenant_id=self.tenant_id)
-            auth_config = session.scalars(auth_config_stmt).first()
+            auth_config = tenant.auth_config
             sso_enabled = bool(auth_config and auth_config.oidc_enabled)
             setup_mode_disabled = bool(not tenant.auth_setup_mode) if hasattr(tenant, "auth_setup_mode") else False
 
@@ -481,12 +435,7 @@ class SetupChecklistService:
         property_count = session.scalar(stmt) or 0
 
         # Also check verified publisher count for better messaging
-        stmt_publishers = (
-            select(func.count())
-            .select_from(PublisherPartner)
-            .where(PublisherPartner.tenant_id == self.tenant_id, PublisherPartner.is_verified == True)  # noqa: E712
-        )
-        verified_publisher_count = session.scalar(stmt_publishers) or 0
+        verified_publisher_count = _verified_publisher_count(session, self.tenant_id)
 
         is_complete = property_count > 0
         details = (
@@ -727,8 +676,7 @@ class SetupChecklistService:
         # SSO Configuration - Optional in multi-tenant mode (platform manages auth centrally)
         # In single-tenant mode, SSO is critical and shown there instead
         if _is_multi_tenant_mode():
-            auth_config_stmt = select(TenantAuthConfig).filter_by(tenant_id=self.tenant_id)
-            auth_config = session.scalars(auth_config_stmt).first()
+            auth_config = tenant.auth_config
             sso_enabled = bool(auth_config and auth_config.oidc_enabled)
             setup_mode_disabled = bool(not tenant.auth_setup_mode) if hasattr(tenant, "auth_setup_mode") else False
 
