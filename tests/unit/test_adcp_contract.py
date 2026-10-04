@@ -715,7 +715,9 @@ class TestAdCPContract:
         product_model.description = "This product has no format_ids configured"
         product_model.delivery_type = "guaranteed"
         product_model.effective_format_ids = []  # Empty - no formats configured
-        product_model.effective_properties = [{"publisher_domain": "example.com", "property_tags": ["test"]}]
+        product_model.resolve_publisher_properties.return_value = [
+            {"publisher_domain": "example.com", "property_tags": ["test"]}
+        ]
         product_model.pricing_options = [
             MagicMock(
                 pricing_model="cpm",
@@ -730,12 +732,12 @@ class TestAdCPContract:
 
         # Conversion should fail with a clear error message
         with pytest.raises(ValueError, match="has no format_ids configured"):
-            convert_product_model_to_schema(product_model)
+            convert_product_model_to_schema(product_model, authorized_properties=[])
 
         # Also test with None (another way format_ids might be missing)
         product_model.effective_format_ids = None
         with pytest.raises(ValueError, match="has no format_ids configured"):
-            convert_product_model_to_schema(product_model)
+            convert_product_model_to_schema(product_model, authorized_properties=[])
 
     def test_adcp_create_media_buy_request(self):
         """Test AdCP create_media_buy request structure."""

@@ -203,6 +203,7 @@ class TestSchemaFieldMapping:
             product = create_test_db_product(
                 tenant_id=tenant_id,
                 product_id="conversion_test_001",
+                property_tags=["all_inventory"],
                 name="Conversion Test Product",
                 description="Product for testing safe conversion",
                 format_ids=[{"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"}],
@@ -394,6 +395,7 @@ class TestSchemaFieldMapping:
             product = create_test_db_product(
                 tenant_id=tenant_id,
                 product_id="validation_test_001",
+                property_tags=["all_inventory"],
                 name="Schema Validation Product",
                 description="Testing schema validation with database data",
                 format_ids=[{"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"}],

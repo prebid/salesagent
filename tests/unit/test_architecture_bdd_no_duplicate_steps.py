@@ -89,7 +89,11 @@ _DUPLICATE_THRESHOLD = 2
 # grade the adapter channel alone, which its "advisory warning" twin does not. Both were listed
 # above as claims a shared body failed to distinguish -- the bodies now distinguish them, so
 # the groups are gone rather than merged.
-_DUPLICATE_GROUP_BASELINE = 21
+#
+# 21 -> 20: the two "errors" absence Thens ('NOT contain an "errors" field', 'NOT have an
+# "errors" field') were one body, ``wire_absent(ctx, "errors")``; both are deleted and their
+# feature lines bind to the one absence step, ``the response should NOT contain "errors" field``.
+_DUPLICATE_GROUP_BASELINE = 20
 
 # Steps exempt from the 3+ identical-body scan (load-bearing: each suppresses a
 # cluster that would otherwise fail test_no_excessive_duplicate_step_bodies).
@@ -114,7 +118,9 @@ _ALLOWED_DUPLICATES: set[str] = set()
 #
 # So the MEMBER count is ratcheted too, two-sided, in the same shape. Together the two numbers
 # carry both sides' obligation: no new group, and no group growing.
-_DUPLICATE_MEMBER_BASELINE = 43
+#
+# 43 -> 41: the two members of the "errors" absence group are deleted (see 21 -> 20 above).
+_DUPLICATE_MEMBER_BASELINE = 41
 
 
 def _is_step_decorated(func: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:

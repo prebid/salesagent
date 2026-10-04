@@ -83,7 +83,9 @@ with get_db_session() as session:
 
 **Key differences from `create_test_product()`:**
 - Requires `tenant_id` parameter
-- Uses legacy database field names: `property_tags`, `property_ids`, `properties`
+- Uses the database field names: `property_tags`, `property_ids`, `properties`. With none given it stores
+  `default_publisher_properties()`, which a buyer is offered only where the tenant holds the verified
+  property `ONE_AUTHORIZED_PROPERTY` names (`tests/factories/product.py`)
 - Returns database model instance (not AdCP schema object)
 - Use for database operations, not API serialization
 

@@ -20,6 +20,7 @@ from src.core.database.models import PricingOption
 from src.core.database.models import Product as ProductModel
 from src.core.product_conversion import convert_product_model_to_schema, default_reporting_capabilities
 from src.core.schemas import Product
+from tests.factories.product import ONE_AUTHORIZED_PROPERTY
 from tests.helpers.adcp_factories import (
     create_test_cpm_pricing_option,
     create_test_db_product,
@@ -150,32 +151,42 @@ class TestConversionDeliveryMeasurementDefaults:
         db_product = _make_db_product(
             delivery_measurement={"provider": "ias", "notes": "IAS viewability"},
         )
-        schema_product = convert_product_model_to_schema(db_product, adapter_type="google_ad_manager")
+        schema_product = convert_product_model_to_schema(
+            db_product, adapter_type="google_ad_manager", authorized_properties=ONE_AUTHORIZED_PROPERTY
+        )
         assert schema_product.delivery_measurement.provider == "ias"
         assert schema_product.delivery_measurement.notes == "IAS viewability"
 
     def test_conversion_uses_gam_default_when_missing(self):
         """Products without delivery_measurement get GAM default when adapter is GAM."""
         db_product = _make_db_product(delivery_measurement=None)
-        schema_product = convert_product_model_to_schema(db_product, adapter_type="google_ad_manager")
+        schema_product = convert_product_model_to_schema(
+            db_product, adapter_type="google_ad_manager", authorized_properties=ONE_AUTHORIZED_PROPERTY
+        )
         assert schema_product.delivery_measurement.provider == "google_ad_manager"
 
     def test_conversion_uses_mock_default_when_missing(self):
         """Products without delivery_measurement get mock default when adapter is mock."""
         db_product = _make_db_product(delivery_measurement=None)
-        schema_product = convert_product_model_to_schema(db_product, adapter_type="mock")
+        schema_product = convert_product_model_to_schema(
+            db_product, adapter_type="mock", authorized_properties=ONE_AUTHORIZED_PROPERTY
+        )
         assert schema_product.delivery_measurement.provider == "mock"
 
     def test_conversion_uses_publisher_fallback_when_no_adapter(self):
         """Products without delivery_measurement get publisher fallback when no adapter_type."""
         db_product = _make_db_product(delivery_measurement=None)
-        schema_product = convert_product_model_to_schema(db_product, adapter_type=None)
+        schema_product = convert_product_model_to_schema(
+            db_product, adapter_type=None, authorized_properties=ONE_AUTHORIZED_PROPERTY
+        )
         assert schema_product.delivery_measurement.provider == "publisher"
 
     def test_conversion_uses_publisher_fallback_for_unknown_adapter(self):
         """Products without delivery_measurement get publisher fallback for unknown adapter."""
         db_product = _make_db_product(delivery_measurement=None)
-        schema_product = convert_product_model_to_schema(db_product, adapter_type="unknown")
+        schema_product = convert_product_model_to_schema(
+            db_product, adapter_type="unknown", authorized_properties=ONE_AUTHORIZED_PROPERTY
+        )
         assert schema_product.delivery_measurement.provider == "publisher"
 
 

@@ -349,13 +349,20 @@ async def _get_products_impl(req: GetProductsRequest, identity: PublicIdentity) 
 
     with ProductUoW(tenant.tenant_id) as uow:
         assert uow.products is not None
+        assert uow.authorized_properties is not None
         db_products = uow.products.list_all()
+        # Once per request: every product's selectors resolve against these (#1845).
+        authorized_properties = uow.authorized_properties.list_refs()
 
         # Convert database Product models to AdCP Product schema
         products = []
         for product_obj in db_products:
             try:
-                validated_product = convert_product_model_to_schema(product_obj, adapter_type=tenant_adapter_type)
+                validated_product = convert_product_model_to_schema(
+                    product_obj, adapter_type=tenant_adapter_type, authorized_properties=authorized_properties
+                )
+                if validated_product is None:
+                    continue  # not offered: names no authorized publisher (logged by the conversion)
                 products.append(validated_product)
                 logger.debug(f"Successfully converted product {product_obj.product_id}")
             except AdCPSalesAgentError:
@@ -449,9 +456,12 @@ async def _get_products_impl(req: GetProductsRequest, identity: PublicIdentity) 
             for variant_model in dynamic_variants:
                 # Convert database model to schema (returns library Product)
                 # Cast to our extended Product type for mypy compatibility
-                variant_schema = convert_product_model_to_schema(variant_model, adapter_type=tenant_adapter_type)
+                variant_schema = convert_product_model_to_schema(
+                    variant_model, adapter_type=tenant_adapter_type, authorized_properties=authorized_properties
+                )
                 # Type: ignore - library Product is compatible with our extended Product at runtime
-                products.append(variant_schema)
+                if variant_schema is not None:
+                    products.append(variant_schema)
 
             logger.info(f"[GET_PRODUCTS] Added {len(dynamic_variants)} dynamic product variants")
     except (ImportError, RuntimeError, OSError) as e:
@@ -772,17 +782,23 @@ def get_product_catalog(tenant_id: str) -> list[Product]:
     """Get products for a tenant.
 
     Returns:
-        List of Product objects with full pricing options
+        List of Product objects with full pricing options. A product that names no
+        publisher the tenant holds a verified authorized property of is left out, as get_products
+        leaves it out (``convert_product_model_to_schema`` answers ``None``).
     """
     from src.core.database.repositories.uow import ProductUoW
 
     with ProductUoW(tenant_id) as uow:
         assert uow.products is not None
+        assert uow.authorized_properties is not None
         products = uow.products.list_all_with_inventory()
+        authorized_properties = uow.authorized_properties.list_refs()
 
         # Use convert_product_model_to_schema for consistency
         loaded_products = []
         for product in products:
-            loaded_products.append(convert_product_model_to_schema(product))
+            converted = convert_product_model_to_schema(product, authorized_properties=authorized_properties)
+            if converted is not None:
+                loaded_products.append(converted)
 
     return loaded_products

@@ -78,9 +78,7 @@ class MediaBuyCreateEnv(EgressHatchMixin, IntegrationEnv):
     def __init__(self, **kwargs: Any) -> None:
         # Unique, hyphen-safe tenant/principal IDs per instance: avoids
         # cross-test collisions under xdist, and keeps the derived
-        # subdomain ("pub-<tenant_id>") a valid publisher domain — an
-        # underscore in the id (e.g. the "test_tenant" default) fails the
-        # AdCP publisher_domain pattern when products resolve property_tags.
+        # subdomain ("pub-<tenant_id>") a valid DNS label.
         suffix = uuid.uuid4().hex[:10]
         kwargs.setdefault("tenant_id", mint(f"mbcreate{suffix}"))
         kwargs.setdefault("principal_id", mint(f"agent{suffix}"))

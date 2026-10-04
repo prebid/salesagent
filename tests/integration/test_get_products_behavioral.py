@@ -785,22 +785,7 @@ class TestProductConversionNegativeCardinality:
         mock_model.effective_format_ids = []
 
         with pytest.raises(ValueError, match="no format_ids"):
-            convert_product_model_to_schema(mock_model)
-
-    def test_zero_properties_raises_value_error(self):
-        """product_conversion with 0 properties -> ValueError."""
-        from src.core.product_conversion import convert_product_model_to_schema
-
-        mock_model = MagicMock()
-        mock_model.product_id = "bad_product"
-        mock_model.name = "Bad Product"
-        mock_model.description = "No properties"
-        mock_model.delivery_type = "guaranteed"
-        mock_model.effective_format_ids = [{"agent_url": "https://example.com", "id": "display_300x250"}]
-        mock_model.effective_properties = []
-
-        with pytest.raises(ValueError, match="no publisher_properties"):
-            convert_product_model_to_schema(mock_model)
+            convert_product_model_to_schema(mock_model, authorized_properties=[])
 
     def test_zero_pricing_options_raises_value_error(self):
         """product_conversion with 0 pricing_options -> ValueError."""
@@ -812,13 +797,13 @@ class TestProductConversionNegativeCardinality:
         mock_model.description = "No pricing"
         mock_model.delivery_type = "guaranteed"
         mock_model.effective_format_ids = [{"agent_url": "https://example.com", "id": "display_300x250"}]
-        mock_model.effective_properties = [
+        mock_model.resolve_publisher_properties.return_value = [
             {"publisher_domain": "test.com", "selection_type": "by_tag", "property_tags": ["all"]}
         ]
         mock_model.pricing_options = []
 
         with pytest.raises(ValueError, match="no pricing_options"):
-            convert_product_model_to_schema(mock_model)
+            convert_product_model_to_schema(mock_model, authorized_properties=[])
 
 
 # ---------------------------------------------------------------------------

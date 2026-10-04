@@ -33,7 +33,7 @@ from src.core.config import get_settings
 from src.core.database.models import AuthorizedProperty, PublisherPartner
 from tests.harness._base import IntegrationEnv
 from tests.harness._realize import realize_e2e
-from tests.harness.admin_client import AdminClient, AdminResponse
+from tests.harness.admin_client import AdminClient, AdminResponse, guarded_admin_client
 
 if TYPE_CHECKING:
     from tests.harness.transport import E2EConfig
@@ -231,7 +231,5 @@ class PublisherAuthorizationEnv(PublisherAdagentsMixin, IntegrationEnv):
         if self._admin is None:
             # Opened on the first action, after every Given: the in-process app is composed
             # under the settings a Given chose.
-            self._admin = AdminClient(self._admin_base_url)
-            self._guard("admin_client", self._admin.close)
-            self._admin.authenticate(self._tenant_id)
+            self._admin = guarded_admin_client(self._guard, self._admin_base_url, self._tenant_id)
         return self._admin.request(method, f"/tenant/{self._tenant_id}/{path}")
