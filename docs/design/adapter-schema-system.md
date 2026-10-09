@@ -1,5 +1,12 @@
 # Adapter Schema System Design
 
+> **This is the design record, not the authoring guide.** To write an adapter, follow
+> [Creating an ad server adapter](../adapters/creating-an-adapter.md). As built,
+> `AdServerAdapter` reads three class attributes: `connection_config_class`,
+> `product_config_class` and `capabilities` (`src/adapters/base.py`). The base schema
+> classes live in `src/adapters/base.py`, and the per-adapter inventory schema described
+> below was not built, so there is no inventory attribute to declare.
+
 ## Summary
 
 Introduce a strongly-typed, schema-driven system for adapter configurations. Each adapter declares Pydantic schemas for its connection, product, and inventory configurations. The admin UI renders forms dynamically based on these schemas.
@@ -155,19 +162,17 @@ from src.adapters.base import AdServerAdapter, AdapterCapabilities
 from src.adapters.broadstreet.schemas import (
     BroadstreetConnectionConfig,
     BroadstreetProductConfig,
-    BroadstreetInventoryConfig,
 )
 
 class BroadstreetAdapter(AdServerAdapter):
     adapter_name = "broadstreet"
 
     # Schema declarations
-    CONNECTION_CONFIG = BroadstreetConnectionConfig
-    PRODUCT_CONFIG = BroadstreetProductConfig
-    INVENTORY_CONFIG = BroadstreetInventoryConfig
+    connection_config_class = BroadstreetConnectionConfig
+    product_config_class = BroadstreetProductConfig
 
     # Capability declaration
-    CAPABILITIES = AdapterCapabilities(
+    capabilities = AdapterCapabilities(
         supports_inventory_sync=True,
         supports_inventory_profiles=True,
         inventory_entity_label="Zones",
@@ -210,10 +215,9 @@ def get_adapter_schema(adapter_type: str):
     adapter_class = get_adapter_class(adapter_type)
 
     return jsonify({
-        "connection": adapter_class.CONNECTION_CONFIG.model_json_schema(),
-        "product": adapter_class.PRODUCT_CONFIG.model_json_schema(),
-        "inventory": adapter_class.INVENTORY_CONFIG.model_json_schema(),
-        "capabilities": asdict(adapter_class.CAPABILITIES),
+        "connection": adapter_class.connection_config_class.model_json_schema(),
+        "product": adapter_class.product_config_class.model_json_schema(),
+        "capabilities": asdict(adapter_class.capabilities),
     })
 ```
 
@@ -224,7 +228,7 @@ def get_adapter_schema(adapter_type: str):
 async function renderAdapterForm(adapterType, formType, containerId) {
     const response = await fetch(`/api/adapters/${adapterType}/schema`);
     const schemas = await response.json();
-    const schema = schemas[formType];  // "connection", "product", or "inventory"
+    const schema = schemas[formType];  // "connection" or "product"
 
     const container = document.getElementById(containerId);
     renderSchemaForm(container, schema, schemas.capabilities);
@@ -254,7 +258,7 @@ def get_adapter(principal: Principal, dry_run: bool = False):
 
         # Validate config against schema
         try:
-            config = adapter_class.CONNECTION_CONFIG.model_validate(
+            config = adapter_class.connection_config_class.model_validate(
                 config_row.config_json
             )
         except ValidationError as e:
