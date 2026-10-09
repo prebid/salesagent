@@ -7,6 +7,7 @@ from sqlalchemy import delete
 
 from src.admin.tenant_management_api import tenant_management_api
 from src.core.database.models import Tenant
+from tests.helpers.hostnames import virtual_host_refusal
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -257,6 +258,29 @@ class TestTenantManagementAPIIntegration:
 
         assert response.status_code == 409
         assert response.json == {"error": "Subdomain already exists"}
+
+    def test_an_unservable_virtual_host_answers_400_naming_the_field(self, client, mock_api_key_auth):
+        """A host the admin UI cannot serve is refused at the boundary, with the field named.
+
+        Without the route's own check the column validator refuses it at assignment, and that
+        ValueError reaches the generic handler as 500 "Failed to create tenant".
+        """
+        unservable = "seller_one.adcp.test"
+
+        response = client.post(
+            "/api/v1/tenant-management/tenants",
+            headers={"X-Tenant-Management-API-Key": mock_api_key_auth},
+            json={
+                "name": "Underscore Host",
+                "subdomain": "underscore-host",
+                "virtual_host": unservable,
+                "ad_server": "mock",
+                "creator_email": "underscore@example.com",
+            },
+        )
+
+        assert response.status_code == 400
+        assert response.json == {"error": virtual_host_refusal(unservable), "field": "virtual_host"}
 
     def test_list_tenants(self, client, mock_api_key_auth, test_tenant):
         """Test listing all tenants."""

@@ -56,6 +56,7 @@ from tests.factories.request import OMIT, CreativeAssetRequestFactory
 from tests.harness.creative_sync import creative_fingerprint
 from tests.harness.media_buy_create import OMIT_ACCOUNT, OMIT_IDEMPOTENCY_KEY
 from tests.helpers.account_seeding import seed_account_with_access, seed_natural_key_matches
+from tests.helpers.hostnames import account_domain
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -330,7 +331,7 @@ def _setup_account_by_id(account_id: str, tenant: object, principal: object) -> 
 
     if account_id in access_denied_ids:
         # Account exists but the test principal has no access — triggers AUTHORIZATION_ERROR
-        domain = account_id.replace("_", "-") + ".com"
+        domain = account_domain(account_id)
         other_principal = PrincipalFactory(tenant=tenant)
         seed_account_with_access(
             tenant, other_principal, account_id=account_id, status="active", brand_domain=domain, operator=domain
@@ -342,8 +343,7 @@ def _setup_account_by_id(account_id: str, tenant: object, principal: object) -> 
         return
 
     # BrandReference domain must match ^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]...)$
-    # Replace underscores with hyphens for valid domains
-    domain = account_id.replace("_", "-") + ".com"
+    domain = account_domain(account_id)
     seed_account_with_access(
         tenant, principal, account_id=account_id, status=status, brand_domain=domain, operator=domain
     )

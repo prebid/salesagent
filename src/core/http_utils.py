@@ -25,11 +25,11 @@ from collections.abc import Iterable, Mapping
 from typing import Any, Protocol
 from urllib.parse import urlsplit
 
-#: The ``Host`` the admin plane can serve, in Werkzeug's own grammar (3.1.7 and later): a name
-#: of letters, digits, ``-`` and ``.``, or a bracketed IPv6 literal, then an optional port with
-#: no leading zero. Werkzeug answers any other ``Host`` with an empty ``request.host``.
-#: ``tests/unit/test_virtual_host_shape.py`` grades this against Werkzeug itself.
-_SERVABLE_HOST = re.compile(r"(?:[a-z0-9.-]+|\[[a-f0-9]*:[a-f0-9.:]+\])(?::[1-9][0-9]{0,4})?")
+#: The ``Host`` grammar Werkzeug serves, as of 3.1.9 (the characters since 3.1.7, the port
+#: since 3.1.9): a name of letters, digits, ``-`` and ``.``, or a bracketed IPv6 literal, then
+#: an optional port of 1-65535 with no leading zero (the range is checked on the captured
+#: port). Werkzeug answers any other ``Host`` with an empty ``request.host``.
+_WERKZEUG_HOST = re.compile(r"(?:[a-z0-9.-]+|\[[a-f0-9]*:[a-f0-9.:]+\])(?::([1-9][0-9]{0,4}))?")
 
 
 class HeaderSource(Protocol):
@@ -86,14 +86,15 @@ def validate_virtual_host(value: str | None) -> str:
     is not a bare host is a value nothing can dial.
 
     The parsing is ``urlsplit``'s, never string surgery: it decides where a netloc ends,
-    what a path is, where userinfo stops and whether a port is a number. Two rules are
-    spelled out here because ``urlsplit`` accepts what no request can use. Whitespace:
+    what a path is, where userinfo stops and whether a port is a number. Three rules are
+    spelled out here because ``urlsplit`` accepts what no request can use: whitespace, since
     ``urlsplit`` parses ``a b.com`` happily and no ``Host`` header can carry a space
-    (RFC 3986 §3.2.2). And the characters the admin plane refuses: ``urlsplit`` takes
-    ``seller_one.example.com``, but Werkzeug serves that ``Host`` with an empty
-    ``request.host``, so every redirect and OAuth callback URL the admin UI builds for the
-    tenant names no host. A row holding either is unreachable, which is the same defect
-    class as a fabricated host.
+    (RFC 3986 §3.2.2); a trailing colon (below); and a host the admin plane cannot build URLs
+    for (:func:`_admin_plane_can_serve`). ``urlsplit`` takes ``seller_one.example.com``, but
+    Werkzeug answers that ``Host`` with an empty ``request.host``, so every
+    ``redirect(request.url)`` and ``url_for(..., _external=True)`` the admin UI builds for the
+    tenant names no host. Tenant routing still finds such a row by its raw ``Host``; the admin
+    UI cannot address it, which is the same defect class as a fabricated host.
 
     Accepts a bare ``host`` and ``host:port``, including a bracketed IPv6 literal, because
     the card publishes this string verbatim and a client dials what the card says.
@@ -124,18 +125,46 @@ def validate_virtual_host(value: str | None) -> str:
     if host.endswith(":"):
         raise ValueError(f"virtual_host {value!r} ends with a colon but names no port")
     try:
-        parts.port  # noqa: B018 — raises for a non-numeric port
+        parts.port  # noqa: B018 — raises for a non-numeric or out-of-range port
     except ValueError as exc:
-        raise ValueError(f"virtual_host {value!r} has a non-numeric port") from exc
+        raise ValueError(
+            f"virtual_host {value!r} has a port that is not a number from 1 to 65535 "
+            "(an IPv6 literal goes in brackets: '[2001:db8::1]:8443')"
+        ) from exc
     if not parts.hostname:
         raise ValueError(f"virtual_host {value!r} names no host")
-    if not _SERVABLE_HOST.fullmatch(host):
+    if not _admin_plane_can_serve(host):
         raise ValueError(
-            f"virtual_host {value!r} is not a host the admin UI can serve: use letters, digits, '-' and '.' "
-            "(no '_'; an international name in its xn-- form) or a bracketed IPv6 literal, "
-            "with a port from 1 to 65535"
+            f"virtual_host {value!r} is not a host the admin UI can serve: use labels of 1-63 letters, "
+            "digits and '-' joined by '.' (no '_'; an international name in its xn-- form) or a "
+            "bracketed IPv6 literal, and a port from 1 to 65535 with no leading zero"
         )
     return host
+
+
+def _admin_plane_can_serve(host: str) -> bool:
+    """Whether the Flask admin plane can build absolute URLs for a request whose ``Host`` is *host*.
+
+    *host* is lowercased. Werkzeug answers a ``Host`` outside its grammar
+    (:data:`_WERKZEUG_HOST`) with an empty ``request.host``. Two more names pass the grammar
+    and still fail: an empty label (``a..b``) or one over 63 characters makes Werkzeug raise
+    BadHost while the request is routed, so the admin plane answers 400; an ``xn--`` label
+    that is not valid punycode makes ``request.url`` raise. ``tests/unit/test_virtual_host_shape.py``
+    compares this function with Flask itself over a generated corpus of hosts.
+    """
+    match = _WERKZEUG_HOST.fullmatch(host)
+    if match is None or (match[1] is not None and int(match[1]) > 65535):
+        return False
+    if host.startswith("["):
+        return True
+    name = hostname_of(host)
+    if not all(0 < len(label) <= 63 for label in name.removesuffix(".").split(".")):
+        return False
+    try:
+        name.encode("ascii").decode("idna")
+    except UnicodeError:
+        return False
+    return True
 
 
 def hostname_of(host: str) -> str:

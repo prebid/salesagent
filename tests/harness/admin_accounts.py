@@ -20,6 +20,7 @@ from sqlalchemy import delete
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Account, Tenant
 from tests.harness.admin_client import AdminClient, AdminResponse
+from tests.helpers.hostnames import dns_label
 from tests.utils.database_helpers import create_tenant_with_timestamps
 
 
@@ -291,7 +292,7 @@ class AdminAccountEnv:
                 tenant = create_tenant_with_timestamps(
                     tenant_id=tenant_id,
                     name=f"BDD Test Tenant {tenant_id}",
-                    subdomain=f"bdd-{tenant_id}".replace("_", "-"),
+                    subdomain=f"bdd-{dns_label(tenant_id)}",
                     ad_server="mock",
                     is_active=True,
                 )

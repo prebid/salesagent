@@ -47,63 +47,6 @@ class TestVirtualHostAdminUI:
         # Assert
         assert form_value == ""
 
-    def test_virtual_host_validation_valid_domain(self):
-        """Test validation of valid virtual host domains."""
-        # Test cases for valid domains
-        valid_domains = [
-            "ad-sales.testcompany.com",
-            "ads.example.org",
-            "advertising.my-company.net",
-            "sales.test123.com",
-        ]
-
-        for domain in valid_domains:
-            # Act - simulate validation logic from settings.py
-            is_valid = True
-
-            # Check for invalid patterns
-            if ".." in domain or domain.startswith(".") or domain.endswith("."):
-                is_valid = False
-
-            # Check allowed characters
-            if not domain.replace("-", "").replace(".", "").replace("_", "").isalnum():
-                is_valid = False
-
-            # Assert
-            assert is_valid, f"Domain should be valid: {domain}"
-
-    def test_virtual_host_validation_invalid_domains(self):
-        """Test validation rejects invalid virtual host domains."""
-        # Test cases for invalid domains
-        invalid_domains = [
-            "..double-dot.com",
-            ".starts-with-dot.com",
-            "ends-with-dot.com.",
-            "has..consecutive.dots.com",
-            "has spaces.com",
-            "has@symbol.com",
-            "has#hash.com",
-            "",  # Empty string should be allowed but converted to None
-        ]
-
-        for domain in invalid_domains:
-            if domain == "":
-                continue  # Empty string is handled separately
-
-            # Act - simulate validation logic
-            is_valid = True
-
-            # Check for invalid patterns
-            if ".." in domain or domain.startswith(".") or domain.endswith("."):
-                is_valid = False
-
-            # Check allowed characters (excluding empty string)
-            if domain and not domain.replace("-", "").replace(".", "").replace("_", "").isalnum():
-                is_valid = False
-
-            # Assert
-            assert not is_valid, f"Domain should be invalid: {domain}"
-
     def test_virtual_host_uniqueness_logic(self):
         """Test uniqueness validation logic for virtual hosts."""
         # Test case 1: Different tenant with same virtual host (should fail)
@@ -189,41 +132,6 @@ class TestVirtualHostAdminUI:
         assert "yourcompany.com" in placeholder
         assert "approximated.app" in help_text
         assert 'target="_blank"' in help_text
-
-    def test_virtual_host_validation_error_messages(self):
-        """Test appropriate error messages for validation failures."""
-        # Test error message scenarios
-        error_scenarios = [
-            {
-                "input": "..invalid.com",
-                "expected_message": "Virtual host cannot contain consecutive dots or start/end with dots",
-            },
-            {
-                "input": ".starts-with-dot.com",
-                "expected_message": "Virtual host cannot contain consecutive dots or start/end with dots",
-            },
-            {
-                "input": "ends-with-dot.com.",
-                "expected_message": "Virtual host cannot contain consecutive dots or start/end with dots",
-            },
-            {
-                "input": "has spaces.com",
-                "expected_message": "Virtual host must contain only alphanumeric characters, dots, hyphens, and underscores",
-            },
-        ]
-
-        for scenario in error_scenarios:
-            # Act - simulate validation and error message logic
-            virtual_host = scenario["input"]
-            error_message = None
-
-            if ".." in virtual_host or virtual_host.startswith(".") or virtual_host.endswith("."):
-                error_message = "Virtual host cannot contain consecutive dots or start/end with dots"
-            elif not virtual_host.replace("-", "").replace(".", "").replace("_", "").isalnum():
-                error_message = "Virtual host must contain only alphanumeric characters, dots, hyphens, and underscores"
-
-            # Assert
-            assert error_message == scenario["expected_message"]
 
     def test_virtual_host_uniqueness_error_message(self):
         """Test error message for virtual host uniqueness violation."""

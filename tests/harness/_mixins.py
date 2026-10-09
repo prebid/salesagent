@@ -617,7 +617,7 @@ def _write_publishable_origin(env: Any) -> str:
     from sqlalchemy import select
 
     from src.core.database.models import Tenant
-    from tests.factories.core import dns_label
+    from tests.helpers.hostnames import dns_label
 
     session = env._session
     tenant = session.scalars(select(Tenant).filter_by(tenant_id=env._tenant_id)).first()

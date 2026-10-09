@@ -44,6 +44,7 @@ from tests.e2e.conftest import e2e_ca_bundle, e2e_tls_base_url
 from tests.e2e.utils import _LiveDBEnv, live_db_env, live_repo_session
 from tests.helpers.admin_session import authenticate_http_session, drop_stated_session_cookie
 from tests.helpers.credentials import credential_headers
+from tests.helpers.hostnames import dns_label
 from tests.helpers.signing import json_seeded_client_factory, wire_origin
 
 #: Flask admin is mounted at BOTH ``/admin`` and ``/`` (src/app.py). The session cookie and
@@ -506,7 +507,7 @@ def provisioned_trust_root_tenant(
         with live_db_env(live_server) as env:
             tenant = TenantFactory(
                 tenant_id=tenant_id,
-                subdomain=f"seller-{slug}".replace("_", "-"),
+                subdomain=f"seller-{dns_label(slug)}",
                 virtual_host=host,
             )
             key = SigningKeyFactory(tenant=tenant, kid=f"adcp-{slug}-key") if mint_key else None

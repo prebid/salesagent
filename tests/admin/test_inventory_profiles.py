@@ -15,6 +15,7 @@ from src.core.database.database_session import get_db_session
 from src.core.database.models import InventoryProfile, Tenant
 from tests.factories import InventoryProfileFactory, TenantFactory
 from tests.helpers import concurrent_commit_in_write_window, operator_answer
+from tests.helpers.hostnames import dns_label
 from tests.utils.database_helpers import create_tenant_with_timestamps
 
 app = create_app()
@@ -90,7 +91,7 @@ def _create_sample_profile(tenant_id: str, name: str = "Sample Profile", profile
             format_ids=[{"agent_url": "https://formats.example.com", "id": "display_300x250_image"}],
             publisher_properties=[
                 {
-                    "publisher_domain": f"{tenant_id}.example.com",
+                    "publisher_domain": f"{dns_label(tenant_id)}.example.com",
                     "property_tags": ["all_inventory"],
                     "selection_type": "by_tag",
                 }

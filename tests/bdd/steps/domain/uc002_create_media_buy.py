@@ -26,6 +26,7 @@ from tests.factories.account import AccountFactory, AgentAccountAccessFactory
 from tests.factories.mint import mint
 from tests.harness.create_request import build_request_packages
 from tests.helpers.account_seeding import seed_natural_key_matches
+from tests.helpers.hostnames import account_domain
 
 # ═══════════════════════════════════════════════════════════════════════
 # GIVEN steps — request setup and account state
@@ -255,8 +256,8 @@ def given_account_exists_active(ctx: dict, account_id: str) -> None:
         tenant=tenant,
         account_id=account_id,
         status="active",
-        brand={"domain": f"{account_id}.com"},
-        operator=f"{account_id}.com",
+        brand={"domain": account_domain(account_id)},
+        operator=account_domain(account_id),
     )
     AgentAccountAccessFactory(tenant_id=tenant.tenant_id, principal=principal, account=account)
 
@@ -274,8 +275,8 @@ def given_account_active(ctx: dict) -> None:
         tenant=tenant,
         account_id=account_id,
         status="active",
-        brand={"domain": f"{account_id}.com"},
-        operator=f"{account_id}.com",
+        brand={"domain": account_domain(account_id)},
+        operator=account_domain(account_id),
     )
     AgentAccountAccessFactory(tenant_id=tenant.tenant_id, principal=principal, account=account)
 
@@ -432,8 +433,8 @@ def given_request_with_boundary_config(ctx: dict, config: str) -> None:
             tenant=tenant,
             account_id=account_id,
             status="active",
-            brand={"domain": f"{account_id}.com"},
-            operator=f"{account_id}.com",
+            brand={"domain": account_domain(account_id)},
+            operator=account_domain(account_id),
         )
         AgentAccountAccessFactory(tenant_id=tenant.tenant_id, principal=principal, account=account)
         ctx["account_ref"] = AccountReference(root=AccountReferenceById(account_id=account_id))

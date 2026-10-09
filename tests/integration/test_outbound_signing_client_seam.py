@@ -120,12 +120,14 @@ def _seed_tenant(env: BareIntegrationEnv, *, virtual_host: str | None, with_key:
     ``_get_protocol_for_domain`` derives ``https`` for that, ``origin_is_publishable``
     accepts it, and the gate under test never engages. A single label derives ``http``,
     which the gate refuses. The tenant id supplies the label because
-    ``ix_tenants_virtual_host`` is UNIQUE and tenant ids carry no dots.
+    ``ix_tenants_virtual_host`` is UNIQUE and tenant ids carry no dots; it goes through
+    ``dns_label`` because a tenant id may hold underscores and a servable host may not.
     """
     from tests.factories import TenantFactory
+    from tests.helpers.hostnames import dns_label
 
     kwargs: dict[str, Any] = {"tenant_id": env.tenant_id}
-    kwargs["virtual_host"] = virtual_host if virtual_host is not None else env.tenant_id
+    kwargs["virtual_host"] = virtual_host if virtual_host is not None else dns_label(env.tenant_id)
     assert virtual_host is not None or "." not in env.tenant_id, (
         f"the unpublishable-origin seed needs a single-label host; tenant id {env.tenant_id!r} carries a dot"
     )

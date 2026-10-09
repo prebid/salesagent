@@ -18,8 +18,8 @@ from src.core.database.models import (
     PropertyTag,
     Tenant,
 )
-from tests.factories.core import dns_label
 from tests.factories.principal import plaintext_token_for
+from tests.helpers.hostnames import dns_label
 
 #: The suffix every fixture-minted host carries. ``.test`` is reserved by RFC 2606 precisely
 #: so it can never resolve, and ``adcp.test`` is the convention
@@ -127,7 +127,7 @@ def seed_tenant_with_product_prerequisites(
     tenant = create_tenant_with_timestamps(
         tenant_id=tenant_id,
         name=name,
-        subdomain=subdomain if subdomain is not None else tenant_id.replace("_", "-"),
+        subdomain=subdomain if subdomain is not None else dns_label(tenant_id),
         **tenant_kwargs,
     )
     session.add(tenant)

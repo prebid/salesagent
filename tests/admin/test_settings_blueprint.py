@@ -26,6 +26,7 @@ from src.admin.blueprints import settings as settings_module
 from src.core.database.models import Tenant
 from tests.factories import TenantFactory
 from tests.helpers import concurrent_commit_in_write_window, operator_answer
+from tests.helpers.hostnames import virtual_host_refusal
 
 app = create_app()
 
@@ -53,6 +54,15 @@ def _auth_session(client, tenant_id: str) -> None:
         sess["test_user_role"] = "super_admin"
         sess["test_user_name"] = "Test User"
         sess["test_tenant_id"] = tenant_id
+
+
+def _post_general(client, tenant_id: str, name: str, virtual_host: str):
+    """POST the general settings form for *tenant_id*."""
+    return client.post(
+        f"/tenant/{tenant_id}/settings/general",
+        data={"name": name, "virtual_host": virtual_host},
+        follow_redirects=False,
+    )
 
 
 class TestAuthorizedDomainsAdd:
@@ -357,13 +367,6 @@ class TestGeneralSettingsVirtualHostTaken:
 
     VIRTUAL_HOST = "contested-vhost.example.com"
 
-    def _post_general(self, client, tenant_id):
-        return client.post(
-            f"/tenant/{tenant_id}/settings/general",
-            data={"name": "Contested Publisher", "virtual_host": self.VIRTUAL_HOST},
-            follow_redirects=False,
-        )
-
     def test_winner_and_loser_get_the_same_answer(self, client, factory_session):
         tenant = TenantFactory()
         own_host = tenant.virtual_host
@@ -373,9 +376,13 @@ class TestGeneralSettingsVirtualHostTaken:
             TenantFactory(virtual_host=self.VIRTUAL_HOST)
 
         with concurrent_commit_in_write_window(settings_module, commit_conflicting_row, trigger="begin_nested"):
-            loser = operator_answer(client, self._post_general(client, tenant.tenant_id))
+            loser = operator_answer(
+                client, _post_general(client, tenant.tenant_id, "Contested Publisher", self.VIRTUAL_HOST)
+            )
 
-        winner = operator_answer(client, self._post_general(client, tenant.tenant_id))
+        winner = operator_answer(
+            client, _post_general(client, tenant.tenant_id, "Contested Publisher", self.VIRTUAL_HOST)
+        )
 
         assert winner[0] == 302
         assert winner[2] == [("error", "This virtual host is already in use by another tenant")]
@@ -387,6 +394,30 @@ class TestGeneralSettingsVirtualHostTaken:
         factory_session.expire_all()
         refreshed = factory_session.get(Tenant, tenant.tenant_id)
         assert refreshed.virtual_host == own_host
+
+
+class TestGeneralSettingsUnservableVirtualHost:
+    """POST /tenant/<id>/settings/general with a host the admin UI cannot serve.
+
+    The form refuses it with the validator's own message, before anything is committed:
+    the tenant keeps its host, and the name submitted alongside it is not saved either.
+    """
+
+    def test_the_form_refuses_it_and_saves_nothing(self, client, factory_session):
+        tenant = TenantFactory()
+        own_host, own_name = tenant.virtual_host, tenant.name
+        _auth_session(client, tenant.tenant_id)
+        unservable = "seller_one.example.com"
+
+        status, _, flashed = operator_answer(
+            client, _post_general(client, tenant.tenant_id, "Renamed Publisher", unservable)
+        )
+
+        assert status == 302
+        assert flashed == [("error", virtual_host_refusal(unservable))]
+        factory_session.expire_all()
+        refreshed = factory_session.get(Tenant, tenant.tenant_id)
+        assert (refreshed.virtual_host, refreshed.name) == (own_host, own_name)
 
 
 class TestApproximatedDomainTenantOwnership:
