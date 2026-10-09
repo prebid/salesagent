@@ -617,6 +617,7 @@ def _write_publishable_origin(env: Any) -> str:
     from sqlalchemy import select
 
     from src.core.database.models import Tenant
+    from tests.factories.core import dns_label
 
     session = env._session
     tenant = session.scalars(select(Tenant).filter_by(tenant_id=env._tenant_id)).first()
@@ -624,7 +625,7 @@ def _write_publishable_origin(env: Any) -> str:
         f"no tenant row for {env._tenant_id!r} — provision the tenant before its publishable origin"
     )
     if "." not in (tenant.virtual_host or ""):
-        tenant.virtual_host = f"{env._tenant_id}.example.com"
+        tenant.virtual_host = f"{dns_label(env._tenant_id)}.example.com"
     env._commit_factory_data()
     return str(tenant.virtual_host)
 

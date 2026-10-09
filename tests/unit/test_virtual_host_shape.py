@@ -23,6 +23,8 @@ from src.core.http_utils import validate_virtual_host
 ACCEPTED = {
     "seller.example.com": "seller.example.com",
     "seller.example.com:8443": "seller.example.com:8443",
+    "ad-sales2.seller-one.example.com": "ad-sales2.seller-one.example.com",
+    "xn--bcher-kva.example": "xn--bcher-kva.example",
     "HOST.Example.COM": "host.example.com",
     "  host.example.com  ": "host.example.com",
     "[2001:db8::1]": "[2001:db8::1]",
@@ -31,8 +33,18 @@ ACCEPTED = {
     "proxy:8000": "proxy:8000",
 }
 
+#: Refused because the admin plane cannot serve them: Werkzeug answers a ``Host`` like these
+#: with an empty ``request.host``. Graded against Werkzeug itself below.
+UNSERVABLE = [
+    ("seller_one.example.com", "underscore in the name"),
+    ("bücher.example", "non-ASCII name"),
+    ("host!.example.com", "punctuation in the name"),
+    ("host.example.com:0", "port zero"),
+    ("host.example.com:08443", "port with a leading zero"),
+]
+
 #: Refused, each with the reason it is not a host a request can name.
-REFUSED = [
+REFUSED = UNSERVABLE + [
     ("", "blank"),
     ("   ", "whitespace only"),
     ("https://evil.com", "carries a scheme"),
@@ -83,6 +95,32 @@ def test_every_refusal_message_is_authored(submitted: str, why: str) -> None:
         f"the refusal for {submitted!r} carries a message this repo did not author: "
         f"{str(caught.value)!r}. The management API puts it in a 400 body."
     )
+
+
+def test_the_admin_plane_serves_every_accepted_host_and_no_unservable_one() -> None:
+    """The character and port rule is Werkzeug's, so Werkzeug grades it.
+
+    Werkzeug (3.1.7 and later) answers a ``Host`` whose name is not letters, digits, ``-`` and
+    ``.`` or a bracketed IPv6 literal, or whose port is outside 1-65535, with an empty
+    ``request.host``. Every ``redirect(request.url)`` and ``url_for(..., _external=True)`` the
+    admin UI builds then names no host, OAuth callbacks included. So an accepted host must come
+    back from Werkzeug intact, and each name refused as unservable must be one it refuses too;
+    a Werkzeug upgrade that moves the rule fails here rather than in a tenant's admin pages.
+    """
+    from flask import Flask, request
+
+    app = Flask(__name__)
+
+    def host_seen_by_the_admin_plane(host: str) -> str:
+        with app.test_request_context("/", headers={"Host": host}):
+            return request.host
+
+    for stored in ACCEPTED.values():
+        assert host_seen_by_the_admin_plane(stored) == stored, f"the admin plane cannot serve accepted {stored!r}"
+    for submitted, why in UNSERVABLE:
+        assert host_seen_by_the_admin_plane(submitted) == "", (
+            f"{submitted!r} ({why}) is servable, so refusing it is wrong"
+        )
 
 
 def test_folding_is_idempotent() -> None:

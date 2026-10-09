@@ -55,7 +55,6 @@ class TestVirtualHostAdminUI:
             "ads.example.org",
             "advertising.my-company.net",
             "sales.test123.com",
-            "portal.company_name.io",
         ]
 
         for domain in valid_domains:

@@ -18,6 +18,7 @@ from src.core.database.models import (
     PropertyTag,
     Tenant,
 )
+from tests.factories.core import dns_label
 from tests.factories.principal import plaintext_token_for
 
 #: The suffix every fixture-minted host carries. ``.test`` is reserved by RFC 2606 precisely
@@ -37,11 +38,12 @@ def vhost_for(tenant_id: str) -> str:
     expression was inlined at two dozen call sites before it was extracted, which is the
     shape CLAUDE.md names a defect rather than a style preference.
 
-    Underscores become hyphens because a tenant_id may hold them and a DNS label may not.
-    Nothing routes to the result — a fixture addresses its tenant directly, by id — so this is
-    a value that satisfies a column, not a claim about where anything is served.
+    The label comes from :func:`~tests.factories.core.dns_label`, because a tenant_id may hold
+    underscores and a DNS label may not. Nothing routes to the result — a fixture addresses
+    its tenant directly, by id — so this is a value that satisfies a column, not a claim about
+    where anything is served.
     """
-    return f"{tenant_id.replace('_', '-')}.{TEST_VHOST_SUFFIX}"
+    return f"{dns_label(tenant_id)}.{TEST_VHOST_SUFFIX}"
 
 
 def add_product_prerequisites(

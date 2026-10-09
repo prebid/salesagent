@@ -52,17 +52,26 @@ def get_or_create(env: Any, model: type, filters: dict[str, Any], create: Any):
     return create()
 
 
+def dns_label(tenant_id: str) -> str:
+    """*tenant_id* as a DNS label: a tenant_id may hold underscores and a label may not.
+
+    The one place a fixture turns a tenant_id into part of a host name. ``validate_virtual_host``
+    refuses an underscore, because the admin plane cannot serve a ``Host`` that carries one.
+    """
+    return tenant_id.replace("_", "-")
+
+
 def tenant_subdomain(tenant_id: str) -> str:
     """A DNS-legal label for the ``Tenant.subdomain`` column.
 
     The column is NOT NULL and UNIQUE, so every seeded tenant needs a value, and DNS
-    labels carry no underscores — so a tenant_id's underscores map to hyphens.
+    labels carry no underscores — so the label comes from :func:`dns_label`.
 
     NOTHING ROUTES BY IT. A request names its tenant by ``Host``, matched against
     ``tenants.virtual_host``, or by ``x-adcp-tenant`` carrying the tenant id verbatim.
     The admin UI is the only reader left.
     """
-    return f"pub-{tenant_id}".replace("_", "-")
+    return f"pub-{dns_label(tenant_id)}"
 
 
 class TenantFactory(factory.alchemy.SQLAlchemyModelFactory):

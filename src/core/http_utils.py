@@ -20,9 +20,16 @@ This module holds no state and imports nothing from the application, so every on
 callers can import it.
 """
 
+import re
 from collections.abc import Iterable, Mapping
 from typing import Any, Protocol
 from urllib.parse import urlsplit
+
+#: The ``Host`` the admin plane can serve, in Werkzeug's own grammar (3.1.7 and later): a name
+#: of letters, digits, ``-`` and ``.``, or a bracketed IPv6 literal, then an optional port with
+#: no leading zero. Werkzeug answers any other ``Host`` with an empty ``request.host``.
+#: ``tests/unit/test_virtual_host_shape.py`` grades this against Werkzeug itself.
+_SERVABLE_HOST = re.compile(r"(?:[a-z0-9.-]+|\[[a-f0-9]*:[a-f0-9.:]+\])(?::[1-9][0-9]{0,4})?")
 
 
 class HeaderSource(Protocol):
@@ -79,10 +86,14 @@ def validate_virtual_host(value: str | None) -> str:
     is not a bare host is a value nothing can dial.
 
     The parsing is ``urlsplit``'s, never string surgery: it decides where a netloc ends,
-    what a path is, where userinfo stops and whether a port is a number. The one rule
-    spelled out here is whitespace, because ``urlsplit`` parses ``a b.com`` happily and no
-    ``Host`` header can carry a space (RFC 3986 §3.2.2) — a row holding one is unreachable,
-    which is the same defect class as a fabricated host.
+    what a path is, where userinfo stops and whether a port is a number. Two rules are
+    spelled out here because ``urlsplit`` accepts what no request can use. Whitespace:
+    ``urlsplit`` parses ``a b.com`` happily and no ``Host`` header can carry a space
+    (RFC 3986 §3.2.2). And the characters the admin plane refuses: ``urlsplit`` takes
+    ``seller_one.example.com``, but Werkzeug serves that ``Host`` with an empty
+    ``request.host``, so every redirect and OAuth callback URL the admin UI builds for the
+    tenant names no host. A row holding either is unreachable, which is the same defect
+    class as a fabricated host.
 
     Accepts a bare ``host`` and ``host:port``, including a bracketed IPv6 literal, because
     the card publishes this string verbatim and a client dials what the card says.
@@ -118,6 +129,12 @@ def validate_virtual_host(value: str | None) -> str:
         raise ValueError(f"virtual_host {value!r} has a non-numeric port") from exc
     if not parts.hostname:
         raise ValueError(f"virtual_host {value!r} names no host")
+    if not _SERVABLE_HOST.fullmatch(host):
+        raise ValueError(
+            f"virtual_host {value!r} is not a host the admin UI can serve: use letters, digits, '-' and '.' "
+            "(no '_'; an international name in its xn-- form) or a bracketed IPv6 literal, "
+            "with a port from 1 to 65535"
+        )
     return host
 
 

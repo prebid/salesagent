@@ -28,6 +28,7 @@ from src.services.setup_checklist_service import (
 from tests.factories.principal import plaintext_token_for
 from tests.helpers.adcp_factories import create_test_db_product
 from tests.helpers.signing import deployment_kek
+from tests.utils.database_helpers import vhost_for
 
 pytestmark = pytest.mark.requires_db
 
@@ -60,7 +61,7 @@ def setup_minimal_tenant(integration_db, test_tenant_id):
             subdomain="test",
             # Required (NOT NULL) and UNIQUE; derived from the tenant_id so sibling
             # fixtures in this module stay distinct.
-            virtual_host=f"{test_tenant_id}.adcp.test",
+            virtual_host=vhost_for(test_tenant_id),
             ad_server=None,  # Not configured
             created_at=now,
             updated_at=now,
@@ -109,7 +110,7 @@ def setup_complete_tenant(integration_db, test_tenant_id):
             tenant_id=test_tenant_id,
             name="Complete Tenant",
             subdomain="complete",
-            virtual_host=f"{test_tenant_id}.adcp.test",
+            virtual_host=vhost_for(test_tenant_id),
             ad_server="google_ad_manager",
             human_review_required=True,
             auto_approve_format_ids=["display_300x250"],
@@ -310,7 +311,7 @@ class TestSetupChecklistService:
                 tenant_id=test_tenant_id,
                 name="Partial Tenant",
                 subdomain="partial",
-                virtual_host=f"{test_tenant_id}.adcp.test",
+                virtual_host=vhost_for(test_tenant_id),
                 ad_server="mock",
                 created_at=now,
                 updated_at=now,
@@ -391,7 +392,7 @@ class TestSetupChecklistService:
                 tenant_id=tenant_ids[0],
                 name="Bulk Test Tenant 1",
                 subdomain="bulk1",
-                virtual_host=f"{tenant_ids[0]}.adcp.test",
+                virtual_host=vhost_for(tenant_ids[0]),
                 ad_server=None,
                 created_at=now,
                 updated_at=now,
@@ -404,7 +405,7 @@ class TestSetupChecklistService:
                 tenant_id=tenant_ids[1],
                 name="Bulk Test Tenant 2",
                 subdomain="bulk2",
-                virtual_host=f"{tenant_ids[1]}.adcp.test",
+                virtual_host=vhost_for(tenant_ids[1]),
                 ad_server="mock",
                 created_at=now,
                 updated_at=now,
@@ -434,7 +435,7 @@ class TestSetupChecklistService:
                 tenant_id=tenant_ids[2],
                 name="Bulk Test Tenant 3",
                 subdomain="bulk3",
-                virtual_host=f"{tenant_ids[2]}.adcp.test",
+                virtual_host=vhost_for(tenant_ids[2]),
                 ad_server="mock",  # Mock adapter is accepted in test environments
                 created_at=now,
                 updated_at=now,
@@ -699,7 +700,7 @@ class TestTaskDetails:
                 tenant_id=test_tenant_id,
                 name="Test",
                 subdomain="test",
-                virtual_host=f"{test_tenant_id}.adcp.test",
+                virtual_host=vhost_for(test_tenant_id),
                 ad_server="google_ad_manager",  # Real ad server so currency task appears
                 created_at=now,
                 updated_at=now,
@@ -745,7 +746,7 @@ class TestTaskDetails:
                 tenant_id=test_tenant_id,
                 name="Test",
                 subdomain="test_sso_opt",
-                virtual_host=f"{test_tenant_id}.adcp.test",
+                virtual_host=vhost_for(test_tenant_id),
                 ad_server="mock",
                 created_at=now,
                 updated_at=now,
@@ -780,7 +781,7 @@ class TestTaskDetails:
                 tenant_id=test_tenant_id,
                 name="Multi-tenant Publisher",
                 subdomain="test_mtp",
-                virtual_host=f"{test_tenant_id}.adcp.test",
+                virtual_host=vhost_for(test_tenant_id),
                 ad_server="mock",
                 created_at=now,
                 updated_at=now,
