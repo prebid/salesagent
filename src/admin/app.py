@@ -4,7 +4,7 @@ import json
 import logging
 
 import markdown
-from flask import Flask, request
+from flask import Flask, Request, request
 from markupsafe import Markup
 from werkzeug.middleware.proxy_fix import ProxyFix as WerkzeugProxyFix
 
@@ -100,6 +100,31 @@ class CustomProxyFix:
         return self.app(environ, custom_start_response)
 
 
+class AdminRequest(Request):
+    """A request whose url-encoded body is capped at ``MAX_FORM_MEMORY_SIZE``.
+
+    Werkzeug reads an ``application/x-www-form-urlencoded`` body into memory whole. Before
+    3.1.9 it refused one longer than ``max_form_memory_size`` (Flask's default: 500 000
+    bytes); from 3.1.9 only ``max_content_length`` bounds it, and Flask leaves that unset, so
+    a form POST of any size is read. This applies the form limit to that content type only.
+    JSON and ``multipart/form-data`` bodies stay bounded by ``MAX_CONTENT_LENGTH`` alone, and
+    a multipart text field by Werkzeug's own ``max_form_memory_size`` check.
+    """
+
+    @property
+    def max_content_length(self) -> int | None:
+        limit = super().max_content_length
+        form_limit = self.max_form_memory_size
+        if self.mimetype != "application/x-www-form-urlencoded" or form_limit is None:
+            return limit
+        return form_limit if limit is None else min(limit, form_limit)
+
+    @max_content_length.setter
+    def max_content_length(self, value: int | None) -> None:
+        # Flask's own setter; the getter above reads it back through super().
+        self._max_content_length = value
+
+
 def create_app(config=None, settings=None):
     """Create and configure the Flask application.
 
@@ -114,6 +139,7 @@ def create_app(config=None, settings=None):
     is_production = settings.runtime.is_production
 
     app = Flask(__name__, template_folder="../../templates", static_folder="../../static")
+    app.request_class = AdminRequest
 
     # Configuration
     app.secret_key = settings.runtime.flask_secret_key
