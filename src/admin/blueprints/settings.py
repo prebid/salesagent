@@ -25,6 +25,7 @@ from src.core.database.integrity import resolve_or_write
 from src.core.database.models import Tenant
 from src.core.database.repositories import TenantLookupRepository
 from src.core.database.repositories.tenant_config import TenantConfigRepository
+from src.core.http_utils import validate_virtual_host
 from src.core.security.outbound_http import OutboundError
 from src.services.ai.config import uses_legacy_gemini_api_key
 from src.services.approximated_client import (
@@ -191,13 +192,20 @@ def update_general(tenant_id):
             # Update virtual_host if provided
             if "virtual_host" in request.form:
                 virtual_host = request.form.get("virtual_host", "").strip()
-                if virtual_host:
+                if virtual_host and virtual_host == tenant.virtual_host:
+                    # The form re-submits the stored host with every save. Unchanged, it is not
+                    # written, so it is not refused either: a host stored before the rule
+                    # tightened would otherwise block every other setting until the tenant
+                    # moves. The admin is still told it no longer passes.
+                    try:
+                        validate_virtual_host(virtual_host)
+                    except ValueError as exc:
+                        flash(str(exc), "warning")
+                elif virtual_host:
                     # ONE definition of the shape, shared with the ORM validator. The rule
                     # spelled out here refused the ':' in 'host:8443' -- a form that cannot
                     # save what the column legitimately holds, so a tenant served on a
                     # non-default port could not be renamed.
-                    from src.core.http_utils import validate_virtual_host
-
                     try:
                         virtual_host = validate_virtual_host(virtual_host)
                     except ValueError as exc:

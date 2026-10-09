@@ -10,6 +10,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import AdapterConfig, SyncJob, Tenant
+from src.core.http_utils import validate_virtual_host
 
 
 def check_all_tenants():
@@ -26,10 +27,19 @@ def check_all_tenants():
         print("📋 All Tenants in Database:")
         print("=" * 80)
 
+        # The validator runs on assignment only, so a host stored before the rule refused it
+        # still loads; this report is where an operator finds one.
+        refused_hosts = []
         for tenant, adapter_config in tenants_with_adapters:
             print(f"\nTenant: {tenant.name}")
             print(f"  ID: {tenant.tenant_id}")
             print(f"  Subdomain: {tenant.subdomain or 'None'}")
+            print(f"  Virtual Host: {tenant.virtual_host}")
+            try:
+                validate_virtual_host(tenant.virtual_host)
+            except ValueError as exc:
+                refused_hosts.append(tenant.tenant_id)
+                print(f"  ⚠️  {exc}")
             print(f"  Ad Server: {tenant.ad_server or 'None configured'}")
             if adapter_config and adapter_config.adapter_type:
                 print(f"  Adapter: {adapter_config.adapter_type}")
@@ -38,6 +48,11 @@ def check_all_tenants():
 
         print("\n" + "=" * 80)
         print(f"Total tenants: {len(tenants_with_adapters)}")
+        if refused_hosts:
+            print(
+                f"⚠️  {len(refused_hosts)} tenant(s) store a virtual_host the admin UI cannot serve: "
+                f"{', '.join(refused_hosts)}"
+            )
 
         # Check for sync status - get latest sync for each tenant
         latest_syncs = (

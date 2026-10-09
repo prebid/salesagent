@@ -18,12 +18,12 @@ from sqlalchemy import text
 from src.core.agent_identity import AGENT_ENDPOINT_PATHS
 from src.core.config_loader import get_tenant_by_virtual_host
 from src.core.domain_routing import route_landing_page
-from src.core.http_utils import hostname_of
 from src.core.resolved_identity import public_identity_for
 from src.services.seller_capabilities import describe_seller
 from tests.factories import TenantFactory
 from tests.harness._base import IntegrationEnv
 from tests.helpers.credentials import credential_headers
+from tests.helpers.hostnames import store_virtual_host_past_the_validator
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -68,15 +68,7 @@ class _VhostEnv(IntegrationEnv):
         """
         tenant = TenantFactory(tenant_id="vh_case", virtual_host="placeholder.example.com", is_active=True)
         self._commit_factory_data()
-        self._session.execute(
-            text("UPDATE tenants SET virtual_host = :host, virtual_host_name = :name WHERE tenant_id = :tid"),
-            {
-                "host": STORED_MIXED_CASE,
-                "name": hostname_of(STORED_MIXED_CASE),
-                "tid": tenant.tenant_id,
-            },
-        )
-        self._session.commit()
+        store_virtual_host_past_the_validator(self._session, tenant.tenant_id, STORED_MIXED_CASE)
         return tenant.tenant_id
 
 

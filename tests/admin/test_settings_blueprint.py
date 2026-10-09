@@ -4,10 +4,11 @@ Covers the security-sensitive slice of src/admin/blueprints/settings.py:
   - /domains/add, /domains/remove  — authorized_domains CRUD
   - /emails/add, /emails/remove    — authorized_emails CRUD
   - /approximated-token            — DNS widget token generation (external API)
+  - /general                       — virtual_host only: taken, refused, or re-submitted unchanged
 
-Does NOT yet cover: /general, /adapter, /slack, /ai, /ai/test, /ai/models,
-/business-rules. Those routes mix tenant config saves + external API calls
-and warrant their own test file with richer mocking. Of
+Does NOT yet cover: the rest of /general, /adapter, /slack, /ai, /ai/test,
+/ai/models, /business-rules. Those routes mix tenant config saves + external API
+calls and warrant their own test file with richer mocking. Of
 /approximated-domain-status|register|unregister only the tenant-ownership
 refusal is covered here (see TestApproximatedDomainTenantOwnership); their
 success paths still belong to that future file.
@@ -26,7 +27,7 @@ from src.admin.blueprints import settings as settings_module
 from src.core.database.models import Tenant
 from tests.factories import TenantFactory
 from tests.helpers import concurrent_commit_in_write_window, operator_answer
-from tests.helpers.hostnames import virtual_host_refusal
+from tests.helpers.hostnames import store_virtual_host_past_the_validator, virtual_host_refusal
 
 app = create_app()
 
@@ -418,6 +419,38 @@ class TestGeneralSettingsUnservableVirtualHost:
         factory_session.expire_all()
         refreshed = factory_session.get(Tenant, tenant.tenant_id)
         assert (refreshed.virtual_host, refreshed.name) == (own_host, own_name)
+
+
+class TestGeneralSettingsStoredVirtualHostUnchanged:
+    """POST /tenant/<id>/settings/general re-submitting the host the tenant is stored at.
+
+    The form re-submits the stored host with every save. Unchanged, it is not written, so the
+    other settings save even when the host was stored before the rule refused it; the admin is
+    warned with the validator's message instead. A changed host is still checked
+    (``TestGeneralSettingsUnservableVirtualHost``).
+    """
+
+    SAVED = ("success", "General settings updated successfully")
+
+    @pytest.mark.parametrize(
+        ("stored", "refused"),
+        [("seller_one.example.com", True), ("seller-one.example.com", False)],
+        ids=["refused by the rule", "accepted by the rule"],
+    )
+    def test_the_other_settings_save_and_a_refused_host_is_flagged(self, client, factory_session, stored, refused):
+        tenant = TenantFactory()
+        store_virtual_host_past_the_validator(factory_session, tenant.tenant_id, stored)
+        _auth_session(client, tenant.tenant_id)
+
+        status, _, flashed = operator_answer(
+            client, _post_general(client, tenant.tenant_id, "Renamed Publisher", stored)
+        )
+
+        assert status == 302
+        assert flashed == ([("warning", virtual_host_refusal(stored))] if refused else []) + [self.SAVED]
+        factory_session.expire_all()
+        refreshed = factory_session.get(Tenant, tenant.tenant_id)
+        assert (refreshed.virtual_host, refreshed.name) == (stored, "Renamed Publisher")
 
 
 class TestApproximatedDomainTenantOwnership:
