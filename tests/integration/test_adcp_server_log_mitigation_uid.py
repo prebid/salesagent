@@ -14,8 +14,8 @@ same invoker via ``id -u``/``id -g`` -- see docker-compose.e2e.yml's `tests`
 service). It never covers adcp-server's OWN identity: the Dockerfile bakes a
 FIXED uid/gid that has nothing to do with whoever invokes run_all_tests.sh --
 
-    Dockerfile:124  RUN groupadd -r -g 1001 app && useradd -r -u 1001 -g app ...
-    Dockerfile:146  USER app:app
+    Dockerfile:127  RUN groupadd -r -g 1001 app && useradd -r -m -d /home/app -u 1001 -g app ...
+    Dockerfile:149  USER app:app
 
 -- and docker-compose.e2e.yml declares no ``group_add:`` for the adcp-server
 service, so uid 1001/gid 1001 ("app") is never made a member of whatever group
@@ -46,7 +46,7 @@ pytestmark = pytest.mark.integration
 
 _DOCKER_AVAILABLE = shutil.which("docker") is not None
 
-# The exact uid:gid the Dockerfile bakes for adcp-server (Dockerfile:124, 146).
+# The exact uid:gid the Dockerfile bakes for adcp-server (Dockerfile:127, 149).
 _ADCP_SERVER_UID_GID = "1001:1001"
 
 # Stand-in for "whoever invokes run_all_tests.sh". Any uid/gid distinct from

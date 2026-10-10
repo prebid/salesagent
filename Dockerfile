@@ -121,7 +121,10 @@ COPY config/nginx/nginx-development.conf /etc/nginx/nginx-development.conf
 # -P mode never follows a symlink argument into its target, so chowning /var/run only
 # relabels the symlink itself and leaves the real directory (where nginx writes its
 # pidfile) root-owned.
-RUN groupadd -r -g 1001 app && useradd -r -u 1001 -g app -s /usr/sbin/nologin app && \
+# The user gets a home directory (-m): the GAM SDK (googleads -> zeep) creates its
+# WSDL cache under $HOME/.cache on its first service call, and a missing home makes
+# every GAM call fail with PermissionError.
+RUN groupadd -r -g 1001 app && useradd -r -m -d /home/app -u 1001 -g app -s /usr/sbin/nologin app && \
     mkdir -p /var/log/nginx /var/run && \
     chown -R app:app /app /opt/venv /var/log/nginx /var/lib/nginx /run /etc/nginx/nginx.conf
 
