@@ -48,7 +48,7 @@ def request_package(index: int = 0, **overrides: Any) -> dict[str, Any]:
       so format validation resolves the product instead of silently skipping.
     - ``package_id`` — NOT a ``PackageRequest`` field, because the buyer does not send one.
       The seller mints it and ``MediaBuyRepository.create_from_request`` injects it into
-      the persisted request from ``package_id_map``; injecting it here is the same move,
+      the persisted request from its ``packages``; injecting it here is the same move,
       and it is what lets a ``MediaPackage`` row and its request entry share one identity
       instead of minting two that join to nothing.
     """
