@@ -1694,6 +1694,18 @@ def _set_targeting_overlay(ctx: dict, overlay: dict[str, Any] | None) -> None:
             kwargs["packages"][0]["targeting_overlay"] = overlay
 
 
+@given(parsers.re(r"^the package targeting_overlay is (?P<overlay>\{.*\})$"))
+def given_package_targeting_overlay(ctx: dict, overlay: str) -> None:
+    """Set the first package's targeting_overlay of the CREATE request to the JSON object *overlay*.
+
+    The update request's overlay is UC-003's ``the package targeting_overlay is set to: ...``;
+    the two texts differ by two words and write to different requests.
+    """
+    import json
+
+    _set_targeting_overlay(ctx, json.loads(overlay))
+
+
 @given(parsers.parse("the targeting overlay scenario is {partition}"))
 def given_targeting_overlay_partition(ctx: dict, partition: str) -> None:
     """Set up targeting overlay for partition scenarios (BR-RULE-014).

@@ -315,10 +315,9 @@ class GoogleAdManager(AdServerAdapter):
     def get_targeting_capabilities() -> TargetingCapabilities:
         """Return targeting capabilities GAM adapter supports.
 
-        Google Ad Manager supports comprehensive geo targeting:
-        - Countries and regions worldwide
-        - Nielsen DMAs (US metros)
-        - US ZIP codes
+        Declares the geo targeting this adapter books: countries, regions and Nielsen
+        DMAs, for the codes in its geo data (src/adapters/gam/geo_codes.json); any other
+        code is refused. Postal codes are refused, so no postal system is declared.
 
         Returns:
             TargetingCapabilities describing GAM's targeting support
@@ -326,8 +325,7 @@ class GoogleAdManager(AdServerAdapter):
         return TargetingCapabilities(
             geo_countries=True,
             geo_regions=True,
-            nielsen_dma=True,  # GAM supports US DMAs
-            us_zip=True,  # GAM supports US ZIP targeting
+            nielsen_dma=True,
         )
 
     # Legacy properties for backward compatibility

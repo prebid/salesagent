@@ -349,6 +349,12 @@ def given_adapter_full_targeting(ctx: dict) -> None:
     ctx["env"].set_targeting_capabilities(**{f.name: True for f in _dc_fields(TargetingCapabilities)})
 
 
+@given("the seller's ad server is Google Ad Manager")
+def given_seller_ad_server_is_gam(ctx: dict) -> None:
+    """The tenant's adapter is Google Ad Manager, resolved by production from its AdapterConfig row."""
+    ctx["env"].use_gam_adapter_class()
+
+
 @given(parsers.parse("the adapter provides targeting as {config}"))
 def given_adapter_targeting_config(ctx: dict, config: str) -> None:
     """Realize an outline-row adapter targeting config (targeting-partitions).
