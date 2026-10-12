@@ -131,7 +131,7 @@ def _get_media_buy_delivery_impl(
     # (cross-field constraint the schema can't express, so it reaches us as valid).
     _validate_attribution_window(req.attribution_window)
 
-    return get_media_buy_delivery(req, identity=identity)
+    return get_media_buy_delivery(req, identity=identity, webhook_context=False)
 
 
 def delivery_for_media_buy(
@@ -140,7 +140,7 @@ def delivery_for_media_buy(
     start_date: str,
     end_date: str,
 ) -> GetMediaBuyDeliveryResponse:
-    """Delivery for ONE media buy over one window, for a SERVER-initiated read.
+    """Delivery for ONE media buy over one window, for a SERVER-initiated read: webhook context.
 
     The entry point for callers with no buyer and no request envelope -- the delivery
     webhook scheduler is the one today. They ask a domain question and this answers it;
@@ -161,17 +161,27 @@ def delivery_for_media_buy(
         ),
         # Resolution from stored ids: the job acts as the buy's owner, on the buy's account.
         identity=identity_of(media_buy.tenant_id, media_buy.principal_id, media_buy.account_id),
+        webhook_context=True,
     )
 
 
 def get_media_buy_delivery(
-    req: GetMediaBuyDeliveryRequest, *, identity: ResolvedIdentity
+    req: GetMediaBuyDeliveryRequest, *, identity: ResolvedIdentity, webhook_context: bool
 ) -> GetMediaBuyDeliveryResponse:
     """Gather delivery for the buys *req* names, for an already-resolved caller.
 
     The service half of :func:`_get_media_buy_delivery_impl`. It asks nothing about
     transports, auth or idempotency, so a server-initiated read can reach it through
     :func:`delivery_for_media_buy` without the front door.
+
+    *webhook_context* says which answer the caller gets for a buy whose adapter reports
+    the period unfinished (``expected_availability`` set). In webhook context the buy is
+    ``reporting_delayed`` with that ``expected_availability`` (get_media_buy_delivery.mdx:
+    "In webhook context, may also be `reporting_delayed`"; the response schema's
+    ``expected_availability`` is "only present when status is reporting_delayed"). A
+    buyer's pull gets the figures reported so far with the buy's lifecycle status (the same
+    page: the seller "returns the buy in `media_buy_deliveries` with zero or partial
+    metrics"). Required, so no caller gets the webhook answer by omission.
     """
     principal_id = identity.principal.principal_id
     tenant = identity.tenant
@@ -281,6 +291,7 @@ def get_media_buy_delivery(
                 adapter_conversions: float | None = None
                 adapter_conversion_value: float | None = None
                 adapter_viewability: float | None = None
+                expected_availability: datetime | None = None
 
                 # Call adapter to get per-package delivery metrics
                 # Note: Mock adapter returns simulated data, GAM adapter returns real data from Reporting API
@@ -318,6 +329,12 @@ def get_media_buy_delivery(
                     raw_conversion_value = getattr(adapter_response.totals, "conversion_value", None)
                     adapter_conversion_value = float(raw_conversion_value) if raw_conversion_value is not None else None
                     adapter_viewability = getattr(adapter_response.totals, "viewability", None)
+
+                    # The ad server has not finished reporting the period. Any buy, not only an
+                    # active one: a buy that completed yesterday still has figures to come.
+                    if webhook_context and adapter_response.expected_availability is not None:
+                        status = "reporting_delayed"
+                        expected_availability = adapter_response.expected_availability
 
                 except Exception as e:
                     logger.error("Error getting delivery for %s: %s", media_buy_id, e)
@@ -465,6 +482,7 @@ def get_media_buy_delivery(
                     ),
                     by_package=package_deliveries,
                     daily_breakdown=None,  # Optional field, not calculated in this implementation
+                    expected_availability=expected_availability,
                 )
 
                 deliveries.append(delivery_data)

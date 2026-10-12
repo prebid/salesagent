@@ -3550,17 +3550,27 @@ def then_partial_data(ctx: dict, mb_id: str) -> None:
 
 @then(parsers.parse('the response should include "{mb_id}" with zero impressions and zero spend'))
 def then_zero_metrics(ctx: dict, mb_id: str) -> None:
-    """Assert the named media buy has exactly zero impressions and zero spend.
+    """The named media buy is delivered with exactly zero impressions and zero spend."""
+    _assert_wire_delivery_totals(ctx, mb_id, impressions=0, spend=0.0)
 
-    Verifies ID mapping (the requested media buy is found in deliveries)
-    and exact metric values (both must be zero, not just non-negative).
+
+@then(parsers.parse('the response should include "{mb_id}" with {impressions:d} impressions and {spend:g} spend'))
+def then_delivery_totals(ctx: dict, mb_id: str, impressions: int, spend: float) -> None:
+    """The named media buy is delivered with exactly *impressions* and *spend*."""
+    _assert_wire_delivery_totals(ctx, mb_id, impressions=impressions, spend=spend)
+
+
+def _assert_wire_delivery_totals(ctx: dict, mb_id: str, *, impressions: int, spend: float) -> None:
+    """The ``media_buy_deliveries`` entry for *mb_id* carries exactly these totals on the wire.
+
+    Locates the entry by its ``media_buy_id`` (the requested buy is present, not just some
+    delivery) and compares exact values, not lower bounds.
     """
-    resp = require_payload(ctx)
-    deliveries = resp.media_buy_deliveries
-    target = next((d for d in deliveries if d.media_buy_id == mb_id), None)
-    assert target is not None, f"No delivery found for '{mb_id}' in {[d.media_buy_id for d in deliveries]}"
-    assert target.totals.impressions == 0.0, f"Expected zero impressions for '{mb_id}', got {target.totals.impressions}"
-    assert target.totals.spend == 0.0, f"Expected zero spend for '{mb_id}', got {target.totals.spend}"
+    totals = wire_entry(ctx, "media_buy_deliveries", media_buy_id=mb_id).get("totals") or {}
+    actual = (totals.get("impressions"), totals.get("spend"))
+    assert actual == (impressions, spend), (
+        f"Expected {mb_id!r} with {impressions} impressions and {spend} spend, got {actual}"
+    )
 
 
 @then("no real billing records should have been created")
