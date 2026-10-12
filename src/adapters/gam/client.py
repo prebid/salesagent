@@ -13,9 +13,22 @@ from googleads import ad_manager
 from src.core.exceptions import AdCPConfigurationError
 
 from .auth import GAMAuthManager
+from .utils.error_handler import map_gam_exception
 from .utils.health_check import GAMHealthChecker, HealthCheckResult, HealthStatus
 
 logger = logging.getLogger(__name__)
+
+
+def current_network_time_zone(client: ad_manager.AdManagerClient) -> str:
+    """The network's own time zone, the zone a line item's flight is written in.
+
+    ``Network.timeZone`` is read-only in GAM: the zone the network delivers orders and
+    reports in. A refused lookup is classified like any other GAM fault.
+    """
+    try:
+        return client.GetService("NetworkService").getCurrentNetwork().timeZone
+    except Exception as fault:
+        raise map_gam_exception(fault) from fault
 
 
 class GAMClientManager:

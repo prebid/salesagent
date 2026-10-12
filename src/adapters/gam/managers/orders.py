@@ -7,12 +7,13 @@ for Google Ad Manager orders.
 
 import logging
 from collections.abc import Callable
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from googleads import ad_manager
 
 from src.adapters.gam.utils.error_handler import map_gam_exception
+from src.adapters.gam.utils.formatters import format_datetime_for_gam
 from src.adapters.gam.utils.timeout_handler import timeout
 from src.core.errors.details import CapabilityRefusalDetails
 from src.core.exceptions import (
@@ -29,6 +30,25 @@ logger = logging.getLogger(__name__)
 # Line item type constants for GAM automation
 GUARANTEED_LINE_ITEM_TYPES = {"STANDARD", "SPONSORSHIP"}
 NON_GUARANTEED_LINE_ITEM_TYPES = {"NETWORK", "BULK", "PRICE_PRIORITY", "HOUSE"}
+
+
+def _line_item_flight(start_time: datetime, end_time: datetime, time_zone: str) -> dict[str, Any]:
+    """A line item's flight, written in the network's time zone.
+
+    GAM requires ``startDateTime`` to be in the future, so a start that is not (an "asap"
+    buy, a buy approved after its start) starts ``IMMEDIATELY``, with no ``startDateTime``.
+
+    Ceiling: the comparison reads this server's clock as the line item is built. A start a
+    few seconds ahead of that moment is sent as an explicit ``startDateTime`` and can have
+    passed by the time GAM receives it, and GAM then refuses it. A margin would close that
+    window at the cost of starting such a buy early by the margin.
+    """
+    flight: dict[str, Any] = {"endDateTime": format_datetime_for_gam(end_time, time_zone)}
+    if start_time <= datetime.now(UTC):
+        flight["startDateTimeType"] = "IMMEDIATELY"
+    else:
+        flight["startDateTime"] = format_datetime_for_gam(start_time, time_zone)
+    return flight
 
 
 class GAMOrdersManager:
@@ -51,8 +71,6 @@ class GAMOrdersManager:
         self,
         order_name: str,
         total_budget: float,
-        start_time: datetime,
-        end_time: datetime,
         currency: str = "USD",
         applied_team_ids: list[str] | None = None,
         po_number: str | None = None,
@@ -62,8 +80,6 @@ class GAMOrdersManager:
         Args:
             order_name: Name for the order
             total_budget: Total budget amount
-            start_time: Order start datetime
-            end_time: Order end datetime
             currency: Currency code for budget (ISO 4217, default: USD)
             applied_team_ids: Optional list of team IDs to apply
             po_number: Optional PO number
@@ -86,18 +102,7 @@ class GAMOrdersManager:
             "traffickerId": self.trafficker_id,
             "status": "DRAFT",  # Start as DRAFT - will approve after line items are created
             "totalBudget": {"currencyCode": currency, "microAmount": int(total_budget * 1_000_000)},
-            "startDateTime": {
-                "date": {"year": start_time.year, "month": start_time.month, "day": start_time.day},
-                "hour": start_time.hour,
-                "minute": start_time.minute,
-                "second": start_time.second,
-            },
-            "endDateTime": {
-                "date": {"year": end_time.year, "month": end_time.month, "day": end_time.day},
-                "hour": end_time.hour,
-                "minute": end_time.minute,
-                "second": end_time.second,
-            },
+            # No startDateTime/endDateTime: GAM derives an order's flight from its line items.
         }
 
         # Add PO number if provided
@@ -338,6 +343,7 @@ class GAMOrdersManager:
         packages: list,
         start_time: datetime,
         end_time: datetime,
+        network_time_zone: str,
         products_map: dict[str, Any],
         log_func: Callable | None = None,
         tenant_id: str | None = None,
@@ -353,6 +359,7 @@ class GAMOrdersManager:
             packages: List of MediaPackage objects (each has targeting_overlay)
             start_time: Flight start datetime
             end_time: Flight end datetime
+            network_time_zone: The network's time zone, from ``current_network_time_zone``
             products_map: Map of product_id to product config
             log_func: Optional logging function
             tenant_id: Tenant ID for fetching naming templates
@@ -892,20 +899,7 @@ class GAMOrdersManager:
                 },
                 "creativeRotationType": impl_config.get("creative_rotation_type", "EVEN"),
                 "deliveryRateType": impl_config.get("delivery_rate_type", "EVENLY"),
-                "startDateTime": {
-                    "date": {"year": start_time.year, "month": start_time.month, "day": start_time.day},
-                    "hour": start_time.hour,
-                    "minute": start_time.minute,
-                    "second": start_time.second,
-                    "timeZoneId": impl_config.get("time_zone", "America/New_York"),
-                },
-                "endDateTime": {
-                    "date": {"year": end_time.year, "month": end_time.month, "day": end_time.day},
-                    "hour": end_time.hour,
-                    "minute": end_time.minute,
-                    "second": end_time.second,
-                    "timeZoneId": impl_config.get("time_zone", "America/New_York"),
-                },
+                **_line_item_flight(start_time, end_time, network_time_zone),
                 # Set status based on whether manual approval is required
                 # DRAFT = needs manual approval, READY = ready to serve (when creatives added)
                 "status": "READY",  # Always create as READY since creatives will be added
