@@ -340,7 +340,7 @@ class HarnessState(Enum):
     REPLAY_PAIR = "replay_pair"
     #: 017: ``SigningSettings.revoked_keyids`` -> ``CounterpartyRevocationChecker``.
     REVOKED_KID = "revoked_kid"
-    #: 020: ``SigningSettings.per_keyid_cap_overrides`` + case-unique claimed nonces.
+    #: 020: the principal's ``signed_requests_grading.replay_cap`` + case-unique claimed nonces.
     CAP_OVERRIDE = "cap_override"
 
 
@@ -612,8 +612,8 @@ TRANSPLANT: dict[str, VectorPlan] = {
         "negative/020-rate-abuse",
         "request_signature_rate_abuse",
         harness_state=HarnessState.CAP_OVERRIDE,
-        notes="NEVER re-signed (same canary as 017). Cap set via per_keyid_cap_overrides, which is "
-        "process-local and cannot reach another xdist worker.",
+        notes="NEVER re-signed (same canary as 017). Cap set on the test principal's grading record, which "
+        "reaches no other counterparty and no other xdist worker.",
     ),
     "negative/021-duplicate-signature-input-label": _rejects(
         "negative/021-duplicate-signature-input-label",

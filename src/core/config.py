@@ -33,10 +33,10 @@ import os
 import secrets
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal, TypedDict
+from typing import Literal
 
 from adcp.signing.agent_resolver import BrandAgentType
-from pydantic import Field, ValidationInfo, field_validator, model_validator
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _ENV = SettingsConfigDict(env_prefix="", case_sensitive=False, extra="ignore", env_ignore_empty=True)
@@ -353,48 +353,9 @@ class LimitSettings(BaseSettings):
     adcp_webhook_breaker_timeout_seconds: int = Field(default=60, gt=0)
 
 
-# Characters that make an override key a PATTERN rather than one counterparty's keyid.
-_KEYID_PATTERN_CHARS = "*?%[]"
-
 #: AdCP 3.1.1 ``security.mdx`` §per-keyid cap, and the signed-requests test kit's
 #: ``production_min_per_keyid_cap_requests``.
 _PRODUCTION_MIN_PER_KEYID_CAP = 1_000_000
-
-
-class CounterpartyRegistryEntry(TypedDict):
-    """One configured counterparty's key material, as the request path consumes it.
-
-    The two keys are exactly what
-    :func:`src.core.signing.verifier.build_registry_resolution` reads. Declaring them here
-    makes the settings boundary refuse a malformed entry, so the request path cannot meet
-    one: a missing key raises ``missing`` and a misspelled one raises both ``missing`` for
-    the key it failed to spell and ``extra_forbidden`` naming the misspelling.
-
-    There is no ``jwks_uri`` and no ``key_origin``. Both are DERIVED from ``agent_url``,
-    because this seller reads keys from ``<agent origin>/.well-known/jwks.json`` and nowhere
-    else -- a declared location could only either repeat the derivation or name somewhere
-    the brand.json walk would refuse (docs/design/request-signing-subset.md).
-    """
-
-    agent_url: str
-    jwks: dict[str, Any]
-
-
-def _validate_explicit_keyid(key: str, field_name: str) -> None:
-    """Refuse an empty or pattern-shaped key on a per-keyid config map.
-
-    Shared by every per-keyid map on :class:`SigningSettings` (override maps AND the
-    counterparty registry) so "explicit keyids only" is one rule, not one reimplementation
-    per field — a pattern key on ANY of them would lower a protection globally, which is
-    refused everywhere identically.
-    """
-    if not key.strip():
-        raise ValueError(f"{field_name}: a key must be an explicit keyid, not empty")
-    if any(char in key for char in _KEYID_PATTERN_CHARS):
-        raise ValueError(
-            f"{field_name}: key {key!r} looks like a pattern. Keys name explicit keyids only — "
-            "a pattern would lower the protection globally, which is refused."
-        )
 
 
 def _cache_max_age_seconds() -> int:
@@ -420,9 +381,11 @@ class SigningSettings(BaseSettings):
 
     Everything about signing that is a property of the DEPLOYMENT rather than of a tenant.
     Both directions land here because both are deployment facts: the inbound knobs are
-    transport limits, a kill switch, and two conformance-grading relaxations that a
-    production signal forbids outright; the outbound knobs say where this process is willing
-    to READ its own private key material from.
+    transport limits, a kill switch, the replay store's floor and the revocation posture;
+    the outbound knobs say where this process is willing to READ its own private key
+    material from. The signed-requests test kit's relaxations are on the test
+    counterparty's onboarding record (``principals.signed_requests_grading``), never
+    deployment settings.
 
     POSTURE is per-tenant in both directions and never here — inbound in the tenant's
     declaration (:class:`src.core.signing.posture.RequestSigningPosture`), outbound in
@@ -436,9 +399,8 @@ class SigningSettings(BaseSettings):
 
     # ``env_ignore_empty`` matches ``_ENV``, which every other settings class here uses. It is
     # not cosmetic: compose interpolates an unset variable to the EMPTY STRING, and an empty
-    # string handed to a dict-typed field is a JSON parse error at construction — so a
-    # deployment that does not set the conformance relaxations would fail to boot because of
-    # the one that does.
+    # string handed to a typed field is a parse error at construction — so a deployment that
+    # leaves a variable unset would fail to boot because compose spelled it as "".
     model_config = SettingsConfigDict(
         env_prefix="ADCP_SIGNING_", case_sensitive=False, extra="ignore", env_ignore_empty=True
     )
@@ -489,8 +451,6 @@ class SigningSettings(BaseSettings):
 
     # -- replay store ------------------------------------------------------
     per_keyid_cap: int = Field(default=_PRODUCTION_MIN_PER_KEYID_CAP)
-    per_keyid_cap_overrides: dict[str, int] = Field(default_factory=dict)
-    replay_ttl_overrides: dict[str, float] = Field(default_factory=dict)
     replay_claim_ttl_seconds: float = Field(default=60.0, gt=0)
 
     # -- revocation, checklist step 9 --------------------------------------
@@ -536,17 +496,6 @@ class SigningSettings(BaseSettings):
             "(CachingRevocationChecker) clamps its effective polling at MAX_POLLING_INTERVAL_SECONDS "
             "(900s, adcp.signing.revocation_fetcher) regardless of what we declare above that — a "
             "value in (900, 1800] is spec-legal to PUBLISH and shrinks only OUR OWN polling"
-        ),
-    )
-
-    # -- conformance-grading key trust ------------------------------------
-    counterparty_registry: dict[str, CounterpartyRegistryEntry] = Field(
-        default_factory=dict,
-        description=(
-            "Per-keyid registered counterparty entries, consulted as a FALLBACK when a signed "
-            "request resolves no principal to walk from (the signed_requests_runner sends no "
-            "bearer at all). NEVER consulted when a principal-derived walk exists but FAILS. "
-            "Refused entirely under a production signal"
         ),
     )
 
@@ -650,84 +599,16 @@ class SigningSettings(BaseSettings):
         """Refuse a GLOBAL cap below the spec floor.
 
         The test kit's ``grading_target_per_keyid_cap_requests: 100`` is permitted for the
-        test-kit COUNTERPARTY only, which is what ``per_keyid_cap_overrides`` is for.
+        test-kit COUNTERPARTY only, which is what that principal's
+        ``signed_requests_grading`` record is for.
         """
         if v < _PRODUCTION_MIN_PER_KEYID_CAP:
             raise ValueError(
                 f"ADCP_SIGNING_PER_KEYID_CAP={v} is below the spec floor of "
-                f"{_PRODUCTION_MIN_PER_KEYID_CAP} live entries per keyid. Lower the cap for a "
-                "single test counterparty with ADCP_SIGNING_PER_KEYID_CAP_OVERRIDES, never globally."
+                f"{_PRODUCTION_MIN_PER_KEYID_CAP} live entries per keyid. Lower the cap for the "
+                "test counterparty on its principal's signed_requests_grading record, never globally."
             )
         return v
-
-    @field_validator("per_keyid_cap_overrides", "replay_ttl_overrides")
-    @classmethod
-    def validate_overrides_name_explicit_keyids(cls, v: dict[str, float], info: ValidationInfo) -> dict[str, float]:
-        """Both override maps name explicit keyids — never a pattern.
-
-        Each map lowers a spec-mandated protection (the cap, and the replay row's lifetime)
-        for one counterparty. A wildcard or prefix key would re-introduce a global lowering
-        by the back door, for a value nobody reads as global.
-        """
-        for key, value in v.items():
-            _validate_explicit_keyid(key, info.field_name or "")
-            if value <= 0:
-                raise ValueError(f"{info.field_name}: override for keyid {key!r} must be positive, got {value}")
-        return v
-
-    @field_validator("counterparty_registry")
-    @classmethod
-    def validate_counterparty_registry_keys(
-        cls, v: dict[str, CounterpartyRegistryEntry], info: ValidationInfo
-    ) -> dict[str, CounterpartyRegistryEntry]:
-        """Registry entries are keyed by explicit keyid too — same rule as the override maps.
-
-        Only the KEY shape is checked: :class:`CounterpartyRegistryEntry` is the annotation,
-        so pydantic refuses a malformed VALUE while building the field, before this runs.
-        """
-        for key in v:
-            _validate_explicit_keyid(key, info.field_name or "")
-        return v
-
-    @model_validator(mode="after")
-    def validate_test_kit_relaxations_forbidden_in_production(self) -> SigningSettings:
-        """Refuse any non-empty conformance relaxation under a production signal.
-
-        A ``@model_validator`` fires on EVERY construction, so every process that can reach
-        :func:`get_settings` is covered — unlike :func:`validate_configuration`, which the
-        ASGI lifespan never calls, so a deployment pointing uvicorn at ``src.app:app``
-        directly would boot the registry with that guard never executing.
-
-        The signal is the UNION of every production marker an entrypoint in this codebase
-        checks, not a reuse of :func:`is_production`: the blast radius a relaxation opens —
-        a keyid alone becoming sufficient to be trusted as a counterparty — warrants the
-        most paranoid reading.
-        """
-        signal = next(
-            (name for name in ("ENVIRONMENT", "PRODUCTION", "FLY_APP_NAME") if _production_signal(name)),
-            None,
-        )
-        if signal is None:
-            return self
-        for field_name in ("counterparty_registry", "per_keyid_cap_overrides", "replay_ttl_overrides"):
-            if getattr(self, field_name):
-                raise ValueError(
-                    f"{field_name} is a conformance-grading relaxation and must not be set "
-                    f"when {signal} signals a production deployment"
-                )
-        return self
-
-
-def _production_signal(name: str) -> bool:
-    """Whether env var *name* is set to something that marks a production deployment.
-
-    ``ENVIRONMENT`` counts only for the literal ``production``; the other two count for any
-    non-empty value, matching ``scripts/run_server.py``'s looser reading of ``FLY_APP_NAME``.
-    """
-    value = os.getenv(name, "").strip()
-    if name == "ENVIRONMENT":
-        return value.lower() == "production"
-    return bool(value)
 
 
 class ToolingSettings(BaseSettings):

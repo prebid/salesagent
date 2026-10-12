@@ -8,7 +8,7 @@ import factory
 from factory import LazyAttribute, Sequence, SubFactory
 
 from src.core.credentials import hash_token, token_prefix
-from src.core.database.models import Principal
+from src.core.database.models import Principal, PrincipalSigningKeyid
 from src.core.resolved_identity import AccountIdentity, PublicIdentity, ResolvedIdentity
 from src.core.schemas import Principal as SchemaPrincipal
 from src.core.schemas.account import Account
@@ -167,3 +167,21 @@ class PrincipalFactory(factory.alchemy.SQLAlchemyModelFactory):
             principal=cls._principal_for(principal_id) if principal_id else None,
             tenant=cls._tenant_for(tenant, tenant_id, tenant_overrides),  # type: ignore[arg-type]
         )
+
+
+class PrincipalSigningKeyidFactory(factory.alchemy.SQLAlchemyModelFactory):
+    """One request-signing keyid onboarded for *principal*.
+
+    ``tenant_id`` and ``principal_id`` are read off the principal, the row's foreign key.
+    """
+
+    class Meta:
+        model = PrincipalSigningKeyid
+        sqlalchemy_session = None
+        sqlalchemy_session_persistence = "commit"
+        exclude = ("principal",)
+
+    principal = SubFactory(PrincipalFactory, agent_url=Sequence(lambda n: f"https://agent-{n:04d}.example.com/a2a"))
+    tenant_id = LazyAttribute(lambda o: o.principal.tenant_id)
+    principal_id = LazyAttribute(lambda o: o.principal.principal_id)
+    keyid = Sequence(lambda n: f"keyid-{n:04d}")

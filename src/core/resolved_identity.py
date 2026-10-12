@@ -9,6 +9,7 @@ This eliminates isinstance checks and auth extraction inside business logic.
 import logging
 from collections.abc import Callable, Mapping
 from enum import StrEnum
+from functools import partial
 from typing import Literal, overload
 
 from adcp.types import AccountReference, AccountReferenceById
@@ -194,7 +195,7 @@ def _signature_credential(
     subject: SignatureSubject | None,
     *,
     headers: Mapping[str, str],
-    tenant: TenantContext | None,
+    tenant: TenantContext,
     principal: Principal | None,
 ) -> Principal | None:
     """Read the request's RFC 9421 signature, and return the caller after it.
@@ -203,35 +204,29 @@ def _signature_credential(
     resolved one from its bearer; the principal the signature ESTABLISHES when it did not.
     Raises ``AdCPRequestSignatureError`` when the verifier refuses.
 
-    A verified signature establishes exactly one fact — "the request was issued by the agent
-    whose ``jwks_uri`` contains the ``keyid``" (security.mdx @ v3.1.1 § Agent identity) — and
-    names that agent by the ``agents[]`` entry the verifier already used to fetch the JWKS. It
-    is a publication coordinate the verifier controlled end to end, never a buyer-asserted
-    field, so looking a principal up by it is exactly as sound as looking one up by a token
-    hash.
+    The verifier is handed a lookup bound to this tenant: the counterparty the tenant
+    onboarded the request's keyid for (security.mdx @ v3.1.1 L1088-1090). It verifies the
+    signature against that counterparty's keys and returns the counterparty only when the
+    signature verified, so the principal a signature establishes is the one whose keys
+    verified it (L1212), identified once.
 
     ONLY when the bearer resolved none. A request carrying both credentials is answered on
     its bearer, so a signature can never silently re-identify an authenticated caller as
     somebody else.
     """
-    from src.core.auth_utils import get_principal_by_agent_url
+    from src.core.auth_utils import get_principal_by_signing_keyid
     from src.core.signing.verifier import verify_inbound_signature
 
     if subject is None:
         return principal
-    signer = verify_inbound_signature(subject, headers=headers, tenant=tenant, principal=principal)
-    if principal is not None or signer is None or not signer.agent_url or tenant is None:
-        return principal
-
-    established = get_principal_by_agent_url(signer.agent_url, tenant.tenant_id)
-    if established is None:
-        logger.warning(
-            "A request signature verified for agent_url %r but tenant %r has no principal "
-            "onboarded at it, so the caller stays anonymous",
-            signer.agent_url,
-            tenant.tenant_id,
-        )
-    return established
+    verified = verify_inbound_signature(
+        subject,
+        headers=headers,
+        tenant=tenant,
+        principal=principal,
+        signer_by_keyid=partial(get_principal_by_signing_keyid, tenant_id=tenant.tenant_id),
+    )
+    return principal if principal is not None else verified
 
 
 def _detect_tenant(headers: Mapping[str, str]) -> str | None:

@@ -159,7 +159,6 @@ from tests.helpers.signing import (
     FAILED_METRIC,
     VERIFIED_METRIC,
     VERIFIER_RESULT,
-    counterparty_key,
     declared_posture,
     rejection_code,
     samples_with,
@@ -198,13 +197,8 @@ _TENANT_ID = "b3_conformance_tenant"
 _AGENT_HOST = "b3-conformance-seller.example.com"
 _PRINCIPAL_ID = "b3_conformance_principal"
 
-#: Above the kit's ``min_replay_ttl_seconds: 10`` and ``max_interval_seconds: 5``,
-#: and above the vectors' 60s signature window, so ``016``'s two submissions cannot
-#: both be accepted because the first entry expired between them.
-_REPLAY_TTL_SECONDS = 70.0
-
-#: ``negative/020``'s cap, scoped through the PRODUCTION config knob so it is
-#: process-local and cannot reach another xdist worker.
+#: ``negative/020``'s cap, carried by this test principal's grading record so it reaches
+#: no other counterparty and no other xdist worker.
 _RATE_ABUSE_CAP = 3
 
 _ED25519_KEYID = "test-ed25519-2026"
@@ -431,7 +425,7 @@ def _seed_tenant() -> Any:
     return TenantFactory(tenant_id=_TENANT_ID, subdomain="seller", virtual_host=_AGENT_HOST)
 
 
-def _seed_principal(tenant: Any) -> str:
+def _seed_principal(tenant: Any, plan: VectorPlan, vector: dict[str, Any]) -> str:
     """The counterparty's Principal, carrying the ``agent_url`` key resolution reads.
 
     ``_resolve_identity`` resolves this row from the Bearer value and hands
@@ -444,8 +438,22 @@ def _seed_principal(tenant: Any) -> str:
     plaintext, so ``plaintext_token_for`` is what both the factory and this caller
     compute — the same derivation ``tests/utils/database_helpers.py`` and the harness
     use, never a second one written here.
+
+    The principal is the ``signed_requests`` test counterparty: its record carries the
+    vector's JWKS, the TTL clamp the kit's keyids need, and, for ``020``, the cap the vector
+    drives the keyid to.
     """
-    PrincipalFactory(tenant=tenant, principal_id=_PRINCIPAL_ID, agent_url=COUNTERPARTY_AGENT_URL)
+    from scripts.setup.storyboard_signing import GRADING_REPLAY_TTL_SECONDS
+    from src.core.signing.grading import SignedRequestsGrading
+
+    grading = SignedRequestsGrading(
+        jwks=_jwks_for(vector),
+        replay_cap=_RATE_ABUSE_CAP if plan.harness_state is HarnessState.CAP_OVERRIDE else None,
+        replay_ttl_seconds=GRADING_REPLAY_TTL_SECONDS,
+    )
+    PrincipalFactory(
+        tenant=tenant, principal_id=_PRINCIPAL_ID, agent_url=COUNTERPARTY_AGENT_URL, signed_requests_grading=grading
+    )
     return plaintext_token_for(_PRINCIPAL_ID)
 
 
@@ -491,11 +499,12 @@ def _forget(env: BareIntegrationEnv, pairs: list[tuple[str, str]]) -> None:
 
 def _claim(env: BareIntegrationEnv, pairs: list[tuple[str, str]]) -> None:
     """Claim these exact ``(keyid, nonce)`` rows through the production repository."""
+    from scripts.setup.storyboard_signing import GRADING_REPLAY_TTL_SECONDS
     from src.core.database.repositories.replay_nonce import ReplayNonceRepository
 
     repository = ReplayNonceRepository(env.get_session())
     for keyid, nonce in pairs:
-        assert not repository.claim(keyid, nonce, _REPLAY_TTL_SECONDS), (
+        assert not repository.claim(keyid, nonce, GRADING_REPLAY_TTL_SECONDS), (
             f"cap-filler nonce {nonce!r} was already live for {keyid!r} — the fixture would be "
             "measuring a leftover row rather than the cap it just established"
         )
@@ -536,12 +545,12 @@ def _frozen_verifier_clock(reference_now: float) -> Iterator[None]:
 
 @contextmanager
 def _config_for(plan: VectorPlan) -> Iterator[None]:
-    """Establish the case's pre-state through PRODUCTION config seams only.
+    """Establish the case's deployment pre-state through the PRODUCTION config seam.
 
-    ``017``'s revocation and ``020``'s cap are CONFIG on this deployment, not
-    white-box injection: ``SigningSettings.revoked_keyids``'s own docstring says "Set to
-    ``test-revoked-2026`` on the conformance-grading deployment", and
-    ``per_keyid_cap_overrides`` says "test-kit counterparties -> 100".
+    ``017``'s revocation is CONFIG on this deployment, not white-box injection:
+    ``SigningSettings.revoked_keyids``'s own docstring says "Set to ``test-revoked-2026``
+    on the conformance-grading deployment". ``020``'s cap is the grading record's
+    (:func:`_seed_principal`).
 
     Through :func:`tests.helpers.signing.signing_config`, which substitutes the whole
     ``SigningSettings`` the verifier reads per request off ``get_settings().signing``
@@ -551,10 +560,6 @@ def _config_for(plan: VectorPlan) -> Iterator[None]:
     """
     with signing_config(
         revoked_keyids="test-revoked-2026" if plan.harness_state is HarnessState.REVOKED_KID else "",
-        per_keyid_cap_overrides=(
-            {_ED25519_KEYID: _RATE_ABUSE_CAP} if plan.harness_state is HarnessState.CAP_OVERRIDE else {}
-        ),
-        replay_ttl_overrides={_ED25519_KEYID: _REPLAY_TTL_SECONDS},
     ):
         yield
 
@@ -572,20 +577,19 @@ def _vector_case(vector_id: str) -> Iterator[tuple[BareIntegrationEnv, str | Non
         # with N placeholder entries"). The keyid stays ``test-ed25519-2026`` — renaming
         # it would mutate a graded ``Signature-Input`` byte and need the JWKS reseeded
         # under a new kid. These pairs are deleted by exact match afterwards, and the
-        # cap itself is a process-local config override, so neither can leak to a
+        # cap itself is this test principal's grading record, so neither can leak to a
         # sibling module on another worker.
         pairs = pairs + [(_ED25519_KEYID, f"b3-cap-{index:02d}") for index in range(_RATE_ABUSE_CAP)]
 
     with BareIntegrationEnv(tenant_id=_TENANT_ID, principal_id=_PRINCIPAL_ID) as env:
         tenant = _seed_tenant()
-        token = _seed_principal(tenant) if plan.credential is Credential.PRINCIPAL_TOKEN else None
+        token = _seed_principal(tenant, plan, vector) if plan.credential is Credential.PRINCIPAL_TOKEN else None
         _forget(env, pairs)
         if plan.harness_state is HarnessState.CAP_OVERRIDE:
             _claim(env, pairs[-_RATE_ABUSE_CAP:])
         try:
             with (
                 declared_posture(tenant_id=_TENANT_ID, **vector["verifier_capability"]),
-                counterparty_key(_jwks_for(vector)),
                 _config_for(plan),
                 _frozen_verifier_clock(vector["reference_now"]),
                 verifier_spy() as calls,

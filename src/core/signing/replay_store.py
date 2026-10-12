@@ -35,12 +35,16 @@ B3/salesagent-z6nr.14 inherits it): the signed-requests test-kit's vectors carry
 leave a row live ~360s — 6x the kit's ``window_seconds: 60``. Vector ``020-rate-abuse``
 drives that keyid to its overridden cap of 100, and those rows would then trip step 9a
 for every LATER vector, including ``016-replayed-nonce``'s first (must-be-accepted)
-submission. ``replay_ttl_overrides`` clamps the runner counterparties to ~70s, which is
-above ``min_replay_ttl_seconds: 10`` and ``max_interval_seconds: 5`` (so 016 still
-grades and cannot false-green) and above ``window_seconds: 60`` (so 020 still reaches
-the cap), while draining between vectors. The clamp is sound ONLY per-counterparty —
-it shortens replay protection below the signature's own validity window — which is why
-:class:`~src.core.config.SigningSettings` refuses a global one.
+submission. The test counterparty's ``signed_requests_grading`` record
+(:class:`~src.core.signing.grading.SignedRequestsGrading`) clamps its rows to ~70s,
+which is above ``min_replay_ttl_seconds: 10`` and ``max_interval_seconds: 5`` (so 016
+still grades and cannot false-green) and above ``window_seconds: 60`` (so 020 still
+reaches the cap), while draining between vectors. The clamp is sound ONLY for the test
+kit's counterparty — it shortens replay protection below the signature's own validity
+window — which is why it exists only on that counterparty's record and
+:class:`~src.core.config.SigningSettings` refuses a global cap below the floor. The
+verifier hands the store the record of the counterparty it resolved as its ``tuning``;
+the store applies it as given.
 
 Spec grounding: AdCP 3.1.1 via ``adcp==6.6.0``;
 ``dist/compliance/3.1.1/test-kits/signed-requests-runner.yaml``; graded at the wire by
@@ -55,6 +59,7 @@ import random
 
 from src.core.config import SigningSettings
 from src.core.database.repositories.replay_nonce import ReplayNonceRepository
+from src.core.signing.grading import SignedRequestsGrading
 
 logger = logging.getLogger(__name__)
 
@@ -74,7 +79,9 @@ class PostgresReplayStore:
 
     Args:
         repository: Statement layer, holding a short-lived caller-owned session.
-        config: Agent-level replay posture (cap, per-counterparty overrides, claim TTL).
+        config: Agent-level replay posture (cap, claim TTL).
+        tuning: The test kit's cap and TTL clamp, when the counterparty the verifier
+            resolved is the signed-requests test counterparty; ``None`` otherwise.
 
     Wiring (B1, salesagent-z6nr.12): construct this INSIDE one
     ``asyncio.to_thread`` hop around the whole synchronous
@@ -84,9 +91,12 @@ class PostgresReplayStore:
     instead of three, which matters under the PgBouncer branch's ``pool_size=2``.
     """
 
-    def __init__(self, repository: ReplayNonceRepository, config: SigningSettings) -> None:
+    def __init__(
+        self, repository: ReplayNonceRepository, config: SigningSettings, tuning: SignedRequestsGrading | None
+    ) -> None:
         self._repository = repository
         self._config = config
+        self._tuning = tuning
 
     def seen(self, keyid: str, nonce: str) -> bool:
         """True iff ``(keyid, nonce)`` is already live — i.e. this is a replay.
@@ -95,20 +105,22 @@ class PostgresReplayStore:
         :meth:`ReplayNonceRepository.claim` and the module docstring for why that is
         both necessary and safe at the pinned SDK version.
         """
-        replayed = self._repository.claim(keyid, nonce, self._claim_ttl(keyid))
+        replayed = self._repository.claim(keyid, nonce, self._claim_ttl())
         self._maybe_reap_expired()
         return replayed
 
     def remember(self, keyid: str, nonce: str, ttl_seconds: float) -> None:
-        """Extend the claim to the signature's own TTL (clamped per counterparty)."""
-        self._repository.extend(keyid, nonce, self._clamped_ttl(keyid, ttl_seconds))
+        """Extend the claim to the signature's own TTL (clamped for the test counterparty)."""
+        self._repository.extend(keyid, nonce, self._clamped_ttl(ttl_seconds))
 
     def at_capacity(self, keyid: str) -> bool:
         """True iff ``keyid`` holds at least its cap in live entries (verifier step 9a)."""
-        cap = self._config.per_keyid_cap_overrides.get(keyid, self._config.per_keyid_cap)
+        cap = self._config.per_keyid_cap
+        if self._tuning is not None and self._tuning.replay_cap is not None:
+            cap = self._tuning.replay_cap
         return self._repository.at_or_above_cap(keyid, cap)
 
-    def _claim_ttl(self, keyid: str) -> float:
+    def _claim_ttl(self) -> float:
         """Lifetime the claim writes, before ``remember()`` raises it to the signature's.
 
         The trade-off the default encodes: a LONG claim TTL covers a crash between
@@ -121,16 +133,16 @@ class PostgresReplayStore:
         RFC profile's max skew rather than at window+skew — well above the test-kit's
         ``min_replay_ttl_seconds: 10`` floor, well below a 300s window's row cost.
         """
-        return self._clamped_ttl(keyid, self._config.replay_claim_ttl_seconds)
+        return self._clamped_ttl(self._config.replay_claim_ttl_seconds)
 
-    def _clamped_ttl(self, keyid: str, ttl_seconds: float) -> float:
-        """Apply this counterparty's TTL clamp, if it has one.
+    def _clamped_ttl(self, ttl_seconds: float) -> float:
+        """Apply the test kit's TTL clamp, when this request is the test counterparty's.
 
         Both the claim and ``remember()`` clamp, because clamping only one of them
         leaves the other free to set the row's real lifetime.
         """
-        override = self._config.replay_ttl_overrides.get(keyid)
-        return ttl_seconds if override is None else min(ttl_seconds, override)
+        clamp = self._tuning.replay_ttl_seconds if self._tuning is not None else None
+        return ttl_seconds if clamp is None else min(ttl_seconds, clamp)
 
     def _maybe_reap_expired(self) -> None:
         """Probabilistically reclaim expired rows in a SEPARATE session and transaction.

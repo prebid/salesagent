@@ -70,8 +70,9 @@ import time
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Literal, NoReturn
+from typing import TYPE_CHECKING, Any, NoReturn
 
+from adcp.signing import SIG_LABEL_DEFAULT
 from adcp.signing.agent_resolver import AgentResolution, AgentResolverError, resolve_agent
 from adcp.signing.canonical import split_structured_field
 from adcp.signing.errors import (
@@ -98,7 +99,7 @@ from adcp.signing.verifier import (
     verify_request_signature,
 )
 
-from src.core.config import CounterpartyRegistryEntry, SigningSettings, get_settings
+from src.core.config import SigningSettings, get_settings
 from src.core.database.database_session import get_db_session
 from src.core.database.repositories.replay_nonce import ReplayNonceRepository
 from src.core.exceptions import adcp_error_for
@@ -107,6 +108,7 @@ from src.core.schemas import Principal
 from src.core.signing.agent_cache import AGENT_RESOLUTION_CACHE
 from src.core.signing.canonical import malformed_authority_reason, origin_of, reject_malformed_target
 from src.core.signing.capture import HttpExchange, SignatureSubject
+from src.core.signing.grading import SignedRequestsGrading
 from src.core.signing.posture import PostureBucket, RequestSigningPosture, posture_for_tenant
 from src.core.signing.replay_store import PostgresReplayStore
 from src.core.signing.revocation import checker_for
@@ -141,14 +143,6 @@ class _ResolutionFailure:
 _RESOLUTION_FAILURES: dict[str, _ResolutionFailure] = {}
 
 
-@dataclass(frozen=True)
-class _CounterpartyResolution:
-    """A resolved (or unresolved) counterparty, tagged with WHERE it came from."""
-
-    resolution: AgentResolution | None
-    source: Literal["walk", "registry"]
-
-
 class _FailedDiscoveryJwksResolver:
     """Raise the discovery failure's MAPPED code from ``__call__``, not the generic ``key_unknown``.
 
@@ -175,14 +169,16 @@ def verify_inbound_signature(
     subject: SignatureSubject,
     *,
     headers: Mapping[str, str],
-    tenant: TenantContext | None,
+    tenant: TenantContext,
     principal: Principal | None,
-) -> VerifiedSigner | None:
+    signer_by_keyid: Callable[[str], Principal | None],
+) -> Principal | None:
     """Read the signature credential this request presents, if any. THE verifier entry.
 
-    Returns the verified signer when a signature was PRESENTED and ACCEPTED, and ``None``
-    when the request presented none or when this seller's posture does not grade it. Raises
-    :class:`~src.core.exceptions.AdCPRequestSignatureError` when it refuses.
+    Returns the counterparty whose keys verified the signature when one was PRESENTED and
+    ACCEPTED, and ``None`` when the request presented none or when this seller's posture
+    does not grade it. Raises :class:`~src.core.exceptions.AdCPRequestSignatureError` when
+    it refuses.
 
     SYNCHRONOUS on purpose. ``_resolve_identity`` is synchronous and the boundary already
     runs it in a worker thread because it hits the database; the counterparty walk is blocking
@@ -198,6 +194,12 @@ def verify_inbound_signature(
     taking the signer's agent URL from a header or a body field, because that would let the
     signer choose which brand.json (and therefore which key set) it is verified against, so
     the only legitimate source is what onboarding recorded.
+
+    *signer_by_keyid* is the tenant's onboarding lookup, bound by the resolver: the
+    counterparty this tenant onboarded a keyid for (security.mdx @ v3.1.1 L1088-1090,
+    "Discovery MAY come from prior onboarding"). It runs only when no bearer resolved a
+    principal (L1216), on the keyid of the label the checklist verifies (L1028), and its
+    answer is a candidate until the signature verifies against that counterparty's keys.
     """
     config = get_settings().signing
     if not config.verifier_enabled:
@@ -209,14 +211,13 @@ def verify_inbound_signature(
     posture = posture_for_tenant(tenant)
     bucket = _bucket_for(posture, subject)
     exchange = subject.exchange
-    agent_url = principal.agent_url if principal is not None else None
 
     if exchange is None or not exchange.presents_signature():
         _refuse_unsigned_if_required(posture, subject, bucket, authenticated=principal is not None)
         record_request_unsigned(subject.operation, "absent")
         return None
 
-    if agent_url is None and principal is not None:
+    if principal is not None and principal.agent_url is None:
         # Onboarding recorded no agent URL for this counterparty, so there is no brand.json to
         # walk and therefore no key. The checklist still runs — a malformed signature must
         # still be refused (:1226) — and reaches ``request_signature_key_unknown`` on its
@@ -227,7 +228,14 @@ def verify_inbound_signature(
         )
 
     return _verify_signed(
-        posture, subject, exchange, bucket=bucket, headers=headers, agent_url=agent_url, config=config
+        posture,
+        subject,
+        exchange,
+        bucket=bucket,
+        headers=headers,
+        principal=principal,
+        signer_by_keyid=signer_by_keyid,
+        config=config,
     )
 
 
@@ -290,10 +298,19 @@ def _verify_signed(
     *,
     bucket: PostureBucket,
     headers: Mapping[str, str],
-    agent_url: str | None,
+    principal: Principal | None,
+    signer_by_keyid: Callable[[str], Principal | None],
     config: SigningSettings,
-) -> VerifiedSigner | None:
-    """At least one signature header present: run the pre-check, then the checklist."""
+) -> Principal | None:
+    """At least one signature header present: run the pre-check, then the checklist.
+
+    Returns the counterparty the signature verified against. Outside the pre-check, the
+    COUNTERPARTY is the bearer's principal when one resolved, and otherwise the one this
+    tenant onboarded the keyid of the verified label for. Everything else is read off it:
+    its ``agent_url`` for the walk, and, when it is the signed-requests test counterparty,
+    its record's accepted JWKS in place of the walk and its replay cap and TTL
+    (:mod:`src.core.signing.grading`).
+    """
     operation = subject.operation
 
     # ``bucket_for`` collapses TWO situations into ``none``: a seller declaring
@@ -332,9 +349,11 @@ def _verify_signed(
         # the headers collapse into a dict, and refusing them here also spares an unresolved
         # counterparty a three-hop outbound walk on a request that cannot be accepted.
         _strict_header_precheck(exchange.raw_headers)
-        if precheck_only:
-            counterparty = _CounterpartyResolution(None, source="registry")
-        else:
+        counterparty: Principal | None = None
+        agent_url: str | None = None
+        resolution: AgentResolution | None = None
+        tuning: SignedRequestsGrading | None = None
+        if not precheck_only:
             # The layer's target-URI gate, in FRONT of the SDK verifier: the pinned 6.6.0
             # verifier canonicalizes internally without the fixes the vendored copy carries,
             # so the layer gates the effective request URI with its own comparer semantics
@@ -346,26 +365,38 @@ def _verify_signed(
             # target-URI malformation, so hoisting it would make ``none`` refuse beyond the
             # requirement.
             reject_malformed_target(exchange.url)
-            counterparty = _resolution_for(agent_url, config, keyid=_parse_keyid(headers))
+            if principal is not None:
+                counterparty = principal
+            else:
+                keyid = _parse_keyid(headers)
+                counterparty = signer_by_keyid(keyid) if keyid else None
+            if counterparty is not None:
+                # The ONE derivation of the counterparty's agent URL: the walk keys its cache and
+                # its failure record on it, and the checklist's resolver reads that record by it.
+                agent_url = counterparty.agent_url
+                tuning = counterparty.signed_requests_grading
+            resolution = _resolution_for(agent_url, pinned=tuning, config=config)
         signer = _run_verifier(
             exchange=exchange,
             headers=headers,
             capability=posture.to_verifier_capability(),
             operation=operation,
             bucket=bucket,
-            resolution=counterparty.resolution,
+            resolution=resolution,
             agent_url=agent_url,
+            tuning=tuning,
             config=config,
             precheck_only=precheck_only,
         )
     except SignatureVerificationError as exc:
-        return _handle_rejection(exc, operation, bucket)
+        _handle_rejection(exc, operation, bucket)
+        return None
 
     record_signature_verified(operation, signer.key_id)
-    return signer
+    return counterparty
 
 
-def _handle_rejection(exc: SignatureVerificationError, operation: str, bucket: PostureBucket) -> VerifiedSigner | None:
+def _handle_rejection(exc: SignatureVerificationError, operation: str, bucket: PostureBucket) -> None:
     """The ONE owner of rejection policy: the spec's two phases, as one branch.
 
     AdCP 3.1.1 ``security.mdx`` puts header well-formedness in a PRE-CHECK above the operation
@@ -439,19 +470,17 @@ def _refuse(exc: SignatureVerificationError, operation: str, *, recorded: bool =
 WELL_KNOWN_JWKS_PATH = "/.well-known/jwks.json"
 
 
-def build_registry_resolution(entry: CounterpartyRegistryEntry) -> AgentResolution:
-    """The :class:`AgentResolution` a configured counterparty registry entry projects to.
+def build_pinned_resolution(agent_url: str, jwks: dict[str, Any]) -> AgentResolution:
+    """The :class:`AgentResolution` for keys already in hand: *jwks*, at *agent_url*.
 
-    The two subscripts cannot raise ``KeyError``:
-    :class:`~src.core.config.CounterpartyRegistryEntry` is the setting's type, so an entry
-    missing one is refused at config load, where an operator sees it.
+    The test counterparty's accepted JWKS is the one production source of such keys
+    (:mod:`src.core.signing.grading`).
 
     Both document locations are DERIVED from the agent URL rather than declared beside it.
-    That is what makes this path answer the same question as the walk: a registry entry
-    cannot name a JWKS location :func:`_jwks_is_well_known` would refuse, because it names
-    no location at all.
+    That is what makes this path answer the same question as the walk: pinned keys cannot
+    name a JWKS location :func:`_jwks_is_well_known` would refuse, because they name no
+    location at all.
     """
-    agent_url = entry["agent_url"]
     origin = origin_of(agent_url)
     jwks_uri = f"{origin}{WELL_KNOWN_JWKS_PATH}"
     return AgentResolution(
@@ -459,7 +488,7 @@ def build_registry_resolution(entry: CounterpartyRegistryEntry) -> AgentResoluti
         brand_json_url=f"{origin}/.well-known/brand.json",
         agent_entry={"type": "sales", "url": agent_url, "jwks_uri": jwks_uri},
         jwks_uri=jwks_uri,
-        jwks=entry["jwks"],
+        jwks=jwks,
         fetched_at=time.time(),
     )
 
@@ -505,12 +534,18 @@ def _jwks_is_well_known(resolution: AgentResolution) -> bool:
 
 
 def _parse_keyid(headers: Mapping[str, str]) -> str | None:
-    """The keyid named in the (unverified) ``Signature-Input`` header, or None.
+    """The keyid of the ``Signature-Input`` label the checklist verifies, or None.
 
-    Used ONLY to look up the counterparty registry fallback below — the signature must still
-    cryptographically verify against whatever key this resolves to, so reading an unverified
-    header here is not a bypass; it is exactly as safe as any other keyid-based key lookup
-    (the SDK's own checklist resolves a JWKS entry off the same unverified field).
+    That label is ``sig1`` (:data:`adcp.signing.SIG_LABEL_DEFAULT`, the value
+    :func:`_run_verifier` passes to ``VerifyOptions.label``), read through the SDK parser
+    the checklist itself uses. security.mdx @ v3.1.1 L1028: verifiers MUST process exactly
+    one label and MUST ignore any other; a label other than the verified one is covered by
+    no signature, so reading it would let an on-path party choose the counterparty.
+
+    The answer selects the bearer-less counterparty, and it is the keyid the checklist resolves at step 7, so the SDK's ``VerifiedSigner.key_id``
+    equals it by construction. It is unverified when read; the signature must still verify
+    against the keys it selects. A missing ``sig1`` or a non-string keyid answers ``None``,
+    and the checklist then refuses the request on its own merits.
     """
     raw = headers.get("signature-input")
     if not raw:
@@ -519,21 +554,27 @@ def _parse_keyid(headers: Mapping[str, str]) -> str | None:
         labels = parse_signature_input_header(raw)
     except ValueError:
         return None
-    for label in labels.values():
-        keyid = label.params.get("keyid")
-        if isinstance(keyid, str):
-            return keyid
-    return None
+    label = labels.get(SIG_LABEL_DEFAULT)
+    keyid = label.params.get("keyid") if label is not None else None
+    return keyid if isinstance(keyid, str) else None
 
 
 def _resolution_for(
-    agent_url: str | None, config: SigningSettings, *, keyid: str | None = None
-) -> _CounterpartyResolution:
-    """The counterparty's cached resolution, resolving on a cold entry, tagged by source.
+    agent_url: str | None, *, pinned: SignedRequestsGrading | None, config: SigningSettings
+) -> AgentResolution | None:
+    """The keys to verify a signature from the counterparty at *agent_url* against.
 
-    ``agent_url -> capabilities -> identity.brand_json_url -> brand.json agents[] -> jwks_uri
-    -> JWKS`` is a three-hop outbound walk, so it is done once per counterparty per TTL and
-    never per request.
+    No counterparty, or one onboarded with no ``agent_url``, has no ``agents[]`` entry and
+    gets no keys: the checklist then answers ``request_signature_key_unknown`` at step 7
+    (security.mdx @ v3.1.1 L1094).
+
+    *pinned* is the counterparty's grading record when it is the signed-requests test
+    counterparty. Its accepted JWKS is then the key source, at the counterparty's own
+    ``agent_url``.
+
+    Otherwise the walk: ``agent_url -> capabilities -> identity.brand_json_url -> brand.json
+    agents[] -> jwks_uri -> JWKS`` is a three-hop outbound walk, so it is done once per
+    counterparty per TTL and never per request (L1091-1092).
 
     A failure is not a rejection — it returns whatever is cached (possibly nothing) and lets
     the checklist decide, carrying the MAPPED discovery code alongside it in
@@ -544,30 +585,19 @@ def _resolution_for(
 
     The SSRF pin stays at the SDK default: the walk follows a URL that ultimately came from a
     counterparty document, and ``allow_private_destinations`` is a test argument.
-
-    The registry fallback: when *agent_url* is falsy (no bearer resolved a principal, or an
-    onboarded principal recorded none — exactly what a bearer-less conformance runner
-    produces), *keyid* is looked up in ``config.counterparty_registry``. This branch is the
-    ONLY place the registry is consulted. A principal that DOES carry an ``agent_url`` never
-    reaches it, even when that walk fails below and returns ``cached`` (possibly ``None``) —
-    the registry is a fallback for a walk with no INPUT, never an override for a walk that
-    FAILED, or a counterparty with a briefly unreachable brand.json would be silently
-    re-identified from config.
     """
     if not agent_url:
-        if keyid is not None:
-            entry = config.counterparty_registry.get(keyid)
-            if entry is not None:
-                return _CounterpartyResolution(build_registry_resolution(entry), source="registry")
-        return _CounterpartyResolution(None, source="registry")
+        return None
+    if pinned is not None:
+        return build_pinned_resolution(agent_url, pinned.jwks)
 
     now = time.time()
     cached = AGENT_RESOLUTION_CACHE.get(agent_url)
     if cached is not None and now - cached.fetched_at <= config.agent_resolution_ttl_seconds:
-        return _CounterpartyResolution(cached, source="walk")
+        return cached
     failure = _RESOLUTION_FAILURES.get(agent_url)
     if failure is not None and now - failure.at < config.agent_resolution_refetch_cooldown_seconds:
-        return _CounterpartyResolution(cached, source="walk")
+        return cached
 
     try:
         resolution = resolve_agent(
@@ -580,7 +610,7 @@ def _resolution_for(
         mapped = _map_agent_resolver_error(exc)
         _RESOLUTION_FAILURES[agent_url] = _ResolutionFailure(at=now, code=mapped)
         logger.warning("Could not resolve signing keys for counterparty %r (%s): %s", agent_url, exc.code, exc)
-        return _CounterpartyResolution(cached, source="walk")
+        return cached
 
     if not _jwks_is_well_known(resolution):
         # The counterparty's brand.json pointed its keys somewhere other than the one
@@ -593,11 +623,11 @@ def _resolution_for(
             resolution.jwks_uri,
             WELL_KNOWN_JWKS_PATH,
         )
-        return _CounterpartyResolution(cached, source="walk")
+        return cached
 
     AGENT_RESOLUTION_CACHE[agent_url] = resolution
     _RESOLUTION_FAILURES.pop(agent_url, None)
-    return _CounterpartyResolution(resolution, source="walk")
+    return resolution
 
 
 def _map_agent_resolver_error(exc: AgentResolverError) -> str:
@@ -682,6 +712,7 @@ def _run_verifier(
     bucket: PostureBucket,
     resolution: AgentResolution | None,
     agent_url: str | None,
+    tuning: SignedRequestsGrading | None,
     config: SigningSettings,
     precheck_only: bool,
 ) -> VerifiedSigner:
@@ -705,10 +736,14 @@ def _run_verifier(
     one decision. Step 9 runs before crypto verify because the SDK calls it that way; nothing
     here may reorder it.
     """
-    with _verifier_dependencies(resolution, agent_url=agent_url, config=config, precheck_only=precheck_only) as deps:
+    with _verifier_dependencies(
+        resolution, agent_url=agent_url, tuning=tuning, config=config, precheck_only=precheck_only
+    ) as deps:
         jwks_resolver, replay_store, revocation_checker = deps
         options = VerifyOptions(
             now=time.time(),
+            # The label :func:`_parse_keyid` reads the counterparty's keyid from, named once.
+            label=SIG_LABEL_DEFAULT,
             capability=capability,
             operation=operation,
             jwks_resolver=jwks_resolver,
@@ -730,6 +765,7 @@ def _verifier_dependencies(
     resolution: AgentResolution | None,
     *,
     agent_url: str | None,
+    tuning: SignedRequestsGrading | None,
     config: SigningSettings,
     precheck_only: bool,
 ) -> Iterator[tuple[JwksResolver, ReplayStore | None, RevocationChecker | None]]:
@@ -755,7 +791,7 @@ def _verifier_dependencies(
     with get_db_session() as session:
         yield (
             _jwks_resolver(resolution, agent_url=agent_url),
-            PostgresReplayStore(ReplayNonceRepository(session), config),
+            PostgresReplayStore(ReplayNonceRepository(session), config, tuning),
             checker_for(resolution, config),
         )
 
