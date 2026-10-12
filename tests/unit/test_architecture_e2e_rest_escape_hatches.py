@@ -480,6 +480,9 @@ EXPECTED_SINGLE_TRANSPORT_TAGS: dict[str, str] = {
     "predispatch-rest": "REST",
     "predispatch-a2a": "A2A",
     "predispatch-mcp": "MCP",
+    # local-mcp-tool-discovery.feature: tools/list is MCP's own discovery frame and exists on
+    # no other transport.
+    "mcptools": "MCP",
 }
 
 

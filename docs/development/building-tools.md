@@ -597,7 +597,14 @@ reached the SDK's nested models first and refused or coerced the payload before 
 this tree ran — so the strip was a no-op on MCP, dev rejection came from pydantic, and
 production tolerance came from a retry in a compat middleware: two programs for one policy.
 `parameters` is the DTO's own `model_json_schema()`, so the advertised shape is the model
-rather than a signature reconstructed from it. `run` reads the request headers with
+rather than a signature reconstructed from it. The server is built with
+`dereference_schemas=False`, so `tools/list` carries that schema with its `$defs` and `$ref`
+intact: FastMCP's default inlines every `$ref` on every listing, which turns a few hundred
+kilobytes per tool into megabytes and re-derives them per request, and MCP 2025-11-25 already
+makes JSON Schema 2020-12 (which defines `$defs` and `$ref`) the default dialect clients must
+support. FastMCP's default exists for MCP clients that do not resolve `$ref`; such a client is
+non-conforming under MCP 2025-11-25, and a multi-megabyte inlined schema is not usable by an LLM
+buyer either. `run` reads the request headers with
 `get_http_headers` and calls `serve`; outside an HTTP request that returns `{}`, a request
 presenting nothing, which the resolver answers `AUTH_MISSING` on a protected tool.
 

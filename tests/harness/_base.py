@@ -2135,6 +2135,23 @@ class BaseTestEnv:
                 raise WireError(envelope) from exc
             raise
 
+    def list_mcp_tools(self) -> list[Any]:
+        """The ``tools/list`` result from the in-memory FastMCP Client: the full server path,
+        middleware chain included. The listing needs no credential."""
+        import asyncio
+
+        from fastmcp import Client
+
+        from src.core.main import mcp
+
+        self._commit_factory_data()
+
+        async def _list() -> list[Any]:
+            async with Client(mcp) as client:
+                return await client.list_tools()
+
+        return asyncio.run(_list())
+
     @staticmethod
     def _mcp_tool_arguments(kwargs: dict[str, Any]) -> dict[str, Any]:
         """Flat MCP tool arguments from dispatch kwargs (``req`` unpacked).
