@@ -512,6 +512,18 @@ IMPRESSION_TRACKER_ASSET_IDS = {
 }
 
 
+def extract_html_markup(creative_data: dict[str, Any]) -> str | None:
+    """The ``content`` of the creative's ``html`` asset, or ``None`` when it has none.
+
+    AdCP 3.1.1 core/assets/html-asset.json: an html asset is discriminated by
+    ``asset_type: "html"`` and carries its markup in ``content``.
+    """
+    for asset in (creative_data.get("assets") or {}).values():
+        if isinstance(asset, dict) and asset.get("asset_type") == "html" and asset.get("content"):
+            return str(asset["content"])
+    return None
+
+
 def extract_media_url_and_dimensions(
     creative_data: dict[str, Any], format_spec: Any | None
 ) -> tuple[str | None, int | None, int | None]:

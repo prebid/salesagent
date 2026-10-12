@@ -776,6 +776,19 @@ EXPECTED_UNSUPPORTED_DECLARATIONS: frozenset[tuple[str, str, str]] = frozenset(
             "no server fault-injection surface for a genuinely untyped exception on a live "
             "remote process (same structural limitation prkv.8's own e2e-verify atom hit)",
         ),
+        # Added by #2367, for scenarios that did not exist before it, and noted against this
+        # pin's shrink-only direction of travel like the #1721 entries above.
+        # sell_through_gam makes the tenant a Google Ad Manager seller whose only stand-in
+        # is Google's SOAP client, patched in-process. A GAM tenant on the live server would
+        # call Google; realizing it there needs a production setting that points googleads at
+        # a stand-in endpoint, a setting that would exist only for tests. The scenarios grade
+        # fully on a2a/mcp/rest.
+        (
+            "tests/harness/gam.py",
+            "sell_through_gam",
+            "the live server has no stand-in Google Ad Manager network: a GAM tenant there would "
+            "call Google, so its tenants run the Mock adapter",
+        ),
     }
 )
 

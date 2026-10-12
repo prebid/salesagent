@@ -70,6 +70,7 @@ from tests.factories.mint import mint
 from tests.harness._base import IntegrationEnv
 from tests.harness._realize import e2e_unsupported, realize_e2e
 from tests.harness.egress import EgressHatchMixin
+from tests.harness.gam import GAM_CLIENT_PATCH, GamSellerMixin
 from tests.harness.media_buy_create import OMIT_ACCOUNT, OMIT_IDEMPOTENCY_KEY
 from tests.harness.transport import DeliverResult
 from tests.helpers.creative_test_helpers import creative_payload
@@ -242,11 +243,11 @@ def creative_fingerprint(creative: Any) -> tuple[str, str]:
     return (creative.status, repr(creative.data))
 
 
-class CreativeSyncEnv(EgressHatchMixin, IntegrationEnv):
+class CreativeSyncEnv(GamSellerMixin, EgressHatchMixin, IntegrationEnv):
     """Integration test environment for _sync_creatives_impl.
 
     Only mocks external services (creative agent registry, async runner,
-    notifications, audit logging). Everything else is real:
+    notifications, audit logging, Google's GAM SOAP client). Everything else is real:
     - Real get_db_session -> real DB queries
     - Real CreativeRepository -> real DB writes
     - Real validation/processing -> real business logic
@@ -273,6 +274,7 @@ class CreativeSyncEnv(EgressHatchMixin, IntegrationEnv):
         # tests/integration/test_creative_sync_transport.py TestAIReviewTrigger)
         # nest inside this one and still win.
         "ai_review_executor": "src.admin.blueprints.creatives._ai_review_executor",
+        **GAM_CLIENT_PATCH,
     }
     #: The EXTERNAL_PATCHES key above, bound to a name so the mock lookup and the base's
     #: ``patch:<key>`` cleanup label cannot drift from it: a rename that reached only one
@@ -312,6 +314,7 @@ class CreativeSyncEnv(EgressHatchMixin, IntegrationEnv):
         mock_registry.build_creative = AsyncMock(return_value={})
         mock_registry.preview_creative = AsyncMock(return_value={})
         self.mock["registry"].return_value = mock_registry
+        self._configure_gam_client()
 
         # run_async: execute the coroutine synchronously (return empty list)
         self.mock["run_async"].side_effect = lambda coro: []
@@ -503,6 +506,17 @@ class CreativeSyncEnv(EgressHatchMixin, IntegrationEnv):
                     )
                 ).all()
             )
+
+    @realize_e2e(
+        # The live server answers format lookups from the checked-in reference catalog
+        # (#2255), so there is nothing to set up there.
+        lambda self: None
+    )
+    def serve_reference_formats(self) -> None:
+        """Format lookups answer as the registry a test deployment runs: from the reference catalog."""
+        from src.core.creative_agent_registry import ReferenceFormatsRegistry
+
+        self.mock["registry"].return_value.get_format = ReferenceFormatsRegistry().get_format
 
     # --- the AI-review EFFECT oracle (GH #1972) ---
     #
