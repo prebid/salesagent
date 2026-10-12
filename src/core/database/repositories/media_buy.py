@@ -12,9 +12,10 @@ session and do not enforce tenant isolation — these are system-level operation
 from __future__ import annotations
 
 import datetime
-from collections.abc import Collection
+from collections.abc import Collection, Sequence
+from dataclasses import dataclass
 from decimal import Decimal
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload
@@ -26,6 +27,29 @@ from src.core.database.models import (
 )
 from src.core.errors.details import EntityRefDetails
 from src.core.idempotency_canonical import canonical_request_hash
+
+if TYPE_CHECKING:
+    from src.core.schemas import PackageRequest
+
+
+@dataclass(frozen=True)
+class RequestedPackage:
+    """One package of a create request, and what the seller decided for it before the row is written.
+
+    ``request`` is the buyer's package as sent; the row records it (product, budget, targeting,
+    creatives, formats). ``package_id`` is the id the seller minted for it, ``pricing_info`` the
+    pricing option the seller resolved, and ``paused`` the state the adapter reported.
+    """
+
+    package_id: str
+    request: PackageRequest
+    pricing_info: dict[str, Any] | None
+    paused: bool = False
+
+
+def stored_line_item_id(package: MediaPackage) -> str | None:
+    """The ad server line item a package row stores, None for a package not booked as one."""
+    return (package.package_config or {}).get("platform_line_item_id")
 
 
 class MediaBuyRepository:
@@ -339,7 +363,7 @@ class MediaBuyRepository:
         order_name: str | None = None,
         campaign_objective: str | None = None,
         kpi_goal: str | None = None,
-        package_id_map: dict[int, str] | None = None,
+        packages: Sequence[RequestedPackage] = (),
         by_alias: bool = False,
         created_at: datetime.datetime | None = None,
         account_id: str | None = None,
@@ -363,7 +387,10 @@ class MediaBuyRepository:
             order_name: Order name (defaults to req.po_number or "Order-{id}").
             campaign_objective: Optional campaign objective.
             kpi_goal: Optional KPI goal.
-            package_id_map: Map of package index → package_id to inject into serialized packages.
+            packages: The request's packages, in request order, each with its minted id. One
+                package row is written per entry, in the same flush as the buy, and each id is
+                injected into the stored request's package at the same position. The rows are
+                part of the create, so they do not bump the buy's revision.
             by_alias: Whether to serialize with field aliases (e.g., content_uri).
             created_at: Optional explicit created_at timestamp.
             account_id: Resolved account scope (AdCP idempotency scope is agent+account+key).
@@ -372,11 +399,9 @@ class MediaBuyRepository:
             The created MediaBuy ORM object (added to session, not committed).
         """
         raw = req.model_dump(mode="json", by_alias=by_alias)
-        if package_id_map:
-            packages = raw.get("packages", [])
-            for idx, pkg_id in package_id_map.items():
-                if idx < len(packages):
-                    packages[idx]["package_id"] = pkg_id
+        raw_packages = raw.get("packages") or []
+        for raw_package, requested in zip(raw_packages, packages, strict=False):
+            raw_package["package_id"] = requested.package_id
 
         kwargs: dict[str, Any] = {
             "media_buy_id": media_buy_id,
@@ -417,8 +442,43 @@ class MediaBuyRepository:
         media_buy = MediaBuy(**kwargs)
         self._stamp_confirmation_if_needed(media_buy, seller_committed=seller_committed)
         self._session.add(media_buy)
+        for requested in packages:
+            self._session.add(self._requested_package_row(media_buy_id, requested, currency))
         self._session.flush()
         return media_buy
+
+    @staticmethod
+    def _requested_package_row(media_buy_id: str, requested: RequestedPackage, currency: str) -> MediaPackage:
+        """The package row for one requested package: what the buyer booked, as the request carried it.
+
+        The budget is stored as ``{"total", "currency"}``, its currency the pricing option's when
+        the seller resolved one and the buy's otherwise; the ``budget`` and ``bid_price`` columns
+        carry the same values.
+        """
+        request = requested.request
+        pricing_info = requested.pricing_info
+        budget: dict[str, Any] | None = None
+        if request.budget is not None:
+            budget = {"total": float(request.budget), "currency": (pricing_info or {}).get("currency", currency)}
+        bid_price = (pricing_info or {}).get("bid_price")
+        package_config = {
+            "package_id": requested.package_id,
+            "paused": requested.paused,
+            "product_id": request.product_id,
+            "budget": budget,
+            "targeting_overlay": request.targeting_overlay,
+            "creative_ids": request.creative_ids,
+            "format_ids": request.format_ids,
+            "pricing_info": pricing_info,
+            "impressions": request.impressions,
+        }
+        return MediaPackage(
+            media_buy_id=media_buy_id,
+            package_id=requested.package_id,
+            package_config=package_config,
+            budget=Decimal(str(budget["total"])) if budget is not None else None,
+            bid_price=Decimal(str(bid_price)) if bid_price is not None else None,
+        )
 
     def create(self, media_buy: MediaBuy, *, seller_committed: bool = False) -> MediaBuy:
         """Persist a new media buy within this tenant.

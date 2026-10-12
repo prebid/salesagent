@@ -42,6 +42,8 @@ pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 #: function carries, so reading it off the persisted row can only pass if production
 #: carried it from the adapter through the merge into the write.
 PLATFORM_CONCEPT_ID = "gam-order-90210"
+#: The ad server's id for the creative it created -- never the buyer's creative_id.
+PLATFORM_CREATIVE_ID = "gam_creative_4242"
 
 
 def _seed_live_buy_with_assigned_creative():
@@ -87,6 +89,7 @@ def _adapter_reporting(creative_id: str) -> MagicMock:
     adapter.creatives_manager.add_creative_assets.return_value = [
         AssetStatus(
             creative_id=creative_id,
+            platform_creative_id=PLATFORM_CREATIVE_ID,
             status="active",
             concept_id=PLATFORM_CONCEPT_ID,
             concept_name="Q4 Brand Push",
@@ -140,7 +143,7 @@ def test_push_persists_the_adapter_enrichment(integration_db, factory_session):
         f"was lost. Persisted data: {data}"
     )
     assert data.get("concept_source") == "gam_order"
-    assert data.get("platform_creative_id") == creative_id, (
-        "platform_creative_id is what the function's own re-approval guard reads; without "
+    assert data.get("ad_server_creative_id") == PLATFORM_CREATIVE_ID, (
+        "ad_server_creative_id is what the function's own re-approval guard reads; without "
         "it a second approval pushes this creative to the ad server again"
     )

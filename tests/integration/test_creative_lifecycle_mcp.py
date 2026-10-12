@@ -915,10 +915,12 @@ class TestCreativeLifecycleMCP:
                 stmt = select(Creative).where(Creative.creative_id == creative_data["creative_id"])
                 creative = session.scalars(stmt).first()
                 if creative:
-                    # Set platform_creative_id in data JSON to skip upload
+                    # The ad server holds the creative, so it is not created again. Its asset
+                    # is still built to place it, from the dimensions on the record.
                     if not creative.data:
                         creative.data = {}
-                    creative.data["platform_creative_id"] = f"gam_creative_{idx + 1}"
+                    creative.data["ad_server_creative_id"] = f"gam_creative_{idx + 1}"
+                    creative.data["width"], creative.data["height"] = 300, 250
                     from sqlalchemy.orm import attributes
 
                     attributes.flag_modified(creative, "data")

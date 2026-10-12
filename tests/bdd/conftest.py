@@ -69,6 +69,7 @@ pytest_plugins = [
     "tests.bdd.steps.domain.uc004_delivery",
     "tests.bdd.steps.domain.uc002_create_media_buy",
     "tests.bdd.steps.domain.uc002_nfr",
+    "tests.bdd.steps.domain.gam_seller",
     "tests.bdd.steps.domain.uc003_update_media_buy",
     "tests.bdd.steps.domain.uc003_ext_error_scenarios",
     "tests.bdd.steps.domain.uc003_storyboard_generic_client",
@@ -6190,6 +6191,11 @@ ENV_ROUTES: list[EnvRoute] = [
                 # plain ValueError") had expired. Neither reason was the reason.
                 or "T-UC-002-partition-daily-spend-cap" in m
                 or "T-UC-002-boundary-daily-spend-cap" in m
+                # Every scenario of local-gam-seller.feature needs exactly this row: the
+                # create chain, and dispatch_mode="create" so the shared When dispatches the
+                # request the Givens built. The row claims that feature's tag prefix once, so
+                # a new GAM scenario joins it without editing this predicate.
+                or any(t.startswith("T-UC-002-local-gam-") for t in m)
             ),
         ),
         env_builder=_env("tests.harness.media_buy_create.MediaBuyCreateEnv"),
@@ -6296,6 +6302,11 @@ ENV_ROUTES: list[EnvRoute] = [
                 # Plus the scenarios named one by one, because the family tags do not
                 # partition along the wired boundary -- see _UC006_WIRED_SCENARIOS.
                 or bool(m & _UC006_WIRED_SCENARIOS)
+                # Every scenario of local-uc006-gam-assignment-trafficking.feature needs
+                # exactly this row: the sync chain on the tenant's own adapter. The row claims
+                # that feature's tag prefix once, so a new scenario joins it without editing
+                # this predicate.
+                or any(t.startswith("T-UC-006-local-gam-") for t in m)
             ),
         ),
         env_builder=_env("tests.harness.creative_sync.CreativeSyncEnv"),

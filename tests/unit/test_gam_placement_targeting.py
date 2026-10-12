@@ -378,7 +378,6 @@ class TestTargetingNameOnLICA:
         manager._associate_creative_with_line_items(
             gam_creative_id="999",
             asset=asset,
-            line_item_map={"TestLineItem - prod_abc": "12345"},
             lica_service=lica_service,
             placement_targeting_map=placement_targeting_map,
         )
@@ -388,7 +387,7 @@ class TestTargetingNameOnLICA:
         """The placement's targeting name rides the association."""
         asset = {
             "creative_id": "creative_1",
-            "package_assignments": [{"package_id": "pkg_prod_abc_def_1", "weight": 100}],
+            "package_assignments": [{"package_id": "pkg_abc_1", "weight": 100, "platform_line_item_id": "12345"}],
             "placement_ids": ["homepage_atf"],
         }
         placement_targeting_map = {
@@ -406,7 +405,7 @@ class TestTargetingNameOnLICA:
         """With no placement on the assignment, the association carries no targetingName."""
         asset = {
             "creative_id": "creative_1",
-            "package_assignments": [{"package_id": "pkg_prod_abc_def_1", "weight": 100}],
+            "package_assignments": [{"package_id": "pkg_abc_1", "weight": 100, "platform_line_item_id": "12345"}],
         }
 
         lica_service = self._associate(asset, None)
@@ -419,7 +418,7 @@ class TestTargetingNameOnLICA:
         """GAM allows one targetingName per association, so the first placement wins."""
         asset = {
             "creative_id": "creative_1",
-            "package_assignments": [{"package_id": "pkg_prod_abc_def_1", "weight": 100}],
+            "package_assignments": [{"package_id": "pkg_abc_1", "weight": 100, "platform_line_item_id": "12345"}],
             "placement_ids": ["homepage_atf", "sidebar"],  # Two placements
         }
         placement_targeting_map = {
@@ -447,45 +446,3 @@ class TestPlacementTargetingMapFlow:
         sig = inspect.signature(GAMCreativesManager.add_creative_assets)
         params = list(sig.parameters.keys())
         assert "placement_targeting_map" in params
-
-
-class TestExtractPackageInfo:
-    """Test _extract_package_info helper function."""
-
-    def test_extract_package_info_legacy_format(self):
-        """Test extraction from legacy string format."""
-        from src.adapters.gam.managers.creatives import _extract_package_info
-
-        result = _extract_package_info(["pkg_1", "pkg_2"])
-        assert result == [("pkg_1", 100), ("pkg_2", 100)]
-
-    def test_extract_package_info_new_format(self):
-        """Test extraction from new dict format with weight."""
-        from src.adapters.gam.managers.creatives import _extract_package_info
-
-        result = _extract_package_info(
-            [
-                {"package_id": "pkg_1", "weight": 50},
-                {"package_id": "pkg_2", "weight": 150},
-            ]
-        )
-        assert result == [("pkg_1", 50), ("pkg_2", 150)]
-
-    def test_extract_package_info_mixed_format(self):
-        """Test extraction from mixed formats."""
-        from src.adapters.gam.managers.creatives import _extract_package_info
-
-        result = _extract_package_info(
-            [
-                "pkg_1",  # Legacy
-                {"package_id": "pkg_2", "weight": 75},  # New format
-            ]
-        )
-        assert result == [("pkg_1", 100), ("pkg_2", 75)]
-
-    def test_extract_package_info_default_weight(self):
-        """Test default weight when not provided in dict."""
-        from src.adapters.gam.managers.creatives import _extract_package_info
-
-        result = _extract_package_info([{"package_id": "pkg_1"}])
-        assert result == [("pkg_1", 100)]
