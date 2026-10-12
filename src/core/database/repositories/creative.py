@@ -34,6 +34,11 @@ logger = logging.getLogger(__name__)
 #: enums/creative-status.json is where the value lives.
 ARCHIVED_STATUS = CreativeStatus.archived.value
 
+#: Creative statuses a buy can serve. ``approved`` is read off the pinned enum
+#: (enums/creative-status.json: "eligible for delivery"). ``active`` is not a pinned creative
+#: status and no writer in src/ sets it; it is kept so the approval gate's answer is unchanged.
+CLEARED_TO_SERVE = frozenset({CreativeStatus.approved.value, "active"})
+
 
 class CreativeListResult(NamedTuple):
     """Result of a paginated creative listing query."""
@@ -115,6 +120,18 @@ class CreativeRepository(SessionEffectsMixin):
                 )
             ).all()
         )
+
+    def uncleared_ids(self, creative_ids: list[str], principal_id: str) -> list[str]:
+        """Of *creative_ids*, the ones with no creative of *principal_id* cleared to serve.
+
+        The principal-scoped, by-id form of the approval gate's question, for a buy whose
+        assignments are about to be written. ``get_by_ids`` matches the full key
+        ``(creative_id, tenant_id, principal_id)``, so another principal's creative with the
+        same id is never read. An id with no row is not cleared. Each id is reported once,
+        in the order given.
+        """
+        cleared = {c.creative_id for c in self.get_by_ids(creative_ids, principal_id) if c.status in CLEARED_TO_SERVE}
+        return [cid for cid in dict.fromkeys(creative_ids) if cid not in cleared]
 
     # ------------------------------------------------------------------
     # List queries
@@ -518,9 +535,7 @@ class CreativeAssignmentRepository:
         alone, and that column is buyer-supplied, so another tenant's row with a
         colliding id was read for its status and blocked the approval.
 
-        ``approved`` and ``active`` both count as cleared: ``active`` is what a
-        creative already serving reads as, and refusing it would hold a buy whose
-        creatives are demonstrably live.
+        Cleared means a status in ``CLEARED_TO_SERVE``.
 
         An empty assignment list yields an empty result — a buy with no creatives
         is not waiting on any, which is what UC-002-ALT-MANUAL-APPROVAL-REQUIRED-08
@@ -532,7 +547,7 @@ class CreativeAssignmentRepository:
         creatives = CreativeRepository(self._session, self._tenant_id).admin_get_by_ids(
             [a.creative_id for a in assignments]
         )
-        return [c.creative_id for c in creatives if c.status not in ("approved", "active")]
+        return [c.creative_id for c in creatives if c.status not in CLEARED_TO_SERVE]
 
     def get_by_package(self, package_id: str) -> list[CreativeAssignment]:
         """Get all assignments for a package within the tenant."""

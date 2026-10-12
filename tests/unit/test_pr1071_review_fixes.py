@@ -18,8 +18,9 @@ from src.core.schemas import (
     GetProductsRequest,
     ReportingPeriod,
 )
-from tests.factories.media_buy import pricing_options_for, request_package
+from tests.factories.media_buy import request_package
 from tests.factories.principal import PrincipalFactory
+from tests.harness._mock_uow import delivery_mock_uow
 
 
 class TestDeliveryLoopErrorHandling:
@@ -88,23 +89,12 @@ class TestDeliveryLoopErrorHandling:
             currency="USD",
         )
 
-        mock_repo = MagicMock()
-        mock_repo.get_packages.return_value = []
-        mock_repo.get_packages_for_ids.return_value = {}
-
-        mock_uow = MagicMock()
-        mock_uow.__enter__ = MagicMock(return_value=mock_uow)
-        mock_uow.__exit__ = MagicMock(return_value=False)
-        mock_uow.media_buys = mock_repo
+        mock_uow = delivery_mock_uow(target_buys)
 
         with (
             patch("src.core.tools.media_buy_delivery.get_adapter", return_value=adapter),
             patch("src.core.tools.media_buy_delivery.MediaBuyUoW", return_value=mock_uow),
             patch("src.core.tools.media_buy_delivery._get_target_media_buys", return_value=target_buys),
-            patch(
-                "src.core.tools.media_buy_delivery._get_pricing_options",
-                side_effect=lambda option_ids, **_: pricing_options_for(option_ids),
-            ),
         ):
             response = _get_media_buy_delivery_impl(req, identity)
 
@@ -112,6 +102,7 @@ class TestDeliveryLoopErrorHandling:
         msg = "A single media buy error killed the entire response — the loop must catch exceptions and continue"
         assert len(response.media_buy_deliveries) >= 1, msg
         assert response.media_buy_deliveries[0].media_buy_id == "mb_good"
+        assert [pkg.package_id for pkg in response.media_buy_deliveries[0].by_package] == ["pkg1"]
 
 
 class TestBrandExtractionFromPydanticModel:

@@ -37,6 +37,7 @@ step layer keeps a thin ctx-reading wrapper over these functions.
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -58,6 +59,7 @@ def build_request_packages(
     packages: list[tuple[str, str]],
     *,
     budget: float = 5000.0,
+    terms: Sequence[Mapping[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """The ``packages`` array of a create request, one entry per ``(product_id, option_id)``.
 
@@ -78,14 +80,19 @@ def build_request_packages(
     (an ORM-fixture helper for that PERSISTED shape) does inject it and this does not. The
     two are different shapes with the same field names, and conflating them is how a
     ``MediaPackage`` row and its request entry end up with identities that join to nothing.
+
+    ``terms``, when given, holds one mapping per package of the fields the buyer states
+    for it (``budget``, ``bid_price``), applied over the scaled default budget.
     """
     return [
         PackageRequestFactory.payload(
             product_id=product_id,
-            budget=budget / (index + 1),
             pricing_option_id=option_id,
+            **{"budget": budget / (index + 1), **package_terms},
         )
-        for index, (product_id, option_id) in enumerate(packages)
+        for index, ((product_id, option_id), package_terms) in enumerate(
+            zip(packages, terms if terms is not None else [{}] * len(packages), strict=True)
+        )
     ]
 
 

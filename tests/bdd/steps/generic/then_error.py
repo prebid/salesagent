@@ -1628,6 +1628,12 @@ def then_sole_entry_error_code(ctx: dict, collection: str, code: str) -> None:
     assert code in codes, f"Expected error code {code!r} on the sole {collection} entry, got {codes}"
 
 
+# A collection whose entries are not named by its singular. A delivery entry names the buy
+# it reports on (get-media-buy-delivery-response.json: media_buy_deliveries[].media_buy_id,
+# required).
+_ENTRY_ID_KEYS = {"media_buy_deliveries": "media_buy_id"}
+
+
 def _entry_index_for(ctx: dict, collection: str, entry_id: str) -> int:
     """Index of the *collection* entry whose id field is *entry_id*, located on the wire.
 
@@ -1636,9 +1642,9 @@ def _entry_index_for(ctx: dict, collection: str, entry_id: str) -> int:
     assignment reference has two rows, and grading "row 0" would grade the anchor.
     The id key is the collection's singular -- ``creatives`` -> ``creative_id``,
     ``accounts`` -> ``account_id`` -- which is how every per-item entry the pinned
-    response schemas define names itself.
+    response schemas define names itself, unless ``_ENTRY_ID_KEYS`` names it.
     """
-    id_key = f"{collection[:-1]}_id"
+    id_key = _ENTRY_ID_KEYS.get(collection, f"{collection[:-1]}_id")
     entries = wire_field(ctx, collection)
     matches = [i for i, entry in enumerate(entries) if entry.get(id_key) == entry_id]
     assert len(matches) == 1, (

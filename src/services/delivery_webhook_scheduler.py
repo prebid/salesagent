@@ -248,6 +248,22 @@ class DeliveryWebhookScheduler:
                 )
                 return False
 
+            # reporting_delayed + expected_availability is the schema's pair for "data not yet
+            # available, expected at T". The circuit-breaker reporting_delayed carries no
+            # availability and is not held.
+            delayed = [
+                d.expected_availability
+                for d in delivery_response.media_buy_deliveries
+                if d.status == "reporting_delayed" and d.expected_availability is not None
+            ]
+            if delayed:
+                logger.info(
+                    "Holding daily delivery webhook for media buy %s: the ad server expects the period complete at %s",
+                    media_buy.media_buy_id,
+                    max(delayed),
+                )
+                return False
+
             # Get sequence number for this webhook (get max sequence + 1)
             sequence_number = 1
             try:

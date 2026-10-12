@@ -50,7 +50,7 @@ from src.adapters.gam.managers.orders import (
     NON_GUARANTEED_LINE_ITEM_TYPES,
 )
 from src.adapters.gam.pricing_compatibility import PricingCompatibility
-from src.adapters.gam_data_freshness import validate_and_log_freshness
+from src.adapters.gam_data_freshness import GAMDataFreshnessValidator
 from src.core.audit_logger import AuditLogger
 from src.core.errors.codes import AppErrorCode
 from src.core.errors.details import (
@@ -64,7 +64,6 @@ from src.core.errors.details import (
 )
 from src.core.exceptions import (
     AdCPActivationWorkflowError,
-    AdCPAdapterError,
     AdCPAuthorizationError,
     AdCPBudgetExceededError,
     AdCPBulkUpdateError,
@@ -939,11 +938,9 @@ class GoogleAdManager(AdServerAdapter):
         Returns:
             AdapterGetMediaBuyDeliveryResponse with real metrics from GAM
         """
-        from sqlalchemy import select
-
         from src.adapters.gam_reporting_service import GAMReportingService
         from src.core.database.database_session import get_db_session
-        from src.core.database.models import MediaBuy
+        from src.core.database.repositories.media_buy import MediaBuyRepository
         from src.core.schemas import AdapterPackageDelivery, DeliveryTotals
 
         # Input validation
@@ -972,13 +969,12 @@ class GoogleAdManager(AdServerAdapter):
                 currency="USD",
             )
 
-        # Get media buy from database to find GAM order/line item IDs
+        # The buy's packages are its persisted rows, each carrying the line item create
+        # booked for it. Read through the repository, as update_media_buy does; nothing
+        # here reads a row after the session closes.
         with get_db_session() as session:
-            stmt = select(MediaBuy).where(
-                MediaBuy.media_buy_id == media_buy_id,
-                MediaBuy.tenant_id == self.tenant_id,
-            )
-            media_buy = session.scalars(stmt).first()
+            repo = MediaBuyRepository(session, self.tenant_id)
+            media_buy = repo.get_by_id(media_buy_id)
 
             if not media_buy:
                 logger.error(f"Media buy {media_buy_id} not found in database")
@@ -997,9 +993,12 @@ class GoogleAdManager(AdServerAdapter):
                     currency="USD",
                 )
 
-            # Extract package information from raw_request
-            raw_request = media_buy.raw_request or {}
-            packages_data = raw_request.get("packages", [])
+            currency = str(media_buy.currency or "USD")
+            package_by_line_item = {
+                str(package.package_config["platform_line_item_id"]): package.package_id
+                for package in repo.get_packages(media_buy_id)
+                if package.package_config.get("platform_line_item_id")
+            }
 
         # Initialize GAM reporting service
         reporting_service = GAMReportingService(self.client)
@@ -1025,15 +1024,9 @@ class GoogleAdManager(AdServerAdapter):
             requested_timezone="America/New_York",
         )
 
-        # Validate data freshness
-        # The adapter decides whether to return data or raise error if data is stale
-        # Target date is the end of the reporting period
-        target_date = date_range.end
-
-        is_fresh = validate_and_log_freshness(reporting_data, media_buy_id, target_date=target_date)
-
-        if not is_fresh:
-            raise AdCPAdapterError(details=AdapterFailureDetails(media_buy_id=media_buy_id))
+        # The figures GAM has reported so far are the answer (get_media_buy_delivery.mdx: "zero or
+        # partial metrics"). When GAM has not finished the period, say when to expect it complete.
+        _, expected_availability = GAMDataFreshnessValidator.should_retry_later(reporting_data, date_range.end)
 
         # Aggregate totals across all packages
         total_impressions = reporting_data.metrics.get("total_impressions", 0)
@@ -1078,39 +1071,24 @@ class GoogleAdManager(AdServerAdapter):
                 }
             )
 
-        # Build package-level delivery data if we have line item IDs
-        by_package = []
-        if packages_data:
-            # Group reporting data by line item
-            line_item_metrics = {}
-            for row in reporting_data.data:
-                line_item_id = row.get("line_item_id", "")
-                if line_item_id:
-                    if line_item_id not in line_item_metrics:
-                        line_item_metrics[line_item_id] = {
-                            "impressions": 0,
-                            "clicks": 0,
-                            "spend": 0.0,
-                        }
-                    line_item_metrics[line_item_id]["impressions"] += row.get("impressions", 0)
-                    line_item_metrics[line_item_id]["clicks"] += row.get("clicks", 0)
-                    line_item_metrics[line_item_id]["spend"] += row.get("spend", 0.0)
-
-            # Match packages to line items and build delivery data
-            for i, pkg_data in enumerate(packages_data):
-                package_id = pkg_data.get("package_id", f"pkg_{i}")
-                # Try to find platform_line_item_id from the package data
-                platform_line_item_id = pkg_data.get("platform_line_item_id")
-
-                if platform_line_item_id and platform_line_item_id in line_item_metrics:
-                    metrics = line_item_metrics[platform_line_item_id]
-                    by_package.append(
-                        AdapterPackageDelivery(
-                            package_id=package_id,
-                            impressions=int(metrics["impressions"]),
-                            spend=metrics["spend"],
-                        )
-                    )
+        # A package's delivery is its line item's. GAM's report covers every line item of
+        # the buy, so a line item with no rows has delivered nothing, and is reported at zero.
+        line_item_metrics: dict[str, dict[str, Any]] = {}
+        for row in reporting_data.data:
+            line_item_id = str(row.get("line_item_id") or "")
+            if line_item_id:
+                metrics = line_item_metrics.setdefault(line_item_id, {"impressions": 0, "spend": 0.0})
+                metrics["impressions"] += row.get("impressions", 0)
+                metrics["spend"] += row.get("spend", 0.0)
+        zero = {"impressions": 0, "spend": 0.0}
+        by_package = [
+            AdapterPackageDelivery(
+                package_id=package_id,
+                impressions=int(line_item_metrics.get(line_item_id, zero)["impressions"]),
+                spend=line_item_metrics.get(line_item_id, zero)["spend"],
+            )
+            for line_item_id, package_id in package_by_line_item.items()
+        ]
 
         return AdapterGetMediaBuyDeliveryResponse(
             media_buy_id=media_buy_id,
@@ -1124,8 +1102,9 @@ class GoogleAdManager(AdServerAdapter):
                 completed_views=None,
                 completion_rate=None,
             ),
-            currency=str(media_buy.currency or "USD"),
+            currency=currency,
             daily_breakdown=daily_breakdown if daily_breakdown else None,
+            expected_availability=expected_availability,
         )
 
     def get_packages_snapshot(

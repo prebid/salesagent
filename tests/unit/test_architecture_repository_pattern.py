@@ -159,14 +159,6 @@ INTEGRATION_SESSION_ADD_ALLOWLIST = {
     ("tests/integration/test_delivery_simulator_restart.py", "test_restart_finds_media_buys_with_principal_webhook"),
     ("tests/integration/test_delivery_simulator_restart.py", "test_restart_ignores_media_buys_without_webhook"),
     ("tests/integration/test_delivery_simulator_restart.py", "test_restart_join_cardinality"),
-    # tests/integration/test_delivery_poll_behavioral.py
-    ("tests/integration/test_delivery_poll_behavioral.py", "test_get_pricing_options_uses_string_id_not_integer_pk"),
-    (
-        "tests/integration/test_delivery_poll_behavioral.py",
-        "test_non_numeric_pricing_option_id_is_not_silently_discarded",
-    ),
-    ("tests/integration/test_delivery_poll_behavioral.py", "test_pricing_options_keyed_by_string_id_not_integer_pk"),
-    ("tests/integration/test_delivery_poll_behavioral.py", "test_integer_pk_lookup_returns_none"),
     # tests/integration/test_delivery_repository.py
     ("tests/integration/test_delivery_repository.py", "tenant_a"),
     ("tests/integration/test_delivery_repository.py", "tenant_b"),
@@ -822,13 +814,6 @@ GET_DB_SESSION_IN_TESTS_ALLOWLIST: set[tuple[str, str]] = {
     ("tests/integration/test_database_health_integration.py", "test_health_check_table_existence_validation"),
     ("tests/integration/test_database_health_integration.py", "test_health_check_with_real_schema_validation"),
     ("tests/integration/test_database_integration.py", "test_settings_queries"),
-    ("tests/integration/test_delivery_poll_behavioral.py", "test_get_pricing_options_uses_string_id_not_integer_pk"),
-    ("tests/integration/test_delivery_poll_behavioral.py", "test_integer_pk_lookup_returns_none"),
-    (
-        "tests/integration/test_delivery_poll_behavioral.py",
-        "test_non_numeric_pricing_option_id_is_not_silently_discarded",
-    ),
-    ("tests/integration/test_delivery_poll_behavioral.py", "test_pricing_options_keyed_by_string_id_not_integer_pk"),
     ("tests/integration/test_delivery_repository.py", "_cleanup_tenant"),
     ("tests/integration/test_delivery_repository.py", "media_buy_a"),
     ("tests/integration/test_delivery_repository.py", "media_buy_b"),
@@ -874,7 +859,6 @@ GET_DB_SESSION_IN_TESTS_ALLOWLIST: set[tuple[str, str]] = {
     ("tests/integration/test_delivery_v3.py", "test_nested_serialization_roundtrip"),
     ("tests/integration/test_delivery_v3.py", "test_ownership_isolation"),
     ("tests/integration/test_delivery_v3.py", "test_ownership_no_info_leakage"),
-    ("tests/integration/test_delivery_v3.py", "test_pricing_option_roundtrip"),
     ("tests/integration/test_delivery_v3.py", "test_single_buy_delivery_via_media_buy_id"),
     ("tests/integration/test_delivery_v3.py", "test_status_filter_all_via_explicit_ids"),
     ("tests/integration/test_delivery_v3.py", "test_status_filter_no_match_returns_empty"),

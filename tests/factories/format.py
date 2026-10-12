@@ -210,11 +210,29 @@ def _category_of(fmt: Format) -> str | None:
     return None if value is None else str(getattr(value, "value", value))
 
 
+def reference_format(format_id: str) -> Format | None:
+    """The reference catalog's definition of the format named *format_id*, or None when it has none.
+
+    The catalog is the fixture the live server resolves under ``ADCP_TESTING``, so an env
+    that answers format lookups from it resolves the same formats in-process as e2e does,
+    and a synthetic id stays unresolvable on both.
+    """
+    return next(iter(pick_reference_formats(lambda f: f.format_id.id == format_id, min_count=0)), None)
+
+
+def asset_ids_of_type(fmt: Format, asset_type: str) -> list[str]:
+    """The ids of *fmt*'s individual assets of *asset_type* (``"image"``, ``"video"``, ...), in order."""
+    from adcp.utils import get_individual_assets
+
+    return [
+        asset.asset_id
+        for asset in get_individual_assets(fmt)
+        if str(getattr(asset.asset_type, "value", asset.asset_type)) == asset_type
+    ]
+
+
 def _uses_asset_type(fmt: Format, asset_type: str) -> bool:
-    return any(
-        str(getattr(getattr(a, "asset_type", None), "value", getattr(a, "asset_type", None))) == asset_type
-        for a in fmt.assets or []
-    )
+    return bool(asset_ids_of_type(fmt, asset_type))
 
 
 def pick_reference_format(category: str, *, without_asset_type: str | None = None) -> Format:

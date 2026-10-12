@@ -13,7 +13,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload, selectinload
 
-from src.core.database.models import PricingOption, Product
+from src.core.database.models import Product
 
 logger = logging.getLogger(__name__)
 
@@ -157,17 +157,3 @@ class ProductRepository:
             setattr(product, key, value)
         self._session.flush()
         return product
-
-    # ------------------------------------------------------------------
-    # PricingOption queries
-    # ------------------------------------------------------------------
-
-    def get_all_pricing_options(self) -> list[PricingOption]:
-        """Get all pricing options for the tenant."""
-        return list(
-            self._session.scalars(
-                select(PricingOption).where(
-                    PricingOption.tenant_id == self._tenant_id,
-                )
-            ).all()
-        )

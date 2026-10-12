@@ -75,7 +75,6 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/adapters/gam_reporting_api.py", "get_principal_reporting"),
     ("src/adapters/gam_reporting_api.py", "get_principal_summary"),
     ("src/adapters/google_ad_manager.py", "create_media_buy"),
-    ("src/adapters/google_ad_manager.py", "get_media_buy_delivery"),
     ("src/adapters/google_ad_manager.py", "get_packages_snapshot"),
     ("src/adapters/mock_ad_server.py", "_create_media_buy_immediate"),
     ("src/adapters/mock_ad_server.py", "mock_product_config"),

@@ -12,7 +12,7 @@ import logging
 import secrets
 import time
 import uuid
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Literal, NoReturn, TypedDict, cast
@@ -34,7 +34,7 @@ from pydantic import BaseModel, ValidationError
 from rich.console import Console
 
 from src.core.database.integrity import is_constraint_violation
-from src.core.database.repositories.creative import CreativeRepository
+from src.core.database.repositories.creative import CLEARED_TO_SERVE, CreativeRepository
 from src.core.exceptions import (
     AdCPAdapterError,
     AdCPAuthorizationError,
@@ -165,6 +165,13 @@ def _get_creative_ids(package: AdcpPackageRequest | PackageRequest | Package | M
         List of creative IDs if present, None otherwise
     """
     return getattr(package, "creative_ids", None)
+
+
+def _named_creative_ids(
+    packages: Iterable[AdcpPackageRequest | PackageRequest | Package | MediaPackage],
+) -> list[str]:
+    """Every creative id the packages name, in request order (duplicates kept)."""
+    return [cid for package in packages for cid in _get_creative_ids(package) or []]
 
 
 def _merge_creative_enrichment(existing_data: dict | None, status: AssetStatus) -> dict:
@@ -335,12 +342,7 @@ def _validate_creatives_before_adapter_call(
 
     from src.core.format_resolver import is_dialled_agent_url
 
-    # Collect all creative IDs from all packages
-    all_creative_ids = set()
-    for package in packages:
-        pkg_creative_ids = _get_creative_ids(package)
-        if pkg_creative_ids:
-            all_creative_ids.update(pkg_creative_ids)
+    all_creative_ids = set(_named_creative_ids(packages))
 
     if not all_creative_ids:
         # No creatives to validate
@@ -1483,7 +1485,7 @@ def push_creative_to_existing_buy(
             creative = uow.creatives.admin_get_by_id(creative_id)
             if not creative:
                 return False, f"Creative {creative_id} not found"
-            if creative.status not in {"approved", "active"}:
+            if creative.status not in CLEARED_TO_SERVE:
                 return False, f"Creative {creative_id} is not approved (status={creative.status})"
 
             if (creative.data or {}).get("platform_creative_id"):
@@ -2945,11 +2947,7 @@ async def _create_media_buy_impl(
                     assert assign_uow.assignments is not None
                     session = assign_uow.session
                     # Batch load all creatives upfront
-                    all_creative_ids = []
-                    for package in req.packages:
-                        pkg_cids = _get_creative_ids(package)
-                        if pkg_cids:
-                            all_creative_ids.extend(pkg_cids)
+                    all_creative_ids = _named_creative_ids(req.packages)
 
                     creatives_map: dict[str, Any] = {}
                     if all_creative_ids:
@@ -3427,41 +3425,36 @@ async def _create_media_buy_impl(
         for i, pkg_item in enumerate(response.packages):
             logger.info(f"[DEBUG] create_media_buy: Response package {i} = {pkg_item}")
 
-        # Determine initial status using centralized logic
-        # Check if creatives are assigned and approved
-        has_creatives = False
-        creatives_approved = True  # Assume approved if any exist
-
-        # Check packages for creative_ids
-        if req.packages:
-            for pkg in req.packages:
-                if _get_creative_ids(pkg):
-                    has_creatives = True
-                    # For now, assume creatives in request are not yet approved
-                    # They need to go through sync_creatives approval flow
-                    creatives_approved = False
-                    break
-
-        # Use centralized status determination
+        request_packages = req.packages or []
+        named_creative_ids = _named_creative_ids(request_packages)
+        # lifecycle.mdx: "Delivery cannot begin until the buyer supplies at least one creative
+        # per package", so a buy has its creatives only when every package names one.
+        has_creatives = bool(request_packages) and all(_get_creative_ids(package) for package in request_packages)
         now = datetime.now(UTC)
-        media_buy_status = _determine_media_buy_status(
-            manual_approval_required=False,  # This path only runs when approval NOT required
-            has_creatives=has_creatives,
-            creatives_approved=creatives_approved,
-            start_time=start_time,
-            end_time=end_time,
-            now=now,
-        )
-        logger.info(
-            f"[STATUS] Media buy {response.media_buy_id}: manual_approval=False, "
-            f"has_creatives={has_creatives}, creatives_approved={creatives_approved} → status={media_buy_status}"
-        )
 
         # Store the media buy in database (context_id is NULL for synchronous operations)
         # Repository handles raw_request serialization at the DB boundary
         try:
             with MediaBuyUoW(tenant.tenant_id) as create_uow:
                 assert create_uow.media_buys is not None
+                assert create_uow.creatives is not None
+                # The creatives the request names are the ones the assignment step below
+                # writes (unknown ids were refused before the adapter ran), so their stored
+                # state decides the status, through the statuses the approval gate counts as
+                # cleared. A failure in that step leaves this row committed; that is #2393.
+                creatives_approved = not create_uow.creatives.uncleared_ids(named_creative_ids, principal_id)
+                media_buy_status = _determine_media_buy_status(
+                    manual_approval_required=False,  # This path only runs when approval NOT required
+                    has_creatives=has_creatives,
+                    creatives_approved=creatives_approved,
+                    start_time=start_time,
+                    end_time=end_time,
+                    now=now,
+                )
+                logger.info(
+                    f"[STATUS] Media buy {response.media_buy_id}: manual_approval=False, "
+                    f"has_creatives={has_creatives}, creatives_approved={creatives_approved} → status={media_buy_status}"
+                )
                 created_row = create_uow.media_buys.create_from_request(
                     # The adapter has already returned by this point (`response` is
                     # its reply), so the seller HAS committed -- including when the
@@ -3605,11 +3598,7 @@ async def _create_media_buy_impl(
                 assert creative_uow.assignments is not None
                 session = creative_uow.session
                 # Batch load all creatives upfront to avoid N+1 queries
-                all_creative_ids = []
-                for package in req.packages:
-                    pkg_cids = _get_creative_ids(package)
-                    if pkg_cids:
-                        all_creative_ids.extend(pkg_cids)
+                all_creative_ids = _named_creative_ids(req.packages)
 
                 creatives_by_id: dict[str, Any] = {}
                 if all_creative_ids:

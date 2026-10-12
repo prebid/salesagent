@@ -183,6 +183,7 @@ def make_format_spec(
 def make_registry_mock(
     formats: list | None = None,
     *,
+    base=None,
     list_all_formats=None,
     get_format=None,
     preview_creative=None,
@@ -207,11 +208,19 @@ def make_registry_mock(
     Args:
         formats: convenience for the common case -- ``list_all_formats`` returns this
             and ``get_format`` returns its first entry (or None).
+        base: a real registry to stand in front of. Every lookup not passed in
+            (``list_all_formats``, ``get_format``, ``_get_tenant_agents``, ...) is the
+            base's own, and ``preview_creative`` / ``build_creative`` keep the inert
+            defaults below. For an env whose format resolution must stay the
+            deployment's while no creative agent is dialed for a preview or a build.
+            Refused together with ``formats``: two answers for the same lookups.
         list_all_formats: an async callable, when the site needs its own.
         get_format: an async callable, when the site needs its own.
         preview_creative: an async callable, when the site asserts on the preview.
         build_creative: an async callable, when the site asserts on the generative build.
     """
+    if base is not None and formats is not None:
+        raise ValueError("make_registry_mock takes base= or formats=, not both: they answer the same lookups")
     listing = list(formats or [])
 
     # The defaults swallow keyword arguments because production's do too:
@@ -226,9 +235,16 @@ def make_registry_mock(
     async def _default_get_format(agent_url, format_id, **_kwargs):
         return listing[0] if listing else None
 
-    registry = Mock()
-    registry.list_all_formats = list_all_formats or _default_list_all_formats
-    registry.get_format = get_format or _default_get_format
+    if base is not None:
+        registry = Mock(wraps=base)
+        if list_all_formats is not None:
+            registry.list_all_formats = list_all_formats
+        if get_format is not None:
+            registry.get_format = get_format
+    else:
+        registry = Mock()
+        registry.list_all_formats = list_all_formats or _default_list_all_formats
+        registry.get_format = get_format or _default_get_format
     # Both defaults are the INERT no-result case _processing already guards for
     # (``if build_result:`` / ``if preview_result and preview_result.get("previews")``),
     # so a site that does not care about these branches sees no extra data written. The

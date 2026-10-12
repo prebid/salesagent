@@ -71,6 +71,9 @@ EXPECTED_WIRED_ROUTES: frozenset[str] = frozenset(
         # notion of a collection -- so an element echo is carried by whoever builds the
         # element. create_media_buy is the cheapest request-element -> response-element pair.
         "ctxecho-packages",
+        # A real create, then a read of that buy on the same env: the initial status
+        # (get_media_buys) and a GAM buy's packages (get_media_buy_delivery).
+        "local-buy-readback",
         "predispatch",
         # The two tenant-identification routes this deployment answers on (Host and
         # x-adcp-tenant), graded through the public capabilities tool. Pinned in the

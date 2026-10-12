@@ -990,7 +990,7 @@ class MockAdServer(AdServerAdapter):
             self.log("   Manual completion required - use complete_task tool")
 
         # Return pending status for all assets
-        return [AssetStatus(creative_id=asset["id"], status="pending") for asset in assets]
+        return [AssetStatus(creative_id=asset["creative_id"], status="pending") for asset in assets]
 
     def associate_creatives(self, line_item_ids: list[str], platform_creative_ids: list[str]) -> list[dict[str, Any]]:
         """Associate already-uploaded creatives with line items (mock simulation)."""
@@ -1043,7 +1043,7 @@ class MockAdServer(AdServerAdapter):
                 approved_assets.append(asset)
             else:
                 rejected_assets.append((asset, rejection_reason))
-                asset_id = asset.get("id", "unknown")
+                asset_id = asset.get("creative_id", "unknown")
                 self.log(f"❌ Creative {asset_id} rejected: {rejection_reason}")
 
         if rejected_assets and not approved_assets:
@@ -1057,7 +1057,7 @@ class MockAdServer(AdServerAdapter):
         elif rejected_assets:
             # Some rejected - log warnings but continue with approved ones
             for asset, reason in rejected_assets:
-                self.log(f"⚠️ Creative {asset['id']} rejected: {reason}")
+                self.log(f"⚠️ Creative {asset['creative_id']} rejected: {reason}")
 
         # Continue with immediate processing for approved assets
         self.log(f"✅ SYNC delay completed, proceeding with {len(approved_assets)} approved creatives")
@@ -1104,7 +1104,7 @@ class MockAdServer(AdServerAdapter):
                 if scenario.should_reject:
                     reason = scenario.rejection_reason or "Test rejection"
                     self.log(f"   ❌ Rejecting creative '{creative_name}' - {reason}")
-                    results.append(AssetStatus(creative_id=asset["id"], status="rejected"))
+                    results.append(AssetStatus(creative_id=asset["creative_id"], status="rejected"))
                     continue
 
                 # Handle creative-specific actions
@@ -1115,15 +1115,15 @@ class MockAdServer(AdServerAdapter):
 
                     if action_type == "ask_for_field":
                         self.log(f"   ❓ Asking for field in creative '{creative_name}' - {reason}")
-                        results.append(AssetStatus(creative_id=asset["id"], status="pending"))
+                        results.append(AssetStatus(creative_id=asset["creative_id"], status="pending"))
                         continue
                     elif action_type == "approve":
                         self.log(f"   ✅ Approving creative '{creative_name}'")
-                        results.append(AssetStatus(creative_id=asset["id"], status="approved"))
+                        results.append(AssetStatus(creative_id=asset["creative_id"], status="approved"))
                         continue
 
             # Default behavior - auto-approve
-            results.append(AssetStatus(creative_id=asset["id"], status="approved"))
+            results.append(AssetStatus(creative_id=asset["creative_id"], status="approved"))
 
         return results
 
