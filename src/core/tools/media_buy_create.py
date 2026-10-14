@@ -2600,13 +2600,13 @@ async def _create_media_buy_impl(
 
         # Validate targeting doesn't use managed-only dimensions (targeting_overlay is at package level per AdCP spec)
         if req.packages:
-            for pkg in req.packages:
+            for pkg_index, pkg in enumerate(req.packages):
                 if pkg.targeting_overlay is not None:
                     violations = collect_targeting_violations(pkg.targeting_overlay)
                     if violations:
                         raise AdCPInvalidRequestError(
                             details=ValidationDetails(**violations),
-                            field="targeting_overlay",
+                            field=package_field_path("targeting_overlay", pkg_index),
                         )
 
     except (AdCPSalesAgentError, ValueError, PermissionError) as e:
