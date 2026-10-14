@@ -234,11 +234,21 @@ class MediaBuyRepository:
             result.setdefault(pkg.media_buy_id, []).append(pkg)
         return result
 
-    def find_package_with_media_buy(self, package_id: str) -> tuple[MediaPackage, MediaBuy] | None:
-        """Find a package and its parent media buy by package_id within the tenant.
+    def find_package_with_media_buy(self, package_id: str, principal_id: str) -> tuple[MediaPackage, MediaBuy] | None:
+        """Find a package and its parent media buy by package_id, on the caller's buys.
 
         Useful when you only have a package_id and need to resolve the parent
         media buy (e.g. during creative-to-package assignment).
+
+        Scoped to the principal as well as the tenant: a package hangs off a media
+        buy one principal owns, so a tenant-only lookup resolves another principal's
+        package and the caller writes an assignment onto a buy that is not theirs.
+        AdCP 3.1.1 ``enums/error-code.json`` MEDIA_BUY_NOT_FOUND reads "does not
+        exist or is not accessible to the requesting agent", so a buy the caller
+        cannot reach is not found, and neither are its packages. ``principal_id`` is
+        required for the reason ``CreativeRepository.get_creative_by_id`` gives: the
+        column is NOT NULL, so a None here would compile to ``IS NULL`` and silently
+        match nothing instead of failing loudly.
 
         Returns (MediaPackage, MediaBuy) tuple or None if not found.
         """
@@ -248,6 +258,7 @@ class MediaBuyRepository:
             .where(
                 MediaPackage.package_id == package_id,
                 MediaBuy.tenant_id == self._tenant_id,
+                MediaBuy.principal_id == principal_id,
             )
         ).first()
         if result is None:
