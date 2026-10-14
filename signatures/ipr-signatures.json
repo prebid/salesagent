@@ -263,6 +263,14 @@
       "created_at": "2026-10-11T15:39:24Z",
       "repoId": 1025117899,
       "pullRequestNo": 2422
+    },
+    {
+      "name": "giancarlopetrini",
+      "id": 15708178,
+      "comment_id": 6173130064,
+      "created_at": "2026-10-14T16:27:56Z",
+      "repoId": 1025117899,
+      "pullRequestNo": 2441
     }
   ]
 }
