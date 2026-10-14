@@ -525,19 +525,25 @@ def _update_media_buy_impl(
                 # Run the same per-package targeting validators the create path runs, so a buyer
                 # can't bypass unknown-field rejection, managed-only dimension checks, or
                 # same-value geo inclusion/exclusion overlap by sending changes through update.
-                overlay_violations: dict[str, object] = {}
-                for pkg_update in req.packages:
+                #
+                # Raises on the first package update carrying a violation, matching the create
+                # path (#1417), rather than merging every package's violations into one `details`
+                # before raising once: a merge cannot name which package failed (core/error.json
+                # `field` wants a path from the request root, #2410), and `dict.update` across
+                # packages silently drops an earlier package's `geo_overlaps` whenever two
+                # packages collide on the same violation key.
+                for pkg_index, pkg_update in enumerate(req.packages):
                     if pkg_update.targeting_overlay is None:
                         continue
-                    overlay_violations.update(collect_targeting_violations(pkg_update.targeting_overlay))
-                if overlay_violations:
-                    # Canonical code per the generated storyboard (UC-002 @ext-f and UC-003
-                    # @*-targeting-overlay both grade targeting validation as INVALID_REQUEST);
-                    # converges with the create path (#1417).
-                    raise AdCPInvalidRequestError(
-                        details=ValidationDetails(**overlay_violations),
-                        field="targeting_overlay",
-                    )
+                    violations = collect_targeting_violations(pkg_update.targeting_overlay)
+                    if violations:
+                        # Canonical code per the generated storyboard (UC-002 @ext-f and UC-003
+                        # @*-targeting-overlay both grade targeting validation as INVALID_REQUEST);
+                        # converges with the create path (#1417).
+                        raise AdCPInvalidRequestError(
+                            details=ValidationDetails(**violations),
+                            field=package_field_path("targeting_overlay", pkg_index),
+                        )
 
                 property_targeting_violations: list[str] = []
                 for pkg_update in req.packages:
