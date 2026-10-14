@@ -13,8 +13,10 @@ The [Quickstart guide](quickstart.md) gets the agent running locally in 5 minute
 
 ### Cloud walkthroughs
 
+- **[AWS (ECS Fargate, RDS, ALB)](deployment/aws.md)**
 - **[Google Cloud Run](deployment/walkthroughs/gcp.md)**
 - **[Fly.io](deployment/walkthroughs/fly.md)**
+- **[Single VM with Docker Compose and Caddy](deployment/vm.md)**
 
 ## User guide
 
@@ -72,6 +74,8 @@ docs/
 ├── deployment/
 │   ├── single-tenant.md        # Standard deployment
 │   ├── multi-tenant.md         # Multi-tenant configuration
+│   ├── aws.md                  # AWS: ECS Fargate, RDS, ALB (Terraform)
+│   ├── vm.md                   # Single VM: Docker Compose + Caddy
 │   └── walkthroughs/
 │       ├── gcp.md              # Google Cloud Run
 │       └── fly.md              # Fly.io

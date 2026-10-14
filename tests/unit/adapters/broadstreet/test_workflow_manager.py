@@ -12,9 +12,16 @@ from src.core.tenant_context import TenantContext
 #: ``src/adapters/base_workflow.py``) and reads ``slack_webhook_url`` off the typed
 #: context; ``get_tenant_config``, which took a config KEY and returned that field, is
 #: gone. These are the two tenants the cases below need.
-_TENANT_WITHOUT_SLACK = TenantContext(tenant_id="test_tenant", name="Test Tenant")
+#: A tenant always declares the host it is served at, so the projection requires one.
+#: Nothing here reads it — these cases grade Slack notification, not routing.
+_TENANT_HOST = "test-tenant.adcp.test"
+
+_TENANT_WITHOUT_SLACK = TenantContext(tenant_id="test_tenant", name="Test Tenant", virtual_host=_TENANT_HOST)
 _TENANT_WITH_SLACK = TenantContext(
-    tenant_id="test_tenant", name="Test Tenant", slack_webhook_url="https://hooks.slack.com/test"
+    tenant_id="test_tenant",
+    name="Test Tenant",
+    virtual_host=_TENANT_HOST,
+    slack_webhook_url="https://hooks.slack.com/test",
 )
 
 

@@ -95,10 +95,14 @@ pytest_plugins = [
     "tests.bdd.steps.domain.egress_ssrf",
     "tests.bdd.steps.domain.local_constraint_relaxations",
     "tests.bdd.steps.domain.local_context_echo",
+    "tests.bdd.steps.domain.tenant_identification",
+    "tests.bdd.steps.domain.agent_card_discovery",
+    "tests.bdd.steps.domain.publisher_authorization",
     "tests.bdd.steps.domain.pre_dispatch_refusals",
     "tests.bdd.steps.domain.codes_open_vocabulary",
     "tests.bdd.steps.domain.security_wire_safety",
     "tests.bdd.steps.domain.security_tenant_isolation",
+    "tests.bdd.steps.domain.database_fail_fast",
     "tests.bdd.steps.domain.protocol_version_negotiation",
 ]
 
@@ -252,8 +256,8 @@ def _record_dormancy(item: pytest.Item, report: pytest.TestReport) -> bool:
         # UC-006 scenarios to "wired"; the detail is appended AFTER the prefix so the
         # reason can stay honest without being the machine-readable channel.
         #
-        # It is no longer the ONLY channel either -- the user_property above and
-        # scenario_liveness's typed classification both carry it now, so losing this
+        # It is not the ONLY channel either -- the user_property above and
+        # scenario_liveness's typed classification both carry it, so losing this
         # prefix costs a worse message rather than a wrong measurement.
         report.wasxfail = (
             f"Step definition not found: DORMANT (test-wiring) — no step definition for "
@@ -955,20 +959,21 @@ _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
     # innet_070926_0757: 68 failing rows, every one ending "-valid"; 16 others, every one
     # ending "-INVALID_REQUEST".
     #
-    # NOT our formats. tests/fixtures/creative_formats/reference_formats.json records its
-    # provenance as {'image': 'adcp-creative-agent', 'pin': '467fd93d7711'} -- captured from
-    # the REFERENCE creative agent at the v3.1.1 tag -- and 4 of the 16 files under the
-    # spec's own formats/canonical/ declare pixel_tracker assets. The spec's reference
-    # catalogue emits what the spec's response schema rejects.
+    # NOT our formats. tests/fixtures/creative_formats/reference_formats.json is captured
+    # from the REFERENCE creative agent (provenance pin 76b031a85eb8, the v3.1.25 tag; it was
+    # 467fd93d7711, v3.1.1, when this was ledgered, with the same 45 pixel_tracker formats),
+    # and 4 of the 16 files under the spec's own formats/canonical/ declare pixel_tracker
+    # assets. At v3.1.1 the spec's reference catalogue emits what the spec's response schema
+    # rejects.
     #
     # Checked against the newest upstream before ledgering, not assumed: v3.1.20 (latest
-    # stable) still admits the same 15, and v3.2.0-rc.1 restructures the oneOf into a nested
-    # item_type/asset_type discriminator and still admits the same 15 while its asset-union
-    # grows to 21. Refreshing the fixture or bumping the pin does not fix it.
+    # stable then) still admitted the same 15. adcp#7338 was then fixed by adcp PR #7421
+    # (merged 2026-09-11, first released in v3.1.22): core/format.json, which
+    # list-creative-formats-response.json $refs, now admits pixel_tracker, vast_tracker,
+    # daast_tracker, card and published_post. Bumping the AGENT pin does not fix it here.
     #
-    # Graduates when #7338 lands and the pin moves past it. NO PR IS PLANNED FROM HERE
-    # (decided 2026-09-09), so do not read this as work in flight — it graduates only if
-    # upstream fixes it independently. A local schema overlay was considered and rejected:
+    # Graduates when the SPEC pin (tests/fixtures/adcp_schemas_pinned, v3.1.1) moves to
+    # v3.1.22 or later. A local schema overlay was considered and rejected:
     # tests/helpers/adcp_pinned_schema.py deliberately RAISES on a name present in both the
     # pinned tree and schemas/, because two live definitions of one contract is the exact
     # condition that tree exists to avoid, and a copied format.json would freeze the whole
@@ -1220,22 +1225,18 @@ _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
     ),
     # Wired non-dormant + strengthened: degradation-partitions rows that
     # production satisfies (adapter_fail, db_fail, adapter_and_db_fail, *_absent) pass; the
-    # gap rows fail — no_tenant needs adcp.supported_versions (not emitted), and no_principal
-    # expects [display] but INV-4 keeps the adapter principal-free so channels are NOT degraded
-    # by a missing principal. full_response GRADUATED: the account block is
-    # now emitted with non-empty supported_billing and adcp.idempotency is already present.
-    # account_degraded stays xfailed — a separate, still-ungraded gap (needs investigation).
+    # gap rows fail — no_principal expects [display] but INV-4 keeps the adapter
+    # principal-free so channels are NOT degraded by a missing principal. full_response
+    # GRADUATED: the account block is now emitted with non-empty supported_billing and
+    # adcp.idempotency is already present. account_degraded stays xfailed — a separate,
+    # still-ungraded gap (needs investigation).
+    #
+    # no_tenant is GONE from this set because the ROW is gone: a request that names no
+    # seller is now refused rather than answered with a minimal document, so there is no
+    # degraded response shape to grade. The refusal is graded by @T-UC-010-ext-a.
     (
         "T-UC-010-degradation-partitions",
-        {"no_tenant", "no_principal", "account_degraded"},
-        # _build_adcp_block(None) always emits supported_versions, so that is not
-        # the no_tenant gap. The real no_tenant gap is extra top-level keys:
-        # _deg_no_tenant asserts wire keys are a SUBSET of {adcp,
-        # supported_protocols}, but the no-tenant response also includes
-        # specialisms/webhook_signing/request_signing, which are non-null and
-        # therefore present on the wire.
-        "no_tenant top-level response carries extra keys (specialisms, webhook_signing, "
-        "request_signing) beyond the minimal {adcp, supported_protocols} contract; "
+        {"no_principal", "account_degraded"},
         "INV-4 keeps adapter channels principal-free so no_principal does not degrade to "
         "[display]; account_degraded expects a supported_billing-only account block but "
         "_build_account_block always emits require_operator_auth/sandbox as real values "
@@ -4526,16 +4527,12 @@ _TRANSPORT_SPECIFIC_TAGS = {"rest", "mcp", "a2a"}
 # surfaces — the ``message/send`` push config — which has no counterpart on MCP
 # or REST at all. That, and only that, is what makes them single-transport.
 #
-# It used to carry three tool-surface scenarios as well, on the stated grounds
-# that MCP and REST refuse the invalid document above the ingest gate "with a
-# field path relative to the sub-model they validated", so grading them would
-# grade the request model rather than the gate. MEASURED, that was false: every
-# transport reports the ABSOLUTE path
-# ``push_notification_config.authentication.credentials``, which is the literal
-# the scenarios assert. The three now run on all four transports, so the
-# agreement is a standing executable proof rather than a claim in a comment.
+# A tool-surface scenario does NOT belong here. Every transport reports the ABSOLUTE field
+# path (e.g. ``push_notification_config.authentication.credentials``), not one relative to
+# the sub-model it validated, so a tool-surface scenario runs on all four transports and
+# their agreement is standing executable proof rather than a claim in a comment.
 #
-# The tag NAME is now a misnomer — neither survivor is an untyped ingest. It is
+# The tag NAME is a misnomer — neither scenario is an untyped ingest. It is
 # left for the rename that owns the registry.
 #
 # PARAMETRIZED on that one transport rather than dropped from parametrization:
@@ -4552,9 +4549,8 @@ _SINGLE_TRANSPORT_TAGS = {
 }
 
 # UC + tag combinations that should run IMPL-only (no 4-way parametrization).
-# (UC-002 @account used to live here when it ran resolve_account() via IMPL on
-# MediaBuyAccountEnv; #1417 routed those scenarios through a full
-# create_media_buy on the wire, so they now parametrize across a2a/mcp/rest.)
+# EMPTY, and it stays empty: BDD grades the wire, so every scenario parametrizes across
+# a2a/mcp/rest (#1417).
 _IMPL_ONLY: set[tuple[str, str]] = set()
 
 # UC-002 idempotency scenarios wired to MediaBuyCreateEnv (run a real
@@ -4872,7 +4868,7 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
     The IMPL transport was dropped from the BDD default parametrization
     (#1417): BDD asserts AdCP *wire* conformance only. IMPL/call_impl
     remain available for unit/integration tests via the harness; they are simply
-    no longer auto-parametrized here.
+    not auto-parametrized here.
 
     Scenarios tagged with @rest, @mcp, or @a2a are transport-specific
     and skip parametrization — they already dispatch through their
@@ -4925,9 +4921,8 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
     transports = [Transport.A2A, Transport.MCP, Transport.REST]
 
     # EVERY tool is reachable on EVERY transport, so no scenario is withheld from one.
-    # There used to be a per-UC exclusion here for tools with no REST route, driven by a
-    # hand-maintained tag-prefix tuple. It is gone, and re-adding it would be a mistake in
-    # two ways at once.
+    # A per-UC exclusion for tools with no REST route, driven by a hand-maintained
+    # tag-prefix tuple, would be a mistake in two ways at once.
     #
     # It cannot fire. A tool's reachability is the registry's answer, not a tag's: MCP
     # registration, the A2A card and the REST route are all generated from the ToolSpec
@@ -5112,8 +5107,19 @@ def _reset_e2e_db(e2e_config) -> None:
     in scenario SETUP and never on an assertion (#2048).
 
     DELETE takes a RowExclusiveLock, which does not conflict with AccessShareLock
-    at all, so the reset can neither block nor be blocked by a concurrent reader
-    and the cycle has nowhere to form. Do NOT "fix" a recurrence by retrying or by
+    at all, so that relation-lock cycle has nowhere to form. A ROW-lock cycle
+    remains, with a concurrent writer rather than a reader. The delivery
+    scheduler's ``webhook_delivery_log`` INSERT takes KEY SHARE locks on the rows
+    its foreign keys name -- tenants, then principals, then media_buys -- while
+    the reset deletes rows in ``pg_tables`` order (measured: principals, then
+    media_buys, then tenants). With those orders the server starts waiting first
+    and Postgres picks it as the victim; ``ProtocolWebhookService._conclude``
+    swallows the error and one delivery-log row is lost. When the reset commits
+    first, the INSERT fails its foreign-key check and is swallowed the same way.
+    Neither touches the scenario, and since #2328 neither trips the server's
+    process-wide fail-fast in ``get_db_session``. Nothing enforces the order,
+    though: a ``DeadlockDetected`` back in scenario SETUP means it changed, and
+    #2048 tracks the remaining cycle. Do NOT "fix" a recurrence by retrying or by
     serialising the suite -- both leave the cycle in place.
 
     Emptying every table makes the delete order irrelevant, so FK triggers are
@@ -5249,11 +5255,10 @@ class EnvRoute:
 
     ``when``, when set, is the row's ROUTING PREDICATE over the scenario's
     marker-name set. Rows carrying one are tried before the coarse ``uc``
-    buckets. These predicates used to live as a hardcoded ``elif`` chain inside
-    ``_harness_env``, invisible to ``scripts/audit``'s join — which knew only
-    about the buckets and therefore reported every predicate-routed scenario as
-    dormant. Moving them into rows is what lets ONE resolver answer for both
-    sides.
+    buckets. They live in rows, not as a hardcoded ``elif`` chain inside
+    ``_harness_env``: such a chain is invisible to ``scripts/audit``'s join, which knows
+    only about the buckets and would report every predicate-routed scenario as dormant.
+    Rows are what let ONE resolver answer for both sides.
 
     ``uc`` is the coarse bucket this row serves, matched against
     ``storyboard_spec.detect_uc``. A row sets ``when`` or ``uc``, not both.
@@ -5646,10 +5651,10 @@ def _run_env_route(
         pytest.xfail(route.xfail_reason)
     with _db_scope_for(request, e2e_config), route.env_builder(e2e_config) as env:
         ctx["env"] = env
-        # Build the client ONCE, here, for every row — it used to be constructed
-        # inside a single hand-wired seed callback, so only that one row could
-        # dispatch via the client and any new row wanting it had to remember to
-        # repeat the line. Construction is cheap and
+        # Build the client ONCE, here, for every row. Constructing it inside a
+        # hand-wired seed callback lets only that one row dispatch via the client,
+        # and any new row wanting it has to remember to repeat the line.
+        # Construction is cheap and
         # side-effect-free; a row that never dispatches via the client simply
         # does not read the key.
         ctx["client"] = AdCPTestClient(env)
@@ -5972,6 +5977,50 @@ ENV_ROUTES: list[EnvRoute] = [
         env_builder=_build_media_buy_create_list_env,
         seed=_seed_media_buy_chain,
     ),
+    # ── @tenantid (local tenant-identification-routes feature) ──────────────
+    # An UNSCOPED `when` row for the same reason as the rows above and below: the
+    # scenarios carry a @tenantid tag rather than a T-UC-<n> identity, so
+    # storyboard_spec.detect_uc returns None and no coarse bucket claims them.
+    #
+    # The capabilities env, because get_adcp_capabilities is what these dispatch: the
+    # tool is chosen by the ENV, not by the step. It is a public read, so no credential
+    # confuses the question of which tenant answered. The seed is the point rather than an
+    # incidental: a tenant with its own virtual_host is exactly the state being
+    # graded, and _seed_tenant_and_principal builds it through TenantFactory, which sets
+    # one by default.
+    # ── @agentcard (local agent-card-discovery feature) ─────────────────────
+    # An UNSCOPED `when` row for the same reason as the rows around it: the scenarios
+    # carry T-AGENTCARD-* identity tags rather than a T-UC-<n>, so detect_uc returns None
+    # and no coarse bucket claims them.
+    #
+    # The capabilities env, for the one thing a card fetch needs from an env: the
+    # in-process ASGI client (`get_rest_client`), which `fetch_agent_card` uses on the
+    # three in-process transports. The card is NOT dispatched as a tool — it is a root
+    # endpoint carrying no envelope — so which tool this env would dispatch is irrelevant.
+    # The seed is the point: a tenant declaring its own virtual_host is the state being
+    # graded, and _seed_tenant_and_principal builds it through TenantFactory.
+    EnvRoute(
+        tag="agentcard",
+        when=lambda m: "agentcard" in m,
+        env_builder=_build_capabilities_env,
+        seed=_seed_tenant_and_principal,
+    ),
+    # ── @pubauth (local publisher-authorization feature) ────────────────────
+    # A `when` row because its scenarios carry T-ADMIN-PUBAUTH-* tags, which detect_uc
+    # files under the ADMIN bucket -- whose env drives the accounts pages and serves no
+    # publisher's file. The seed is the tenant whose agent_url the publisher names.
+    EnvRoute(
+        tag="pubauth",
+        when=lambda m: "pubauth" in m,
+        env_builder=_env("tests.harness.publisher_authorization.PublisherAuthorizationEnv"),
+        seed=_seed_tenant_and_principal,
+    ),
+    EnvRoute(
+        tag="tenantid",
+        when=lambda m: "tenantid" in m,
+        env_builder=_build_capabilities_env,
+        seed=_seed_tenant_and_principal,
+    ),
     # ── @predispatch (local pre-dispatch-refusals feature) ──────────────────
     # T-PREDISPATCH-* identity tags, so an UNSCOPED `when` row like the two above.
     # Every routable document addresses get_products, and a tenant plus its
@@ -6077,6 +6126,14 @@ ENV_ROUTES: list[EnvRoute] = [
         # the branch's default one, because a single-tenant database cannot exhibit the leak
         # it is looking for.
         when=lambda m: any(t.startswith("T-SECURITY-002") for t in m),
+        env_builder=_build_product_env,
+    ),
+    EnvRoute(
+        tag="database-fail-fast",
+        # The process-wide fail-fast in get_db_session must refuse every tenant only when the
+        # database cannot be reached. The claim is about the OTHER tenant, so it reuses
+        # BR-SECURITY-002's two-tenant seeding and dispatches get_products like it does.
+        when=lambda m: any(t.startswith("T-DBFAILFAST") for t in m),
         env_builder=_build_product_env,
     ),
     EnvRoute(

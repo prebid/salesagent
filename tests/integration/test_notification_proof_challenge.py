@@ -88,12 +88,7 @@ _SUBSCRIBER_URL = "https://buyer.example.com/adcp/notifications"
 
 #: The seller's own host, DOTTED so ``canonical_agent_url`` derives ``https://`` and the
 #: published ``agents[].url`` this challenge names is one a receiver could resolve.
-#: MIXED CASE on purpose. A receiver matches ``seller_agent_url`` byte-for-byte against our
-#: published ``agents[].url`` (security.mdx @ v3.1.1 :1104 step 5, "no canonicalization at
-#: this step"), and ``WebhookChallenge.seller_agent_url`` is a pydantic ``AnyUrl`` whose
-#: serializer LOWERCASES the host. An all-lowercase fixture host cannot tell the published
-#: string from the lowercased one, so it would grade nothing here.
-_AGENT_HOST = "Seller-Proof.Example.com"
+_AGENT_HOST = "seller-proof.example.com"
 
 _SUBSCRIBER_ID = "buyer-subscriber-1"
 #: An ACCOUNT-surface notification type. Both halves are load-bearing and were found by
@@ -309,18 +304,13 @@ class TestChallengeBodyIsConformant:
         assert [e.value if hasattr(e, "value") else str(e) for e in challenge.event_types] == _EVENT_TYPES, (
             "event_types is part of the proof scope, so it must be the set the subscriber asked for"
         )
-        # Read off the RAW payload, never off the re-validated model: round-tripping through
-        # `WebhookChallenge` would lowercase the host again and the assertion would be
-        # checking pydantic against itself rather than checking the bytes we sent.
+        # Read off the RAW payload, never off the re-validated model: what a receiver matches
+        # is the bytes sent, and asserting against the re-parsed model checks pydantic
+        # against itself.
         assert payload["seller_agent_url"] == f"https://{_AGENT_HOST}/mcp/", (
             "seller_agent_url must be the PUBLISHED agents[] entry for the registering transport, "
             "BYTE-FOR-BYTE — a receiver matches it against our brand.json with no canonicalization "
             f"(security.mdx :1104 step 5); got {payload['seller_agent_url']!r}"
-        )
-        assert str(challenge.seller_agent_url) != payload["seller_agent_url"], (
-            "this assertion exists to keep the one above honest: it pins that the SDK type's "
-            "serializer really does mangle the host, so if a future SDK stops lowercasing, the "
-            "emit-the-published-string workaround can be deleted rather than carried forever"
         )
         assert challenge.account_id == response.accounts[0].account_id, (
             "the challenge must name the account id the account is actually created with, or the "

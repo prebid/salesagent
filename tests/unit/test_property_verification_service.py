@@ -4,7 +4,7 @@ Tests the database wrapper logic around the adcp library's adagents functionalit
 The actual adagents.json fetching, parsing, and validation is tested in the adcp library.
 """
 
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import AsyncMock, Mock, call, patch
 
 import pytest
 from adcp import AdagentsNotFoundError, AdagentsTimeoutError, AdagentsValidationError
@@ -16,24 +16,20 @@ class MockSetup:
     """Centralized mock setup to reduce duplicate mocking."""
 
     @staticmethod
-    def create_mock_db_session_with_property(property_data):
-        """Create mock database session with property (SQLAlchemy 2.0 compatible)."""
-        mock_session = Mock()
-        mock_db_session_patcher = patch("src.services.property_verification_service.get_db_session")
-        mock_db_session = mock_db_session_patcher.start()
-        mock_db_session.return_value.__enter__.return_value = mock_session
+    def create_mock_uow_with_property(property_data):
+        """Patch the service's unit of work; its repository returns *property_data* as a row."""
+        mock_uow_patcher = patch("src.services.property_verification_service.AuthorizedPropertyUoW")
+        mock_uow_cls = mock_uow_patcher.start()
+        mock_repo = mock_uow_cls.return_value.__enter__.return_value.authorized_properties
 
         mock_property = Mock() if property_data else None
         if mock_property:
             for key, value in property_data.items():
                 setattr(mock_property, key, value)
 
-        # Mock SQLAlchemy 2.0 pattern: session.scalars(stmt).first()
-        mock_scalars = Mock()
-        mock_scalars.first.return_value = mock_property
-        mock_session.scalars.return_value = mock_scalars
+        mock_repo.get_by_id.return_value = mock_property
 
-        return mock_db_session_patcher, mock_session, mock_property
+        return mock_uow_patcher, mock_repo, mock_property
 
 
 class TestPropertyVerificationService:
@@ -58,7 +54,7 @@ class TestPropertyVerificationService:
             "property_type": "website",
             "identifiers": [{"type": "domain", "value": "example.com"}],
         }
-        mock_db_patcher, mock_session, mock_property = MockSetup.create_mock_db_session_with_property(property_data)
+        mock_db_patcher, mock_repo, mock_property = MockSetup.create_mock_uow_with_property(property_data)
 
         # Mock adcp library functions
         mock_adagents_data = {
@@ -99,8 +95,7 @@ class TestPropertyVerificationService:
                 )
 
                 # Verify database updated
-                assert mock_property.verification_status == "verified"
-                assert mock_property.verification_error is None
+                mock_repo.record_verification.assert_called_once_with(mock_property, "verified", None)
 
         mock_db_patcher.stop()
 
@@ -114,7 +109,7 @@ class TestPropertyVerificationService:
             "property_type": "website",
             "identifiers": [{"type": "domain", "value": "example.com"}],
         }
-        mock_db_patcher, mock_session, mock_property = MockSetup.create_mock_db_session_with_property(property_data)
+        mock_db_patcher, mock_repo, mock_property = MockSetup.create_mock_uow_with_property(property_data)
 
         mock_adagents_data = {"authorized_agents": []}
 
@@ -131,8 +126,7 @@ class TestPropertyVerificationService:
                 assert "not authorized" in error
 
                 # Verify database updated with failure
-                assert mock_property.verification_status == "failed"
-                assert mock_property.verification_error is not None
+                mock_repo.record_verification.assert_called_once_with(mock_property, "failed", error)
 
         mock_db_patcher.stop()
 
@@ -146,7 +140,7 @@ class TestPropertyVerificationService:
             "property_type": "website",
             "identifiers": [],
         }
-        mock_db_patcher, mock_session, mock_property = MockSetup.create_mock_db_session_with_property(property_data)
+        mock_db_patcher, mock_repo, mock_property = MockSetup.create_mock_uow_with_property(property_data)
 
         with patch("src.services.property_verification_service.fetch_adagents", new_callable=AsyncMock) as mock_fetch:
             mock_fetch.side_effect = AdagentsNotFoundError("404 Not Found")
@@ -161,7 +155,7 @@ class TestPropertyVerificationService:
             assert error == "adagents.json not found for this domain"
 
             # Verify database updated with failure
-            assert mock_property.verification_status == "failed"
+            mock_repo.record_verification.assert_called_once_with(mock_property, "failed", error)
 
         mock_db_patcher.stop()
 
@@ -175,7 +169,7 @@ class TestPropertyVerificationService:
             "property_type": "website",
             "identifiers": [],
         }
-        mock_db_patcher, mock_session, mock_property = MockSetup.create_mock_db_session_with_property(property_data)
+        mock_db_patcher, mock_repo, mock_property = MockSetup.create_mock_uow_with_property(property_data)
 
         with patch("src.services.property_verification_service.fetch_adagents", new_callable=AsyncMock) as mock_fetch:
             mock_fetch.side_effect = AdagentsTimeoutError("https://example.com/.well-known/adagents.json", 5.0)
@@ -189,7 +183,7 @@ class TestPropertyVerificationService:
             assert error == "Timed out fetching adagents.json"
 
             # Verify database updated with failure
-            assert mock_property.verification_status == "failed"
+            mock_repo.record_verification.assert_called_once_with(mock_property, "failed", error)
 
         mock_db_patcher.stop()
 
@@ -203,7 +197,7 @@ class TestPropertyVerificationService:
             "property_type": "website",
             "identifiers": [],
         }
-        mock_db_patcher, mock_session, mock_property = MockSetup.create_mock_db_session_with_property(property_data)
+        mock_db_patcher, mock_repo, mock_property = MockSetup.create_mock_uow_with_property(property_data)
 
         with patch("src.services.property_verification_service.fetch_adagents", new_callable=AsyncMock) as mock_fetch:
             mock_fetch.side_effect = AdagentsValidationError("Missing authorized_agents field")
@@ -219,14 +213,14 @@ class TestPropertyVerificationService:
             assert error == "adagents.json could not be validated"
 
             # Verify database updated with failure
-            assert mock_property.verification_status == "failed"
+            mock_repo.record_verification.assert_called_once_with(mock_property, "failed", error)
 
         mock_db_patcher.stop()
 
     @pytest.mark.asyncio
     async def test_verify_property_not_found_in_db(self):
         """Test handling of property not found in database."""
-        mock_db_patcher, mock_session, mock_property = MockSetup.create_mock_db_session_with_property(None)
+        mock_db_patcher, mock_repo, mock_property = MockSetup.create_mock_uow_with_property(None)
 
         is_verified, error = await self.service._verify_property_async(
             "tenant1", "nonexistent", "https://sales-agent.example.com"
@@ -249,19 +243,8 @@ class TestPropertyVerificationService:
 
     def test_verify_all_properties(self):
         """Test bulk verification of all pending properties."""
-        # Mock database with multiple properties
-        property1 = Mock(property_id="prop1", name="Property 1")
-        property2 = Mock(property_id="prop2", name="Property 2")
-
-        mock_db_patcher = patch("src.services.property_verification_service.get_db_session")
-        mock_db_session = mock_db_patcher.start()
-        mock_session = Mock()
-        mock_db_session.return_value.__enter__.return_value = mock_session
-
-        # Mock SQLAlchemy 2.0 pattern for all()
-        mock_scalars = Mock()
-        mock_scalars.all.return_value = [property1, property2]
-        mock_session.scalars.return_value = mock_scalars
+        mock_db_patcher, mock_repo, _ = MockSetup.create_mock_uow_with_property(None)
+        mock_repo.list_pending.return_value = [("prop1", "Property 1"), ("prop2", "Property 2")]
 
         # Mock verify_property to return success for first, failure for second
         with patch.object(self.service, "verify_property") as mock_verify:
@@ -269,9 +252,17 @@ class TestPropertyVerificationService:
 
             results = self.service.verify_all_properties("tenant1", "https://agent.example.com")
 
-            assert results["total_checked"] == 2
-            assert results["verified"] == 1
-            assert results["failed"] == 1
-            assert len(results["errors"]) == 1
+            assert results == {
+                "total_checked": 2,
+                "verified": 1,
+                "failed": 1,
+                "errors": ["Property 2: Not authorized"],
+            }
+            mock_verify.assert_has_calls(
+                [
+                    call("tenant1", "prop1", "https://agent.example.com"),
+                    call("tenant1", "prop2", "https://agent.example.com"),
+                ]
+            )
 
         mock_db_patcher.stop()

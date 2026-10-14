@@ -1,10 +1,6 @@
 """Integration tests: list_creative_formats filtering, sort, auth.
 
 Behavioral tests using CreativeFormatsEnv + real PostgreSQL + factory_boy.
-Replaces mock-heavy unit tests from test_creative.py and
-test_creative_formats_behavioral.py with provable assertions.
-
-Covers:
 """
 
 from __future__ import annotations
@@ -45,16 +41,12 @@ def _make_format(
     )
 
 
-# (Deleted) TestFormatsAuth::test_no_tenant_raises_auth_error, which built an identity
-# carrying a resolved principal and NO tenant and expected list_creative_formats to refuse
-# it. Neither half of that state is reachable: a principal is a row in a tenant, so the
-# resolver performs no principal lookup when the request names no seller
-# (src/core/resolved_identity._resolve_identity step 4), and ResolvedIdentity declares
-# `tenant` required. The tenant-less DISCOVERY request that IS reachable -- anonymous,
-# PublicIdentity(principal=None, tenant=None) -- is answered with an empty catalog by
-# design, not refused (creative_formats.py, 76c2a96fb). UC-005-EXT-A-01's "no tenant
-# resolves -> error" obligation is therefore ungraded here; it can only be graded at the
-# boundary, on the wire, with no tenant header.
+# There is no tenant-less identity to test this tool with: both identity types declare
+# `tenant` required, because a request naming no seller this deployment serves is refused
+# CONFIGURATION_ERROR by the resolver before any identity is built. UC-005-EXT-A-01's "no
+# tenant resolves -> error" obligation is graded where that refusal happens -- at the
+# boundary, on the wire, with no resolvable host (BR-UC-010 @T-UC-010-ext-a and
+# local-tenant-identification-routes.feature).
 
 
 # ---------------------------------------------------------------------------

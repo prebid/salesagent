@@ -4,7 +4,7 @@ Frozen scope authority for `salesagent-rys3u.6`. Every claim below was verified
 by reading the pinned schema or the source, not inferred.
 
 Pin: AdCP 3.1.1 via `adcp==6.6.0`. Schemas at
-`/Users/konst/projects/adcp/dist/schemas/3.1.1/`.
+`../adcp/dist/schemas/3.1.1/`.
 
 ## Why this blocks rys3u.2
 

@@ -61,17 +61,16 @@ ADVERTISED_CREATIVE_AGENT_CAPABILITIES: tuple[CreativeAgentCapability, ...] = (
 
 
 def _ensure_backward_compatible_format[FormatT: AdcpFormat](f: FormatT) -> FormatT:
-    """Pass-through function for backward compatibility.
+    """Return *f* unchanged, as the same Format subclass it was given.
 
-    Note: adcp 3.2.0 removed the deprecated `assets_required` field from Format.
-    The new `assets` field includes both required and optional assets with a `required` boolean.
-    This function is kept for API compatibility but now just returns the format unchanged.
+    Nothing is reshaped: the pinned Format declares one ``assets`` list whose entries
+    carry their own ``required`` flag, so there is no second field to populate from it.
 
     Args:
         f: Format object from creative agent
 
     Returns:
-        Format unchanged (backward compatibility code removed in adcp 3.2.0 upgrade)
+        The same object, unchanged.
     """
     return f
 
@@ -151,10 +150,9 @@ def _list_creative_formats_impl(
         req = ListCreativeFormatsRequest()
 
     principal_id = identity.principal_id
+    # Always a tenant: a request naming no seller is refused CONFIGURATION_ERROR by the
+    # resolver, so there is no empty-format answer for one.
     tenant = identity.tenant
-    if tenant is None:
-        # No seller is addressed: there are no formats to list, and nothing to refuse.
-        return ListCreativeFormatsResponse(formats=[])
 
     # Get formats from all registered creative agents via registry
     from src.core.creative_agent_registry import FormatFetchResult, get_creative_agent_registry
@@ -426,8 +424,8 @@ def _list_creative_formats_impl(
     # (type field removed in adcp 3.12)
     formats.sort(key=lambda f: f.name or "")
 
-    # Ensure backward compatibility: populate both assets and assets_required
-    # This allows old clients (using assets_required) and new clients (using assets) to work
+    # A no-op today: the helper returns each format unchanged, because the pinned Format
+    # carries required/optional on the asset itself. Nothing is populated here.
     formats = [_ensure_backward_compatible_format(f) for f in formats]
 
     # Apply cursor-based pagination (AdCP PaginationRequest spec)

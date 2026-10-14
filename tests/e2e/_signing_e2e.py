@@ -34,6 +34,7 @@ import ssl
 from collections.abc import Callable, Iterator, Mapping
 from pathlib import Path
 from typing import Any
+from urllib.parse import urljoin
 
 import httpx
 import pytest
@@ -41,21 +42,14 @@ from sqlalchemy import delete
 
 from tests.e2e.conftest import e2e_ca_bundle, e2e_tls_base_url
 from tests.e2e.utils import _LiveDBEnv, live_db_env, live_repo_session
+from tests.helpers.admin_session import authenticate_http_session, drop_stated_session_cookie
 from tests.helpers.credentials import credential_headers
 from tests.helpers.signing import json_seeded_client_factory, wire_origin
 
-#: The super-admin the e2e stack seeds, and the endpoint that logs it in.
-#: ``/test/auth`` needs ``ADCP_AUTH_TEST_MODE`` (docker-compose.e2e.yml) AND the
-#: target tenant's ``auth_setup_mode``, AND a ``tenant_id`` form field — posting
-#: without one aborts 404, not 401, so a missing field must not be misdiagnosed
-#: as a routing problem. No ``CSRFProtect`` is registered anywhere in
-#: ``src/admin``, so a raw POST is accepted.
-E2E_ADMIN_EMAIL = "test_super_admin@example.com"
-E2E_ADMIN_PASSWORD = "test123"
-
-#: Flask admin is mounted at BOTH ``/admin`` and ``/`` (src/app.py). Auth and the
-#: create POST are pinned to ONE prefix so the session cookie and the ``url_for``
-#: redirect stay on a single script root.
+#: Flask admin is mounted at BOTH ``/admin`` and ``/`` (src/app.py). The session cookie and
+#: the create POST are pinned to ONE prefix so the cookie and the ``url_for`` redirect stay
+#: on a single script root. No ``CSRFProtect`` is registered anywhere in ``src/admin``, so a
+#: raw POST is accepted.
 _ADMIN_PREFIX = "/admin"
 
 #: What the create route FLASHES on success (src/admin/blueprints/signing_keys.py).
@@ -236,6 +230,41 @@ def seeded_capabilities_factory(body: dict):
     """
 
     return json_seeded_client_factory(body)
+
+
+def free_host(live_server: dict, host: str) -> None:
+    """Remove whichever tenant currently holds *host*, whatever its id.
+
+    ``ix_tenants_virtual_host`` is UNIQUE, so a host is a resource exactly one tenant can
+    hold, and every module in this suite claims the SAME one — the single origin the
+    stack serves TLS on. ``tests/e2e`` writes to the SERVER's database, which outlives a
+    run, so a module that died before its ``finally`` leaves its row holding the host and
+    every later claim fails on the index. :func:`drop_tenant` cannot clear that: it deletes
+    by id, and the row belongs to another module's id.
+
+    Claiming by host rather than trusting the previous claimant to have released it is
+    what makes the fixture idempotent across runs.
+    """
+    from sqlalchemy import select
+
+    from src.core.database.models import Tenant
+
+    with live_db_env(live_server) as env:
+        occupant = env.get_session().scalars(select(Tenant).filter_by(virtual_host=host)).first()
+        if occupant is None:
+            return
+        occupant_id = occupant.tenant_id
+    # Only this suite's OWN rows: every module here names its tenant ``<module>_e2e``.
+    # Anything else at this host belongs to the deployment or another suite — the stack's
+    # bootstrap tenant answers at ``localhost:<port>``, which is a host a caller here
+    # legitimately passes. Deleting that would take the seller every other e2e module
+    # resolves against, so a foreign occupant SURFACES rather than being cleared.
+    assert occupant_id.endswith("_e2e"), (
+        f"tenant {occupant_id!r} already answers at {host!r} and this suite did not create it. "
+        "Freeing the host would delete a tenant another suite depends on; point this fixture at a "
+        "host of its own, or remove the foreign row deliberately."
+    )
+    drop_tenant(live_server, occupant_id)
 
 
 def drop_tenant(live_server: dict, tenant_id: str) -> None:
@@ -472,6 +501,7 @@ def provisioned_trust_root_tenant(
     from tests.factories import AuthorizedPropertyFactory, PrincipalFactory, SigningKeyFactory, TenantFactory
 
     drop_tenant(live_server, tenant_id)
+    free_host(live_server, host)
     try:
         with live_db_env(live_server) as env:
             tenant = TenantFactory(
@@ -701,25 +731,26 @@ def _admin_post_rendered_page(
 
     with requests.Session() as session:
         session.verify = ca_bundle()
-        auth = session.post(
-            f"{base_url}{_ADMIN_PREFIX}/test/auth",
-            data={"email": E2E_ADMIN_EMAIL, "password": E2E_ADMIN_PASSWORD, "tenant_id": tenant_id},
-            allow_redirects=False,
-            timeout=30,
-        )
-        assert auth.status_code in (200, 302), (
-            f"admin test auth must succeed before {path!r} can be driven through the admin route; POST "
-            f"{_ADMIN_PREFIX}/test/auth returned HTTP {auth.status_code}. A 404 here means "
-            f"ADCP_AUTH_TEST_MODE is off, the tenant's auth_setup_mode is off, or the tenant_id form "
-            f"field never arrived — it is not a routing problem. Body: {auth.text[:300]!r}"
-        )
+        # The session is STATED, not obtained from a login route. `tests/helpers/admin_session.py`
+        # signs the cookie the way the server signs its own, so the app under test is the
+        # deployed app: there is no route that exists only when a flag is set, and the verdict
+        # does not depend on whether the flag happened to be on.
+        authenticate_http_session(session, base_url, tenant_id)
 
         response = session.post(
             f"{base_url}{path}",
             data=data,
-            allow_redirects=True,
+            allow_redirects=False,
             timeout=30,
         )
+        if response.is_redirect:
+            # The redirect is followed by hand so the STATED cookie can be dropped first.
+            # It is domainless and therefore shadows the server's own session cookie, which
+            # is the only place the flash lives -- following the redirect with both in the
+            # jar renders the destination page with no message at all. See
+            # ``drop_stated_session_cookie``.
+            drop_stated_session_cookie(session)
+            response = session.get(urljoin(base_url, response.headers["Location"]), timeout=30)
         assert response.status_code == 200, (
             f"the admin route {path!r} must succeed; got HTTP {response.status_code} for tenant "
             f"{tenant_id!r}. Body: {response.text[:300]!r}"

@@ -1466,10 +1466,12 @@ class TestPricingOptionStringLookup:
         from src.core.tools.media_buy_delivery import _get_pricing_options
 
         with get_db_session() as session:
+            # Required (NOT NULL) and UNIQUE. Nothing routes to this host; it exists to satisfy the column.
             tenant = Tenant(
                 tenant_id="t1",
                 name="Test",
                 subdomain="t1",
+                virtual_host="t1.adcp.test",
                 is_active=True,
                 ad_server="mock",
             )
@@ -1522,6 +1524,7 @@ class TestPricingOptionStringLookup:
                 tenant_id="t1",
                 name="Test",
                 subdomain="t1",
+                virtual_host="t1.adcp.test",
                 is_active=True,
                 ad_server="mock",
             )
@@ -1628,6 +1631,7 @@ class TestPricingOptionStringToIntComparisonRejected:
                 tenant_id="t1",
                 name="Test",
                 subdomain="t1",
+                virtual_host="t1.adcp.test",
                 is_active=True,
                 ad_server="mock",
             )
@@ -1683,6 +1687,7 @@ class TestPricingOptionStringToIntComparisonRejected:
                 tenant_id="t1",
                 name="Test",
                 subdomain="t1",
+                virtual_host="t1.adcp.test",
                 is_active=True,
                 ad_server="mock",
             )

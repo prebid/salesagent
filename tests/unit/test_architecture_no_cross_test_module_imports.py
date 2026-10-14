@@ -77,11 +77,6 @@ _ALLOWLIST: set[tuple[str, str]] = {
         "tests/unit/test_architecture_ci_suite_coverage.py",
         "tests.smoke.test_smoke_basic",
     ),
-    # DEFERRED — exporter: tests/unit/test_get_adcp_capabilities.py (capabilities).
-    (
-        "tests/unit/test_version_negotiation.py",
-        "tests.unit.test_get_adcp_capabilities",
-    ),
     # DEFERRED — exporter: tests/integration/test_delivery_webhooks_integration.py.
     (
         "tests/integration/test_delivery_webhooks_force.py",
@@ -114,12 +109,6 @@ _ALLOWLIST: set[tuple[str, str]] = {
     # DEFERRED — exporter: tests/integration/test_creative_v3.py (creative sync setup).
     ("tests/integration/test_credential_block_is_logged.py", "tests.integration.test_creative_v3"),
     ("tests/integration/test_sync_creatives_idempotency.py", "tests.integration.test_creative_v3"),
-    # DEFERRED — exporter: tests/storyboard/test_storyboard_conformance.py, whose
-    # conformance-run accessors three storyboard suites reuse.
-    (
-        "tests/integration/test_storyboard_collection_gate_real_session.py",
-        "tests.storyboard.test_storyboard_conformance",
-    ),
     ("tests/unit/test_storyboard_both_protocols_one_origin.py", "tests.storyboard.test_storyboard_conformance"),
     ("tests/unit/test_storyboard_summary_is_published.py", "tests.storyboard.test_storyboard_conformance"),
     # DEFERRED — guard-to-guard: each importer reuses a sibling GUARD's scanner

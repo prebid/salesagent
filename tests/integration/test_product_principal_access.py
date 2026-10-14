@@ -9,15 +9,14 @@ from sqlalchemy import select
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import (
-    CurrencyLimit,
     Principal,
     Product,
-    PropertyTag,
     Tenant,
 )
 from src.core.product_conversion import convert_product_model_to_schema
 from tests.factories import PricingOptionFactory
 from tests.factories.principal import plaintext_token_for
+from tests.utils.database_helpers import seed_tenant_with_product_prerequisites, vhost_for
 
 
 @pytest.mark.requires_db
@@ -26,33 +25,11 @@ def test_product_stores_and_retrieves_allowed_principal_ids(integration_db):
     tenant_id = "test_principal_access"
 
     with get_db_session() as session:
-        # Create tenant
-        tenant = Tenant(
-            tenant_id=tenant_id,
-            name="Test Tenant",
-            subdomain="test-principal",
-            ad_server="mock",
-            billing_plan="basic",
-            is_active=True,
+        # The tenant and the two rows a product cannot exist without (CLAUDE.md's chain:
+        # Tenant -> USD CurrencyLimit -> "all_inventory" PropertyTag).
+        seed_tenant_with_product_prerequisites(
+            session, tenant_id, subdomain="test-principal", ad_server="mock", billing_plan="basic", is_active=True
         )
-        session.add(tenant)
-
-        # Create required setup data
-        currency_limit = CurrencyLimit(
-            tenant_id=tenant_id,
-            currency_code="USD",
-            min_package_budget=100.0,
-            max_daily_package_spend=10000.0,
-        )
-        session.add(currency_limit)
-
-        property_tag = PropertyTag(
-            tenant_id=tenant_id,
-            tag_id="all_inventory",
-            name="All Inventory",
-            description="All inventory",
-        )
-        session.add(property_tag)
 
         # Create a product with allowed_principal_ids
         product = Product(
@@ -84,33 +61,9 @@ def test_product_with_null_allowed_principal_ids(integration_db):
     tenant_id = "test_null_principal"
 
     with get_db_session() as session:
-        # Create tenant
-        tenant = Tenant(
-            tenant_id=tenant_id,
-            name="Test Tenant",
-            subdomain="test-null-principal",
-            ad_server="mock",
-            billing_plan="basic",
-            is_active=True,
+        seed_tenant_with_product_prerequisites(
+            session, tenant_id, subdomain="test-null-principal", ad_server="mock", billing_plan="basic", is_active=True
         )
-        session.add(tenant)
-
-        # Create required setup data
-        currency_limit = CurrencyLimit(
-            tenant_id=tenant_id,
-            currency_code="USD",
-            min_package_budget=100.0,
-            max_daily_package_spend=10000.0,
-        )
-        session.add(currency_limit)
-
-        property_tag = PropertyTag(
-            tenant_id=tenant_id,
-            tag_id="all_inventory",
-            name="All Inventory",
-            description="All inventory",
-        )
-        session.add(property_tag)
 
         # Create a product without allowed_principal_ids (visible to all)
         product = Product(
@@ -142,32 +95,9 @@ def test_convert_product_includes_allowed_principal_ids(integration_db):
     tenant_id = "test_convert_principal"
 
     with get_db_session() as session:
-        # Create tenant and setup
-        tenant = Tenant(
-            tenant_id=tenant_id,
-            name="Test Tenant",
-            subdomain="test-convert",
-            ad_server="mock",
-            billing_plan="basic",
-            is_active=True,
+        seed_tenant_with_product_prerequisites(
+            session, tenant_id, subdomain="test-convert", ad_server="mock", billing_plan="basic", is_active=True
         )
-        session.add(tenant)
-
-        currency_limit = CurrencyLimit(
-            tenant_id=tenant_id,
-            currency_code="USD",
-            min_package_budget=100.0,
-            max_daily_package_spend=10000.0,
-        )
-        session.add(currency_limit)
-
-        property_tag = PropertyTag(
-            tenant_id=tenant_id,
-            tag_id="all_inventory",
-            name="All Inventory",
-            description="All inventory",
-        )
-        session.add(property_tag)
 
         # Create product with restrictions
         product_model = Product(
@@ -212,32 +142,9 @@ def test_allowed_principal_ids_excluded_from_serialization(integration_db):
     tenant_id = "test_serialize_principal"
 
     with get_db_session() as session:
-        # Create tenant and setup
-        tenant = Tenant(
-            tenant_id=tenant_id,
-            name="Test Tenant",
-            subdomain="test-serialize",
-            ad_server="mock",
-            billing_plan="basic",
-            is_active=True,
+        seed_tenant_with_product_prerequisites(
+            session, tenant_id, subdomain="test-serialize", ad_server="mock", billing_plan="basic", is_active=True
         )
-        session.add(tenant)
-
-        currency_limit = CurrencyLimit(
-            tenant_id=tenant_id,
-            currency_code="USD",
-            min_package_budget=100.0,
-            max_daily_package_spend=10000.0,
-        )
-        session.add(currency_limit)
-
-        property_tag = PropertyTag(
-            tenant_id=tenant_id,
-            tag_id="all_inventory",
-            name="All Inventory",
-            description="All inventory",
-        )
-        session.add(property_tag)
 
         # Create product with restrictions
         product_model = Product(
@@ -288,6 +195,7 @@ def test_principal_model_exists_for_access_control(integration_db):
             tenant_id=tenant_id,
             name="Test Tenant",
             subdomain="test-principal-model",
+            virtual_host=vhost_for(tenant_id),
             ad_server="mock",
             billing_plan="basic",
             is_active=True,

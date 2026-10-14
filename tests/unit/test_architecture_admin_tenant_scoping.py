@@ -44,7 +44,6 @@ _SUPER_ADMIN_ONLY = (
 )
 _INLINE_DEAD_ROLE_CHECK = "#2233: inline session['role'] viewer/tenant_admin check that no production login sets"
 _INLINE_SESSION_TENANT_CHECK = "#2233: inline session['tenant_id'] == tenant_id compare instead of the decorator"
-_ISSUE_2234 = "#2234: GAM OAuth initiation proves the tenant exists, not that the caller belongs to it"
 _PR_2075 = "PR #2075 (open) adds require_tenant_access(api_mode=True) to publisher partners; remove when it merges"
 
 # (endpoint, rule) -> why it may skip the decorator. One line each; only ever shrinks.
@@ -53,7 +52,6 @@ EXEMPT: dict[tuple[str, str], str] = {
     ("auth.tenant_google_auth", "/tenant/<tenant_id>/auth/google"): _LOGIN_ENTRY,
     ("oidc.login", "/auth/oidc/login/<tenant_id>"): _LOGIN_ENTRY,
     ("oidc.test_initiate", "/auth/oidc/test/<tenant_id>"): _LOGIN_ENTRY,
-    ("auth.gam_authorize", "/auth/gam/authorize/<tenant_id>"): _ISSUE_2234,
     ("sync_api.trigger_sync", "/api/sync/trigger/<tenant_id>"): _API_KEY,
     ("sync_api.get_sync_history", "/api/sync/history/<tenant_id>"): _API_KEY,
     ("sync_api.sync_tenant_orders", "/api/sync/tenant/<tenant_id>/orders/sync"): _API_KEY,

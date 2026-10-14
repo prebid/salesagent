@@ -49,6 +49,7 @@ def tenant_with_prereqs(integration_db):
             tenant_id="fmt_test_tenant",
             name="Format Test Tenant",
             subdomain="fmt-test",
+            virtual_host="fmt-test.adcp.test",
             is_active=True,
             ad_server="mock",
         )
@@ -99,7 +100,6 @@ def tenant_with_prereqs(integration_db):
 @pytest.fixture
 def app_client(tenant_with_prereqs, monkeypatch):
     """Flask test client with authenticated admin session."""
-    monkeypatch.setenv("ADCP_AUTH_TEST_MODE", "true")
 
     # Set up super admin email in DB
     from src.core.database.models import TenantManagementConfig

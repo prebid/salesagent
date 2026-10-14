@@ -47,9 +47,8 @@ from tests.helpers.local_http_origin import (
     OriginRequest,
     OriginResponse,
     responds,
-    run_local_origin,
 )
-from tests.helpers.tls_material import load_gen_test_tls, server_ssl_context
+from tests.helpers.tls_material import load_gen_test_tls, start_tls_origin
 
 
 def _e2e_capture_url(env: Any) -> str:
@@ -595,11 +594,15 @@ def _fetch_from_live_server(
 def _publishable_origin_headers(host: str) -> dict[str, str]:
     """Headers that address a per-tenant document GET at *host*.
 
-    ``Apx-Incoming-Host`` rather than ``Host``: :func:`route_landing_page` gives the
-    proxy header precedence, and over e2e the request crosses nginx, which is free to
-    rewrite ``Host``.
+    ``Host``, because that is the only host input the application has. A vendor proxy
+    header is edge configuration: ``config/nginx/nginx-multi-tenant.conf`` folds
+    ``Apx-Incoming-Host`` into ``Host`` and drops it, so a request that arrives through
+    that edge is indistinguishable from one that named the host directly, and nothing
+    under ``src/`` reads the vendor header at all. Addressing the app with it instead
+    reaches the in-process legs — which have no edge in front of them — as no host at
+    all, and every document 404s for want of a tenant.
     """
-    return {"Apx-Incoming-Host": host}
+    return {"Host": host}
 
 
 def _write_publishable_origin(env: Any) -> str:
@@ -1007,10 +1010,10 @@ class LocalOriginMixin:
         Pre, not post: ``CircuitBreakerEnv._configure_mocks`` programs
         ``self.origin``, so the origin has to exist by then.
 
-        Every resource is registered with ``_guard`` on the line it is acquired,
-        so a failure part-way through releases exactly what was started —
-        no defensive ``getattr`` teardown, and nothing survives a failed enter.
-        Release is LIFO, which reproduces the old hatches -> origin -> ssl order.
+        Every resource is registered with ``_guard`` on the line it is acquired
+        (the origin inside ``start_tls_origin``), so a failure part-way through
+        releases exactly what was started — no defensive ``getattr`` teardown,
+        and nothing survives a failed enter. Release is LIFO: hatches, origin, ssl.
         """
         super()._enter_pre()  # type: ignore[misc]
         if self.is_e2e:  # type: ignore[attr-defined]
@@ -1024,28 +1027,17 @@ class LocalOriginMixin:
             self._capture_key, _ = register_capture_key()
             return
 
-        gen_test_tls = load_gen_test_tls()
-        gen_test_tls.ensure_test_tls()
-        self._ssl_cert_file = patch.dict(os.environ, {"SSL_CERT_FILE": str(gen_test_tls.COMBINED_CERT)})
+        # The bundle's path, trusted before the origin starts; start_tls_origin writes it.
+        combined_cert = load_gen_test_tls().COMBINED_CERT
+        self._ssl_cert_file = patch.dict(os.environ, {"SSL_CERT_FILE": str(combined_cert)})
         self._ssl_cert_file.start()
         self._guard("ssl_cert_file", self._ssl_cert_file.stop)
 
-        self._origin_ctx = run_local_origin(ssl_context=server_ssl_context(gen_test_tls))
-        self._origin = self._origin_ctx.__enter__()
-        self._guard("local_origin", self._exit_origin)
+        self._origin = start_tls_origin(self._guard, "local_origin")
 
         self._egress_hatches = patch.dict(os.environ, egress_hatch_env(private=True))
         self._egress_hatches.start()
         self._guard("egress_hatches", self._egress_hatches.stop)
-
-    def _exit_origin(self) -> None:
-        """Close the origin context, discarding ``__exit__``'s suppression verdict.
-
-        A cleanup returns nothing: the registry is releasing resources, not
-        handling the exception, and letting a context manager's bool leak into
-        that position would silently mean "suppressed".
-        """
-        self._origin_ctx.__exit__(None, None, None)
 
     # -- The endpoint under test -------------------------------------------
 

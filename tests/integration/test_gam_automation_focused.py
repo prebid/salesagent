@@ -17,6 +17,7 @@ from src.core.database.database_session import get_db_session
 from src.core.database.models import Product, Tenant
 from src.core.schemas import FormatId, MediaPackage, Principal
 from tests.integration.conftest import create_test_product_with_pricing
+from tests.utils.database_helpers import vhost_for
 
 # Default agent URL for creating FormatId objects
 DEFAULT_AGENT_URL = "https://creative.adcontextprotocol.org"
@@ -57,10 +58,12 @@ class TestGAMProductConfiguration:
 
         with get_db_session() as db_session:
             # Create test tenant
+            # Required (NOT NULL) and UNIQUE. Nothing routes to this host; it exists to satisfy the column.
             test_tenant = Tenant(
                 tenant_id=tenant_id,
                 name="Test Automation Tenant",
                 subdomain="test-auto",
+                virtual_host=vhost_for(tenant_id),
                 created_at=datetime.now(),
                 updated_at=datetime.now(),
             )

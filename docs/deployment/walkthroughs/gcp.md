@@ -92,9 +92,9 @@ Note your service URL from the output (e.g., `https://adcp-sales-agent-abc123-uc
 ## Step 4: Initial Setup
 
 1. Open `https://YOUR-SERVICE-URL.run.app/admin`
-2. Log in with test credentials (Setup Mode is enabled by default for new tenants):
-   - Email: `test_super_admin@example.com`
-   - Password: `test123`
+2. Log in with the deployment's own OAuth account (the address you put in
+   `SUPER_ADMIN_EMAILS`). Setup Mode, enabled by default for new tenants, lets you verify
+   a tenant's OIDC login before you enable it.
 3. Verify you can access the Admin UI
 
 ## Step 5: Configure SSO (Production)

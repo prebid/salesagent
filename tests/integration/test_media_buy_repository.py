@@ -17,6 +17,7 @@ from src.core.database.database_session import get_db_session
 from src.core.database.models import MediaBuy, PersistedMediaBuyStatus, Principal, Tenant
 from tests.factories.principal import plaintext_token_for
 from tests.integration.conftest import cleanup_tenant, make_media_buy, make_package
+from tests.utils.database_helpers import vhost_for
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -31,7 +32,15 @@ def tenant_a(integration_db):
     """Create tenant A."""
     tenant_id = "repo_test_tenant_a"
     with get_db_session() as session:
-        tenant = Tenant(tenant_id=tenant_id, name="Tenant A", subdomain="tenant-a", is_active=True, ad_server="mock")
+        # Required (NOT NULL) and UNIQUE. Nothing routes to this host; it exists to satisfy the column.
+        tenant = Tenant(
+            tenant_id=tenant_id,
+            name="Tenant A",
+            subdomain="tenant-a",
+            virtual_host=vhost_for(tenant_id),
+            is_active=True,
+            ad_server="mock",
+        )
         session.add(tenant)
         session.commit()
     yield tenant_id
@@ -43,7 +52,14 @@ def tenant_b(integration_db):
     """Create tenant B (for cross-tenant isolation tests)."""
     tenant_id = "repo_test_tenant_b"
     with get_db_session() as session:
-        tenant = Tenant(tenant_id=tenant_id, name="Tenant B", subdomain="tenant-b", is_active=True, ad_server="mock")
+        tenant = Tenant(
+            tenant_id=tenant_id,
+            name="Tenant B",
+            subdomain="tenant-b",
+            virtual_host=vhost_for(tenant_id),
+            is_active=True,
+            ad_server="mock",
+        )
         session.add(tenant)
         session.commit()
     yield tenant_id

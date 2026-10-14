@@ -13,19 +13,17 @@ inherited unchanged, and the harness lifecycle guard
 one hand-rolled ``__enter__``/``__exit__`` home to ``AdminAccountEnv``, so a second admin
 env inherits that lifecycle instead of restating it.
 
-The caller logs in through ``/test/auth`` on both transports, always against a HOME
-tenant that is never the target. That endpoint stamps ``test_tenant_id`` with the login
-tenant, and ``require_tenant_access`` waives the membership lookup only when that equals
-the requested tenant — logging in elsewhere is what makes the target tenant's ``User``
-row the only thing that decides the outcome, so a rejection here is the real membership
-check and not the test-mode bypass, and the in-process leg takes the same branch of the
-decorator the stack does.
+The caller's session is STATED on both transports (``AdminClient.state_session``), in
+the shape an OIDC login writes for a non-admin: a ``user`` email and a HOME tenant that is
+never the target, with no ``test_user`` key. ``require_tenant_access`` therefore takes its
+real branch, and the target tenant's ``User`` row is the only thing that decides the
+outcome, so a rejection here is the real membership check, on the same branch of the
+decorator in-process as on the stack.
 
 In process the caller can also sign in through the two single-sign-on paths production
 uses, OIDC and Google OAuth (``login=`` on ``integration()``). Those drive the real login
-and callback routes with only the identity provider's two network calls stubbed, on an
-app built without ``ADCP_AUTH_TEST_MODE``, so neither ``/test/auth`` nor the decorator's
-test-mode branch exists. Both write ``session["user"]`` as a plain email string and set no
+and callback routes with only the identity provider's two network calls stubbed, and no
+``test_user`` key ever enters the session. Both write ``session["user"]`` as a plain email string and set no
 ``session["role"]`` — the session shape #2204 is about.
 
 The module-level helpers (route table, case expansion, seeding, state snapshot, assertion
@@ -48,24 +46,26 @@ from urllib.parse import parse_qs, urlsplit
 from authlib.integrations.flask_client import FlaskOAuth2App
 from sqlalchemy.orm import Session
 
+from src.core.config import load_settings
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Tenant
 from src.services.default_products import get_default_products
 from tests.factories import MediaBuyFactory, ProductFactory, TenantAuthConfigFactory, TenantFactory, UserFactory
-from tests.harness.admin_accounts import AdminAccountEnv, _AdminResponse
+from tests.harness.admin_accounts import AdminAccountEnv
+from tests.harness.admin_client import AdminResponse
+from tests.helpers.admin_session import member_session_payload
 from tests.utils.database_helpers import bound_factory_session
 
-#: The one non-admin identity ``/test/auth`` accepts on the Docker stack. The integration
-#: transport uses the same address so both transports grade identical ``User`` rows.
+#: The non-admin identity the scenarios log in as. Both transports use the same address
+#: so they grade identical ``User`` rows.
 MEMBER_EMAIL = "test_tenant_user@example.com"
-MEMBER_PASSWORD = "test123"
 ACTIVE_BUY_BUDGET = Decimal("1500.00")
 #: Any numeric id passes ``validate_numeric_id``; the handlers stop before they would use it.
 GAM_ADVERTISER_ID = "12345"
 
-#: How the caller signs in. ``test_auth`` runs on both transports; the two single-sign-on
+#: How the caller signs in. ``stated`` runs on both transports; the two single-sign-on
 #: paths run in process only (the stack has no identity provider).
-Login = Literal["test_auth", "oidc", "google"]
+Login = Literal["stated", "oidc", "google"]
 SSO_LOGINS: tuple[Login, ...] = ("oidc", "google")
 
 
@@ -280,9 +280,9 @@ class AdminTenantScopingEnv(AdminAccountEnv):
     the choice of login path.
     """
 
-    def __init__(self, *, mode: str = "integration", base_url: str | None = None, login: Login = "test_auth") -> None:
+    def __init__(self, *, mode: str = "integration", base_url: str | None = None, login: Login = "stated") -> None:
         super().__init__(mode=mode, base_url=base_url)
-        assert login == "test_auth" or mode == "integration", f"{login} login needs an identity provider; e2e has none"
+        assert login == "stated" or mode == "integration", f"{login} login needs an identity provider; e2e has none"
         self._login = login
         self._target: TargetTenant | None = None
         self._state: tuple | None = None
@@ -290,7 +290,7 @@ class AdminTenantScopingEnv(AdminAccountEnv):
     @classmethod
     @contextmanager
     def integration(
-        cls, *, login: Login = "test_auth", super_admin_email: str | None = None
+        cls, *, login: Login = "stated", super_admin_email: str | None = None
     ) -> Iterator[AdminTenantScopingEnv]:
         """The in-process env, with no ambient super-admin grant for the member identity.
 
@@ -301,17 +301,14 @@ class AdminTenantScopingEnv(AdminAccountEnv):
         the test process controls, and both places that build the in-process env
         (tests/admin/conftest.py, tests/bdd/conftest.py) come through here.
 
-        Every setting below is read when ``create_app()`` loads settings, which happens on entry.
-        ``login`` other than ``test_auth`` builds the app without ``ADCP_AUTH_TEST_MODE``, so
-        ``/test/auth`` is not registered and ``require_tenant_access`` has no test-mode branch to
-        take. ``super_admin_email`` grants super-admin through ``SUPER_ADMIN_EMAILS``, a setting a
+        The app is composed from the current settings object (``admin_test_app``), so the
+        settings are reloaded from the patched environment before the env is entered.
+        ``super_admin_email`` grants super-admin through ``SUPER_ADMIN_EMAILS``, a setting a
         deployment sets and ``is_super_admin`` reads; nothing about the session is forged.
         """
         with mock.patch.dict(os.environ):
             os.environ.pop("SUPER_ADMIN_DOMAINS", None)
             os.environ.pop("SUPER_ADMIN_DOMAIN", None)
-            if login != "test_auth":
-                os.environ.pop("ADCP_AUTH_TEST_MODE", None)
             if login == "google":
                 # The generic OAUTH_* settings take precedence over GOOGLE_* (auth.get_oauth_config).
                 for name in ("OAUTH_DISCOVERY_URL", "OAUTH_CLIENT_ID", "OAUTH_CLIENT_SECRET"):
@@ -320,9 +317,8 @@ class AdminTenantScopingEnv(AdminAccountEnv):
                 os.environ["GOOGLE_CLIENT_SECRET"] = "test-client-secret"
             if super_admin_email is not None:
                 os.environ["SUPER_ADMIN_EMAILS"] = super_admin_email
+            load_settings()
             with cls(mode="integration", login=login) as env:
-                if login != "test_auth":
-                    assert "test_auth" not in env._app.blueprints, "test login must not exist on an SSO app"
                 yield env
 
     # ── Target tenant ─────────────────────────────────────────────────────
@@ -371,26 +367,26 @@ class AdminTenantScopingEnv(AdminAccountEnv):
         """
         with bound_factory_session():
             home = TenantFactory(tenant_id=unique_id("home"), authorized_domains=[])
-            if with_member or self._login != "test_auth":
+            if with_member or self._login != "stated":
                 UserFactory(tenant=home, user_id=unique_id("user"), email=MEMBER_EMAIL)
             if self._login == "oidc":
                 TenantAuthConfigFactory(tenant=home, oidc_enabled=True)
             return home.tenant_id
 
     def _authenticate_member(self, login_tenant_id: str) -> None:
-        """Log in as the non-admin member identity against ``login_tenant_id`` (never the target)."""
+        """Sign the non-admin member in against ``login_tenant_id`` (never the target)."""
         if self._login == "oidc":
             self._login_via_oidc(login_tenant_id)
         elif self._login == "google":
             self._login_via_google(login_tenant_id)
         else:
-            self._login_via_test_auth(login_tenant_id, email=MEMBER_EMAIL, password=MEMBER_PASSWORD)
+            self.client.state_session(member_session_payload(MEMBER_EMAIL, login_tenant_id))
 
     def _login_via_oidc(self, tenant_id: str) -> None:
         """Sign in through the tenant's OIDC login and callback; ``oidc.py`` writes the session."""
         with _stubbed_identity_provider():
-            login = self._flask_client.get(f"/auth/oidc/login/{tenant_id}")
-            callback = self._flask_client.get(f"/auth/oidc/callback?code=test-code&state={_authorization_state(login)}")
+            login = self._flask.get(f"/auth/oidc/login/{tenant_id}")
+            callback = self._flask.get(f"/auth/oidc/callback?code=test-code&state={_authorization_state(login)}")
         assert callback.status_code == 302 and redirect_path(callback) == f"/tenant/{tenant_id}", (
             f"OIDC callback did not sign the member in: {callback.status_code} {callback.headers.get('Location')}"
         )
@@ -399,13 +395,11 @@ class AdminTenantScopingEnv(AdminAccountEnv):
     def _login_via_google(self, tenant_id: str) -> None:
         """Sign in through Google OAuth at ``tenant_id``, choosing that tenant if asked to pick one."""
         with _stubbed_identity_provider():
-            login = self._flask_client.get(f"/tenant/{tenant_id}/auth/google")
-            callback = self._flask_client.get(
-                f"/auth/google/callback?code=test-code&state={_authorization_state(login)}"
-            )
+            login = self._flask.get(f"/tenant/{tenant_id}/auth/google")
+            callback = self._flask.get(f"/auth/google/callback?code=test-code&state={_authorization_state(login)}")
         assert callback.status_code == 302, f"Google callback failed: {callback.status_code}"
         if redirect_path(callback) == "/auth/select-tenant":
-            callback = self._flask_client.post("/auth/select-tenant", data={"tenant_id": tenant_id})
+            callback = self._flask.post("/auth/select-tenant", data={"tenant_id": tenant_id})
         assert callback.status_code == 302 and redirect_path(callback) == f"/tenant/{tenant_id}", (
             f"Google login did not land on the tenant: {callback.status_code} {callback.headers.get('Location')}"
         )
@@ -413,7 +407,7 @@ class AdminTenantScopingEnv(AdminAccountEnv):
 
     def _assert_sso_session(self, tenant_id: str, *, auth_method: str | None) -> None:
         """The session production writes for an ordinary single-sign-on user: a str user and no role."""
-        with self._flask_client.session_transaction() as sess:
+        with self._flask.session_transaction() as sess:
             session = dict(sess)
         assert session["user"] == MEMBER_EMAIL, session.get("user")
         assert session["tenant_id"] == tenant_id
@@ -423,15 +417,19 @@ class AdminTenantScopingEnv(AdminAccountEnv):
         # Google login asks is_super_admin(), which caches its False verdict in the session.
         assert not session.get("is_super_admin"), "SSO member is a super-admin"
 
+    @property
+    def _flask(self) -> Any:
+        """The in-process Flask test client; the single-sign-on drivers need its cookie jar."""
+        flask_client = self.client._flask_client
+        assert flask_client is not None, "single-sign-on login runs in process only"
+        return flask_client
+
     # ── Requests ──────────────────────────────────────────────────────────
 
-    def send(self, method: str, route_name: str) -> _AdminResponse:
+    def send(self, method: str, route_name: str) -> AdminResponse:
         route = ROUTES[route_name]
         assert method in route.methods, f"{route_name} does not serve {method}"
         path = route.path.format(
             tenant_id=self.target.tenant_id, principal_id=self.target.principal_id, advertiser_id=GAM_ADVERTISER_ID
         )
-        url = f"{self._base_url}{path}" if self._mode == "e2e" else path
-        if method == "GET":
-            return self._get(url)
-        return self._post_form(url, {})
+        return self.client.request(method, path, data={} if method == "POST" else None)

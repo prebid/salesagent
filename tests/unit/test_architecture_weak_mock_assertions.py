@@ -43,7 +43,6 @@ WEAK_ASSERTION_ALLOWLIST: set[tuple[str, str]] = {
     ("tests/unit/test_creative_repository.py", "test_creates_and_flushes"),
     ("tests/unit/test_creative_repository.py", "test_creates_assignment"),
     ("tests/unit/test_delivery.py", "test_adapter_failure_audit_logged"),
-    ("tests/unit/test_external_domain_routing.py", "test_index_route_external_domain_with_tenant"),
     ("tests/unit/test_gam_creative_rotation.py", "test_lica_payload_excludes_weight_when_default"),
     ("tests/unit/test_gam_creative_rotation.py", "test_lica_payload_includes_weight_when_non_default"),
     ("tests/unit/test_gam_service_account_auth.py", "test_service_account_credentials_creation"),
@@ -53,7 +52,6 @@ WEAK_ASSERTION_ALLOWLIST: set[tuple[str, str]] = {
     # FIXME(#1370): pre-existing split assertions outside tests/unit/ (surfaced by SCAN_DIRS widen)
     ("tests/integration/test_creative_async_lifecycle_obligations.py", "test_async_input_required_response"),
     ("tests/integration/test_delivery_webhooks_force.py", "test_trigger_report_for_media_buy_public_method"),
-    ("tests/integration/test_gam_tenant_setup.py", "test_command_line_parsing_network_code_optional"),
     ("tests/integration/test_targeting_values_endpoint.py", "test_get_targeting_values_endpoint"),
 }
 

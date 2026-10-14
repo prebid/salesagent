@@ -6,13 +6,8 @@ import os
 from adcp import get_adcp_spec_version
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
-from src.core.config import get_settings
-from src.core.domain_config import (
-    extract_subdomain_from_host,
-    get_sales_agent_url,
-    get_tenant_url,
-    is_sales_agent_domain,
-)
+from src.core.agent_identity import AGENT_CARD_PATH, AGENT_ENDPOINT_PATHS
+from src.core.tenant_context import TenantContext
 from src.core.version import get_version
 
 
@@ -28,76 +23,39 @@ def _get_jinja_env() -> Environment:
     )
 
 
-def _determine_base_url(virtual_host: str | None = None) -> str:
-    """Determine the base URL for the current environment.
+def _tenant_base_url(tenant_row: dict) -> str:
+    """The origin every URL on this page is built from: the tenant's STORED one.
 
-    Args:
-        virtual_host: Virtual host if provided (e.g., from request.host or Apx-Incoming-Host header)
-
-    Returns:
-        Base URL for generating endpoint URLs
-    """
-    # Check if we're in production
-    if get_settings().runtime.is_production:
-        if virtual_host:
-            return f"https://{virtual_host}"
-        # Fallback to production domain (if configured)
-        if url := get_sales_agent_url():
-            return url
-        # If no SALES_AGENT_DOMAIN configured, fall through to development mode
-
-    # Development/local mode: use virtual_host if provided
-    if virtual_host:
-        # Use http for localhost, https for everything else
-        scheme = "http" if "localhost" in virtual_host or virtual_host.startswith("127.") else "https"
-        return f"{scheme}://{virtual_host}"
-
-    # Local development fallback (should rarely be reached)
-    return get_settings().runtime.local_base_url
-
-
-def _extract_tenant_subdomain(tenant_row: dict, virtual_host: str | None = None) -> str | None:
-    """Extract tenant subdomain from tenant data or virtual host.
+    The same string the agent card publishes, through the same accessor
+    (``tenant.agent_url`` over the host the tenant declares), so the page and the
+    card cannot name different origins for one tenant. Reading the request's ``Host`` here
+    would publish whatever spelling the caller sent: a request resolves with or without the
+    port, so a tenant stored at ``host:8443`` would be advertised as ``https://host`` by the
+    page and ``https://host:8443`` by its card, and one of the two reaches nothing (#1845).
 
     Args:
         tenant_row: Tenant data from database, as ``serialize_tenant_to_dict`` shapes it
-        virtual_host: Virtual host domain if available
 
     Returns:
-        Tenant subdomain if determinable
+        Scheme plus host, no path and no trailing slash
     """
-    # First try virtual host
-    if virtual_host:
-        # Extract subdomain from virtual host using domain config
-        subdomain = extract_subdomain_from_host(virtual_host)
-        if subdomain:
-            return subdomain
-        elif "." in virtual_host:
-            # Generic virtual host, use first part
-            return virtual_host.split(".")[0]
-
-    # Fallback to tenant subdomain field
-    if tenant_row.get("subdomain"):
-        return tenant_row["subdomain"]
-
-    # Fallback to tenant_id
-    return tenant_row.get("tenant_id")
+    # Through the projection, not the raw column: it folds the host to lowercase, which is
+    # what the card's own reader does, so both sides publish the byte-identical string.
+    return TenantContext.from_dict(tenant_row).agent_url
 
 
-def _generate_pending_configuration_page(tenant_row: dict, virtual_host: str | None = None) -> str:
+def _generate_pending_configuration_page(tenant_row: dict) -> str:
     """Generate pending configuration page for unconfigured tenants.
 
     Args:
         tenant_row: Tenant data from database, as ``serialize_tenant_to_dict`` shapes it
-        virtual_host: Virtual host domain if applicable
 
     Returns:
         Simple HTML page indicating pending configuration
     """
     tenant_name = html.escape(tenant_row.get("name", "Unknown Publisher"))
     tenant_id = tenant_row.get("tenant_id", "default")
-    base_url = _determine_base_url(virtual_host)
-    admin_url = f"{base_url}/admin/tenant/{tenant_id}"
+    admin_url = f"{_tenant_base_url(tenant_row)}/admin/tenant/{tenant_id}"
 
     return f"""
     <!DOCTYPE html>
@@ -200,12 +158,14 @@ def _generate_pending_configuration_page(tenant_row: dict, virtual_host: str | N
     """
 
 
-def generate_tenant_landing_page(tenant_row: dict, virtual_host: str | None = None) -> str:
+def generate_tenant_landing_page(tenant_row: dict) -> str:
     """Generate HTML content for tenant landing page.
 
+    Every URL on the page names the tenant's stored origin (:func:`_tenant_base_url`), which
+    is what the agent card publishes too, so a buyer reading both is told one thing.
+
     Args:
-        tenant_row: Tenant data from database (``serialize_tenant_to_dict``): name, subdomain, etc.
-        virtual_host: Virtual host domain if applicable (e.g., from Apx-Incoming-Host)
+        tenant_row: Tenant data from database (``serialize_tenant_to_dict``): name, virtual_host, etc.
 
     Returns:
         Complete HTML page as string
@@ -221,65 +181,32 @@ def generate_tenant_landing_page(tenant_row: dict, virtual_host: str | None = No
 
     # If not configured, show pending configuration page
     if not is_configured:
-        return _generate_pending_configuration_page(tenant_row, virtual_host)
+        return _generate_pending_configuration_page(tenant_row)
 
-    # Get base URL for this environment
-    base_url = _determine_base_url(virtual_host)
+    base_url = _tenant_base_url(tenant_row)
 
-    # Extract tenant subdomain
-    tenant_subdomain = _extract_tenant_subdomain(tenant_row, virtual_host)
-
-    # Generate endpoint URLs
-    mcp_url = f"{base_url}/mcp"
-    a2a_url = base_url  # A2A endpoint is at the root, not /a2a
-    agent_card_url = f"{base_url}/.well-known/agent.json"
-
-    # Admin URL: Depends on deployment mode
-    from src.core.config_loader import is_single_tenant_mode
-
-    if is_single_tenant_mode():
-        # Single-tenant mode: use full URLs based on virtual_host (passed from request)
-        # This ensures users see copy-pasteable URLs like http://localhost:55030/mcp
-        if virtual_host:
-            # Use http for localhost, https for everything else
-            scheme = "http" if "localhost" in virtual_host or virtual_host.startswith("127.") else "https"
-            single_tenant_base = f"{scheme}://{virtual_host}"
-        else:
-            # Fallback to base_url if no virtual_host
-            single_tenant_base = base_url
-        mcp_url = f"{single_tenant_base}/mcp"
-        a2a_url = single_tenant_base  # A2A is at root
-        agent_card_url = f"{single_tenant_base}/.well-known/agent.json"
-        admin_url = f"{single_tenant_base}/admin/"
-    else:
-        # Multi-tenant mode: For external domains, use subdomain; otherwise use current domain
-        is_external_domain = virtual_host and not is_sales_agent_domain(virtual_host)
-        if is_external_domain and tenant_subdomain:
-            # External domain: Point admin to tenant subdomain
-            if get_settings().runtime.is_production:
-                admin_url = f"{get_tenant_url(tenant_subdomain)}/admin/"
-            else:
-                # Local dev: Use localhost with subdomain simulation
-                admin_url = f"http://{tenant_subdomain}.localhost:8001/admin/"
-        else:
-            # Same domain or subdomain: Use base_url
-            admin_url = f"{base_url}/admin/"
+    # Every endpoint, and the admin, on the one origin. A tenant is served at the host it
+    # declares whether the deployment carries one tenant or many, so there is no second
+    # origin for a deployment mode to choose between (#1845).
+    # The paths come from AGENT_ENDPOINT_PATHS, which is what src/app.py mounts and what the
+    # agent card publishes. A machine client reads the card, so a path spelled here is copy
+    # for a human -- and a human copying "/mcp" where FastMCP mounts "/mcp/", or the bare
+    # origin where A2A answers at "/a2a", gets sent somewhere that is not the endpoint.
+    mcp_url = f"{base_url}{AGENT_ENDPOINT_PATHS['mcp']}"
+    a2a_url = f"{base_url}{AGENT_ENDPOINT_PATHS['a2a']}"
+    agent_card_url = f"{base_url}{AGENT_CARD_PATH}"
+    admin_url = f"{base_url}/admin/"
 
     # Prepare template context
     template_context = {
         # Tenant information (escaped by Jinja2 auto-escape)
         "tenant_name": tenant_row.get("name", "Unknown Publisher"),
-        "tenant_subdomain": tenant_subdomain,
         # URLs
-        "base_url": base_url,
         "mcp_url": mcp_url,
         "a2a_url": a2a_url,
         "agent_card_url": agent_card_url,
         "admin_url": admin_url,
         "adcp_docs_url": "https://adcontextprotocol.org",
-        # Virtual host info
-        "virtual_host": virtual_host,
-        "is_production": get_settings().runtime.is_production,
         # Additional context
         "page_title": f"{tenant_row.get('name', 'Publisher')} Sales Agent",
         "version": get_version(),

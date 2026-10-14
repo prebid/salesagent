@@ -6,6 +6,7 @@ Each check function returns a list of "<file>:<line>: <message>" strings.
 
 from __future__ import annotations
 
+import os
 import re
 import sys
 from pathlib import Path
@@ -57,17 +58,10 @@ def check_no_fn_calls(files: list[Path]) -> list[str]:
 # a path into .claude/notes/ points at a working note that is deleted when the
 # work lands, and a review-round finding id (R1-19, SF-7, Chris-#2) exists only
 # inside such a note. Both make an internal artifact load-bearing for the suite.
-# Beads ids are deliberately NOT covered here: 733 of them already exist under
-# src/ and tests/, so banning them is its own sweep rather than a forward-lock,
-# and CLAUDE.md already directs FIXMEs at GitHub numbers.
-# The beads-id alternation that used to be the third line here was removed: it
-# contradicted the paragraph directly above it, and both were added in the SAME
-# commit (26783202f), so one of the two was a slip. The comment is the one that
-# holds up -- it names a checkable reason, and the count is now 478 beads ids
-# under src/ and tests/. A pattern matching 478 existing occurrences is not a
-# forward-lock; it made every file carrying one uncommittable, which is how it
-# surfaced. The docstring below still says "either form", counting two, which is
-# the same design speaking again. Banning beads ids remains "its own sweep".
+# Beads ids are deliberately NOT covered here: hundreds of them already exist
+# under src/ and tests/, so a pattern matching them is not a forward-lock — it
+# makes every file carrying one uncommittable. Banning them is its own sweep, and
+# CLAUDE.md already directs FIXMEs at GitHub numbers.
 _UNRESOLVABLE_CITATION_RE = re.compile(r"\.claude/notes/|\b(?:R\d-\d{1,2}|SF-\d{1,2}|Chris-#\d+)\b")
 
 
@@ -95,15 +89,76 @@ def check_no_unresolvable_citations(files: list[Path]) -> list[str]:
 CHECKS = [check_no_skip_tests, check_no_fn_calls, check_no_unresolvable_citations]
 
 
+# A developer's home directory, hardcoded. `/Users/<name>/` and `/home/<name>/` are
+# machine-specific: they break on every other checkout and, when the offender is a
+# SYMLINK, they break git itself — a path under a symlinked directory is
+# unreachable ("fatal: pathspec ... is beyond a symbolic link"), so a file written
+# there cannot be committed from a worktree at all. #2228 removed the last of them,
+# including two tracked symlinks; this keeps them out.
+_DEV_HOME_RE = re.compile(r"/(?:Users|home)/(?!<|\$)([A-Za-z0-9._-]+)/")
+
+# Generic stand-ins that are documentation, not someone's machine.
+_PLACEHOLDER_USERS = frozenset({"user", "username", "you", "youruser", "your-user", "me", "name", "runner", "root"})
+
+
+def _dev_home_hit(text: str) -> str | None:
+    """The first machine-specific home path in *text*, or None."""
+    for match in _DEV_HOME_RE.finditer(text):
+        if match.group(1).lower() not in _PLACEHOLDER_USERS:
+            return match.group(0)
+    return None
+
+
+def check_no_developer_paths(files: list[Path]) -> list[str]:
+    """Forbid hardcoded developer home directories, in file CONTENT and in SYMLINK TARGETS.
+
+    Two distinct failure modes, and the second is the one that bites hardest:
+
+    * content — a path under a named home directory in a doc, formula or
+      script is unrunnable for everyone else.
+    * symlink target — a tracked symlink pointing into one machine makes its whole
+      subtree unreachable to git from any other worktree. That is not a portability
+      nit; files under it cannot be committed at all.
+
+    Placeholders (``/home/user/``, ``/Users/<you>/``, ``$HOME``) are allowed: they
+    are documentation, not a machine.
+    """
+    out: list[str] = []
+    for filepath in files:
+        if filepath.is_symlink():
+            target = os.readlink(filepath)
+            if (hit := _dev_home_hit(target + "/")) is not None:
+                out.append(
+                    f"{filepath}:0: symlink points into a developer home ({hit}) — "
+                    f"its subtree becomes unreachable to git from other worktrees"
+                )
+            continue
+        try:
+            text = filepath.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        for lineno, line in enumerate(text.splitlines(), 1):
+            if (hit := _dev_home_hit(line)) is not None:
+                out.append(
+                    f"{filepath}:{lineno}: hardcoded developer path ({hit}) — use a repo-relative or sibling path"
+                )
+    return out
+
+
 def main(argv: list[str]) -> int:
-    files = [Path(p) for p in argv[1:] if p.endswith(".py")]
-    if not files:
+    given = [Path(p) for p in argv[1:]]
+    files = [p for p in given if p.suffix == ".py"]
+    if not given:
         # When invoked with no filenames (always_run-style), scan tests/ and src/
         repo = Path(__file__).resolve().parents[1]
         files = list((repo / "tests").rglob("test_*.py")) + list((repo / "src").rglob("*.py"))
+        given = files
     all_errors: list[str] = []
     for check in CHECKS:
         all_errors.extend(check(files))
+    # Portability is not a Python-only concern: docs, formulas, shell scripts and
+    # symlinks carry these too, so this one check sees every file it is handed.
+    all_errors.extend(check_no_developer_paths(given))
     if all_errors:
         for error in all_errors:
             print(error, file=sys.stderr)

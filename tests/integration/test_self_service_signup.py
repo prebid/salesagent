@@ -48,6 +48,67 @@ def _provisioned_tenant_id(response) -> str:
 class TestSelfServiceSignupFlow:
     """Test self-service tenant signup flow."""
 
+    @pytest.fixture(autouse=True)
+    def _multi_tenant_deployment(self, monkeypatch, client):
+        """Self-serve signup only exists on a deployment that can host a self-serve tenant.
+
+        A signing-up publisher cannot know where the deployment answers, so signup is the one
+        creation path that DERIVES its tenant's ``virtual_host`` — and it may only do so where
+        ``config/nginx/nginx-multi-tenant.conf`` serves ``*.${SALES_AGENT_DOMAIN}`` and lets the
+        app pick the tenant from the ``Host``. Those two settings together are what make the
+        derived name a host something actually serves; without them the route refuses, because
+        deriving anyway publishes an unreachable agent URL (#1845).
+
+        So these cases have to declare the deployment they are testing. Two traps:
+
+        * Set on the settings OBJECT, not the environment. Settings are built once and an env
+          write lands only before the first read, so ``monkeypatch.setenv`` is silently ignored.
+        * Takes ``client`` so it runs AFTER it. ``create_app`` calls ``load_settings()``
+          (``src/admin/app.py``), which REBUILDS the global settings — patching first and
+          building the client second throws the patch away, and the route then refuses with
+          the fields apparently set.
+        """
+        from src.core.config import get_settings
+
+        runtime = get_settings().runtime
+        monkeypatch.setattr(runtime, "adcp_multi_tenant", True)
+        monkeypatch.setattr(runtime, "sales_agent_domain", "sales-agent.adcp.test")
+
+    def test_signup_is_refused_when_the_deployment_hosts_no_wildcard(self, integration_db, client, monkeypatch):
+        """Without the wildcard, signup refuses rather than inventing a host for the tenant.
+
+        The other half of the rule above, and the half nothing graded until now: on a
+        single-tenant install nginx is ``server_name _`` with no wildcard, so
+        ``f"{subdomain}.{sales_agent_domain}"`` names nothing. Refusing is what keeps the
+        derivation true by construction of the deployment that permits it.
+        """
+        from src.core.config import get_settings
+
+        monkeypatch.setattr(get_settings().runtime, "adcp_multi_tenant", False)
+
+        with client.session_transaction() as sess:
+            sess["signup_flow"] = True
+            sess["user"] = "newpublisher@example.com"
+            sess["user_name"] = "New Publisher"
+
+        response = client.post(
+            "/signup/provision",
+            data={"publisher_name": "No Wildcard Publisher", "adapter": "mock"},
+            follow_redirects=False,
+        )
+
+        assert response.status_code == 302, "a refused signup redirects back to onboarding"
+        assert "/signup/onboarding" in response.headers["Location"]
+
+        # Through the harness's own session rather than get_db_session() in a test body —
+        # the surrounding file is allowlisted for that and a new test does not inherit the
+        # exemption. Queried by name because that is the only key the caller supplied: the
+        # subdomain and the host are both derived server-side, and the refusal fires before
+        # either exists.
+        with IntegrationEnv() as env:
+            created = env.get_session().scalars(select(Tenant).filter_by(name="No Wildcard Publisher")).first()
+        assert created is None, "a tenant was provisioned on a deployment that serves no wildcard host"
+
     def test_landing_page_accessible_without_auth(self, integration_db, client):
         """Test that landing page is accessible without authentication."""
         response = client.get("/signup")
@@ -314,6 +375,7 @@ class TestSelfServiceSignupFlow:
                 tenant_id="completiontest",
                 name="Completion Test Publisher",
                 subdomain="completiontest",
+                virtual_host="completiontest.adcp.test",
                 ad_server="mock",
                 is_active=True,
                 billing_plan="standard",

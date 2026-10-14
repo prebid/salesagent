@@ -114,9 +114,16 @@ COPY config/nginx/nginx-multi-tenant.conf /etc/nginx/nginx-multi-tenant.conf
 COPY config/nginx/nginx-development.conf /etc/nginx/nginx-development.conf
 
 # Non-root runtime user (D34 — issue #1234 PR 5)
+# /etc/nginx/nginx.conf is chowned too: run_all_services.py overwrites it at startup
+# with the selected single-/multi-tenant config, and the apt-installed file is
+# root-owned by default — without this, that write fails under the non-root user.
+# Target /run, not /var/run: /var/run is a symlink to /run, and `chown -R`'s default
+# -P mode never follows a symlink argument into its target, so chowning /var/run only
+# relabels the symlink itself and leaves the real directory (where nginx writes its
+# pidfile) root-owned.
 RUN groupadd -r -g 1001 app && useradd -r -u 1001 -g app -s /usr/sbin/nologin app && \
     mkdir -p /var/log/nginx /var/run && \
-    chown -R app:app /app /opt/venv /var/log/nginx /var/run
+    chown -R app:app /app /opt/venv /var/log/nginx /var/lib/nginx /run /etc/nginx/nginx.conf
 
 # Venv on PATH; PYTHONPATH points at bind-mounted source in dev compose
 ENV PATH="/opt/venv/bin:$PATH"
@@ -131,9 +138,10 @@ ENV ADCP_HOST=0.0.0.0
 # Internal services (MCP:8080, Admin:8001, A2A:8091) are accessed via nginx
 EXPOSE 8000
 
-# Health check
+# Health check through nginx, so a dead proxy is unhealthy (nginx proxies /health to :8080).
+# A deployment that sets SKIP_NGINX defines its own healthcheck, as every compose file does.
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:8080/health || exit 1
+    CMD curl -f http://localhost:8000/health || exit 1
 
 USER app:app
 

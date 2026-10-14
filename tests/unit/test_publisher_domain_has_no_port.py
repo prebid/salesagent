@@ -10,7 +10,7 @@ else.
 
 from unittest.mock import MagicMock, PropertyMock
 
-from src.core.database.models import Product
+from src.core.database.models import Product, Tenant
 
 
 class TestPublisherDomainDropsThePort:
@@ -26,10 +26,11 @@ class TestPublisherDomainDropsThePort:
     """
 
     @staticmethod
-    def _product(virtual_host: str | None, *, subdomain: str = "ci-test", **fields: object) -> MagicMock:
-        tenant = MagicMock()
-        tenant.virtual_host = virtual_host
-        tenant.subdomain = subdomain
+    def _product(virtual_host: str, *, subdomain: str = "ci-test", **fields: object) -> MagicMock:
+        # A REAL tenant row, unattached: the derivation under test is
+        # ``Tenant.primary_domain``, and a mock stands in for it with an
+        # auto-created attribute that equals nothing and grades nothing.
+        tenant = Tenant(tenant_id="t-port", name="Port Tenant", subdomain=subdomain, virtual_host=virtual_host)
 
         product = MagicMock(spec=Product)
         product.inventory_profile_id = None
@@ -53,13 +54,16 @@ class TestPublisherDomainDropsThePort:
     def test_a_portless_virtual_host_is_untouched(self):
         assert self._product("publisher.example.com").publisher_domain == "publisher.example.com"
 
-    def test_an_ipv6_authority_keeps_its_colons(self):
-        """``rpartition`` and the digit check, not ``split(':')`` — which would truncate the address."""
-        assert self._product("[2001:db8::1]:8443").publisher_domain == "[2001:db8::1]"
-        assert self._product("[2001:db8::1]").publisher_domain == "[2001:db8::1]"
+    def test_an_ipv6_authority_keeps_its_whole_address(self):
+        """The address survives whole. ``split(':')`` would truncate it at the first group.
 
-    def test_no_virtual_host_falls_back_to_the_subdomain(self):
-        assert self._product(None, subdomain="ci-test").publisher_domain == "ci-test.example.com"
+        The brackets do not survive, because the derivation is ``hostname_of`` — the same
+        one the tenant-resolution query compares a request's ``Host`` with. Brackets are the
+        authority's spelling of an address, not part of it, and a second derivation that
+        kept them would be a second answer to "what host is this tenant".
+        """
+        assert self._product("[2001:db8::1]:8443").publisher_domain == "2001:db8::1"
+        assert self._product("[2001:db8::1]").publisher_domain == "2001:db8::1"
 
     def test_every_selection_variant_reads_the_same_derivation(self):
         """The three inline copies this replaced could have been fixed one at a time."""

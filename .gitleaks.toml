@@ -11,6 +11,15 @@ useDefault = true
 description = "agent-db skill test-only ENCRYPTION_KEY"
 paths = ['''\.claude/skills/\.agent-db\.env''']
 
+# The conformance corpus MANIFEST maps each vector file to its SHA-256 digest, which is
+# how the fixture sync detects drift. A 64-char hex digest trips the generic-api-key rule
+# on entropy alone. Scoped to that one manifest, so a real secret in any other vector file
+# still triggers -- including keys.json, whose private keys the corpus publishes on purpose
+# and which therefore must never be mistaken for this deployment's material.
+[[allowlists]]
+description = "conformance-vector MANIFEST file digests (integrity hashes, not secrets)"
+paths = ['''tests/fixtures/adcp_conformance_vectors/.*/MANIFEST\.json''']
+
 # AdCP idempotency keys are client-chosen request-deduplication identifiers
 # (spec pattern ^[A-Za-z0-9_.:-]{16,255}$), not credentials. Test literals like
 # idempotency_key="unit-test-key-..." trip the generic-api-key rule on entropy

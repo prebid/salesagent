@@ -28,6 +28,7 @@ def mock_adapter(integration_db):
             tenant_id="test_tenant_ai_creative",
             name="Test Tenant - AI Creative",
             subdomain="test-ai-creative",
+            virtual_host="test-ai-creative.adcp.test",
             ad_server="mock",  # Use ad_server field instead of config
         )
         session.add(tenant)

@@ -23,6 +23,7 @@ from src.core.database.queries import (
     get_creative_with_latest_review,
 )
 from tests.factories.principal import plaintext_token_for
+from tests.utils.database_helpers import vhost_for
 
 
 def _create_test_tenant_with_creative(session, tenant_id: str, creative_id: str):
@@ -38,6 +39,7 @@ def _create_test_tenant_with_creative(session, tenant_id: str, creative_id: str)
         tenant_id=tenant_id,
         name=f"Test Tenant {tenant_id}",
         subdomain=tenant_id,
+        virtual_host=vhost_for(tenant_id),
         is_active=True,
     )
     session.add(tenant)

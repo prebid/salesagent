@@ -112,10 +112,12 @@ EXPECTED_LEDGER: frozenset[str] = frozenset(
         # transport; over e2e_rest the live catalog carries pixel_tracker assets the
         # pinned Format.assets union does not admit (adcp#7338), so the compliance
         # Then fails there for the same reason as the three UC-005 rows above.
-        # Upstream's own release is inconsistent with itself, which is why no change here
-        # can graduate this row: the reference catalog captured at pin 467fd93d7711 -- the
-        # same commit the feature files cite for the pinned schemas -- publishes
-        # pixel_tracker on 45 of its 57 formats, and the adcp SDK from that release already
+        # Upstream's v3.1.1 release was inconsistent with itself: its reference catalog
+        # publishes pixel_tracker on 45 formats (45 of 71 in the catalog now captured at
+        # agent pin 76b031a85eb8, v3.1.25), its core/format.json admits none, and adcp#7338
+        # fixed the schema only in v3.1.22. The row graduates when the SPEC pin (the commit
+        # the feature files cite, 467fd93d7) moves to v3.1.22 or later; moving the agent
+        # pin alone changes nothing here. The adcp SDK from that release already
         # carries an UnknownFormatAsset fallback arm for exactly this ("AdCP enums grow
         # additively by design", strict on emit, lenient on parse). The JSON schema is the
         # half that did not get the arm. The one local "fix" -- stripping assets the pin

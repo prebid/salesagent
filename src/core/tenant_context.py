@@ -1,21 +1,20 @@
 """Typed tenant context model.
 
-Replaces the fragile dict[str, Any] tenant representation with a typed,
-validated Pydantic model. All tenant fields are explicitly defined with
-appropriate defaults.
+A typed, validated Pydantic model of a tenant: every field is explicitly
+declared, with a default where one is sound.
 
 The resolver (``src/core/resolved_identity._resolve_identity``) loads it once per request
 and hands it on as ``ResolvedIdentity.tenant``. Nothing downstream loads a tenant again.
 
-It is read by attribute only: ``tenant.tenant_id``. The dict shim (``__getitem__``, ``get``,
-``keys``, ``__contains__``) that let ``tenant["tenant_id"]`` compile is gone, so mypy sees
-every field a reader names.
+It is read by attribute only: ``tenant.tenant_id``. There is deliberately no dict shim
+(``__getitem__``, ``get``, ``keys``, ``__contains__``), so ``tenant["tenant_id"]`` does not
+compile and mypy sees every field a reader names.
 """
 
 import logging
 from typing import Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 from src.core.config_loader import safe_json_loads
 
@@ -23,17 +22,19 @@ logger = logging.getLogger(__name__)
 
 
 class TenantContext(BaseModel):
-    """Typed tenant context — replaces dict[str, Any] for tenant data.
+    """A tenant's fields, typed, as every reader downstream of the boundary sees them.
 
     Created from the database Tenant ORM model at the transport boundary.
-    Immutable after creation. All fields have sensible defaults so tests
-    can construct with just TenantContext(tenant_id="test").
+    Immutable after creation. Two fields are required, because the row always carries
+    them and a projection that admitted less would put the decision back on every
+    reader: ``tenant_id`` names the tenant, and ``virtual_host`` is the host it is
+    served at — the type is how ``canonical_agent_url`` stops needing a fallback. Every
+    other field has a default, so a test names only what it is grading.
     """
 
     tenant_id: str
     name: str = ""
-    subdomain: str = ""
-    virtual_host: str | None = None
+    virtual_host: str
     ad_server: str | None = None
     enable_axe_signals: bool = True
     authorized_emails: list[str] = []
@@ -57,6 +58,51 @@ class TenantContext(BaseModel):
     # #1592 T1a: implementation-backed AdCP capability declaration blocks.
     # None = nothing declared = the pre-#1592 capabilities wire.
     capability_declarations: dict[str, Any] | None = None
+
+    @field_validator("virtual_host")
+    @classmethod
+    def _fold_virtual_host(cls, value: str) -> str:
+        """The host this projection carries is LOWERCASE, whoever built it.
+
+        The read half of the same rule ``Tenant.virtual_host``'s validator states on the
+        write half: a ``Host`` names a DNS name and DNS is case-insensitive, so the one
+        canonical spelling is the folded one. Every reader that publishes or byte-matches
+        this tenant's origin — the agent card, ``get_adcp_capabilities`` — reads it from
+        here through ``canonical_agent_url``, so folding once at the projection is what
+        keeps a row written before that validator existed from publishing an origin in a
+        case no other reader would produce.
+        """
+        return value.strip().lower()
+
+    @property
+    def agent_url(self) -> str:
+        """Where this tenant's agent is reachable: its canonical ORIGIN, scheme included.
+
+        The ONE accessor, same name the ORM row carries, so a caller holding either shape
+        reads the same thing and no caller anywhere puts a scheme in front of a host itself
+        (#1845). The derivation stays in
+        :func:`src.core.agent_identity.canonical_agent_url`: one place computes, one name
+        reads.
+
+        Always a string, and never a fallback — ``virtual_host`` is required on this model.
+        """
+        from src.core.agent_identity import canonical_agent_url
+
+        return canonical_agent_url(self)
+
+    @property
+    def primary_domain(self) -> str:
+        """The publisher domain this tenant is known by: a HOSTNAME, never an origin.
+
+        The same accessor the ORM row carries, over the same derivation
+        (:func:`src.core.http_utils.hostname_of`), because ``publisher_domain`` is
+        constrained by AdCP to a pattern admitting no colon while ``virtual_host`` carries
+        the port. A reader holding the projection asks for the fact by this name rather than
+        stripping the port itself.
+        """
+        from src.core.http_utils import hostname_of
+
+        return hostname_of(self.virtual_host)
 
     # --- Construction helpers ---
 
@@ -83,7 +129,6 @@ class TenantContext(BaseModel):
         return cls(
             tenant_id=tenant.tenant_id,
             name=tenant.name or "",
-            subdomain=tenant.subdomain or "",
             virtual_host=tenant.virtual_host,
             ad_server=tenant.ad_server,
             enable_axe_signals=tenant.enable_axe_signals if tenant.enable_axe_signals is not None else True,

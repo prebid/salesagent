@@ -566,62 +566,16 @@ class TestIdentityIsDerivedNeverReLiteralled:
 # ---------------------------------------------------------------------------
 
 
-class TestBothConstructionSitesAgree:
-    """The no-tenant and tenant-resolved responses come from ONE builder."""
+class TestTheOneConstructionSite:
+    """The signing blocks come from ONE builder, on the one response path there is.
 
-    def test_no_tenant_response_declares_the_agent_level_verifier_posture(self, honesty_env):
-        """A caller with no resolved tenant still gets the agent's real posture.
-
-        ``request_signing.supported`` is defined by the pin as "Whether this agent
-        VERIFIES RFC 9421 signatures on incoming requests" — an AGENT-level fact.
-        ``verify_inbound_signature`` runs inside ``_resolve_identity``, which every
-        transport reaches ahead of any tenant read, and
-        ``SigningSettings.verifier_enabled`` defaults True, so the agent genuinely
-        does verify for a caller with no resolved tenant, and emitting ``false``
-        there UNDER-declares a fact that is true. ``webhook_signing`` is the
-        opposite case and stays ``false``: with no tenant there is no key, so we
-        genuinely do not sign. ``identity`` is absent for the same reason — there is
-        no trust root to point at.
-
-        The no-tenant caller is realized as ``credential={}`` — no headers at all, so
-        neither ``x-adcp-tenant`` nor a bearer is presented and ``_detect_tenant``
-        resolves nothing. That is the production shape of this branch;
-        ``get_adcp_capabilities`` takes a ``PublicIdentity``, so the request is served
-        rather than refused, which is what makes the branch reachable to grade.
-
-        This is also the DRY leg: two independent literals for one wire field is
-        the drift bug the ``_build_signing_blocks`` extraction now exists to
-        prevent, and the fix is ONE builder feeding both sites.
-        """
-        from src.core.config import get_settings
-
-        _seed(honesty_env, virtual_host="seller-notenant.example.com", keyed=False)
-
-        wire = _capabilities_wire(honesty_env, credential={})
-
-        # Non-vacuity: the minimal response has no media_buy block, so this proves
-        # the no-tenant branch really ran.
-        assert wire.get("media_buy") is None, (
-            "this must be the NO-TENANT minimal response; a media_buy block means a tenant resolved "
-            "and the assertions below would grade the other construction site"
-        )
-
-        verifier_enabled = get_settings().signing.verifier_enabled
-        assert wire["request_signing"]["supported"] is verifier_enabled, (
-            "the no-tenant response must declare request_signing.supported = "
-            f"SigningSettings.verifier_enabled ({verifier_enabled}); got "
-            f"{wire['request_signing']['supported']!r}. request_signing is not key-backed — it "
-            "declares that we VERIFY with the COUNTERPARTY's keys — so the agent-level fact is the "
-            "honest answer and a literal false under-declares it"
-        )
-        assert wire["webhook_signing"]["supported"] is False, (
-            "the no-tenant response must declare webhook_signing.supported false: with no tenant "
-            f"there is no key, so we genuinely do not sign. got {wire['webhook_signing']!r}"
-        )
-        assert wire.get("identity") is None, (
-            "the no-tenant response must carry no identity block — there is no tenant trust root "
-            f"to anchor a key origin against. got {wire.get('identity')!r}"
-        )
+    Was ``TestBothConstructionSitesAgree``, over a no-tenant site and a tenant-resolved
+    one. There is no no-tenant site: a request naming no seller is refused
+    TENANT_UNDEFINED before an identity exists, ``PublicIdentity.tenant`` is required,
+    and ``_resolve_signing_blocks`` carries no branch for a tenant whose row is missing.
+    What remains is that the one site DERIVES every block rather than re-literalling any
+    of them, graded below on a keyless tenant.
+    """
 
     def test_keyless_tenant_verifies_but_does_not_sign_and_publishes_nothing(self, honesty_env):
         """The asymmetry, on the tenant-resolved site: verify true, sign false.

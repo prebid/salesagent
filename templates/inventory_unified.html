@@ -239,6 +239,19 @@
                 </div>
             </div>
 
+            <div class="row mb-3">
+                <div class="col-12">
+                    <a href="{{ url_for('authorized_properties.list_authorized_properties', tenant_id=tenant_id) }}"
+                       class="btn btn-outline-primary">
+                        <i class="fas fa-list"></i> Authorized Properties
+                    </a>
+                    <a href="{{ url_for('authorized_properties.list_property_tags', tenant_id=tenant_id) }}"
+                       class="btn btn-outline-secondary">
+                        <i class="fas fa-tags"></i> Property Tags
+                    </a>
+                </div>
+            </div>
+
             <div class="row mb-4">
                 <div class="col-md-4">
                     <div class="card">
