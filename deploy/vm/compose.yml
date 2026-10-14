@@ -1,0 +1,106 @@
+# Prebid Sales Agent on one VM: Caddy (TLS) -> app (the image's nginx on :8000) -> PostgreSQL.
+# Guide: docs/deployment/vm.md. Lives in /opt/salesagent next to .env and Caddyfile.
+#
+# Only Caddy publishes ports. The app and the databases are reachable on the compose network only.
+name: salesagent
+
+services:
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    depends_on:
+      - app
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      SALES_AGENT_DOMAIN: ${SALES_AGENT_DOMAIN:?set in .env}
+      ACME_EMAIL: ${SUPPORT_EMAIL:?set in .env}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # Certificates and the ACME account. Losing it only means re-issuing certificates.
+      - caddy_data:/data
+      - caddy_config:/config
+
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: salesagent
+      POSTGRES_USER: salesagent
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set in .env}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U salesagent -d salesagent"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    shm_size: 256m
+
+  app:
+    # Built or pulled per docs/deployment/vm.md, then tagged salesagent:current.
+    image: salesagent:current
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://salesagent:${POSTGRES_PASSWORD}@postgres:5432/salesagent
+      # Mounts GET /tls/ask, which the Caddyfile's on-demand TLS asks before it requests a
+      # certificate. Off (the default) the path answers 404 and Caddy issues no certificate.
+      # Needed only behind a proxy that issues certificates on demand, as this one does.
+      TLS_ASK_ENABLED: "true"
+
+  # ---- Optional: the pinned AdCP reference creative agent (docker compose --profile creative-agent) ----
+  # The app reaches it at https://<SALES_AGENT_DOMAIN>/api/creative-agent through Caddy, because
+  # the app's outbound HTTP is https-only. Image built by src/scripts/creative-agent-stack.sh build.
+  creative-pg:
+    profiles: ["creative-agent"]
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: adcp_registry
+      POSTGRES_USER: adcp
+      POSTGRES_PASSWORD: ${CREATIVE_PG_PASSWORD:?set in .env}
+    volumes:
+      - creative_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U adcp -d adcp_registry"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  creative-agent:
+    profiles: ["creative-agent"]
+    image: adcp-creative-agent:latest
+    restart: unless-stopped
+    depends_on:
+      creative-pg:
+        condition: service_healthy
+    environment:
+      # The agent refuses to boot with DEV_USER_* when NODE_ENV=production, and without them it
+      # needs WorkOS. Caddy exposes only /api/creative-agent, so its UI is unreachable.
+      NODE_ENV: development
+      PORT: "8080"
+      DATABASE_URL: postgresql://adcp:${CREATIVE_PG_PASSWORD}@creative-pg:5432/adcp_registry
+      RUN_MIGRATIONS: "true"
+      ALLOW_INSECURE_COOKIES: "true"
+      DEV_USER_EMAIL: ${SUPPORT_EMAIL}
+      DEV_USER_ID: ops
+      AGENT_TOKEN_ENCRYPTION_SECRET: ${CREATIVE_AGENT_TOKEN_SECRET:?set in .env}
+      WORKOS_API_KEY: sk_test_unused
+      WORKOS_CLIENT_ID: client_unused
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:8080/api/creative-agent/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 18
+      start_period: 30s
+
+volumes:
+  pgdata:
+  creative_pgdata:
+  caddy_data:
+  caddy_config:

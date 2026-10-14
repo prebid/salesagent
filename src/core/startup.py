@@ -52,8 +52,9 @@ def validate_startup_requirements() -> None:
 
         # Note: SUPER_ADMIN_EMAILS is no longer required at startup.
         # Per-tenant OIDC with Setup Mode is the default authentication flow.
-        # New tenants start with auth_setup_mode=true, allowing test credentials
-        # to log in and configure SSO via the Admin UI.
+        # New tenants start with auth_setup_mode=true, so a super admin can administer
+        # one before it has configured its own SSO. The password login this used to
+        # name is gone (#2253): a session comes from Google, or not at all.
 
         logger.info("Startup requirements validation passed")
 

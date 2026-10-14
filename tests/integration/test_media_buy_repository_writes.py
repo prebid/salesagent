@@ -32,7 +32,12 @@ def tenant_a(integration_db):
     tenant_id = "write_test_tenant_a"
     with get_db_session() as session:
         tenant = Tenant(
-            tenant_id=tenant_id, name="Write Tenant A", subdomain="write-a", is_active=True, ad_server="mock"
+            tenant_id=tenant_id,
+            name="Write Tenant A",
+            subdomain="write-a",
+            virtual_host="write-a.adcp.test",
+            is_active=True,
+            ad_server="mock",
         )
         session.add(tenant)
         session.commit()
@@ -46,7 +51,12 @@ def tenant_b(integration_db):
     tenant_id = "write_test_tenant_b"
     with get_db_session() as session:
         tenant = Tenant(
-            tenant_id=tenant_id, name="Write Tenant B", subdomain="write-b", is_active=True, ad_server="mock"
+            tenant_id=tenant_id,
+            name="Write Tenant B",
+            subdomain="write-b",
+            virtual_host="write-b.adcp.test",
+            is_active=True,
+            ad_server="mock",
         )
         session.add(tenant)
         session.commit()

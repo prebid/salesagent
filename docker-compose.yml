@@ -12,7 +12,7 @@
 #   http://localhost:8000/a2a    - A2A Server (agent-to-agent)
 #
 # First-time setup:
-#   1. Log in with test credentials (test_super_admin@example.com / test123)
+#   1. Log in with Google as a SUPER_ADMIN_EMAILS address (there is no password login)
 #   2. Configure SSO in Users & Access
 #   3. Disable Setup Mode once SSO is working
 #
@@ -81,11 +81,10 @@ services:
       DATABASE_URL: postgresql://adcp_user:secure_password_change_me@postgres:5432/adcp?sslmode=disable
       SKIP_NGINX: "true"
       SKIP_CRON: "true"
-      # Per-tenant Setup Mode enables test credentials for new tenants
+      # Per-tenant Setup Mode: a new tenant may be administered before its own SSO is
       # Override .env ports to match nginx-development.conf expectations
       ADCP_SALES_PORT: "8080"
-      # Enable test login mode for development
-      ADCP_AUTH_TEST_MODE: "true"
+      FLASK_SECRET_KEY: "${FLASK_SECRET_KEY:-adcp-test-stack-session-signing-key}"
       # The key encryption key for RFC 9421 signing keys (#1291) comes from .env, and
       # from nowhere else. `.env.template` seeds a worthless development value, so
       # `cp .env.template .env` gives a working stack; a real deployment edits it or

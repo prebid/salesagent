@@ -51,7 +51,12 @@ def tenant_a(integration_db):
     tenant_id = "del_repo_tenant_a"
     with get_db_session() as session:
         tenant = Tenant(
-            tenant_id=tenant_id, name="Delivery Tenant A", subdomain="del-a", is_active=True, ad_server="mock"
+            tenant_id=tenant_id,
+            name="Delivery Tenant A",
+            subdomain="del-a",
+            virtual_host="del-a.adcp.test",
+            is_active=True,
+            ad_server="mock",
         )
         session.add(tenant)
         session.commit()
@@ -65,7 +70,12 @@ def tenant_b(integration_db):
     tenant_id = "del_repo_tenant_b"
     with get_db_session() as session:
         tenant = Tenant(
-            tenant_id=tenant_id, name="Delivery Tenant B", subdomain="del-b", is_active=True, ad_server="mock"
+            tenant_id=tenant_id,
+            name="Delivery Tenant B",
+            subdomain="del-b",
+            virtual_host="del-b.adcp.test",
+            is_active=True,
+            ad_server="mock",
         )
         session.add(tenant)
         session.commit()

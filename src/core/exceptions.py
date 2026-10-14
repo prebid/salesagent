@@ -1087,6 +1087,46 @@ class AdCPAdapterError(AdCPSalesAgentError[AdapterFailureDetails]):
     _code: ClassVar[ErrorCodeT] = ErrorCode.SERVICE_UNAVAILABLE
 
 
+class AdCPTenantUndefinedError(AdCPSalesAgentError[ErrorDetails]):
+    """The request named no seller this deployment serves (421, terminal).
+
+    A PLATFORM code, because AdCP defines none for this and the spec's vocabulary is open
+    (``core/error.json``; ``error-handling.mdx:845`` "sellers MAY return platform-specific
+    codes"). AdCP 3.1.1 is silent on tenant addressing -- a request is addressed to an
+    agent's URL and the mapping from that to a seller is this seller's own concern -- so
+    there is no published code to collapse this onto, and collapsing it would throw away the
+    one distinction a buyer can act on.
+
+    NOT ``CONFIGURATION_ERROR``, which this used to be. That code's pinned condition is a
+    seller-side deployment defect whose remediation is "report this to the seller's
+    operator", and after ``virtual_host`` became NOT NULL the seller-side sub-case cannot
+    occur: what reaches here is a caller naming an address this deployment answers for
+    nobody. The shipped edge is ``default_server`` / ``server_name _``, so a buyer holding a
+    stale URL and ordinary scanner traffic arrive exactly as an edge misroute would. Telling
+    those callers the SELLER is misconfigured points at the wrong party, and
+    ``error-handling.mdx:849`` then has their dashboards page the aggregate as a seller
+    outage.
+
+    TERMINAL, not correctable. ``correctable`` means "fix the request and resend"
+    (``core/error.json``), and no version of this request to THIS deployment succeeds:
+    naming a different host addresses a different agent, which is another request to another
+    seller rather than a correction of this one. The caller's move is to find the right
+    seller, not to resend.
+
+    421 Misdirected Request (RFC 9110 S15.5.20) says precisely this -- "directed at a server
+    that is unable or unwilling to produce an authoritative response for the target URI's
+    origin". Not 500, which would claim a fault on this side; not 404, which answers for a
+    resource inside a seller this request never identified.
+
+    CARRIES NO DETAILS. The address the caller supplied is what the operator needs and the
+    one thing the buyer must not be handed back, so it travels in the raise's ``__cause__``
+    to the server's record. The resolver is the only author
+    (``ruff-boundary.toml`` bans this class elsewhere, beside the two auth refusals).
+    """
+
+    _code: ClassVar[ErrorCodeT] = AppErrorCode.TENANT_UNDEFINED
+
+
 class AdCPConfigurationError(AdCPSalesAgentError[ConfigurationDetails]):
     """Server-side configuration is broken (500).
 

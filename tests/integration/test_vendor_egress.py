@@ -64,6 +64,7 @@ from src.core.exceptions import AdCPSalesAgentError
 from src.core.schemas import Principal, ReportingPeriod
 from src.core.security.egress.attempts import OutboundDeliveryFailed
 from src.core.security.outbound_http import OutboundError
+from tests.factories import TenantFactory, UserFactory
 from tests.harness._base import IntegrationEnv
 from tests.helpers.egress_backoff import fast_backoff
 from tests.helpers.local_http_origin import LocalOrigin, OriginResponse
@@ -71,6 +72,7 @@ from tests.helpers.local_http_origin import LocalOrigin, OriginResponse
 # Reused rather than restated: which escape hatches a case opens is one decision
 # with one home, and the backoff knob that keeps a retry case fast is the seam
 # suite's own helper.
+from tests.integration.gam_oauth_helpers import callback, log_in, start_flow
 from tests.integration.property_list_helpers import allow_local_origin
 
 pytestmark = [pytest.mark.integration]
@@ -585,7 +587,9 @@ def test_google_token_exchange_does_not_retry_a_retryable_failure(local_origin_t
     assert local_origin_tls.hits == 1
 
 
-def test_gam_callback_flashes_googles_rejection_on_a_400(local_origin_tls, monkeypatch, admin_client):
+def test_gam_callback_flashes_googles_rejection_on_a_400(
+    local_origin_tls, monkeypatch, admin_client, gam_oauth_configured, bound_factory_session
+):
     """``GET /auth/gam/callback`` turns Google's 400 into the operator's message.
 
     This is the branch of the extraction that must NOT move: the service raises,
@@ -600,21 +604,20 @@ def test_gam_callback_flashes_googles_rejection_on_a_400(local_origin_tls, monke
     exception proves the ``except`` branch can be entered, not that a real 400
     from a real socket arrives there as an ``OutboundError`` whose
     ``http_status`` is 400. Only the second claim survives the extraction.
-    """
-    from src.core.config import get_settings
 
+    The callback is reached the way a member reaches it — after authorize, with
+    the state that step issued — because since #2205 it denies anything else
+    before the exchange. ``gam_oauth_configured`` sets the seller's Google
+    credentials on the live settings object the view reads.
+    """
     allow_local_origin(monkeypatch)
     fast_backoff(monkeypatch)
     _point_google_token_url_at(local_origin_tls, monkeypatch)
     local_origin_tls.respond_with(400, body=b'{"error": "invalid_grant"}')
-    # The seller's own Google credentials are named facts on the settings object -- the
-    # GAMOAuthConfig carrier and its getter are gone, and the environment is read once
-    # (``load_settings``), so the values are set on the live settings the view reads.
-    auth = get_settings().auth
-    monkeypatch.setattr(auth, "gam_oauth_client_id", _GOOGLE_CLIENT_ID)
-    monkeypatch.setattr(auth, "gam_oauth_client_secret", _GOOGLE_CLIENT_SECRET)
+    tenant = TenantFactory(tenant_id="gam_oauth_tenant")
+    log_in(admin_client, UserFactory(tenant=tenant))
 
-    response = admin_client.get(f"/auth/gam/callback?code={_GOOGLE_AUTH_CODE}&state=gam_oauth_tenant")
+    response = callback(admin_client, start_flow(admin_client, tenant.tenant_id))
 
     assert response.status_code == 302
     assert urlsplit(response.headers["Location"]).path == "/tenant/gam_oauth_tenant/settings"

@@ -48,10 +48,11 @@ from unittest.mock import MagicMock
 from src.core.schemas import GetProductsResponse
 from tests.harness._base import IntegrationEnv
 from tests.harness._mixins import ProductMixin
+from tests.harness.database_faults import DatabaseFaultMixin
 from tests.harness.egress import EgressHatchMixin
 
 
-class ProductEnv(ProductMixin, IntegrationEnv):
+class ProductEnv(DatabaseFaultMixin, ProductMixin, IntegrationEnv):
     """Integration test environment for _get_products_impl.
 
     Only mocks external services (policy, dynamic variants,

@@ -8,11 +8,9 @@ The original was skipped because it tried to use python_a2a library, but we use 
 This test validates the actual HTTP endpoints that our A2A server exposes.
 """
 
-import json
 import os
 import sys
 from unittest.mock import MagicMock
-from urllib.parse import urlparse
 
 import pytest
 import requests
@@ -24,6 +22,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 
 from src.app import _AGENT_CARD_PATHS  # noqa: E402  (after the sys.path bootstrap above)
 from src.core.tools.registry import TOOLS  # noqa: E402  (after the sys.path bootstrap above)
+from tests.e2e.conftest import e2e_ca_bundle  # noqa: E402  (after the sys.path bootstrap)
+from tests.e2e.utils import declare_tenant_front  # noqa: E402
 from tests.helpers.credentials import credential_headers
 
 # Read the declared set from production: a path added to (or dropped from)
@@ -33,6 +33,15 @@ AGENT_CARD_PATHS = sorted(_AGENT_CARD_PATHS)
 
 # The one path the a2a-sdk factory mounts today — the regression guard.
 CANONICAL_AGENT_CARD_PATH = "/.well-known/agent-card.json"
+
+
+def card_origin(live_server) -> str:
+    """The origin to fetch an agent card from, and NO tenant header goes with it.
+
+    A card is discovery: a buyer has a hostname and nothing else, so the tenant has to be
+    resolvable from the HOST. Prefers the stack's named TLS front.
+    """
+    return live_server.get("tls") or live_server["a2a"]
 
 
 class TestA2AEndpointsActual:
@@ -46,81 +55,97 @@ class TestA2AEndpointsActual:
     stack is guaranteed up, so a connection failure is a real failure instead of a
     skip — same rule as ``test_unknown_task_id_returns_task_not_found_code_on_the_wire``
     below.
+
+    The front is declared here for the same reason the discovery-path class declares it: a
+    card fetch is discovery, so the tenant has to be resolvable from the Host alone, and a
+    request naming a host no tenant declares is refused rather than answered with a card.
     """
+
+    @pytest.fixture(autouse=True)
+    def _front_declared(self, live_server):
+        """This stack's tenant declares the host these tests fetch the card from.
+
+        Released after each test: there is one TLS origin and ``virtual_host`` is unique, so
+        holding it would take it from the signing suite.
+        """
+        with declare_tenant_front(live_server, card_origin(live_server)):
+            yield
 
     @pytest.mark.integration
     def test_well_known_agent_json_endpoint_live(self, live_server):
         """Test /.well-known/agent-card.json endpoint against live server."""
         # a2a-sdk 1.0 canonical path is /.well-known/agent-card.json
-        response = requests.get(f"{live_server['a2a']}/.well-known/agent-card.json", timeout=2)
+        response = requests.get(
+            f"{card_origin(live_server)}/.well-known/agent-card.json", verify=e2e_ca_bundle(), timeout=5
+        )
 
-        if response.status_code == 200:
-            # Endpoint works - validate response
-            assert response.headers["content-type"].startswith("application/json")
+        assert response.status_code == 200, (
+            f"the declared front returned {response.status_code} for the canonical card path: {response.text[:300]!r}"
+        )
+        assert response.headers["content-type"].startswith("application/json")
 
-            data = response.json()
-            assert "name" in data
-            assert "description" in data
-            assert "version" in data
-            assert "skills" in data
+        data = response.json()
+        assert "name" in data
+        assert "description" in data
+        assert "version" in data
+        assert "skills" in data
 
-            # a2a-sdk 1.0 (protobuf): URL is in supportedInterfaces, not top-level
-            assert "supportedInterfaces" in data, "Agent card must have supportedInterfaces"
-            interfaces = data["supportedInterfaces"]
-            assert len(interfaces) > 0
-            url = interfaces[0]["url"]
+        # a2a-sdk 1.0 (protobuf): URL is in supportedInterfaces, not top-level
+        assert "supportedInterfaces" in data, "Agent card must have supportedInterfaces"
+        interfaces = data["supportedInterfaces"]
+        assert len(interfaces) > 0
+        url = interfaces[0]["url"]
 
-            # Critical regression test: URL should not have trailing slash
-            assert not url.endswith("/"), f"Agent card URL should not have trailing slash: {url}"
-            assert url.endswith("/a2a"), f"Agent card URL should end with '/a2a': {url}"
+        # Critical regression test: URL should not have trailing slash
+        assert not url.endswith("/"), f"Agent card URL should not have trailing slash: {url}"
+        assert url.endswith("/a2a"), f"Agent card URL should end with '/a2a': {url}"
 
-            # Should be Prebid Sales Agent
-            assert data["name"] == "Prebid Sales Agent"
+        # Should be Prebid Sales Agent
+        assert data["name"] == "Prebid Sales Agent"
 
-            # Should have skills
-            assert "skills" in data
-            assert len(data["skills"]) > 0
+        # Should have skills
+        assert "skills" in data
+        assert len(data["skills"]) > 0
 
-            # AdCP 2.5: Should have AdCP extension in capabilities
-            assert "capabilities" in data
-            assert "extensions" in data["capabilities"]
-            extensions = data["capabilities"]["extensions"]
-            assert len(extensions) > 0
+        # AdCP 2.5: Should have AdCP extension in capabilities
+        assert "capabilities" in data
+        assert "extensions" in data["capabilities"]
+        extensions = data["capabilities"]["extensions"]
+        assert len(extensions) > 0
 
-            # Find AdCP extension
-            adcp_ext = None
-            for ext in extensions:
-                if "adcp-extension" in ext.get("uri", ""):
-                    adcp_ext = ext
-                    break
+        # Find AdCP extension
+        adcp_ext = None
+        for ext in extensions:
+            if "adcp-extension" in ext.get("uri", ""):
+                adcp_ext = ext
+                break
 
-            assert adcp_ext is not None, "AdCP extension not found in live agent card"
-            assert adcp_ext["params"]["adcp_version"] == get_adcp_spec_version()
-            assert "media_buy" in adcp_ext["params"]["protocols_supported"]
+        assert adcp_ext is not None, "AdCP extension not found in live agent card"
+        assert adcp_ext["params"]["adcp_version"] == get_adcp_spec_version()
+        assert "media_buy" in adcp_ext["params"]["protocols_supported"]
 
     @pytest.mark.integration
-    def test_agent_json_endpoint_live(self, live_server):
-        """Test /agent.json endpoint against live server."""
-        response = requests.get(f"{live_server['a2a']}/agent.json", timeout=2)
+    @pytest.mark.parametrize("retired", ["/agent.json", "/.well-known/agent.json"])
+    def test_a_retired_card_path_is_not_served(self, live_server, retired):
+        """The paths this seller stopped serving answer 404, and keep answering 404.
 
-        if response.status_code == 200:
-            assert response.headers["content-type"].startswith("application/json")
-            data = response.json()
-            assert data["name"] == "Prebid Sales Agent"
+        The card is declared on one path (``AGENT_CARD_PATH``). These two were served as
+        well: ``/.well-known/agent.json`` is the path AdCP's guide names, and ``/agent.json``
+        is a bare spelling no specification names. Serving one document at three addresses
+        lets a URL-keyed cache hold three copies of one agent's card.
 
-            # Same URL validation as the well-known endpoint. a2a-sdk 1.0
-            # (protobuf) puts the endpoint in supportedInterfaces, NOT top-level:
-            # `data["url"]` here was a dormant 0.3-era read that never ran, because
-            # /agent.json 404'd and this whole block sits behind a 200 check. Routing
-            # the path woke it into a KeyError, which is what a vacuous assertion
-            # does the moment it stops being vacuous.
-            assert "supportedInterfaces" in data, "Agent card must have supportedInterfaces"
-            interfaces = data["supportedInterfaces"]
-            assert len(interfaces) > 0
-            url = interfaces[0]["url"]
+        Asserted rather than dropped, because "retired" is a claim that can regress: a route
+        re-added here would not fail any other test, and this is what makes the single
+        declaration enforceable. A conforming client is unaffected — ``@adcp/sdk``'s
+        ``buildCardUrls`` tries both well-known paths and breaks on the first success.
+        """
+        response = requests.get(f"{card_origin(live_server)}{retired}", verify=e2e_ca_bundle(), timeout=5)
 
-            assert not url.endswith("/"), f"Agent card URL should not have trailing slash: {url}"
-            assert url.endswith("/a2a"), f"Agent card URL should end with '/a2a': {url}"
+        assert response.status_code == 404, (
+            f"{retired} answered {response.status_code}; this seller serves the card at "
+            f"{CANONICAL_AGENT_CARD_PATH} alone, and a second address for one document is "
+            f"a second document as far as any cache keyed on the URL is concerned"
+        )
 
     @pytest.mark.integration
     def test_a2a_endpoint_accessible(self, live_server):
@@ -141,20 +166,34 @@ class TestA2AEndpointsActual:
 
         # a2a-sdk 1.0 canonical path is /.well-known/agent-card.json
         response = requests.get(
-            f"{live_server['a2a']}/.well-known/agent-card.json",
+            f"{card_origin(live_server)}/.well-known/agent-card.json",
             headers={"Origin": allowed_origin},
-            timeout=2,
+            verify=e2e_ca_bundle(),
+            timeout=5,
         )
 
-        if response.status_code == 200:
-            # Should have CORS headers for an allowed origin
-            assert "Access-Control-Allow-Origin" in response.headers, "Missing CORS headers"
+        assert response.status_code == 200, (
+            f"the declared front returned {response.status_code} for the card: {response.text[:300]!r}"
+        )
+        # Should have CORS headers for an allowed origin
+        assert "Access-Control-Allow-Origin" in response.headers, "Missing CORS headers"
 
     @pytest.mark.integration
     def test_options_preflight_support(self, live_server):
-        """Test that OPTIONS requests work for CORS preflight."""
-        # a2a-sdk 1.0 canonical path is /.well-known/agent-card.json
-        response = requests.options(f"{live_server['a2a']}/.well-known/agent-card.json", timeout=2)
+        """Test that OPTIONS requests work for CORS preflight.
+
+        Declares the front for the same reason the discovery-path tests do: the card
+        describes a resolved tenant, and the host this stack is reached at is decided per
+        session, so the test is what states it.
+        """
+        # The tenant declares the front this request names, because a card fetch carries
+        # no tenant header — a request naming a host no tenant declares is refused before
+        # the route's OPTIONS handling is ever reached.
+        with declare_tenant_front(live_server, card_origin(live_server)):
+            # a2a-sdk 1.0 canonical path is /.well-known/agent-card.json
+            response = requests.options(
+                f"{card_origin(live_server)}/.well-known/agent-card.json", verify=e2e_ca_bundle(), timeout=5
+            )
 
         # Should handle OPTIONS requests
         assert response.status_code in [200, 204], "OPTIONS request should be handled"
@@ -168,13 +207,30 @@ class TestAgentCardDiscoveryPathsLive:
     in-process TestClient probe in
     tests/unit/test_a2a_transport_contract.py cannot reach: here a 200 also
     proves the card routes are matched BEFORE the catch-all, not swallowed by it.
+
+    NO TENANT HEADER, and that is the point. A card fetch is discovery: a client has a
+    hostname and nothing else. So the tenant has to be resolvable from the HOST, which
+    means this stack's tenant must declare the front it is served at — a per-session fact
+    (a compose service name in-network, a dynamic TLS port on the host path) that the test
+    knows and states through ``declare_tenant_front``. A request naming a host no tenant
+    declares is refused, which the last test here grades.
     """
+
+    @pytest.fixture(autouse=True)
+    def _front_declared(self, live_server):
+        """This stack's tenant declares the host these tests fetch the card from.
+
+        Released afterwards: there is one TLS origin and ``virtual_host`` is unique, so
+        holding it past these tests takes it from the signing suite.
+        """
+        with declare_tenant_front(live_server, card_origin(live_server)):
+            yield
 
     @pytest.mark.integration
     @pytest.mark.parametrize("path", AGENT_CARD_PATHS)
     def test_declared_card_path_is_served_live(self, live_server, path):
         """GET on every path in _AGENT_CARD_PATHS returns 200 from the live server."""
-        response = requests.get(f"{live_server['a2a']}{path}", timeout=2)
+        response = requests.get(f"{card_origin(live_server)}{path}", verify=e2e_ca_bundle(), timeout=5)
 
         assert response.status_code == 200, (
             f"{path} is declared in _AGENT_CARD_PATHS but the live server returned "
@@ -183,175 +239,69 @@ class TestAgentCardDiscoveryPathsLive:
         assert response.headers["content-type"].startswith("application/json")
 
     @pytest.mark.integration
-    def test_all_declared_card_paths_return_byte_identical_bodies_live(self, live_server):
-        """The live server serves one byte-identical card on every declared path.
+    def test_a_request_naming_no_tenant_is_refused_as_a_misconfiguration(self, live_server):
+        """No tenant, no card — refused with the seller-side code, not a card.
 
-        Compares raw bytes, not the parsed dict: a caching fetcher keyed on bytes
-        treats a re-serialization difference as a different document.
-        """
-        bodies = {path: requests.get(f"{live_server['a2a']}{path}", timeout=2) for path in AGENT_CARD_PATHS}
-
-        for path, response in bodies.items():
-            assert response.status_code == 200, f"{path} returned {response.status_code}, expected 200"
-
-        canonical = bodies[CANONICAL_AGENT_CARD_PATH].content
-        for path, response in bodies.items():
-            assert response.content == canonical, (
-                f"{path} body differs from {CANONICAL_AGENT_CARD_PATH}; "
-                f"all declared paths must serve one byte-identical card"
-            )
-
-    @pytest.mark.integration
-    @pytest.mark.parametrize("path", AGENT_CARD_PATHS)
-    def test_host_derivation_applies_on_every_card_path_live(self, live_server, path):
-        """Apx-Incoming-Host drives supportedInterfaces[0].url on every path.
-
-        A path that returns 200 carrying the static fallback host is still broken:
-        it advertises the wrong A2A endpoint to every tenant. That is the failure
-        mode this grades, and the HOST is what discriminates it.
-
-        The SCHEME is deliberately not pinned here. Whatever X-Forwarded-Proto a
-        client sends, an edge proxy sets its own -- in-network our nginx terminates
-        plain HTTP and forwards `http`, so pinning `https` asserts a value the
-        deployment topology owns rather than anything the app decides. Trusting the
-        edge's header IS the documented behaviour (src/app.py's get_protocol). The
-        scheme logic is graded where the input is actually controllable, in
-        tests/unit/test_agent_card_scheme.py; do not restore an https pin here.
+        The complement of the tests above: the card publishes a tenant's stored identity,
+        so with no tenant there is nothing truthful to publish. The refusal names what was
+        rejected, which is the operator's lever; what it must never do is publish the
+        caller's Host as the AGENT'S OWN advertised URL, which is what it did before #1440
+        and what let an attacker-supplied `Host: evil.example.com` come back as
+        `supportedInterfaces[0].url`.
         """
         response = requests.get(
-            f"{live_server['a2a']}{path}",
-            headers={"Apx-Incoming-Host": "tenant.example.com"},
-            timeout=2,
+            f"{card_origin(live_server)}{CANONICAL_AGENT_CARD_PATH}",
+            headers={"Host": "unclaimed.example"},
+            verify=e2e_ca_bundle(),
+            timeout=5,
         )
 
-        assert response.status_code == 200, f"{path} returned {response.status_code}, expected 200"
-        card = response.json()
-        derived = urlparse(card["supportedInterfaces"][0]["url"])
-
-        assert derived.netloc == "tenant.example.com", (
-            f"{path} did not derive its URL from Apx-Incoming-Host: got {derived.geturl()!r}, "
-            f"which means it served the static fallback host to a tenant"
+        assert response.status_code == 421, (
+            f"a Host no tenant claims returned {response.status_code}; 421 Misdirected Request "
+            f"is the status for a request this server cannot answer authoritatively for"
         )
-        assert derived.path == "/a2a", f"{path} derived the wrong endpoint path: {derived.geturl()!r}"
-        assert derived.scheme in ("http", "https"), f"{path} derived a non-HTTP scheme: {derived.geturl()!r}"
+        body = response.json()
+        assert body["adcp_error"]["code"] == "TENANT_UNDEFINED", body
+        assert body["adcp_error"]["recovery"] == "terminal", body
+        # The host the caller named belongs in the SERVER's record, not the envelope: this
+        # code declares no details shape, and echoing caller-controlled text back is the
+        # shape this route exists to refuse.
+        assert "unclaimed.example" not in response.text, (
+            f"the refusal echoed the caller's own Host back to it: {response.text[:300]!r}"
+        )
+        assert "supportedInterfaces" not in response.text, (
+            "the refusal published an agent URL built from the caller's own Host"
+        )
+
+    @pytest.mark.integration
+    def test_the_card_is_declared_on_the_canonical_path_alone(self, live_server):
+        """ONE declared path, and it is the one A2A fixes.
+
+        This compared every declared path's raw bytes against the canonical one's, which was
+        the right test while three paths were served. One path cannot disagree with itself,
+        so what is graded now is the DECLARATION: a non-canonical path added back here would
+        reintroduce the divergence the single declaration exists to prevent, and a buyer
+        reaching the card at two addresses can cache two documents for one agent.
+
+        ``/.well-known/agent.json`` (AdCP's guide) and ``/agent.json`` were both served.
+        Dropping them is safe for discovery because a conforming client falls back --
+        ``@adcp/sdk``'s ``buildCardUrls`` tries both well-known paths and breaks on the
+        first success.
+        """
+        assert AGENT_CARD_PATHS == [CANONICAL_AGENT_CARD_PATH], (
+            f"the card is declared on {AGENT_CARD_PATHS}; A2A fixes "
+            f"{CANONICAL_AGENT_CARD_PATH} (§8.2, §14.3) and this seller serves that one"
+        )
+
+        response = requests.get(
+            f"{card_origin(live_server)}{CANONICAL_AGENT_CARD_PATH}", verify=e2e_ca_bundle(), timeout=5
+        )
+        assert response.status_code == 200, f"{CANONICAL_AGENT_CARD_PATH} returned {response.status_code}"
+        assert response.json()["supportedInterfaces"], "the card declares no interface for a client to select"
 
 
 class TestA2AAgentCardCreation:
     """Test agent card creation functions directly (no HTTP required)."""
-
-    def test_create_agent_card_function(self):
-        """Test the create_agent_card function directly."""
-        try:
-            from src.a2a_server.adcp_a2a_server import create_agent_card
-        except ImportError as e:
-            if e.name and e.name.startswith("a2a"):
-                pytest.skip(f"a2a-sdk library not installed: {e}")
-            raise
-
-        agent_card = create_agent_card()
-
-        # Validate structure (protobuf AgentCard fields)
-        assert agent_card.name
-        assert agent_card.description
-        assert agent_card.version
-        assert len(agent_card.skills) > 0
-        assert len(agent_card.supported_interfaces) > 0
-
-        # Validate content
-        assert agent_card.name == "Prebid Sales Agent"
-
-        # a2a-sdk 1.0: URL is in supported_interfaces[0].url, not agent_card.url
-        interface_url = agent_card.supported_interfaces[0].url
-        assert not interface_url.endswith("/"), f"Interface URL should not have trailing slash: {interface_url}"
-        assert interface_url.endswith("/a2a"), f"Interface URL should end with '/a2a': {interface_url}"
-
-        # Validate skills structure (protobuf: skills have id and description)
-        for skill in agent_card.skills:
-            assert skill.id
-            assert skill.description
-
-    def test_agent_card_adcp_extension(self):
-        """Test that agent card includes AdCP 2.5 extension."""
-        from src.a2a_server.adcp_a2a_server import create_agent_card
-
-        agent_card = create_agent_card()
-
-        # Check capabilities has extensions
-        assert hasattr(agent_card, "capabilities")
-        assert agent_card.capabilities is not None
-        assert hasattr(agent_card.capabilities, "extensions")
-        assert agent_card.capabilities.extensions is not None
-        assert len(agent_card.capabilities.extensions) > 0
-
-        # Find AdCP extension
-        adcp_ext = None
-        for ext in agent_card.capabilities.extensions:
-            if "adcp-extension" in ext.uri:
-                adcp_ext = ext
-                break
-
-        assert adcp_ext is not None, "AdCP extension not found in capabilities.extensions"
-
-        # Validate AdCP extension structure
-        adcp_version = get_adcp_spec_version()
-        assert adcp_ext.uri == f"https://adcontextprotocol.org/schemas/{adcp_version}/protocols/adcp-extension.json"
-        assert adcp_ext.params is not None
-        # protobuf Struct: access fields dict-like
-        params = adcp_ext.params
-        assert "adcp_version" in params.fields
-        assert "protocols_supported" in params.fields
-
-        # Validate AdCP extension values
-        assert params.fields["adcp_version"].string_value == adcp_version
-        protocols_value = params.fields["protocols_supported"].list_value
-        protocols = [v.string_value for v in protocols_value.values]
-        assert len(protocols) >= 1
-        # Currently only media_buy protocol is supported
-        assert "media_buy" in protocols
-        assert set(protocols) == {"media_buy"}, "Only media_buy protocol is currently supported"
-
-    def test_agent_card_skills_coverage(self):
-        """Test that agent card includes expected AdCP skills."""
-        from src.a2a_server.adcp_a2a_server import create_agent_card
-
-        agent_card = create_agent_card()
-        skill_names = [skill.id for skill in agent_card.skills]
-
-        # Should include core AdCP skills
-        # Note: get_signals removed - should come from dedicated signals agents
-        expected_skills = [
-            "get_products",
-            "create_media_buy",
-            "sync_creatives",
-            "list_creatives",
-        ]
-
-        for expected_skill in expected_skills:
-            assert expected_skill in skill_names, f"Missing expected skill: {expected_skill}"
-
-    def test_agent_card_serialization(self):
-        """Test that agent card can be serialized to JSON."""
-        from src.a2a_server.adcp_a2a_server import create_agent_card
-
-        agent_card = create_agent_card()
-
-        # Should be able to serialize to dict (protobuf: use MessageToDict)
-        try:
-            from google.protobuf.json_format import MessageToDict, MessageToJson
-
-            card_dict = MessageToDict(agent_card)
-            assert isinstance(card_dict, dict)
-
-            # Should be JSON serializable
-            json_str = MessageToJson(agent_card)
-            assert len(json_str) > 0
-
-            # Should be able to parse back
-            parsed = json.loads(json_str)
-            assert parsed["name"] == "Prebid Sales Agent"
-
-        except Exception as e:
-            pytest.fail(f"Agent card serialization failed: {e}")
 
 
 class TestA2ARequestHandler:
@@ -416,12 +366,10 @@ class TestA2ARequestHandler:
     def test_core_skills_are_dispatchable_over_a2a(self):
         """The core skills are dispatchable over A2A, per the registry.
 
-        This used to assert one ``_handle_<tool>_skill`` method per tool. Those eleven
-        methods are deleted: A2A dispatch is the single derived ``_dispatch_skill``,
-        and a row is dispatchable because ``TOOLS[name].a2a`` is True. The old
-        ``hasattr``-based selection was the defect it appeared to guard — it
-        overrode the registry, advertising ``list_tasks``, ``get_task_status`` and
-        ``complete_task`` on the agent card while answering MethodNotFoundError.
+        Dispatch is the single derived ``_dispatch_skill``, and a row is dispatchable
+        because ``TOOLS[name].a2a`` is True — not because a ``_handle_<tool>_skill`` method
+        exists. ``hasattr``-based selection overrides the registry, which is how a card
+        comes to advertise a skill that answers MethodNotFoundError.
         """
         assert callable(self.handler._dispatch_skill), "A2A's one dispatch method is missing"
 
@@ -432,6 +380,16 @@ class TestA2ARequestHandler:
 
 class TestA2AServerIntegration:
     """Integration tests for complete A2A server setup."""
+
+    @pytest.fixture(autouse=True)
+    def _front_declared(self, live_server):
+        """Declared for the card fetch in ``test_server_discovery_flow``.
+
+        A card fetch carries no tenant header, so the tenant has to be resolvable from the
+        Host alone or the request is refused.
+        """
+        with declare_tenant_front(live_server, card_origin(live_server)):
+            yield
 
     @pytest.mark.integration
     @pytest.mark.parametrize("method", ["GetTask", "CancelTask"])
@@ -475,13 +433,20 @@ class TestA2AServerIntegration:
 
     @pytest.mark.integration
     def test_server_discovery_flow(self, live_server):
-        """Test complete A2A client discovery flow."""
+        """Test complete A2A client discovery flow.
+
+        The stack is guaranteed up by ``live_server`` and the fixture above declares the
+        front this fetches, so a non-200 here is a failure and never a skip.
+        """
         # Step 1: Client discovers agent (a2a-sdk 1.0 canonical path)
-        response = requests.get(f"{live_server['a2a']}/.well-known/agent-card.json", timeout=2)
+        response = requests.get(
+            f"{card_origin(live_server)}/.well-known/agent-card.json", verify=e2e_ca_bundle(), timeout=5
+        )
 
-        if response.status_code != 200:
-            pytest.skip("A2A server not responding")
-
+        assert response.status_code == 200, (
+            f"the declared front returned {response.status_code} for the card a client discovers "
+            f"the agent with: {response.text[:300]!r}"
+        )
         agent_card = response.json()
 
         # Step 2: Validate agent card has what client needs
@@ -496,8 +461,9 @@ class TestA2AServerIntegration:
         # Step 4: Test that messaging endpoint exists
         messaging_url = url if url.endswith("/a2a") else f"{url}/a2a"
 
-        # Try to connect (will fail with auth error, but should not be 404)
-        response = requests.post(messaging_url, json={"test": "message"}, timeout=2)
+        # Try to connect (will fail with auth error, but should not be 404). The URL comes
+        # off the card, so it is the declared front's https origin and needs the test CA.
+        response = requests.post(messaging_url, json={"test": "message"}, verify=e2e_ca_bundle(), timeout=5)
         assert response.status_code != 404, "Messaging endpoint should exist"
 
     @pytest.mark.integration
@@ -517,38 +483,3 @@ class TestA2AServerIntegration:
         # Missing auth should also not be 404
         response = requests.post(f"{live_server['a2a']}/a2a", json={"method": "SendMessage", "params": {}}, timeout=2)
         assert response.status_code != 404, "Endpoint should exist even without auth"
-
-
-def test_a2a_regression_summary():
-    """Quick summary test for key regressions."""
-
-    try:
-        # Test 1: Agent card URL format
-        from src.a2a_server.adcp_a2a_server import create_agent_card
-
-        agent_card = create_agent_card()
-        assert not agent_card.supported_interfaces[0].url.endswith("/"), "REGRESSION: Agent card URL has trailing slash"
-
-        # Test 2: Handler can be created
-        from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
-
-        handler = AdCPRequestHandler()
-        assert handler is not None, "REGRESSION: Cannot create A2A handler"
-
-        # Test 3: get_products is dispatchable over A2A and its row holds a plain callable
-        # Note: signals tools removed - using get_products as core function check instead
-        # (the module-level core_<tool>_tool wrappers are deleted; the registry row is
-        # what invoke_tool calls and what decides A2A dispatchability)
-        assert callable(TOOLS["get_products"].impl), "REGRESSION: registry impl not callable"
-        assert TOOLS["get_products"].a2a is True, "REGRESSION: get_products not dispatchable over A2A"
-    except ImportError as e:
-        if e.name and e.name.startswith("a2a"):
-            pytest.skip(f"a2a-sdk library not installed: {e}")
-        raise
-
-    print("✅ A2A regression tests passed")
-
-
-if __name__ == "__main__":
-    # Run basic checks when executed directly
-    test_a2a_regression_summary()

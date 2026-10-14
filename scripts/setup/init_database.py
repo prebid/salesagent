@@ -100,17 +100,28 @@ def init_db(exit_on_error=False):
             # Create default tenant
             from datetime import UTC, datetime
 
+            from src.core.agent_identity import deployment_virtual_host
+
+            # The deployment declares where it answers; see deployment_virtual_host. None
+            # means a production install declaring nothing, which gets no tenant rather than
+            # one holding a host it does not serve.
+            virtual_host = deployment_virtual_host()
+            if virtual_host is None:
+                print("⚠️  No default tenant created: set ADCP_AGENT_URL or SALES_AGENT_DOMAIN, then re-run.")
+                return
+
             now = datetime.now(UTC)
             default_tenant = Tenant(
                 tenant_id="default",
                 name="Default Publisher",
-                subdomain="default",  # Proper subdomain routing
+                subdomain="default",  # An internal identifier; virtual_host is what routes
+                virtual_host=virtual_host,
                 is_active=True,
                 billing_plan="standard",
                 ad_server="mock",
                 enable_axe_signals=True,
                 human_review_required=True,
-                auto_approve_format_ids=["display_300x250", "display_728x90", "display_320x50"],
+                auto_approve_format_ids=["display_300x250_image", "display_728x90_image", "display_320x50_image"],
                 brand_manifest_policy="public",  # Allow unauthenticated discovery for quick start
                 created_at=now,
                 updated_at=now,
@@ -159,7 +170,7 @@ def init_db(exit_on_error=False):
                     format_ids=[
                         {
                             "agent_url": "https://creative.adcontextprotocol.org",
-                            "id": "display_300x250",
+                            "id": "display_300x250_image",
                         }
                     ],
                     targeting_template={"geo_countries": ["US"]},
@@ -180,7 +191,7 @@ def init_db(exit_on_error=False):
                     format_ids=[
                         {
                             "agent_url": "https://creative.adcontextprotocol.org",
-                            "id": "video_preroll",
+                            "id": "video_standard_30s",
                         }
                     ],
                     targeting_template={"content_cat_any_of": ["sports"]},
@@ -257,7 +268,7 @@ def init_db(exit_on_error=False):
                         "formats": [
                             {
                                 "agent_url": "https://creative.adcontextprotocol.org",
-                                "id": "display_300x250",
+                                "id": "display_300x250_image",
                             }
                         ],
                         "targeting_template": {
@@ -282,7 +293,7 @@ def init_db(exit_on_error=False):
                         "formats": [
                             {
                                 "agent_url": "https://creative.adcontextprotocol.org",
-                                "id": "display_728x90",
+                                "id": "display_728x90_image",
                             }
                         ],
                         "targeting_template": {"geo_countries": ["US", "CA"]},

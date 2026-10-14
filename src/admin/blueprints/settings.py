@@ -192,18 +192,16 @@ def update_general(tenant_id):
             if "virtual_host" in request.form:
                 virtual_host = request.form.get("virtual_host", "").strip()
                 if virtual_host:
-                    # Basic validation for virtual host format
-                    # Check for invalid patterns first
-                    if ".." in virtual_host or virtual_host.startswith(".") or virtual_host.endswith("."):
-                        flash("Virtual host cannot contain consecutive dots or start/end with dots", "error")
-                        return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="general"))
+                    # ONE definition of the shape, shared with the ORM validator. The rule
+                    # spelled out here refused the ':' in 'host:8443' -- a form that cannot
+                    # save what the column legitimately holds, so a tenant served on a
+                    # non-default port could not be renamed.
+                    from src.core.http_utils import validate_virtual_host
 
-                    # Then check allowed characters
-                    if not virtual_host.replace("-", "").replace(".", "").replace("_", "").isalnum():
-                        flash(
-                            "Virtual host must contain only alphanumeric characters, dots, hyphens, and underscores",
-                            "error",
-                        )
+                    try:
+                        virtual_host = validate_virtual_host(virtual_host)
+                    except ValueError as exc:
+                        flash(str(exc), "error")
                         return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="general"))
 
                     # Check if virtual host is already in use by another tenant.
@@ -226,12 +224,16 @@ def update_general(tenant_id):
                         db_session,
                         conflict=taken_by_another_tenant,
                         write=claim_virtual_host,
-                        constraint="ix_tenants_virtual_host",
+                        constraint="ux_tenants_virtual_host_name",
                     )
                     if conflict is not None:
                         return conflict
                 else:
-                    tenant.virtual_host = None
+                    # An empty submission is refused rather than CLEARING the host, which
+                    # would leave an existing tenant unreachable by any Host. A tenant can
+                    # be MOVED, never un-addressed.
+                    flash("Virtual host is required — it is the address this tenant is served at", "error")
+                    return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="general"))
 
             # Update currency limits
             from decimal import Decimal, InvalidOperation
@@ -1278,11 +1280,10 @@ def update_business_rules(tenant_id):
 def _resolve_owned_domain(tenant_id: str, domain: str | None) -> OwnedDomain | None:
     """Prove the tenant owns *domain*, or report that the tenant is missing.
 
-    The ownership rule used to be written inside ONE of the Approximated
-    handlers, which is precisely why its two sibling routes never had it. The
-    status and unregister routes now share it from here; register_approximated_domain
-    still proves it inline (see the comment there) because its raw ``select()``
-    is a live no-raw-select allowlist row.
+    One owner for the ownership rule, so no Approximated handler can be written
+    without it. The status and unregister routes share it from here;
+    register_approximated_domain still proves it inline (see the comment there)
+    because its raw ``select()`` is a live no-raw-select allowlist row.
 
     ``tenant.virtual_host`` is read INSIDE the session block on purpose -- a
     detached instance would raise at the read rather than refuse.

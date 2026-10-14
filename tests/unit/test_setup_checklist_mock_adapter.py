@@ -11,6 +11,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from tests.utils.database_helpers import vhost_for
+
 
 class TestSetupChecklistMockAdapter:
     """Test setup checklist service handles mock adapter correctly."""
@@ -51,7 +53,7 @@ class TestSetupChecklistMockAdapter:
                 mock_tenant.order_name_template = None
                 mock_tenant.line_item_name_template = None
                 mock_tenant.slack_webhook_url = None
-                mock_tenant.virtual_host = None
+                mock_tenant.virtual_host = vhost_for(tenant_id)
                 mock_tenant.enable_axe_signals = False
                 mock_tenant.policy_settings = {}
                 mock_tenant.auth_setup_mode = True  # Setup mode active
@@ -110,7 +112,7 @@ class TestSetupChecklistMockAdapter:
             mock_tenant.order_name_template = None
             mock_tenant.line_item_name_template = None
             mock_tenant.slack_webhook_url = None
-            mock_tenant.virtual_host = None
+            mock_tenant.virtual_host = vhost_for(tenant_id)
             mock_tenant.enable_axe_signals = False
             mock_tenant.policy_settings = {}
             mock_tenant.auth_setup_mode = True  # Setup mode active
@@ -156,7 +158,7 @@ class TestSetupChecklistMockAdapter:
             mock_tenant.order_name_template = None
             mock_tenant.line_item_name_template = None
             mock_tenant.slack_webhook_url = None
-            mock_tenant.virtual_host = None
+            mock_tenant.virtual_host = vhost_for(tenant_id)
             mock_tenant.enable_axe_signals = False
             mock_tenant.policy_settings = {}
             mock_tenant.auth_setup_mode = True  # Setup mode active
@@ -205,7 +207,7 @@ class TestSetupChecklistMockAdapter:
                 mock_tenant.order_name_template = None
                 mock_tenant.line_item_name_template = None
                 mock_tenant.slack_webhook_url = None
-                mock_tenant.virtual_host = None
+                mock_tenant.virtual_host = vhost_for(tenant_id)
                 mock_tenant.enable_axe_signals = False
                 mock_tenant.policy_settings = {}
                 mock_tenant.auth_setup_mode = True  # Setup mode active
@@ -263,7 +265,7 @@ class TestSetupChecklistMockAdapter:
                 mock_tenant.order_name_template = None
                 mock_tenant.line_item_name_template = None
                 mock_tenant.slack_webhook_url = None
-                mock_tenant.virtual_host = None
+                mock_tenant.virtual_host = vhost_for(tenant_id)
                 mock_tenant.enable_axe_signals = False
                 mock_tenant.policy_settings = {}
                 mock_tenant.auth_setup_mode = True  # Setup mode active
@@ -310,7 +312,7 @@ class TestSetupChecklistMockAdapter:
                 mock_tenant.order_name_template = None
                 mock_tenant.line_item_name_template = None
                 mock_tenant.slack_webhook_url = None
-                mock_tenant.virtual_host = None
+                mock_tenant.virtual_host = vhost_for(tenant_id)
                 mock_tenant.enable_axe_signals = False
                 mock_tenant.policy_settings = {}
                 mock_tenant.auth_setup_mode = True  # Setup mode still active (SSO is optional in multi-tenant)

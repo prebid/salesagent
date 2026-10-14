@@ -1,0 +1,40 @@
+# Caddy for the Prebid Sales Agent on one VM. Guide: docs/deployment/vm.md.
+#
+# One catch-all site with on-demand TLS: Caddy gets a certificate for a hostname the first time a
+# client connects to it, after asking the app whether it serves that hostname (GET /tls/ask). The app
+# says yes for SALES_AGENT_DOMAIN, ADMIN_DOMAIN and every active tenant's host, so adding a tenant
+# never needs a Caddy change. Without the ask, anyone who points a domain here makes Caddy request
+# certificates for it. The app mounts /tls/ask only with TLS_ASK_ENABLED=true, which compose.yml sets.
+{
+	email {$ACME_EMAIL}
+	on_demand_tls {
+		ask http://app:8000/tls/ask
+	}
+}
+
+https:// {
+	tls {
+		on_demand
+	}
+	encode gzip zstd
+
+	# Routes that exist only on a test deployment (ADCP_TESTING=true). Never public.
+	@internal path /debug/* /_internal/* /admin/debug/*
+	handle @internal {
+		respond "Not found" 404
+	}
+
+	# Optional reference creative agent: its MCP surface only, on the apex host only.
+	@creative_agent {
+		host {$SALES_AGENT_DOMAIN}
+		path /api/creative-agent /api/creative-agent/*
+	}
+	handle @creative_agent {
+		reverse_proxy creative-agent:8080
+	}
+
+	# Everything else goes to the app. Caddy keeps Host as sent, which is how the app picks the tenant.
+	handle {
+		reverse_proxy app:8000
+	}
+}

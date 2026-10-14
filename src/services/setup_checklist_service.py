@@ -60,6 +60,35 @@ def _is_multi_tenant_mode() -> bool:
     return not get_settings().runtime.is_single_tenant
 
 
+def _custom_domain_task(tenant_id: str, virtual_host: str) -> "SetupTask":
+    """The "Custom Domain (CNAME)" task for a tenant served at *virtual_host*.
+
+    A custom domain is a host that DIFFERS from the one this deployment declares for
+    itself. Every tenant declares a host — ``tenants.virtual_host`` is mandatory — so the
+    presence of one says nothing about whether an operator configured it; the only host
+    nobody chose is the one ``deployment_virtual_host`` derives for the tenant a deployment
+    bootstraps for itself, and the bootstraps store that answer verbatim (#1845).
+
+    A deployment that declares no host of its own has no default for a tenant to be sitting
+    on, so every tenant's host was stated by somebody and the task is done.
+
+    One function, because the live path and the dashboard's pre-fetched path both build this
+    task and a second copy is how they would come to disagree.
+    """
+    from src.core.agent_identity import deployment_virtual_host
+
+    deployment_host = deployment_virtual_host()
+    is_custom = deployment_host is None or virtual_host.lower() != deployment_host.lower()
+    return SetupTask(
+        key="tenant_cname",
+        name="Custom Domain (CNAME)",
+        description="Configure custom domain for your sales agent",
+        is_complete=is_custom,
+        action_url=f"/tenant/{tenant_id}/settings#account",
+        details=(f"Using {virtual_host}" if is_custom else f"Using this deployment's own host ({virtual_host})"),
+    )
+
+
 # Simple time-based cache for setup status (5 minute TTL)
 _setup_status_cache: dict[str, tuple[float, dict[str, Any]]] = {}
 _CACHE_TTL_SECONDS = 300  # 5 minutes
@@ -687,18 +716,7 @@ class SetupChecklistService:
         )
 
         # 6. Tenant CNAME (Virtual Host)
-        virtual_host = tenant.virtual_host
-        has_custom_domain = bool(virtual_host)
-        tasks.append(
-            SetupTask(
-                key="tenant_cname",
-                name="Custom Domain (CNAME)",
-                description="Configure custom domain for your sales agent",
-                is_complete=has_custom_domain,
-                action_url=f"/tenant/{self.tenant_id}/settings#account",
-                details=f"Using {virtual_host}" if has_custom_domain else "Using default subdomain",
-            )
-        )
+        tasks.append(_custom_domain_task(self.tenant_id, tenant.virtual_host))
 
         return tasks
 
@@ -1073,17 +1091,7 @@ class SetupChecklistService:
         )
 
         # 6. Custom Domain
-        has_custom_domain = bool(tenant.virtual_host)
-        tasks.append(
-            SetupTask(
-                key="tenant_cname",
-                name="Custom Domain (CNAME)",
-                description="Configure custom domain for your sales agent",
-                is_complete=has_custom_domain,
-                action_url=f"/tenant/{self.tenant_id}/settings#account",
-                details=f"Using {tenant.virtual_host}" if has_custom_domain else "Using default subdomain",
-            )
-        )
+        tasks.append(_custom_domain_task(self.tenant_id, tenant.virtual_host))
 
         return tasks
 

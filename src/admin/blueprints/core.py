@@ -25,10 +25,7 @@ from src.core.database.database_session import get_db_session
 from src.core.database.integrity import resolve_or_write
 from src.core.database.models import Tenant
 from src.core.database.repositories import TenantLookupRepository
-from src.core.domain_config import (
-    extract_subdomain_from_host,
-    is_sales_agent_domain,
-)
+from src.core.http_utils import requested_host
 
 logger = logging.getLogger(__name__)
 
@@ -37,25 +34,25 @@ core_bp = Blueprint("core", __name__)
 
 
 def get_tenant_from_hostname():
-    """Extract tenant from hostname for tenant-specific subdomains."""
-    host = request.headers.get("Host", "")
+    """The tenant this admin request's host names, or None.
 
-    # Check for Approximated routing headers first
-    # Approximated sends Apx-Incoming-Host with the original requested domain
-    approximated_host = request.headers.get("Apx-Incoming-Host")
-    if approximated_host and not approximated_host.startswith("admin."):
-        # Approximated handles all external routing - look up tenant by virtual_host
-        with get_db_session() as db_session:
-            tenant = db_session.scalars(select(Tenant).filter_by(virtual_host=approximated_host)).first()
-            return tenant
+    The ONE host -> tenant lookup in the admin plane: ``public.landing`` and
+    ``auth.login`` call this rather than each rebuilding it, so neither can differ about
+    which host names a tenant or which tenants are eligible.
 
-    # Fallback to direct domain routing
-    if is_sales_agent_domain(host) and not host.startswith("admin."):
-        tenant_subdomain = extract_subdomain_from_host(host)
-        with get_db_session() as db_session:
-            tenant = db_session.scalars(select(Tenant).filter_by(subdomain=tenant_subdomain)).first()
-            return tenant
-    return None
+    Both steps have one owner: ``requested_host`` spells the header names
+    (``src/core/http_utils.py``) and ``TenantLookupRepository`` issues the query, the same
+    one ``config_loader`` routes buyer traffic with — so this honours ``is_active`` and the
+    column's folding, rather than matching ``virtual_host`` as an exact string. Routing is
+    routing on both planes.
+
+    A host under ``admin.`` names the admin domain itself, not a tenant.
+    """
+    host = requested_host(request.headers)
+    if not host or host.startswith("admin."):
+        return None
+    with get_db_session() as db_session:
+        return TenantLookupRepository(db_session).find_active_by_virtual_host(host)
 
 
 def render_super_admin_index():
@@ -214,21 +211,15 @@ def index():
         if tenant:
             from src.landing.landing_page import generate_tenant_landing_page
 
-            # Build effective host from request
-            effective_host = request.headers.get("X-Forwarded-Host", request.host)
-
-            # Use virtual_host if configured
-            if tenant.virtual_host:
-                effective_host = tenant.virtual_host
-
-            # Convert tenant to dict for landing page generator
+            # Convert tenant to dict for landing page generator. The page builds every URL
+            # from the stored ``virtual_host``, so no host is read off this request.
             tenant_dict = {
                 "tenant_id": tenant.tenant_id,
                 "name": tenant.name,
                 "subdomain": tenant.subdomain,
                 "virtual_host": tenant.virtual_host,
             }
-            html_content = generate_tenant_landing_page(tenant_dict, effective_host)
+            html_content = generate_tenant_landing_page(tenant_dict)
             return Response(html_content, mimetype="text/html")
         # No default tenant yet - redirect to login to set up
         return redirect(url_for("auth.login"))
@@ -257,7 +248,7 @@ def index():
 
             # The condition above ensures tenant is not None
             assert result.tenant is not None, "Tenant must be present for custom_domain/subdomain routing"
-            html_content = generate_tenant_landing_page(result.tenant, result.effective_host)
+            html_content = generate_tenant_landing_page(result.tenant)
             return Response(html_content, mimetype="text/html")
 
         # No tenant found - show signup landing
@@ -346,7 +337,6 @@ def debug_headers():
         ),
         "routing_analysis": {
             "host_header": request.headers.get("Host"),
-            "apx_incoming_host": request.headers.get("Apx-Incoming-Host"),
             "x_forwarded_host": request.headers.get("X-Forwarded-Host"),
             "x_original_host": request.headers.get("X-Original-Host"),
             "x_forwarded_for": request.headers.get("X-Forwarded-For"),
@@ -433,6 +423,21 @@ def _tenant_already_exists(db_session, tenant_id: str, subdomain: str):
     return None
 
 
+def _missing_required_tenant_field(tenant_name: str, virtual_host: str) -> str | None:
+    """The first field this form cannot create a tenant without, or None.
+
+    ``virtual_host`` is among them because the operator running this form is the only
+    party who knows where the deployment answers for the tenant, and nothing derives one
+    on their behalf. A tenant created without it was reachable by no ``Host`` at all and
+    published ``http://localhost:8080`` as its public A2A endpoint.
+    """
+    if not tenant_name:
+        return "Tenant name is required"
+    if not virtual_host:
+        return "Virtual host is required — it is the address this tenant is served at"
+    return None
+
+
 @core_bp.route("/create_tenant", methods=["GET", "POST"])
 @require_auth(admin_only=True)
 @log_admin_action("create_tenant")
@@ -446,10 +451,11 @@ def create_tenant():
         # Get form data
         tenant_name = request.form.get("name", "").strip()
         subdomain = request.form.get("subdomain", "").strip()
+        virtual_host = request.form.get("virtual_host", "").strip()
         ad_server = request.form.get("ad_server", "").strip() or None  # Default to None, not mock
 
-        if not tenant_name:
-            flash("Tenant name is required", "error")
+        if refusal := _missing_required_tenant_field(tenant_name, virtual_host):
+            flash(refusal, "error")
             return render_template("create_tenant.html")
 
         # Generate tenant ID if not provided
@@ -466,6 +472,7 @@ def create_tenant():
                 tenant_id=tenant_id,
                 name=tenant_name,
                 subdomain=subdomain,
+                virtual_host=virtual_host,
                 is_active=True,
                 ad_server=ad_server,
                 created_at=datetime.now(UTC),

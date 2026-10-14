@@ -43,12 +43,24 @@ def init_db(exit_on_error=False):
         existing_tenant = db_session.scalars(stmt).first()
 
         if not existing_tenant:
+            # See ensure_default_tenant: the deployment declares where it answers, once, and
+            # the answer is stored. A production install declaring neither ADCP_AGENT_URL nor
+            # SALES_AGENT_DOMAIN gets no default tenant rather than one holding a host that
+            # looks configured and serves nothing.
+            from src.core.agent_identity import deployment_virtual_host
+
+            bootstrap_host = deployment_virtual_host()
+            if bootstrap_host is None:
+                print("⚠️  No default tenant created: set ADCP_AGENT_URL or SALES_AGENT_DOMAIN, then restart.")
+                return
+
             if create_demo_tenant:
                 # Demo mode: Create fully configured tenant with mock adapter
                 new_tenant = Tenant(
                     tenant_id="default",
                     name="Demo Sales Agent",
                     subdomain="default",
+                    virtual_host=bootstrap_host,
                     created_at=datetime.now(UTC),
                     updated_at=datetime.now(UTC),
                     is_active=True,
@@ -56,9 +68,9 @@ def init_db(exit_on_error=False):
                     ad_server="mock",
                     enable_axe_signals=True,
                     auto_approve_format_ids=[
-                        "display_300x250",
-                        "display_728x90",
-                        "video_30s",
+                        "display_300x250_image",
+                        "display_728x90_image",
+                        "video_standard_30s",
                     ],
                     human_review_required=False,
                     auth_setup_mode=False,  # Disable setup mode for demo (simulates SSO configured)
@@ -69,6 +81,7 @@ def init_db(exit_on_error=False):
                     tenant_id="default",
                     name="My Sales Agent",
                     subdomain="default",
+                    virtual_host=bootstrap_host,
                     created_at=datetime.now(UTC),
                     updated_at=datetime.now(UTC),
                     is_active=True,
@@ -245,7 +258,7 @@ def init_db(exit_on_error=False):
                         "formats": [
                             {
                                 "agent_url": "https://creative.adcontextprotocol.org",
-                                "id": "display_300x250",
+                                "id": "display_300x250_image",
                             }
                         ],
                         "targeting_template": {
@@ -269,7 +282,7 @@ def init_db(exit_on_error=False):
                         "formats": [
                             {
                                 "agent_url": "https://creative.adcontextprotocol.org",
-                                "id": "display_728x90",
+                                "id": "display_728x90_image",
                             }
                         ],
                         "targeting_template": {

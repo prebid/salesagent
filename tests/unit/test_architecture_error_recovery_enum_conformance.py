@@ -96,6 +96,7 @@ _KNOWN_PLATFORM_CODES = frozenset(
         "AGENT_UNREACHABLE",
         "INTERNAL_ERROR",
         "MEDIA_BUY_REJECTED",
+        "TENANT_UNDEFINED",
         "PARTIAL_FAILURE",
         "WORKFLOW_CREATION_FAILED",
     }

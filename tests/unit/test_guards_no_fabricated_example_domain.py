@@ -1,19 +1,16 @@
 """Guard: never fabricate a "<dynamic-value>.example.com" domain as a fallback.
 
-src/core/tools/capabilities.py and src/core/database/models.py
-(Tenant.primary_domain) used to fabricate ``f"{subdomain}.example.com"`` whenever
-no real domain was configured -- ``example.com`` is RFC 2606 reserved, so the
-value is guaranteed unreachable, and callers treat these fields as claims (a
-publisher authorization the buyer resolves against, or a guard deciding whether
-real domain config exists). This guard bans the exact shape: an f-string literal
-whose LAST
-segment is a constant string ending in ``.example.com`` and where at least one
-value is interpolated before it (the "fabricate a subdomain-based example.com"
-form). It intentionally does NOT match a plain literal ``"example.com"`` string
-(no interpolation -- a different, separately-tracked pattern) or an f-string where
-``.example.com`` is a static substring followed by further interpolation (e.g. a
-URL path with a trailing ``{param}`` -- also a different, separately-tracked
-pattern), which keeps the guard narrow to the exact disease this ticket fixed.
+``example.com`` is RFC 2606 reserved, so a name built under it is guaranteed
+unreachable -- and the fields this shape reached were claims a buyer resolves
+against, or a guard deciding whether real domain configuration exists. A publisher
+authorization pointing at an address nothing answers is worse than no answer.
+
+The banned shape is exact: an f-string whose LAST segment is a constant string
+ending in ``.example.com``, with at least one value interpolated before it. Two
+neighbouring shapes are deliberately out of scope, each tracked on its own: a plain
+``"example.com"`` literal, which interpolates nothing and so cannot be this one, and
+an f-string where ``.example.com`` is a static substring followed by further
+interpolation, such as a URL path ending in a parameter.
 """
 
 from __future__ import annotations
@@ -25,49 +22,11 @@ from tests.unit._architecture_helpers import REPO_ROOT, assert_violations_match_
 _SRC_DIR = REPO_ROOT / "src"
 
 # Format: (relative_path_from_repo_root, lineno)
-# Pre-existing violations that predate this guard. The list can only shrink.
-ALLOWLIST: set[tuple[str, int]] = {
-    # FIXME(#1845): Product.publisher_properties fabricates the same shape --
-    # needs its own fix (the pinned publisher-property-selector.json schema
-    # requires publisher_domain non-empty on every entry, unlike capabilities.py's
-    # optional Portfolio, so the capabilities.py fix does not transfer as-is).
-    #
-    # RE-PINNED (#1757, -1 line each): models.py's signing import shrank by one line when
-    # it stopped importing four primitives from the facade and started importing
-    # REQUEST_SIGNING plus two CHECK-clause OPERATIONS from the leaf. The SAME THREE
-    # violations are listed, at their new coordinates — none added, none fixed.
-    #
-    # RE-PINNED AGAIN (merge of main into rfc9421-request-signing, +1 line each): the
-    # merge added a single `from enum import StrEnum` import to models.py, above all
-    # three sites. Verified a pure shift: the source text at 425/435/445 in the merged
-    # tree is byte-identical to 424/434/444 in the pre-merge parent, the only hunk above
-    # line 424 is that one-line import, and a full AST scan of src/ still finds exactly
-    # three violations — all three the same `self.tenant.virtual_host or
-    # f"{self.tenant.subdomain}.example.com"` fallback inside Product.effective_properties.
-    # Three entries out, three in; none added, none fixed.
-    #
-    # RE-PINNED A THIRD TIME (merge of main into feat/rfc9421-on-1721, +23 lines each):
-    # #1721's rewritten request boundary added lines to models.py ABOVE Product — the last
-    # hunk preceding the violations ends at line 232, and the next one starts at 529, so
-    # nothing inside Product.effective_properties changed. Verified a pure shift: the source
-    # at 448/458/468 is byte-identical to 425/435/445 in the pre-merge parent, the enclosing
-    # scope is still Product.effective_properties, and a full AST scan of the MERGED src/
-    # finds exactly three violations. Three entries out, three in; none added, none fixed.
-    #
-    # This allowlist is keyed by LINE NUMBER, so any edit above a violation re-reports it
-    # as new AND its old coordinate as stale; re-keying it on (file, symbol) is tracked as
-    # a follow-up on #1757. The three re-pins above were all caused by an unrelated edit
-    # ABOVE the violations rather than by any change to them.
-    #
-    # SHRUNK, 3 -> 1, and this one is NOT a re-pin. The three entries were three IDENTICAL
-    # copies of the fallback, inline in `Product.effective_properties`'s by_id, by_tag and
-    # `all` branches. They are now one `Product.publisher_domain` property, so there is one
-    # violation where there were three. The fabrication itself is unfixed and keeps
-    # FIXME(#1845); what changed is that fixing it is now a single edit rather than three
-    # that could diverge. (The same commit strips a port from the value for a separate
-    # reason -- see the property's docstring -- which does not touch this shape.)
-    ("src/core/database/models.py", 491),
-}
+# EMPTY, and it stays empty: the guard now grades a property no src/ file has. The last
+# entry was `Product.publisher_domain`'s `self.tenant.virtual_host or
+# f"{self.tenant.subdomain}.example.com"`, and it is gone because `virtual_host` is
+# mandatory (#1845) -- a column that refuses NULL leaves a fallback nothing to answer.
+ALLOWLIST: set[tuple[str, int]] = set()
 
 
 def _ends_with_fabricated_example_com(node: ast.JoinedStr) -> bool:

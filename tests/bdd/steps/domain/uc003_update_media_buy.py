@@ -2449,7 +2449,7 @@ def given_request_revision_wrong_type(ctx: dict, revision: str) -> None:
     Without this step the row failed on StepDefinitionNotFoundError, and the strict-xfail
     guard correctly refused to let that be recorded as a production/spec gap — it is test
     wiring, and the guard named it: "MISCLASSIFIED strict-xfail ... this is DORMANCY
-    (test-wiring), not a graded production gap (R1-2 class)". That is the
+    (test-wiring), not a graded production gap". That is the
     dormancy-misclassified-as-gap pattern ``test_architecture_bdd_xfail_reason_tokens``
     grades.
 

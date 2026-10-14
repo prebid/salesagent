@@ -3,7 +3,7 @@
 Two graders need the same rig and must not each grow their own copy of it
 (DRY invariant): ``tests/integration/test_storyboard_ledger_fitness_real_session.py``
 grades the in-session ledger join, and
-``tests/integration/test_storyboard_collection_gate_real_session.py`` grades the
+``tests/integration/test_storyboard_ledger_fitness_real_session.py`` grades the
 collection gate that decides whether that join has anything to join against.
 
 Both need the same three things, and nothing here is specific to either:

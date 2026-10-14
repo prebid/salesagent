@@ -34,7 +34,6 @@ def serialize_tenant_to_dict(tenant: Tenant) -> dict[str, Any]:
     return {
         "tenant_id": tenant.tenant_id,
         "name": tenant.name,
-        "subdomain": tenant.subdomain,
         "virtual_host": tenant.virtual_host,
         "ad_server": tenant.ad_server,
         "enable_axe_signals": tenant.enable_axe_signals,

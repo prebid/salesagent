@@ -24,22 +24,20 @@ the properties doing the reading are pinned shrink-only by
 from __future__ import annotations
 
 import json
-import shutil
 import subprocess
 import sys
-from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
 
-from tests.unit._architecture_helpers import repo_root
+from tests.unit._architecture_helpers import repo_root, stage_ast_grep_root
 
 RULE_ID = "test-flag-never-reaches-production"
 RULE_FILE = f".ast-grep/rules/{RULE_ID}.yml"
 
 #: A production read of the flag, in the spelling every real site uses: an attribute chain
-#: off a settings object. Written to a temp file under src/ so the rule's own ``files:``
-#: scoping applies to it exactly as it would to a real module.
+#: off a settings object. Written under ``src/`` in a staged project root so the rule's own
+#: ``files:`` scoping applies to it exactly as it would to a real module.
 _VIOLATING_SOURCE = """\
 from src.core.config import get_settings
 
@@ -79,13 +77,13 @@ def _ast_grep_bin() -> Path:
     return candidate
 
 
-def _scan(*paths: str) -> subprocess.CompletedProcess[str]:
-    """Run the real ast-grep with the real rule file over *paths*, from the repo root."""
+def _scan(*paths: str, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
+    """Run the real ast-grep with the real rule file over *paths*, from the repo root or a staged *cwd*."""
     return subprocess.run(
         [str(_ast_grep_bin()), "scan", "--rule", RULE_FILE, *paths, "--json=compact"],
         capture_output=True,
         text=True,
-        cwd=repo_root(),
+        cwd=cwd or repo_root(),
         check=False,
     )
 
@@ -109,32 +107,27 @@ def _matches(proc: subprocess.CompletedProcess[str]) -> list[dict]:
 
 
 @pytest.fixture
-def planted(request: pytest.FixtureRequest) -> Iterator[Path]:
-    """A directory under ``src/`` this ONE case writes its probe modules into.
+def planted(tmp_path: Path) -> Path:
+    """A staged project root this ONE case writes its probe modules into, under ``src/``.
 
     Under ``src/`` deliberately: the rule is scoped ``files: ["src/**/*.py"]``, so a probe
-    written to a pytest tmp_path would sit outside that glob and prove nothing about a
-    production read — the scan would report clean whether the rule worked or not. Cleaned
-    explicitly on teardown, since it cannot live under tmp_path.
-
-    Named after the requesting test, because the cases run on different xdist workers and
-    a directory shared between them is not a fixture but a race: one worker's teardown
-    deletes the probe another worker is mid-scan on, and removes the directory under it.
-    ``mkdir()`` refuses an existing directory rather than adopting it, so a leftover from
-    a killed run is loud instead of silently shared.
+    outside that glob would prove nothing about a production read — the scan would report
+    clean whether the rule worked or not. But under a STAGED root (``stage_ast_grep_root``
+    copies the real config and rules next to it), never the live ``src/``: there the probe
+    is a file every other guard's scan can list and then fail to read once this case
+    deletes it, which under xdist is a race between workers.
     """
-    target = repo_root() / "src" / f"_ast_grep_probe_{request.node.name}"
-    target.mkdir()
-    yield target
-    shutil.rmtree(target)
+    root = stage_ast_grep_root(tmp_path)
+    (root / "src" / "_ast_grep_probe").mkdir(parents=True)
+    return root
 
 
 def test_a_production_read_of_the_flag_matches(planted: Path) -> None:
     """(a) POSITIVE — the rule sees the spelling every real site uses."""
-    probe = planted / "reads_the_flag.py"
+    probe = planted / "src" / "_ast_grep_probe" / "reads_the_flag.py"
     probe.write_text(_VIOLATING_SOURCE, encoding="utf-8")
 
-    found = _matches(_scan(str(probe.relative_to(repo_root()))))
+    found = _matches(_scan(str(probe.relative_to(planted)), cwd=planted))
 
     assert len(found) == 1, f"expected exactly one match for one read, got {len(found)}: {found}"
     assert found[0]["ruleId"] == RULE_ID
@@ -147,18 +140,18 @@ def test_the_match_is_build_failing(planted: Path) -> None:
     Without ``severity: error`` ast-grep prints its matches and exits 0, and a rule that
     reports while passing is the dormancy every guard here exists to remove.
     """
-    probe = planted / "reads_the_flag.py"
+    probe = planted / "src" / "_ast_grep_probe" / "reads_the_flag.py"
     probe.write_text(_VIOLATING_SOURCE, encoding="utf-8")
 
-    assert _scan(str(probe.relative_to(repo_root()))).returncode == 1
+    assert _scan(str(probe.relative_to(planted)), cwd=planted).returncode == 1
 
 
 def test_the_same_decision_on_a_real_input_is_clean(planted: Path) -> None:
     """(c) NEGATIVE — reading a settings field a deployment can set is the fix, not a finding."""
-    probe = planted / "reads_a_real_input.py"
+    probe = planted / "src" / "_ast_grep_probe" / "reads_a_real_input.py"
     probe.write_text(_CONFORMING_SOURCE, encoding="utf-8")
 
-    proc = _scan(str(probe.relative_to(repo_root())))
+    proc = _scan(str(probe.relative_to(planted)), cwd=planted)
 
     assert _matches(proc) == []
     assert proc.returncode == 0
@@ -187,6 +180,6 @@ def test_the_config_exemption_is_live_not_prose() -> None:
 # There is no case scanning the live tree here. `make quality-ci` line 29 IS that scan
 # (`uv run ast-grep scan --config sgconfig.yml`), it covers every rule at once, and it
 # fails the build — so a pytest case re-running it over `src/` graded nothing the gate
-# did not already grade, and it collided with this module's own probe: cases (a)-(c)
-# plant a violating module under `src/_ast_grep_probe/`, which a serial run cleans up
-# before the tree scan reads it and an xdist run does not.
+# did not already grade, and it collided with this module's own probe back when cases
+# (a)-(c) planted it under the live `src/`. They plant it in a staged root now, but a
+# tree scan here would still grade nothing the gate does not.

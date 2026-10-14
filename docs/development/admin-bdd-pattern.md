@@ -11,11 +11,11 @@ own transports, its own env, and its own `ctx` key.
 | Transport | MCP, A2A, REST (plus `e2e_rest`) | Flask `test_client`, or `requests.Session` against the live stack |
 | Parametrized over | `Transport.A2A`, `Transport.MCP`, `Transport.REST`, plus the e2e members when `BDD_E2E_ENABLED=true` (`tests/bdd/conftest.py:4432-4435`) | `AdminTransport.INTEGRATION`, plus `AdminTransport.E2E` when `BDD_E2E_ENABLED=true` (`tests/bdd/conftest.py:4383-4387`) |
 | Caller identity | A credential headers dict; production's resolver builds the identity from it | A Flask session cookie, set through the env's `authenticate()` |
-| What a Then reads | The wire envelope, through the guarded helpers in `tests/bdd/steps/_outcome_helpers.py` | The `_AdminResponse` the When stored under `ctx["admin_page"]` |
+| What a Then reads | The wire envelope, through the guarded helpers in `tests/bdd/steps/_outcome_helpers.py` | The `AdminResponse` the When stored under `ctx["admin_page"]` |
 | Harness | A domain `IntegrationEnv` subclass | `AdminAccountEnv` (`tests/harness/admin_accounts.py`) |
 
 `AdminTransport` is a `StrEnum` and is deliberately **not** a member of
-`tests.harness.transport.Transport` (`tests/harness/admin_accounts.py:29-49`):
+`tests.harness.transport.Transport` (`tests/harness/admin_accounts.py:26-46`):
 every `Transport` member maps to an AdCP protocol, and the admin UI has none —
 so a member there needs a fabricated protocol. Because `StrEnum` members are
 `str`, a value that leaks into `dispatch_request` misses the transport map and
@@ -36,7 +36,8 @@ tests/bdd/
 └── conftest.py                      # T-ADMIN- parametrization, marker, ENV_ROUTES rows
 
 tests/harness/
-├── admin_accounts.py                # AdminTransport, AdminAccountEnv, _AdminResponse
+├── admin_client.py                  # AdminClient, AdminResponse: the two transports, once
+├── admin_accounts.py                # AdminTransport, AdminAccountEnv
 └── admin_tenant_scoping.py          # AdminTenantScopingEnv (AdminAccountEnv subclass)
 
 tests/helpers/
@@ -139,12 +140,12 @@ anything that read it, so the admin steps own `ctx["admin_page"]`
 (`tests/bdd/steps/domain/admin_accounts.py:51-58`).
 
 Every HTTP call goes through an env method (`get_list_page`, `post_create`,
-`post_status_change`, …) so both transports run the same step.
-`_AdminResponse` (`tests/harness/admin_accounts.py:78-120`) normalizes the two
-response objects and folds headers case-insensitively
-(`_CaseInsensitiveHeaders`, `:51-76`). `dict(response.headers)` threw that
-property away, and six scenarios read every redirect as "no redirect happened"
-the first time they ran over real HTTP.
+`post_status_change`, …) so both transports run the same step. The env sends it
+through `AdminClient.request` (`tests/harness/admin_client.py`), the one place
+that knows the two transports. `AdminResponse` normalizes the two response
+objects and folds headers case-insensitively (`_CaseInsensitiveHeaders`).
+`dict(response.headers)` threw that property away, and six scenarios read every
+redirect as "no redirect happened" the first time they ran over real HTTP.
 
 ### 3. Register the step module
 
@@ -172,33 +173,37 @@ makes the scenarios run at all.
 
 ### 5. Extend the harness
 
-`AdminAccountEnv` (`tests/harness/admin_accounts.py:124`) is the pattern to
+`AdminAccountEnv` (`tests/harness/admin_accounts.py:48`) is the pattern to
 follow:
 
-- **The caller names the transport; the env never infers it** (`:137-175`, with
-  the two refusals at `:157-162`). The constructor takes
+- **The caller names the transport; the env never infers it** (`:61-94`, with
+  the two refusals at `:81-86`). The constructor takes
   `mode="integration" | "e2e"` and, for e2e, a required `base_url`; it rejects
   any other mode and rejects `mode="e2e"` without an address. An env that
   guesses its transport from a process-global cannot tell "my caller wants e2e"
   from "the container publishes a port for unrelated reasons", and a global
   cannot carry a different address per xdist worker at all.
-- **`__enter__` calls `__exit__` if it raises** (`:182-197`), so a failure in
+- **`__enter__` calls `__exit__` if it raises** (`:100-111`), so a failure in
   tenant setup does not strand the Flask client or the `requests` session for
   the rest of the process.
-- **One method builds every route** (`_url`, `:282-284`), and each page gets a
-  method returning `_AdminResponse`.
-- **Auth has one entry point**, `authenticate()` (`:237-243`), branching to
-  `admin_auth_session` for the Flask client or a `POST /test/auth` form for the
-  live stack.
+- **One method builds every route** (`_url`), and each page gets a method
+  returning `AdminResponse`.
+- **The transport lives in `AdminClient`, never in the env.** The env opens one
+  `AdminClient` (`None` for the Flask client, the live server's URL otherwise)
+  and sends every request through it. `AdminClient.authenticate()` is the one
+  auth entry point: `admin_auth_session` writes the session on the Flask client,
+  and `authenticate_http_session` sets a signed session cookie for the live
+  stack. `PublisherAuthorizationEnv` drives its admin routes through the same
+  client.
 - **Seeding goes through the production write path.** `create_account`
-  (`:339-385`) uses `AccountUoW` → `AccountRepository.create()`, so a
+  (`:180-226`) uses `AccountUoW` → `AccountRepository.create()`, so a
   harness-seeded row obeys the invariants a production-created one does — above
   all the natural-key collision refusal. It propagates `NaturalKeyConflict`
   deliberately. Seeding straight into the table is the one seam through which a
   test can establish a state production forbids, and a test asserting on an
   impossible state proves nothing.
 - **Read-backs are env methods too** (`get_account_from_db`,
-  `accounts_on_natural_key`, `accounts_with_brand_domain`, `:387-430`), so a
+  `accounts_on_natural_key`, `accounts_with_brand_domain`, `:228-278`), so a
   lookup follows whichever database the transport selected instead of a step
   opening its own session.
 
@@ -206,15 +211,16 @@ follow:
 
 ### Integration (`admin_integration`)
 
-Flask `test_client` against `create_app()`, in process, no Docker
-(`:214-222`). Auth injects the session through
+Flask `test_client` against `admin_test_app()` (`tests/helpers/admin_session.py`,
+the one composition every admin harness uses), in process, no Docker, opened by
+`AdminClient`. Auth injects the session through
 `tests/helpers/admin_session.py`. Runs in `tox -e bdd`.
 
 ### Live stack (`e2e_admin`)
 
-`requests.Session` against the address the caller supplied (`:224-235`). Auth
-posts form data to `/test/auth` and keeps the session cookie; anything but `200`
-or `302` raises (`:251-265`). pytest collects it only when
+`requests.Session` against the address the caller supplied, opened by
+`AdminClient`. Auth sets a session cookie signed the way the server signs its
+own (`authenticate_http_session`). pytest collects it only when
 `BDD_E2E_ENABLED=true`, and the per-worker address comes from the `e2e_stack`
 fixture by way of the admin builders (`_build_admin_env`,
 `_build_admin_tenant_scoping_env`).
@@ -227,10 +233,16 @@ fixture by way of the admin builders (`_build_admin_env`,
    branch uses (`tests/bdd/conftest.py:4379-4387`, `:4104-4135`). It derives the
    pytest ids from the enum values, because `tox.ini`'s `-k` selectors match on
    them.
+   Every admin scenario gets both legs. When the live stack cannot realize a Given
+   as it stands, the harness or the stack is extended until it can:
+   `local-publisher-authorization.feature` serves a publisher's adagents.json from a
+   TLS origin in the runner (`publisher.adcp-e2e.dev`, the runner's alias on the
+   stack's non-private subnet), and the stack's servers start with
+   `PUBLISHER_AUTO_VERIFY=false`, the setting its in-process leg patches.
 2. **A registry row builds the env.** `ENV_ROUTES["ADMIN"]`
-   (`tests/bdd/conftest.py:5683`) names `_build_admin_env` (`:5308-5339`); the
-   `admin-tenant-scoping` predicate row ahead of it (`:5930`) names
-   `_build_admin_tenant_scoping_env` (`:5342-5364`) for `T-ADMIN-SCOPE-*`.
+   (`tests/bdd/conftest.py:5688`) names `_build_admin_env` (`:5313-5344`); the
+   `admin-tenant-scoping` predicate row ahead of it (`:5934`) names
+   `_build_admin_tenant_scoping_env` (`:5347-5369`) for `T-ADMIN-SCOPE-*`.
    `_run_env_route` is the single consumer. These two builders are the only ones
    that pass `base_url=` rather than `e2e_config=`, because the admin env needs
    the address and nothing else from `E2EConfig`;

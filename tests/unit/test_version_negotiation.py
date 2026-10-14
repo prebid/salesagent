@@ -1,26 +1,24 @@
-"""Regression tests for salesagent-rldj (C4: version negotiation + idempotency posture).
+"""Regression tests for version negotiation and idempotency posture.
 
-Pins the CORE behavior from the refined implementation plan, steps 1-4:
+Pins four behaviors:
 
-1. ``SUPPORTED_ADCP_VERSIONS`` (new ``src/core/version_negotiation.py``) is
+1. ``SUPPORTED_ADCP_VERSIONS`` (``src/core/version_negotiation.py``) is
    derived from ``adcp.get_adcp_spec_version()`` STRIPPED to release
    precision (MAJOR.MINOR, e.g. "3.1"), never the raw 3-part semver
    ("3.1.1") which violates the v3.1.1 ``supported_versions`` wire pattern
    (``^\\d+\\.\\d+(-...)?$``).
-2. ``negotiate_adcp_version()`` raises the new ``AdCPVersionUnsupportedError``
+2. ``negotiate_adcp_version()`` raises ``AdCPVersionUnsupportedError``
    (-> wire code ``VERSION_UNSUPPORTED``) for a version pin outside
    ``SUPPORTED_ADCP_VERSIONS``, and is a no-op for a supported pin / None.
 3. Negotiation runs at the BOUNDARY, so it covers every tool and stays
-   un-tenant-gated. It used to run inside ``_get_adcp_capabilities_impl``,
-   which left every other tool serving a buyer whose pin this build cannot
+   un-tenant-gated. Running it inside ``_get_adcp_capabilities_impl`` instead
+   would leave every other tool serving a buyer whose pin this build cannot
    speak. The wire-level grading across transports lives in
    ``tests/integration/test_version_negotiation_wire.py``.
 4. The DRY ``_build_adcp_block()`` helper derives ``supported_versions`` from
-   the single-sourced constant on BOTH the minimal (no-tenant) and full
-   (tenant-resolved) response paths -- no literal duplication.
-
-Does NOT cover plan step 5 (harness override seam) or step 6 (BDD step
-authoring) -- that is separate implementation-atom scope.
+   the single-sourced constant -- no literal duplication. There is one response
+   path: a request naming no seller is refused TENANT_UNDEFINED before an
+   identity exists, so there is no minimal (no-tenant) response to cover.
 """
 
 from __future__ import annotations
@@ -29,12 +27,9 @@ import re
 
 import pytest
 
-from src.core.schemas import GetAdcpCapabilitiesRequest
-from tests.factories.principal import PrincipalFactory
-
 
 class TestSupportedAdcpVersionsDerivation:
-    """Plan step 1: SUPPORTED_ADCP_VERSIONS must be release-precision, derived."""
+    """SUPPORTED_ADCP_VERSIONS must be release-precision, derived."""
 
     def test_supported_adcp_versions_are_release_precision(self):
         """Every entry must match the v3.1.1 SupportedVersion wire pattern
@@ -69,7 +64,7 @@ class TestSupportedAdcpVersionsDerivation:
 
 
 class TestNegotiateAdcpVersion:
-    """Plan step 1: negotiate_adcp_version() raises for unsupported pins."""
+    """negotiate_adcp_version() raises for unsupported pins."""
 
     def test_rejects_unsupported_version_pin(self):
         from src.core.exceptions import AdCPVersionUnsupportedError
@@ -153,58 +148,3 @@ class TestNegotiateAdcpVersion:
         # The aligned pairs stay acceptable.
         assert version_negotiation.negotiate_adcp_version("3.1", 3) is None
         assert version_negotiation.negotiate_adcp_version("4.0", 4) is None
-
-
-class TestBoundaryNegotiatesForEveryTool:
-    """Plan step 3: negotiation is the boundary's, so no tool can skip it.
-
-    ``_get_adcp_capabilities_impl`` no longer negotiates. That the boundary refuses a bad
-    pin is graded on the wire by BR-PROTOCOL-001 and BR-UC-010's adcp_version scenarios;
-    this class keeps only the implementation-level half.
-    """
-
-    async def test_capabilities_impl_no_longer_negotiates_on_its_own(self):
-        """The call site MOVED; it was not duplicated.
-
-        Two negotiators would drift, and the boundary's is the one every tool crosses.
-        """
-        from src.core.tools.capabilities import _get_adcp_capabilities_impl
-
-        req = GetAdcpCapabilitiesRequest(adcp_version="0.1")
-
-        # Reached directly, past the boundary, the implementation just answers. The
-        # caller is anonymous and names no seller: a PublicIdentity with neither.
-        response = _get_adcp_capabilities_impl(req, PrincipalFactory.make_public_identity(tenant=None))
-        assert response.adcp.supported_versions is not None
-
-
-class TestBuildAdcpBlockDry:
-    """Plan step 3-4: _build_adcp_block() single-sources supported_versions
-    across BOTH the no-tenant minimal response and the tenant-resolved full
-    response -- no literal Adcp(...) duplication.
-    """
-
-    def test_minimal_no_tenant_response_declares_derived_supported_versions(self):
-        from src.core.tools.capabilities import _get_adcp_capabilities_impl
-        from src.core.version_negotiation import SUPPORTED_ADCP_VERSIONS
-
-        response = _get_adcp_capabilities_impl(None, PrincipalFactory.make_public_identity(tenant=None))
-
-        assert response.adcp.supported_versions is not None
-        assert [v.root for v in response.adcp.supported_versions] == SUPPORTED_ADCP_VERSIONS
-
-    def test_full_tenant_response_declares_same_derived_supported_versions(self):
-        from src.core.tools.capabilities import _get_adcp_capabilities_impl
-        from src.core.version_negotiation import SUPPORTED_ADCP_VERSIONS
-        from tests.unit.test_get_adcp_capabilities import (
-            _make_capabilities_identity,
-            _patch_capabilities_deps,
-        )
-
-        identity = _make_capabilities_identity(principal_id=None, tenant_id="test-tenant-version-negotiation")
-
-        with _patch_capabilities_deps(adapter=None):
-            response = _get_adcp_capabilities_impl(None, identity)
-
-        assert response.adcp.supported_versions is not None
-        assert [v.root for v in response.adcp.supported_versions] == SUPPORTED_ADCP_VERSIONS

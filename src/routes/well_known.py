@@ -59,7 +59,6 @@ from src.core.agent_identity import (
     BRAND_JSON_PATH,
     GOVERNANCE_REVOCATIONS_PATH,
     JWKS_PATH,
-    agent_origin_host,
 )
 from src.core.config import get_settings
 from src.core.database.repositories.uow import TrustRootUoW
@@ -168,7 +167,9 @@ def _adagents_json_handler(uow: TrustRootUoWType, tenant: Tenant, now: datetime)
     # host — never for properties a publisher hosts elsewhere, whose own
     # adagents.json is the document a verifier consults. A tenant whose
     # agent host is not a property domain therefore claims nothing here.
-    properties = uow.authorized_properties.list_for_publisher_domain(agent_origin_host(tenant))
+    # The host itself, not a re-split of the published origin: the origin IS scheme plus
+    # this column, so splitting it back apart is the same read with a step in between.
+    properties = uow.authorized_properties.list_for_publisher_domain(tenant.virtual_host)
     return build_adagents_json(tenant, keys, properties), CACHE_MAX_AGE_SECONDS
 
 

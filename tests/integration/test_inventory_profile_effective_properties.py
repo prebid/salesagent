@@ -28,10 +28,12 @@ from tests.helpers.adcp_factories import create_test_db_product
 def test_tenant(integration_db):
     """Create a test tenant for inventory profile tests."""
     with get_db_session() as session:
+        # Required (NOT NULL) and UNIQUE. Nothing routes to this host; it exists to satisfy the column.
         tenant = Tenant(
             tenant_id="test_tenant",
             name="Test Tenant",
             subdomain="test",
+            virtual_host="test-tenant.adcp.test",
             is_active=True,
             ad_server="gam",
             auto_approve_format_ids=[],

@@ -5,10 +5,10 @@ here collects them against the ``scoping_env`` below, which drives the same harn
 ``requests.Session`` against nginx -> FastAPI -> admin blueprints.
 
 Requires the Docker stack: ``docker_services_e2e`` supplies the admin port, and
-``admin_stack_env`` (tests/e2e/conftest.py) hands the env that ``base_url``. The stack runs with
-ADCP_AUTH_TEST_MODE=true; the harness logs in through ``/test/auth`` as the non-admin
-``test_tenant_user`` identity against a tenant that is never the target, which keeps the
-test-mode bypass out of every membership decision.
+``admin_stack_env`` (tests/e2e/conftest.py) hands the env that ``base_url``. The harness
+states a signed non-admin session for the ``test_tenant_user`` identity against a tenant
+that is never the target, with no ``test_user`` key, which keeps the test-mode bypass out
+of every membership decision.
 """
 
 from __future__ import annotations

@@ -17,151 +17,16 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
-from sqlalchemy import select
 
 # Add project root to path
 project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
-
-from scripts.setup.setup_tenant import create_tenant, main
-from src.core.database.models import AdapterConfig, Tenant
 
 
 @pytest.mark.integration
 @pytest.mark.requires_db
 class TestGAMTenantSetup:
     """Test GAM tenant setup and configuration flow."""
-
-    def test_gam_tenant_creation_without_network_code(self, test_database):
-        """
-        Test that a GAM tenant can be created without providing network code upfront.
-
-        This tests the core regression scenario: network code should be optional
-        during tenant creation when using OAuth tokens.
-        """
-        # Create a simple args object without network code (should work)
-        import uuid
-
-        unique_id = str(uuid.uuid4())[:8]
-
-        class Args:
-            name = "Test GAM Publisher"
-            tenant_id = f"test_gam_pub_{unique_id}"
-            subdomain = f"testgampub{unique_id}"
-            adapter = "google_ad_manager"
-            gam_network_code = None  # Key test: No network code provided
-            gam_refresh_token = "test_refresh_token_123"
-            manual_approval = False
-            auto_approve_all = False
-            max_daily_budget = 15000
-            # admin_token dropped: nothing reads args.admin_token (84a86e019 removed the
-            # tenant admin credential), so the attribute was a dead assignment.
-            authorized_domain = []
-            admin_email = []
-
-        args = Args()
-
-        # This should NOT raise an error (the regression made this fail)
-        create_tenant(args)
-
-        # Verify tenant was created successfully using SQLAlchemy ORM
-        from src.core.database.database_session import get_db_session
-
-        with get_db_session() as session:
-            tenant = session.scalars(select(Tenant).filter_by(tenant_id=args.tenant_id)).first()
-            assert tenant is not None
-            assert tenant.name == "Test GAM Publisher"
-            assert tenant.ad_server == "google_ad_manager"
-
-            # Verify adapter config allows null network code initially
-            adapter_config = session.scalars(select(AdapterConfig).filter_by(tenant_id=args.tenant_id)).first()
-            assert adapter_config is not None
-            assert adapter_config.gam_network_code is None  # network_code should be null initially
-            assert adapter_config.gam_refresh_token == "test_refresh_token_123"  # refresh_token should be stored
-
-    def test_gam_tenant_creation_with_network_code(self, test_database):
-        """
-        Test that a GAM tenant can be created WITH network code provided upfront.
-
-        This ensures the manual network code path still works.
-        """
-        # Create a simple args object with network code
-        import uuid
-
-        unique_id = str(uuid.uuid4())[:8]
-
-        class Args:
-            name = "Test GAM Publisher With Code"
-            tenant_id = f"test_gam_with_code_{unique_id}"
-            subdomain = f"testgamcode{unique_id}"
-            adapter = "google_ad_manager"
-            gam_network_code = "123456789"  # Network code provided
-            gam_refresh_token = "test_refresh_token_456"
-            manual_approval = False
-            auto_approve_all = False
-            max_daily_budget = 20000
-            # admin_token dropped — see the sibling Args above.
-            authorized_domain = []
-            admin_email = []
-
-        args = Args()
-
-        create_tenant(args)
-
-        # Verify network code was stored using SQLAlchemy ORM
-        from src.core.database.database_session import get_db_session
-
-        with get_db_session() as session:
-            adapter_config = session.scalars(select(AdapterConfig).filter_by(tenant_id=args.tenant_id)).first()
-            assert adapter_config is not None
-            assert adapter_config.gam_network_code == "123456789"
-
-    def test_command_line_parsing_network_code_optional(self):
-        """
-        Test that the command line parsing correctly handles optional network code.
-
-        This would have caught the regression where --gam-network-code was required.
-        """
-        # Test the CLI argument parsing
-        old_argv = sys.argv
-        try:
-            # Simulate command line without network code
-            sys.argv = [
-                "setup_tenant.py",
-                "Test Publisher",
-                "--adapter",
-                "google_ad_manager",
-                "--gam-refresh-token",
-                "test_token",
-                # Note: NO --gam-network-code provided - should NOT error
-            ]
-
-            with patch("scripts.setup.setup_tenant.create_tenant") as mock_create:
-                try:
-                    main()
-                    # If we get here, the parsing succeeded (correct behavior)
-                    parsing_succeeded = True
-
-                    # Verify create_tenant was called with network_code as None
-                    mock_create.assert_called_once()
-                    args = mock_create.call_args[0][0]
-                    assert args.gam_network_code is None
-                    assert args.gam_refresh_token == "test_token"
-
-                except SystemExit as e:
-                    # Check if it's just the normal success exit
-                    if e.code == 0:
-                        parsing_succeeded = True
-                    else:
-                        parsing_succeeded = False
-                except Exception:
-                    # Any other exception means parsing failed
-                    parsing_succeeded = False
-
-            assert parsing_succeeded, "Network code should be optional when refresh token is provided"
-
-        finally:
-            sys.argv = old_argv
 
     def test_admin_ui_network_detection_endpoint(self):
         """

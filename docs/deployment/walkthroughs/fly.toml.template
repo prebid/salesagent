@@ -20,7 +20,6 @@
 #     - GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET
 #
 # Optional:
-#   - ADCP_AUTH_TEST_MODE=true (bypasses OAuth for testing)
 
 app = "your-app-name"
 primary_region = "iad"

@@ -111,12 +111,24 @@ def signing_env(monkeypatch: pytest.MonkeyPatch) -> Iterator[BareIntegrationEnv]
 
 
 def _seed_tenant(env: BareIntegrationEnv, *, virtual_host: str | None, with_key: bool = True) -> _Seeded:
-    """A tenant, optionally holding a real, active request-signing key minted through production."""
+    """A tenant, optionally holding a real, active request-signing key minted through production.
+
+    ``virtual_host=None`` means "this tenant has no PUBLISHABLE origin", which is the state
+    the posture-gate tests need. It is spelled as a single-label host rather than as an
+    absent column: ``virtual_host`` is mandatory (#1845), so a tenant without one does not
+    exist, and leaving the factory to its own default hands back a DOTTED host —
+    ``_get_protocol_for_domain`` derives ``https`` for that, ``origin_is_publishable``
+    accepts it, and the gate under test never engages. A single label derives ``http``,
+    which the gate refuses. The tenant id supplies the label because
+    ``ix_tenants_virtual_host`` is UNIQUE and tenant ids carry no dots.
+    """
     from tests.factories import TenantFactory
 
     kwargs: dict[str, Any] = {"tenant_id": env.tenant_id}
-    if virtual_host is not None:
-        kwargs["virtual_host"] = virtual_host
+    kwargs["virtual_host"] = virtual_host if virtual_host is not None else env.tenant_id
+    assert virtual_host is not None or "." not in env.tenant_id, (
+        f"the unpublishable-origin seed needs a single-label host; tenant id {env.tenant_id!r} carries a dot"
+    )
     tenant = TenantFactory(**kwargs)
 
     repo = signing_key_repo(env, env.tenant_id)

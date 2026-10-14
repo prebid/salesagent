@@ -70,9 +70,9 @@ class SigningKeyRepository:
         from src.core.database.repositories.tenant_config import TenantConfigRepository
 
         tenant = TenantConfigRepository(self._session, self._tenant_id).get_tenant()
-        # The PURE half, on THIS session. agent_identity_for_tenant_id() would open a
-        # TrustRootUoW of its own and read committed state — breaking the same-transaction
-        # property the flush-visibility test grades.
+        # Derived on THIS session, from the row this repository just read. An identity
+        # helper that opened a unit of work of its own would read committed state instead,
+        # breaking the same-transaction property the flush-visibility test grades.
         return agent_identity_for_tenant(tenant).origin if tenant is not None else None
 
     def _scope_prefix(self) -> tuple[ColumnElement[bool], ...]:

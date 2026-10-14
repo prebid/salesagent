@@ -16,10 +16,12 @@ def test_get_targeting_data_returns_audience_type(authenticated_admin_session, i
     """Test getting targeting data includes audience segment type."""
     with get_db_session() as db_session:
         # Create test tenant
+        # Required (NOT NULL) and UNIQUE. Nothing routes to this host; it exists to satisfy the column.
         tenant = Tenant(
             tenant_id="test_tenant_targeting",
             name="Test Tenant Targeting",
             subdomain="test-targeting",
+            virtual_host="test-tenant-targeting.adcp.test",
             ad_server="google_ad_manager",
         )
         db_session.add(tenant)

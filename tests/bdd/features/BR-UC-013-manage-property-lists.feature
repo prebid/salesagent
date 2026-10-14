@@ -477,7 +477,7 @@ Feature: BR-UC-013 Manage Property Lists
   Scenario Outline: <operation> property list -- valid credentials but unresolvable tenant
     Given no tenant can be resolved from the request context
     When the Buyer Agent sends a <operation> property list request
-    Then the error code should be "CONFIGURATION_ERROR"
+    Then the error code should be "TENANT_UNDEFINED"
     And the error should include "suggestion" field
     # BR-RULE-070 INV-2: Credentials valid but tenant unresolvable -> TENANT_ERROR
     # Representative sample: create (mutating), list (read-all), delete (mutating + needs list_id)

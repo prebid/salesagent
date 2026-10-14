@@ -12,13 +12,12 @@ inherited unchanged, and the harness lifecycle guard
 one hand-rolled ``__enter__``/``__exit__`` home to ``AdminAccountEnv``, so a second admin
 env inherits that lifecycle instead of restating it.
 
-The caller logs in through ``/test/auth`` on both transports, always against a HOME
-tenant that is never the target. That endpoint stamps ``test_tenant_id`` with the login
-tenant, and ``require_tenant_access`` waives the membership lookup only when that equals
-the requested tenant — logging in elsewhere is what makes the target tenant's ``User``
-row the only thing that decides the outcome, so a rejection here is the real membership
-check and not the test-mode bypass, and the in-process leg takes the same branch of the
-decorator the stack does.
+The caller's session is STATED on both transports (``AdminClient.state_session``), in
+the shape an OIDC login writes for a non-admin: a ``user`` email and a HOME tenant that is
+never the target, with no ``test_user`` key. ``require_tenant_access`` therefore takes its
+real branch, and the target tenant's ``User`` row is the only thing that decides the
+outcome, so a rejection here is the real membership check, on the same branch of the
+decorator in-process as on the stack.
 
 The module-level helpers (route table, case expansion, seeding, state snapshot, assertion
 helpers) are shared by the contract classes in
@@ -43,13 +42,14 @@ from src.core.database.database_session import get_db_session
 from src.core.database.models import Tenant
 from src.services.default_products import get_default_products
 from tests.factories import MediaBuyFactory, ProductFactory, TenantFactory, UserFactory
-from tests.harness.admin_accounts import AdminAccountEnv, _AdminResponse
+from tests.harness.admin_accounts import AdminAccountEnv
+from tests.harness.admin_client import AdminResponse
+from tests.helpers.admin_session import member_session_payload
 from tests.utils.database_helpers import bound_factory_session
 
-#: The one non-admin identity ``/test/auth`` accepts on the Docker stack. The integration
-#: transport uses the same address so both transports grade identical ``User`` rows.
+#: The non-admin identity the scenarios log in as. Both transports use the same address
+#: so they grade identical ``User`` rows.
 MEMBER_EMAIL = "test_tenant_user@example.com"
-MEMBER_PASSWORD = "test123"
 ACTIVE_BUY_BUDGET = Decimal("1500.00")
 
 
@@ -262,16 +262,13 @@ class AdminTenantScopingEnv(AdminAccountEnv):
             return home.tenant_id
 
     def _authenticate_member(self, login_tenant_id: str) -> None:
-        """Log in as the non-admin test identity against ``login_tenant_id`` (never the target)."""
-        self._login_via_test_auth(login_tenant_id, email=MEMBER_EMAIL, password=MEMBER_PASSWORD)
+        """State a non-admin session for ``MEMBER_EMAIL`` against ``login_tenant_id`` (never the target)."""
+        self.client.state_session(member_session_payload(MEMBER_EMAIL, login_tenant_id))
 
     # ── Requests ──────────────────────────────────────────────────────────
 
-    def send(self, method: str, route_name: str) -> _AdminResponse:
+    def send(self, method: str, route_name: str) -> AdminResponse:
         route = ROUTES[route_name]
         assert method in route.methods, f"{route_name} does not serve {method}"
         path = route.path.format(tenant_id=self.target.tenant_id)
-        url = f"{self._base_url}{path}" if self._mode == "e2e" else path
-        if method == "GET":
-            return self._get(url)
-        return self._post_form(url, {})
+        return self.client.request(method, path, data={} if method == "POST" else None)

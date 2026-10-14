@@ -16,7 +16,6 @@ from src.core.config import get_settings
 from src.core.database.database_session import get_db_session
 from src.core.database.integrity import resolve_or_write
 from src.core.database.models import AuthorizedProperty, PropertyTag, Tenant
-from src.core.domain_config import get_tenant_url
 from src.core.schemas import (
     PROPERTY_ERROR_MESSAGES,
     PROPERTY_REQUIRED_FIELDS,
@@ -220,25 +219,26 @@ def _parse_and_save_properties_file(file, tenant_id: str) -> tuple[int, int, lis
     return _save_properties_batch(properties_data, tenant_id)
 
 
-def _construct_agent_url(tenant_id: str, request: Any) -> str:
+def _construct_agent_url(tenant_id: str) -> str:
     """This tenant's canonical agent URL — the SAME string every document publishes.
 
-    These URLs are compared against the ``url`` values in publishers'
-    adagents.json files (``publisher_partners.py``, the property-sync service),
-    so a derivation of its own here would make us check authorization against a
-    string we never publish. It delegates to :func:`canonical_agent_url`
-    (#1291 A3, salesagent-z6nr.9) instead of the PRODUCTION-flag /
-    localhost-port ladder it used to carry.
+    These URLs are compared against the ``url`` values in publishers' adagents.json
+    files (``publisher_partners.py``, the property-sync service) and against the URL
+    the agent card published, and there is no diagnostic when two of them disagree —
+    the check simply fails. So this reads ``tenant.agent_url``, the one accessor,
+    rather than deriving its own.
 
-    *request* is retained for call-site compatibility and is unused: the agent
-    URL is stored tenant state, never request state.
+    Takes no ``request``: a tenant's published identity comes from its row, and a
+    request parameter on a function deriving it is an invitation to read a header
+    instead.
     """
-    from src.core.agent_identity import agent_identity_for_tenant_id
+    from src.core.database.repositories.tenant_lookup import TenantLookupRepository
 
-    identity = agent_identity_for_tenant_id(tenant_id)
-    if identity is None:
-        raise ValueError(f"Tenant {tenant_id} not found")
-    return identity.origin
+    with get_db_session() as db_session:
+        tenant = TenantLookupRepository(db_session).find_by_id(tenant_id)
+        if not tenant:
+            raise ValueError(f"Tenant {tenant_id} not found")
+        return tenant.agent_url
 
 
 @authorized_properties_bp.route("/<tenant_id>/authorized-properties")
@@ -532,12 +532,12 @@ def verify_all_properties(tenant_id: str) -> Response:
 
         if is_production:
             # Production: ignore any dev overrides, always use tenant context
-            agent_url = _construct_agent_url(tenant_id, request)
+            agent_url = _construct_agent_url(tenant_id)
         else:
             # Development: allow dev overrides from form
             agent_url = request.form.get("dev_agent_url", "").strip() or request.form.get("agent_url", "").strip()
             if not agent_url:
-                agent_url = _construct_agent_url(tenant_id, request)
+                agent_url = _construct_agent_url(tenant_id)
 
         verification_service = get_property_verification_service()
         results = verification_service.verify_all_properties(tenant_id, agent_url)
@@ -598,6 +598,11 @@ def sync_properties_from_adagents(tenant_id: str) -> Response:
             stmt = select(Tenant).where(Tenant.tenant_id == tenant_id)
             tenant = session.scalars(stmt).first()
 
+            # The URL this tenant publishes, read off the row while it is still attached.
+            # One accessor: a scheme written in here answers https for a deployment served
+            # over http and drifts from what the card published (#1845).
+            agent_url: str | None = tenant.agent_url if tenant else None
+
             if tenant and isinstance(tenant.metadata, dict):
                 last_sync = tenant.metadata.get("last_property_sync")
                 if last_sync:
@@ -615,14 +620,6 @@ def sync_properties_from_adagents(tenant_id: str) -> Response:
                                 tenant_id=tenant_id,
                             )
                         )
-
-        # Compute agent_url for property resolution (handles property_ids, property_tags)
-        agent_url: str | None = None
-        if tenant:
-            if tenant.virtual_host:
-                agent_url = f"https://{tenant.virtual_host}"
-            else:
-                agent_url = get_tenant_url(tenant.subdomain)
 
         # Get optional domain filter from form
         publisher_domains_str = request.form.get("publisher_domains", "").strip()
@@ -748,7 +745,7 @@ def verify_property_auto(tenant_id: str, property_id: str) -> Response:
         if is_production:
             # Production: ignore any dev overrides, always use tenant context
             logger.info("🔒 Production mode: ignoring any dev URL overrides")
-            agent_url = _construct_agent_url(tenant_id, request)
+            agent_url = _construct_agent_url(tenant_id)
             logger.info(f"🏢 Constructed agent URL from tenant context: {agent_url}")
         else:
             # Development: allow dev overrides from form
@@ -758,7 +755,7 @@ def verify_property_auto(tenant_id: str, property_id: str) -> Response:
 
             agent_url = dev_url or explicit_url
             if not agent_url:
-                agent_url = _construct_agent_url(tenant_id, request)
+                agent_url = _construct_agent_url(tenant_id)
                 logger.info(f"🏗️ No override provided, constructed from tenant: {agent_url}")
             else:
                 logger.info(f"🔧 Using override URL: {agent_url}")

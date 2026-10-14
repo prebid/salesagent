@@ -2,7 +2,7 @@
 
 Covers:
 - UC-005-MAIN-MCP-02: Authentication optional for discovery
-- UC-005-EXT-A-01: Tenant resolution failure returns TENANT_REQUIRED error
+- UC-005-EXT-A-01: Tenant resolution failure returns TENANT_UNDEFINED
 
 The list_creative_formats endpoint is a discovery/catalog endpoint.
 While tenant context is required to resolve the format catalog, an
@@ -114,10 +114,8 @@ class TestAuthOptionalForDiscovery:
         assert isinstance(result.payload, ListCreativeFormatsResponse)
         assert len(result.payload.formats) == 1
 
-    # (Deleted) test_no_tenant_context_raises_auth_error: it built an identity with a
-    # resolved principal and tenant=None. See the note on the deleted
-    # TestTenantResolutionFailure class below -- the state is unreachable and the
-    # behavior it expected is not the one production has.
+    # There is no test for a tenant-less call: the identity type requires a tenant. See the
+    # note at the bottom of this file for where that refusal is graded instead.
 
     def test_authenticated_vs_unauthenticated_return_same_catalog(self, integration_db):
         """UC-005-MAIN-MCP-02: auth token does not affect the catalog returned.
@@ -157,22 +155,9 @@ class TestAuthOptionalForDiscovery:
 # ---------------------------------------------------------------------------
 
 
-# (Deleted) TestTenantResolutionFailure, whose two tests -- an in-process AUTH_MISSING
-# raise and its A2A wire envelope -- both began by constructing an identity with a
-# RESOLVED principal and ``tenant=None``.
-#
-# That state cannot be produced. ``_resolve_identity`` looks a credential up only inside
-# the tenant the request reached ("no tenant, no lookup", step 4), so a caller with no
-# tenant has no principal either; and ``ResolvedIdentity`` declares ``tenant`` required,
-# which is why these calls now fail in ``make_identity`` rather than in the assertion.
-#
-# The reachable tenant-less discovery request is the anonymous one --
-# ``PublicIdentity(principal=None, tenant=None)`` -- and production answers it with an
-# empty catalog rather than refusing it: "No seller is addressed: there are no formats to
-# list, and nothing to refuse" (``_list_creative_formats_impl``, 76c2a96fb, which replaced
-# the ``require_tenant`` raise these tests were written against).
-#
-# So UC-005-EXT-A-01 ("no hostname mapping resolves to a tenant -> error") is now
-# UNGRADED. Grading it means driving the boundary with no ``x-adcp-tenant`` header and
-# reading the wire; that also settles whether the empty catalog or the refusal is the
-# spec-correct answer, which is a question for the storyboard, not for a fixture.
+# There is no tenant-less identity to test this tool with: ``PublicIdentity`` declares
+# ``tenant`` required, because a request naming no seller this deployment serves is refused
+# TENANT_UNDEFINED by the resolver before any identity is built (``_addressed_tenant``).
+# So UC-005-EXT-A-01 ("no hostname mapping resolves to a tenant -> error") is graded where
+# the refusal happens -- on the wire, with no resolvable host -- not here with a fixture:
+# BR-UC-010 @T-UC-010-ext-a and local-tenant-identification-routes.feature.

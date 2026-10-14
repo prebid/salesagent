@@ -26,15 +26,13 @@ ROOT = Path(__file__).resolve().parents[2]
 # ---------------------------------------------------------------------------
 
 # Directories scanned by discovery glob (not a hand-maintained file list) for
-# _impl-adjacent get_db_session() calls. The hand-maintained list this replaced
-# omitted accounts.py (the largest new tools module) entirely and
-# never scanned helpers/ at all -- making a session-opening helper one call
-# frame from _impl invisible to this guard (the guard even taught the
-# workaround: adapter_helpers.py's _read_mock_test_behavior docstring used to
-# describe the loophole as the sanctioned seam). #1721 M2.
+# _impl-adjacent get_db_session() calls. A glob so that a new tools module is
+# covered the day it is added, and ``helpers/`` is in scope because a
+# session-opening helper one call frame from _impl is the same violation
+# (#1721 M2).
 _IMPL_DISCOVERY_DIRS = ("src/core/tools", "src/core/helpers")
 
-# Two files outside the discovery dirs were already in the pre-glob list.
+# Two files that fall outside the discovery dirs and must still be scanned.
 # Kept explicit so widening scan scope never NARROWS it for these.
 _IMPL_LEGACY_EXTRA_FILES = frozenset({"src/core/context_manager.py", "src/admin/blueprints/creatives.py"})
 
@@ -87,7 +85,11 @@ def _discover_integration_test_files() -> list[str]:
         test_files.extend(glob.glob(f"{root}/**/test_*.py", recursive=True))
         conftest_files.extend(glob.glob(f"{root}/conftest.py", recursive=True))
     helper_files = glob.glob("tests/helpers/**/*.py", recursive=True)
-    return sorted(set(test_files + conftest_files + helper_files))
+    # tests/utils/** too: the consolidation moved session.add out of the test bodies into
+    # database_helpers.py and tenant_setup.py, and two allowlist rows were removed as
+    # "fixed" when the calls had only moved somewhere this glob did not reach.
+    util_files = glob.glob("tests/utils/**/*.py", recursive=True)
+    return sorted(set(test_files + conftest_files + helper_files + util_files))
 
 
 INTEGRATION_TEST_FILES = _discover_integration_test_files()
@@ -95,6 +97,15 @@ INTEGRATION_TEST_FILES = _discover_integration_test_files()
 # Pre-existing violations: (file_path, function_or_fixture_name)
 # FIXME(#2133): integration tests should use polyfactory fixtures
 INTEGRATION_SESSION_ADD_ALLOWLIST = {
+    # tests/utils/** — the SAME pre-existing violations, at the address they moved to.
+    # Two rows were removed from this allowlist as "removed by the consolidation"; the
+    # calls were not removed, they were lifted out of the test bodies into these shared
+    # helpers, which this file's discovery glob did not reach until it did. Restoring them
+    # is bookkeeping, not a new concession: the count that changed was the visible one.
+    ("tests/utils/database_helpers.py", "add_product_prerequisites"),
+    ("tests/utils/database_helpers.py", "seed_tenant_with_principal"),
+    ("tests/utils/database_helpers.py", "seed_tenant_with_product_prerequisites"),
+    ("tests/utils/tenant_setup.py", "seed_gam_tenant"),
     # tests/integration/conftest.py
     ("tests/integration/conftest.py", "authenticated_admin_session"),
     ("tests/integration/conftest.py", "test_tenant_with_data"),
@@ -140,8 +151,6 @@ INTEGRATION_SESSION_ADD_ALLOWLIST = {
     ("tests/integration/test_cross_principal_security.py", "test_cross_tenant_isolation_also_enforced"),
     # tests/integration/test_database_health_integration.py
     ("tests/integration/test_database_health_integration.py", "test_health_check_performance_with_real_database"),
-    # tests/integration/test_database_integration.py
-    ("tests/integration/test_database_integration.py", "test_settings_queries"),
     # tests/integration/test_delivery_simulator_restart.py
     ("tests/integration/test_delivery_simulator_restart.py", "test_tenant"),
     ("tests/integration/test_delivery_simulator_restart.py", "test_principal"),
@@ -357,8 +366,6 @@ INTEGRATION_SESSION_ADD_ALLOWLIST = {
     # mock_api_key_auth fixed — stores the API key digest through
     # TenantManagementConfigRepository (salesagent-3cs7o.18)
     ("tests/integration/test_tenant_management_api_integration.py", "test_tenant"),
-    # tests/integration/test_tenant_settings_comprehensive.py
-    ("tests/integration/test_tenant_settings_comprehensive.py", "test_database_queries"),
     # tests/integration/test_tenant_utils.py
     ("tests/integration/test_tenant_utils.py", "test_serialize_tenant_json_fields_are_deserialized"),
     ("tests/integration/test_tenant_utils.py", "test_serialize_tenant_nullable_fields_have_defaults"),
@@ -590,8 +597,7 @@ class TestImplNoDirectDbSession:
     def test_discovery_glob_catches_a_synthetic_new_file(self, tmp_path):
         """Guard self-test: the discovery glob picks up a file it has never seen
         before, proving it is a LIVE glob (re-evaluated every run) and not a
-        frozen snapshot masquerading as one -- the exact failure mode of the
-        hand-maintained list this replaced (#1721 M2)."""
+        frozen snapshot masquerading as one (#1721 M2)."""
         scan_dir = tmp_path / "src" / "core" / "tools"
         scan_dir.mkdir(parents=True)
         (scan_dir / "_never_seen_before.py").write_text("def f():\n    pass\n")
@@ -642,12 +648,11 @@ class TestIntegrationTestsNoInlineSessionAdd:
 # ─────────────────────────────────────────────────────────────────────────
 # Invariant 3: No get_db_session() in integration test bodies (#1417)
 # ─────────────────────────────────────────────────────────────────────────
-# Invariant 1 scans get_db_session() only in src/ (_impl) files, so a
-# get_db_session() opened in a NEW test function inside an EXISTING test file
-# slipped through (e.g. test_resolve_account.py's new natural-key test). This
-# invariant closes that gap: it scans the same test scope as Invariant 2 and
-# flags any get_db_session() in a test/fixture body outside the legacy
-# allowlist. DB access in tests belongs in factories / the harness UoW
+# Invariant 1 scans get_db_session() only in src/ (_impl) files, which leaves a
+# get_db_session() opened in a test body uncovered -- including one in a NEW test
+# function inside an EXISTING test file. This invariant covers it: it scans the same
+# test scope as Invariant 2 and flags any get_db_session() in a test/fixture body
+# outside the legacy allowlist. DB access in tests belongs in factories / the harness UoW
 # (e.g. `with AccountUoW(...) as uow: uow.accounts`), never a raw inline session.
 GET_DB_SESSION_IN_TESTS_ALLOWLIST: set[tuple[str, str]] = {
     ("tests/admin/test_accounts_blueprint.py", "test_create_account_via_post"),
@@ -899,12 +904,9 @@ GET_DB_SESSION_IN_TESTS_ALLOWLIST: set[tuple[str, str]] = {
         "test_manual_approval_enriches_concept_and_is_filterable",
     ),
     ("tests/integration/test_execute_approved_platform_ids.py", "test_multiple_packages_all_persisted"),
-    # Re-keyed, not added: this pre-existing violation was allowlisted as
-    # "test_no_platform_line_item_ids_attr" and the test was renamed to
-    # "test_omitted_platform_line_item_ids" (the attribute it named can no longer be
-    # absent — AdapterCreateResult declares platform_line_item_ids with
-    # default_factory=dict). Same violation, same count; this allowlist is keyed on the
-    # test NAME, so a rename has to re-point the entry in the same change.
+    # Re-keyed, not added: same pre-existing violation under the test's current name.
+    # This allowlist is keyed on the test NAME, so a rename has to re-point the entry in
+    # the same change or the stale-entry check fires.
     ("tests/integration/test_execute_approved_platform_ids.py", "test_omitted_platform_line_item_ids"),
     ("tests/integration/test_execute_approved_platform_ids.py", "test_platform_line_item_ids_persisted_after_approval"),
     ("tests/integration/test_format_conversion_approval.py", "create_media_package"),
@@ -932,8 +934,6 @@ GET_DB_SESSION_IN_TESTS_ALLOWLIST: set[tuple[str, str]] = {
     ("tests/integration/test_gam_pricing_models_integration.py", "setup_gam_tenant_with_all_pricing_models"),
     ("tests/integration/test_gam_pricing_models_integration.py", "test_gam_auction_cpc_creates_price_priority"),
     ("tests/integration/test_gam_pricing_restriction.py", "setup_gam_tenant_with_non_cpm_product"),
-    ("tests/integration/test_gam_tenant_setup.py", "test_gam_tenant_creation_with_network_code"),
-    ("tests/integration/test_gam_tenant_setup.py", "test_gam_tenant_creation_without_network_code"),
     ("tests/integration/test_generative_creatives.py", "test_generative_format_detection_calls_build_creative"),
     ("tests/integration/test_get_products_database_integration.py", "access_fields"),
     ("tests/integration/test_get_products_database_integration.py", "database_operation"),
@@ -1262,9 +1262,7 @@ class TestIntegrationTestsNoGetDbSession:
     Pattern #8 (tests/CLAUDE.md): DB access in tests goes through factories and
     the harness (AccountUoW / IntegrationEnv), not a session opened inline. The
     legacy allowlist captures pre-existing debt; a NEW test-body get_db_session()
-    fails immediately — including a new function in an EXISTING file, which is how
-    the #1417 test_resolve_account.py natural-key test slipped when this guard was
-    src-only.
+    fails immediately — including a new function in an EXISTING file.
     """
 
     @pytest.mark.arch_guard

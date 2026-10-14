@@ -8,11 +8,9 @@ from datetime import UTC, datetime
 
 from sqlalchemy import select
 
-from src.core.config import get_settings
 from src.core.database.database_session import get_db_session
 from src.core.database.integrity import resolve_or_write
 from src.core.database.models import Tenant, TenantAuthConfig
-from src.core.domain_config import get_sales_agent_domain, get_sales_agent_url
 
 logger = logging.getLogger(__name__)
 
@@ -179,7 +177,8 @@ def enable_oidc(tenant_id: str) -> bool:
             logger.error(f"Cannot enable OIDC: no config for tenant {tenant_id}")
             return False
 
-        if not is_oidc_config_valid(tenant_id):
+        tenant = session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
+        if not _config_is_verified_for(config, tenant, tenant_id):
             logger.error(f"Cannot enable OIDC: config not verified for tenant {tenant_id}")
             return False
 
@@ -234,33 +233,44 @@ def mark_oidc_verified(tenant_id: str, redirect_uri: str) -> None:
 
 
 def get_tenant_redirect_uri(tenant: Tenant) -> str:
-    """Get the OAuth redirect URI for a tenant.
+    """The OAuth redirect URI for *tenant*, on the origin the tenant is served at.
 
-    The redirect URI is based on the tenant's domain configuration.
+    ``tenant.agent_url`` is the whole answer: a redirect URI has to name a host the tenant is
+    actually reachable at, and the tenant declares exactly one. The accessor decides the
+    scheme too, so a developer's ``localhost`` install gets ``http`` rather than an ``https``
+    URI the provider then refuses.
 
-    Args:
-        tenant: The Tenant object
-
-    Returns:
-        Full redirect URI
+    There is no ladder beneath it. The deployment-wide answers this used to fall through to —
+    ``SALES_AGENT_DOMAIN``, the Fly app name, ``localhost`` — were reachable only for a tenant
+    that declared no host, and ``virtual_host`` is mandatory (#1845).
     """
-    if tenant.virtual_host:
-        # Custom domain takes highest priority
-        base = f"https://{tenant.virtual_host}"
-    elif tenant.subdomain and get_sales_agent_domain():
-        # Subdomain on main domain (multi-tenant mode with SALES_AGENT_DOMAIN set)
-        base = f"https://{tenant.subdomain}.{get_sales_agent_domain()}"
-    elif main_url := get_sales_agent_url():
-        # Explicit SALES_AGENT_DOMAIN URL
-        base = main_url
-    elif fly_app := get_settings().runtime.fly_app_name:
-        # Single-tenant mode on Fly.io - use the app's URL
-        base = f"https://{fly_app}.fly.dev"
-    else:
-        # Local development fallback
-        base = get_settings().runtime.local_base_url
+    return f"{tenant.agent_url}/admin/auth/oidc/callback"
 
-    return f"{base}/admin/auth/oidc/callback"
+
+def _config_is_verified_for(config: TenantAuthConfig | None, tenant: Tenant | None, tenant_id: str) -> bool:
+    """Whether *config* is verified for *tenant*'s CURRENT redirect URI.
+
+    A predicate over rows the caller already has, so a caller inside a session asks it
+    without opening a second one. Asking the session-opening :func:`is_oidc_config_valid`
+    from inside a session instead loses the write silently: the inner context's exit
+    removes the scoped session, which detaches the outer one, so a ``commit()`` after it
+    writes NOTHING and ``oidc_enabled`` stays false while the service logs success.
+    """
+    if not config or not tenant:
+        return False
+    if not config.oidc_verified_at or not config.oidc_verified_redirect_uri:
+        return False
+
+    current_uri = get_tenant_redirect_uri(tenant)
+    if config.oidc_verified_redirect_uri != current_uri:
+        logger.warning(
+            "OIDC config invalid for tenant %s: redirect URI changed from %s to %s",
+            tenant_id,
+            config.oidc_verified_redirect_uri,
+            current_uri,
+        )
+        return False
+    return True
 
 
 def is_oidc_config_valid(tenant_id: str) -> bool:
@@ -278,33 +288,8 @@ def is_oidc_config_valid(tenant_id: str) -> bool:
     """
     with get_db_session() as session:
         config = session.scalars(select(TenantAuthConfig).filter_by(tenant_id=tenant_id)).first()
-
-        if not config:
-            return False
-
-        if not config.oidc_verified_at:
-            return False
-
-        if not config.oidc_verified_redirect_uri:
-            return False
-
-        # Get current redirect URI
         tenant = session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
-
-        if not tenant:
-            return False
-
-        current_uri = get_tenant_redirect_uri(tenant)
-
-        # Check if verified URI matches current
-        if config.oidc_verified_redirect_uri != current_uri:
-            logger.warning(
-                f"OIDC config invalid for tenant {tenant_id}: "
-                f"redirect URI changed from {config.oidc_verified_redirect_uri} to {current_uri}"
-            )
-            return False
-
-        return True
+        return _config_is_verified_for(config, tenant, tenant_id)
 
 
 def get_oidc_config_for_auth(tenant_id: str) -> dict | None:
