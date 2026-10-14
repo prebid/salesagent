@@ -228,14 +228,13 @@ max-statements = 50
 # function referenced an undeclared name, ruff stayed silent, and it surfaced as four
 # NameErrors only after a 25-minute in-network e2e run.
 #
-# The 9 remaining violations are all in src/ and are likewise NOT the documented false
+# The 8 remaining violations are all in src/ and are likewise NOT the documented false
 # positive -- they are undefined names (`oauth_client_id`, `formats`, `_inspect`, ...)
 # that look latent-real but sit in admin code this change does not touch. They are pinned
 # per FILE so the rule stays live everywhere else and this list can only shrink.
-# FIXME(#2099): investigate and remove these four entries.
+# FIXME(#2099): investigate and remove these three entries.
 "src/admin/blueprints/api.py" = ["F821"]
 "src/admin/blueprints/products.py" = ["F821"]
-"src/admin/tests/unit/test_auth.py" = ["F821"]
 "src/core/schemas/__init__.py" = ["F821"]
 "tests/*" = ["E722"]
 "admin_ui.py" = ["E402", "E722"]

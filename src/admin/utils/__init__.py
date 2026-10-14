@@ -12,7 +12,6 @@ from src.admin.utils.helpers import (
     get_tenant_config_from_db,
     is_admin_production,
     is_super_admin,
-    is_tenant_admin,
     parse_json_config,
     require_auth,
     require_tenant_access,
@@ -28,7 +27,6 @@ __all__ = [
     # Auth/authorization functions
     "is_admin_production",
     "is_super_admin",
-    "is_tenant_admin",
     "require_auth",
     "require_tenant_access",
     # Utility functions

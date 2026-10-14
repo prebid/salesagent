@@ -249,7 +249,6 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/admin/utils/helpers.py", "get_custom_targeting_mappings"),
     ("src/admin/utils/helpers.py", "get_tenant_config_from_db"),
     ("src/admin/utils/helpers.py", "is_super_admin"),
-    ("src/admin/utils/helpers.py", "is_tenant_admin"),
     ("src/admin/utils/helpers.py", "require_tenant_access"),
     # ── Core ──
     ("src/core/audit_logger.py", "log_operation"),

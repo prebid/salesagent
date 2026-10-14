@@ -216,42 +216,6 @@ def _cache_admin_status(email, is_admin):
         pass
 
 
-def is_tenant_admin(email, tenant_id=None):
-    """Check if user is a tenant admin.
-
-    Args:
-        email: User's email address
-        tenant_id: Optional tenant ID to check admin status for specific tenant
-
-    Returns:
-        bool: True if user is a tenant admin
-    """
-    if not email:
-        return False
-
-    # Super admins are implicitly tenant admins
-    if is_super_admin(email):
-        return True
-
-    # Check if user is a tenant admin in the database
-    try:
-        with get_db_session() as db_session:
-            stmt = select(User).filter_by(email=email.lower(), is_active=True, is_admin=True)
-
-            if tenant_id:
-                # Check for specific tenant
-                stmt = stmt.filter_by(tenant_id=tenant_id)
-
-            user = db_session.scalars(stmt).first()
-            return user is not None
-
-    except Exception as e:
-        logger.error(f"Error checking tenant admin status: {e}")
-        return False
-
-    return False
-
-
 def require_auth(admin_only=False):
     """Decorator to require authentication for routes."""
 
