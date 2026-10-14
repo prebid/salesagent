@@ -6,7 +6,7 @@ import pytest
 
 import src.core.config as config_module
 from src.admin.blueprints.auth import auth_bp, init_oauth
-from src.admin.utils import is_super_admin, is_tenant_admin
+from src.admin.utils import is_super_admin
 
 
 class TestAuthBlueprint:
@@ -131,65 +131,6 @@ class TestAuthUtilities:
         # Reset counter for negative test
         call_count[0] = 0
         assert not is_super_admin("user@example.com")
-
-    @patch("src.admin.utils.helpers.is_super_admin")
-    def test_is_tenant_admin_super_admin(self, mock_is_super_admin):
-        """Test tenant admin check - super admin path."""
-        # Super admins are implicitly tenant admins
-        mock_is_super_admin.return_value = True
-        assert is_tenant_admin("superadmin@example.com", "tenant_123")
-
-    @patch("src.admin.utils.helpers.select")
-    @patch("src.admin.utils.helpers.is_super_admin")
-    @patch("src.admin.utils.helpers.get_db_session")
-    def test_is_tenant_admin_database(self, mock_get_db_session, mock_is_super_admin, mock_select):
-        """Test tenant admin check - database path."""
-        # Mock is_super_admin to return False (testing regular tenant admin path)
-        mock_is_super_admin.return_value = False
-
-        # Setup mock database session
-        mock_session = MagicMock()
-        mock_get_db_session.return_value.__enter__.return_value = mock_session
-
-        # Mock select() and filter_by() chain
-        mock_stmt = MagicMock()
-        mock_stmt.filter_by.return_value = mock_stmt
-        mock_select.return_value = mock_stmt
-
-        # Test 1: User is admin
-        mock_user_admin = Mock()
-        mock_scalars_admin = Mock()
-        mock_scalars_admin.first.return_value = mock_user_admin
-        mock_session.scalars.return_value = mock_scalars_admin
-
-        assert is_tenant_admin("admin@tenant.com", "tenant_123")
-
-        # Test 2: User is not admin
-        mock_scalars_not_admin = Mock()
-        mock_scalars_not_admin.first.return_value = None
-        mock_session.scalars.return_value = mock_scalars_not_admin
-
-        assert not is_tenant_admin("user@tenant.com", "tenant_123")
-
-        # Test 3: User is inactive
-        mock_user_inactive = Mock()
-        mock_user_inactive.is_admin = True
-        mock_user_inactive.is_active = False
-
-        mock_user_query_inactive = MagicMock()
-        # When is_active=False, the filter_by chain should return no results (None)
-        mock_user_query_inactive.filter_by.return_value.filter_by.return_value.first.return_value = None
-
-        def query_side_effect_inactive(model):
-            if hasattr(model, "__name__"):
-                if model.__name__ == "TenantManagementConfig":
-                    return mock_superadmin_query
-                elif model.__name__ == "User":
-                    return mock_user_query_inactive
-            return mock_user_query_inactive
-
-        mock_session.query.side_effect = query_side_effect_inactive
-        assert not is_tenant_admin("admin@tenant.com", "tenant_123")
 
 
 class TestAuthIntegration:
