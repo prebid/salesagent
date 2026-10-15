@@ -238,6 +238,13 @@ The authoritative field list is the `GAMImplementationConfig` schema in `src/ada
 - **Values**: `automatic` (instant activation), `confirmation_required` (human approval, then automatic activation), `manual` (a human handles all steps)
 - **Defaults**: `manual` for guaranteed, `confirmation_required` for non-guaranteed
 
+#### Native style (creative template)
+
+- **Field**: `native_style_id` (optional; needed before a native creative can be pushed for the product)
+- **Type**: String. The numeric id of the GAM creative template that native creatives of this product are built against (`TemplateCreative.creativeTemplateId`).
+- **Behavior**: Every native creative pushed for a package of this product is created in GAM as a `TemplateCreative` with this template. Without it the creative's upload status is `failed`, its message names `native_style_id`, and nothing is sent to GAM for that creative; the media buy itself still completes, so check the creative's status after the push. A creative assigned to packages of several products needs every one of those products to name the same template.
+- **Best practice**: The product form has no input for this field; set it in the product's `implementation_config` JSON on every product that accepts native formats, before trafficking native creatives.
+
 ## Testing
 
 ### Test the configuration UI
@@ -370,6 +377,7 @@ Response:
 - Match the product's formats exactly.
 - Set `expected_creative_count` to the number of creatives you expect per size.
 - Set `is_native: true` for native formats.
+- Set `native_style_id` on every product that accepts native formats: a native creative is built against the template the product names, and a `1x1` placeholder alone does not provide one.
 
 ### Frequency caps
 
