@@ -76,7 +76,7 @@ from enum import StrEnum
 
 from sqlalchemy.exc import SQLAlchemyError
 
-from src.adapters.base import AdapterCreateRequest, AdapterCreateResult
+from src.adapters.base import AdapterCreateRequest, AdapterCreateResult, AdServerAdapter
 from src.core.audit_logger import get_audit_logger
 from src.core.context_manager import get_context_manager
 from src.core.database.models import AdapterConfig, CurrencyLimit, MediaBuy, PersistedMediaBuyStatus, Tenant
@@ -550,6 +550,8 @@ def _execute_adapter_media_buy_creation(
     end_time: datetime,
     package_pricing_info: dict[str, dict[str, Any]],
     identity: ResolvedIdentity,
+    *,
+    adapter: AdServerAdapter | None = None,
 ) -> AdapterCreateResult:
     """Execute adapter's create_media_buy call.
 
@@ -566,6 +568,11 @@ def _execute_adapter_media_buy_creation(
         end_time: Resolved campaign end datetime
         package_pricing_info: Pricing model info per package
         identity: The caller the adapter acts for (from a request or from stored ids)
+        adapter: The caller's adapter, when it already holds one. GAM fills per-order
+            state in create_media_buy (placement targeting, native creative templates)
+            that add_creative_assets reads back on the same instance, so a caller that
+            pushes creatives afterwards hands its adapter in (GH #1516). Built from
+            ``identity`` when absent.
 
     Returns:
         AdapterCreateResult from the adapter
@@ -573,8 +580,8 @@ def _execute_adapter_media_buy_creation(
     Raises:
         Exception: If adapter creation fails (with detailed logging)
     """
-    principal = identity.principal
-    adapter = get_adapter(identity)
+    if adapter is None:
+        adapter = get_adapter(identity)
 
     # Call adapter with detailed error logging
     try:
@@ -3415,7 +3422,7 @@ async def _create_media_buy_impl(
         # This uses the same function as manual approval to ensure consistency across adapters
         try:
             response = _execute_adapter_media_buy_creation(
-                adapter_request, packages, start_time, end_time, package_pricing_info, identity
+                adapter_request, packages, start_time, end_time, package_pricing_info, identity, adapter=adapter
             )
         except Exception:
             raise

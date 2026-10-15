@@ -1308,6 +1308,28 @@ class TestCreateMediaBuyAdapterInteraction:
                     identity=_make_identity(),
                 )
 
+    def test_uses_the_adapter_it_is_given(self):
+        """The adapter that places the order is the caller's instance, not a fresh one.
+
+        GAM builds per-order state in create_media_buy (its placement targeting and native
+        template maps) that add_creative_assets reads back on the same object, so a caller
+        that already holds an adapter hands it in and the helper must not build another.
+        """
+        from src.core.tools.media_buy_create import _execute_adapter_media_buy_creation
+
+        mock_adapter = MagicMock()
+        request = AdapterCreateRequest.from_buyer_request(_make_request())
+        start, end = datetime.now(UTC), datetime.now(UTC) + timedelta(days=7)
+
+        with patch("src.core.tools.media_buy_create.get_adapter") as get_adapter:
+            response = _execute_adapter_media_buy_creation(
+                request, [], start, end, {}, _make_identity(), adapter=mock_adapter
+            )
+
+        get_adapter.assert_not_called()
+        mock_adapter.create_media_buy.assert_called_once_with(request, [], start, end, {})
+        assert response is mock_adapter.create_media_buy.return_value
+
     # test_dry_run_skips_adapter (UC-002-AD03 / UC-002-MAIN-19) is REMOVED. It drove
     # _create_media_buy_impl with an identity whose testing context said dry_run=True and
     # asserted the tool returned a simulated success with a "dry_run_" media_buy_id
