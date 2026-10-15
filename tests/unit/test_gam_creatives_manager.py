@@ -5,9 +5,14 @@ Tests creative validation logic including 1x1 wildcard placeholder handling
 and line item matching for creative associations.
 """
 
+from datetime import UTC, datetime
 from unittest.mock import MagicMock, call, patch
 
+import pytest
+
 from src.adapters.gam.managers.creatives import GAMCreativesManager, _extract_product_id_from_package
+from src.core.exceptions import AdCPConfigurationError
+from tests.helpers.gam_client import gam_line_item, stub_gam_client_manager
 
 
 def test_1x1_placeholder_accepts_any_creative_size_native_template():
@@ -333,3 +338,148 @@ def test_line_item_matching_takes_the_first_matching_line_item():
     lica_service.createLineItemCreativeAssociations.assert_called_once_with(
         [{"creativeId": "12345", "lineItemId": "exact_match_id"}]
     )
+
+
+# =============================================================================
+# Tests for the native creative template id (GH #1516)
+# =============================================================================
+
+_NATIVE_PACKAGE = "pkg_prod_native_aa11bb22_1"
+
+
+def _manager() -> GAMCreativesManager:
+    return GAMCreativesManager(MagicMock(), "adv-1")
+
+
+def _native_asset(*packages: str) -> dict:
+    """A native asset the way the manager types it: template variables, no snippet, no media.
+
+    Package ids follow production's ``pkg_<product_id>_<hex>_<n>`` shape so the helpers
+    that derive the product id from a package id keep working.
+    """
+    return {
+        "creative_id": "cr_native_1",
+        "name": "Native 1",
+        "width": 300,
+        "height": 250,
+        "template_variables": {"headline": "Buy now"},
+        "package_assignments": [{"package_id": pkg, "weight": 100} for pkg in (packages or (_NATIVE_PACKAGE,))],
+    }
+
+
+@pytest.mark.parametrize(
+    ("asset", "native_template_ids"),
+    [
+        pytest.param(_native_asset(), {_NATIVE_PACKAGE: "987654"}, id="single-package"),
+        pytest.param(_native_asset("pkg_a", "pkg_b"), {"pkg_a": "987654", "pkg_b": "987654"}, id="two-packages-agree"),
+        pytest.param(
+            {**_native_asset(), "package_assignments": [_NATIVE_PACKAGE]},
+            {_NATIVE_PACKAGE: "987654"},
+            id="legacy-string-assignments",
+        ),
+    ],
+)
+def test_configured_native_style_id_becomes_the_creative_template_id(asset, native_template_ids):
+    """AC: the configured native_style_id flows to creativeTemplateId on the TemplateCreative."""
+    creative = _manager()._create_gam_creative(asset, "native", [], native_template_ids=native_template_ids)
+
+    assert creative is not None
+    assert creative["xsi_type"] == "TemplateCreative"
+    assert creative["creativeTemplateId"] == "987654"
+
+
+@pytest.mark.parametrize(
+    "native_template_ids",
+    [None, {}, {_NATIVE_PACKAGE: ""}, {"pkg_some_other_package": "111"}],
+    ids=["no-map", "empty-map", "empty-string", "other-package-only"],
+)
+def test_missing_native_style_id_raises_configuration_error(native_template_ids):
+    """AC: no configured native_style_id is a typed seller misconfiguration, with no fallback id."""
+    with pytest.raises(AdCPConfigurationError) as excinfo:
+        _manager()._create_gam_creative(_native_asset(), "native", [], native_template_ids=native_template_ids)
+
+    err = excinfo.value
+    assert err.field == "native_style_id"
+    assert err.details is not None
+    assert err.details.creative_id == "cr_native_1"
+    assert err.details.package_id == _NATIVE_PACKAGE
+    assert err.details.rejected_value is None
+
+
+def test_packages_that_disagree_on_the_template_raise_configuration_error():
+    """One GAM creative carries one template, so two configured templates cannot both be honoured.
+
+    The inputs are deliberately out of order so the assertion pins the sorted ``rejected_value``.
+    """
+    with pytest.raises(AdCPConfigurationError) as excinfo:
+        _manager()._create_gam_creative(
+            _native_asset("pkg_a", "pkg_b"), "native", [], native_template_ids={"pkg_a": "222", "pkg_b": "111"}
+        )
+
+    err = excinfo.value
+    assert err.field == "native_style_id"
+    assert err.details is not None
+    assert err.details.rejected_value == ["111", "222"]
+    assert err.details.package_id is None
+
+
+def test_package_without_a_template_beside_a_configured_one_raises_configuration_error():
+    """One creative serves every package it is assigned to, so a template-less package cannot ride along."""
+    with pytest.raises(AdCPConfigurationError) as excinfo:
+        _manager()._create_gam_creative(
+            _native_asset("pkg_a", "pkg_b"), "native", [], native_template_ids={"pkg_a": "111"}
+        )
+
+    err = excinfo.value
+    assert err.field == "native_style_id"
+    assert err.details is not None
+    assert err.details.package_id == "pkg_b"
+    assert err.details.rejected_value == ["111"]
+
+
+def _manager_over_a_native_line_item() -> tuple[GAMCreativesManager, MagicMock]:
+    """A manager over a stand-in GAM client whose order holds one 1x1 (native) line item.
+
+    The line item is named after the package's product, which is how association finds it.
+    The returned CreativeService stand-in is what the payload assertions read.
+    """
+    client_manager = stub_gam_client_manager(line_items=(gam_line_item("prod_native", sizes=((1, 1),)),))
+    return GAMCreativesManager(client_manager, "adv-1"), client_manager.get_service("CreativeService")
+
+
+def test_add_creative_assets_builds_the_template_creative_from_the_configured_id():
+    manager, creative_service = _manager_over_a_native_line_item()
+
+    statuses = manager.add_creative_assets(
+        "9000001", [_native_asset()], datetime.now(UTC), native_template_ids={_NATIVE_PACKAGE: "987654"}
+    )
+
+    assert [status.status for status in statuses] == ["approved"]
+    creative_service.createCreatives.assert_called_once_with(
+        [
+            {
+                "xsi_type": "TemplateCreative",
+                "name": "Native 1",
+                "advertiserId": "adv-1",
+                "creativeTemplateId": "987654",
+                "creativeTemplateVariableValues": [
+                    {
+                        "uniqueName": "headline",
+                        "value": {"xsi_type": "StringCreativeTemplateVariableValue", "value": "Buy now"},
+                    }
+                ],
+            }
+        ]
+    )
+
+
+def test_add_creative_assets_reports_the_missing_native_style_id_on_the_status():
+    """The per-asset handler carries the field into the status; nothing reaches GAM."""
+    manager, creative_service = _manager_over_a_native_line_item()
+
+    statuses = manager.add_creative_assets("9000001", [_native_asset()], datetime.now(UTC))
+
+    assert len(statuses) == 1
+    assert statuses[0].status == "failed"
+    assert statuses[0].message is not None and "field: native_style_id" in statuses[0].message
+    creative_service.createCreatives.assert_not_called()
