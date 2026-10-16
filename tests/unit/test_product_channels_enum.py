@@ -5,6 +5,7 @@ is included in serialization output (public field per AdCP spec), and handles
 DB string-to-enum conversion correctly.
 """
 
+import pytest
 from adcp.types._generated import MediaChannel
 
 from src.core.schemas import Product
@@ -141,3 +142,18 @@ class TestProductChannelsConversion:
         product_model = self._make_db_product(channels=None)
         product = convert_product_model_to_schema(product_model)
         assert product.channels is None
+
+    @pytest.mark.parametrize("member", list(MediaChannel), ids=lambda m: m.value)
+    def test_every_picker_value_round_trips_through_conversion(self, member):
+        """Every value the admin picker can emit reaches ``Product.channels`` as its enum member.
+
+        Tied to the picker's options rather than the enum alone, so what a publisher can
+        actually tag is what is graded (GH #1532). Green by construction for the twenty
+        members; it pins that an SDK enum bump the conversion did not follow shows up.
+        """
+        from src.core.helpers.channel_helpers import media_channel_options
+        from src.core.product_conversion import convert_product_model_to_schema
+
+        assert member.value in dict(media_channel_options())
+        product = convert_product_model_to_schema(self._make_db_product(channels=[member.value]))
+        assert product.channels == [member]
