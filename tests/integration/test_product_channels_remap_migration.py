@@ -29,10 +29,10 @@ from tests.integration.migration_helpers import (
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
-# Red phase: "head" IS the previous revision until the repair revision exists, so every
-# case below fails on its value assertion (the seeded string survives) rather than on an
-# unknown revision id. Pinned to the revision's id once it lands.
-_REVISION = "head"
+# Written red against "head" (then 7f31c0ab94d2, so every case failed on the stored
+# value rather than on an unknown revision id); pinned now so a later revision cannot run
+# inside this module.
+_REVISION = "b9b8e637b56c"
 _PREVIOUS = "7f31c0ab94d2"
 
 _TENANT = "mig_channels_tenant"
