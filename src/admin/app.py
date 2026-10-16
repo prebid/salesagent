@@ -267,6 +267,13 @@ def create_app(config=None, settings=None):
         # Inject support email (configurable via SUPPORT_EMAIL env var)
         context["support_email"] = get_support_email()
 
+        # The product forms' channel picker iterates this, so it offers exactly the
+        # MediaChannel enum (GH #1532). Imported here like its siblings: src.core.helpers
+        # imports the adapters eagerly, which the admin app does not need at import time.
+        from src.core.helpers.channel_helpers import media_channel_options
+
+        context["media_channel_options"] = media_channel_options()
+
         # NO sales_agent_domain. Templates built per-tenant URLs as
         # `https://{{ tenant.subdomain }}.{{ sales_agent_domain }}/...`, which is the
         # derivation removes — and its `or "example.com"` default made
