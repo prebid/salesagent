@@ -54,7 +54,7 @@ def login_as_tenant_admin(page: Page, tenant_id: str) -> None:
     page.context.add_cookies(
         [{"name": "session", "value": admin_session_cookie(tenant_id), "domain": host, "path": "/"}]
     )
-    page.goto(f"/tenant/{tenant_id}/", wait_until="networkidle")
+    page.goto(f"/tenant/{tenant_id}", wait_until="domcontentloaded")
 
 
 def build_admin_test_session(base_url: str, tenant_id: str) -> requests.Session:

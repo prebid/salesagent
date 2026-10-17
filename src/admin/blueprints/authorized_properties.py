@@ -241,6 +241,12 @@ def _construct_agent_url(tenant_id: str) -> str:
         return tenant.agent_url
 
 
+def _admin_entry_url() -> str:
+    """Use the mounted root or the direct admin entry, both registered views."""
+    endpoint = "core.index" if request.script_root == "/admin" else "core.admin_index"
+    return url_for(endpoint)
+
+
 @authorized_properties_bp.route("/<tenant_id>/authorized-properties")
 @require_tenant_access()
 def list_authorized_properties(tenant_id: str) -> str | Response:
@@ -258,7 +264,7 @@ def list_authorized_properties(tenant_id: str) -> str | Response:
             if not tenant:
                 logger.error(f"Tenant not found: {tenant_id}")
                 flash(PROPERTY_ERROR_MESSAGES["tenant_not_found"], "error")
-                return redirect(url_for("core.admin_dashboard"))
+                return redirect(_admin_entry_url())
 
             logger.info(f"Found tenant: {tenant.name}")
 
@@ -315,7 +321,7 @@ def upload_authorized_properties(tenant_id: str) -> str | Response:
                 tenant = db_session.scalars(stmt).first()
                 if not tenant:
                     flash(PROPERTY_ERROR_MESSAGES["tenant_not_found"], "error")
-                    return redirect(url_for("core.admin_dashboard"))
+                    return redirect(_admin_entry_url())
 
                 # Get existing tags for this tenant
                 tags_stmt = select(PropertyTag).where(PropertyTag.tenant_id == tenant_id)
@@ -412,7 +418,7 @@ def list_property_tags(tenant_id: str) -> str | Response:
             tenant = db_session.scalars(stmt).first()
             if not tenant:
                 flash("Tenant not found", "error")
-                return redirect(url_for("core.admin_dashboard"))
+                return redirect(_admin_entry_url())
 
             # Ensure 'all_inventory' tag exists (default tag for all properties)
             tag_stmt = select(PropertyTag).where(
@@ -787,7 +793,7 @@ def create_property(tenant_id: str) -> str | Response:
                 tenant = db_session.scalars(stmt).first()
                 if not tenant:
                     flash(PROPERTY_ERROR_MESSAGES["tenant_not_found"], "error")
-                    return redirect(url_for("core.admin_dashboard"))
+                    return redirect(_admin_entry_url())
 
                 # Get existing tags for this tenant
                 tags_stmt = select(PropertyTag).where(PropertyTag.tenant_id == tenant_id)
@@ -860,7 +866,7 @@ def edit_property(tenant_id: str, property_id: str) -> str | Response:
                 tenant = db_session.scalars(stmt).first()
                 if not tenant:
                     flash(PROPERTY_ERROR_MESSAGES["tenant_not_found"], "error")
-                    return redirect(url_for("core.admin_dashboard"))
+                    return redirect(_admin_entry_url())
 
                 # Get the property to edit
                 prop_stmt = select(AuthorizedProperty).where(
