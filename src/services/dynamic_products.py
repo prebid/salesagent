@@ -20,12 +20,18 @@ from sqlalchemy.orm import attributes
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Product
+from src.core.database.repositories.product import ProductRepository
+from src.core.database.repositories.uow import ProductUoW
+from src.core.product_conversion import convert_product_model_to_schema
+from src.core.schemas import Product as ProductSchema
 from src.core.signals_agent_registry import get_signals_agent_registry
 
 logger = logging.getLogger(__name__)
 
 
-async def generate_variants_for_brief(tenant_id: str, brief: str, our_agent_url: str | None = None) -> list[Product]:
+async def generate_variants_for_brief(
+    tenant_id: str, brief: str, our_agent_url: str | None = None, *, adapter_type: str | None = None
+) -> list[ProductSchema]:
     """Generate product variants from signals agents based on buyer's brief.
 
     Uses the singleton SignalsAgentRegistry which handles:
@@ -39,14 +45,14 @@ async def generate_variants_for_brief(tenant_id: str, brief: str, our_agent_url:
         our_agent_url: Our sales agent URL for deployment specification (optional)
 
     Returns:
-        List of Product variants (newly created or existing)
+        Complete product schemas, converted before the transaction closes.
     """
     variants = []
 
-    with get_db_session() as session:
+    with ProductUoW(tenant_id) as uow:
+        assert uow.products is not None
         # Get all dynamic product templates for this tenant
-        stmt = select(Product).filter_by(tenant_id=tenant_id, is_dynamic=True, archived_at=None)
-        templates = session.scalars(stmt).all()
+        templates = uow.products.list_dynamic_templates()
 
         if not templates:
             logger.debug(f"No dynamic product templates found for tenant {tenant_id}")
@@ -97,7 +103,9 @@ async def generate_variants_for_brief(tenant_id: str, brief: str, our_agent_url:
             return []
 
         # Generate variants for each template using the signals
-        for template in templates:
+        # Serialize creation and pricing repair for each template after the remote
+        # query completes. Concurrent requests then reuse the committed variant.
+        for template in uow.products.list_dynamic_templates(for_update=True):
             if not template.signals_agent_ids:
                 continue
 
@@ -108,7 +116,7 @@ async def generate_variants_for_brief(tenant_id: str, brief: str, our_agent_url:
 
                 # Generate variants from signals
                 template_variants = generate_variants_from_signals(
-                    session, template, template_signals, brief, our_agent_url
+                    uow.products, template, template_signals, brief, our_agent_url
                 )
                 variants.extend(template_variants)
 
@@ -116,18 +124,18 @@ async def generate_variants_for_brief(tenant_id: str, brief: str, our_agent_url:
                 logger.error(f"Error generating variants for template {template.product_id}: {e}", exc_info=True)
                 continue
 
-        session.commit()
-
-    return variants
+        # Return values survive the UoW's commit and session expiry. A conversion
+        # failure rolls back the same transaction that created the variant.
+        return [convert_product_model_to_schema(variant, adapter_type=adapter_type) for variant in variants]
 
 
 def generate_variants_from_signals(
-    session, template: Product, signals: list[dict], brief: str, our_agent_url: str | None = None
+    repository: ProductRepository, template: Product, signals: list[dict], brief: str, our_agent_url: str | None = None
 ) -> list[Product]:
     """Generate product variants from template and signals.
 
     Args:
-        session: Database session
+        repository: Tenant-scoped product repository
         template: Dynamic product template
         signals: List of signal dicts from signals agent
         brief: Buyer's brief (for variant customization)
@@ -152,32 +160,24 @@ def generate_variants_from_signals(
             # Generate variant ID (deterministic)
             variant_id = generate_variant_id(template.product_id, activation_key)
 
-            # Check if variant already exists
-            stmt = select(Product).filter_by(tenant_id=template.tenant_id, product_id=variant_id)
-            existing = session.scalars(stmt).first()
+            with repository.variant_write():
+                existing = repository.get_by_id_with_pricing(variant_id)
+                if existing:
+                    variant = existing
+                    variant.last_synced_at = datetime.now(UTC)
+                    ttl_days = template.variant_ttl_days or 30
+                    new_expiration = datetime.now(UTC) + timedelta(days=ttl_days)
+                    if not variant.expires_at or variant.expires_at < new_expiration:
+                        variant.expires_at = new_expiration
+                    repository.inherit_missing_variant_pricing(variant, template)
+                else:
+                    variant = create_variant_from_template(template, signal, activation_key, variant_id, brief)
+                    repository.inherit_missing_variant_pricing(variant, template)
+                    repository.create(variant)
 
-            if existing:
-                # Update existing variant
-                existing.last_synced_at = datetime.now(UTC)
-                # Extend expiration if still active
-                ttl_days = template.variant_ttl_days or 30
-                new_expiration = datetime.now(UTC) + timedelta(days=ttl_days)
-                if not existing.expires_at or existing.expires_at < new_expiration:
-                    existing.expires_at = new_expiration
-                variants.append(existing)
-                logger.debug(f"Updated existing variant {variant_id}")
-                continue
-
-            # Create new variant from template
-            variant = create_variant_from_template(template, signal, activation_key, variant_id, brief)
-
-            session.add(variant)
+            # Append only after the savepoint flush succeeds.
             variants.append(variant)
-
-            logger.info(
-                f"Created dynamic variant {variant_id} from template {template.product_id} "
-                f"for signal {signal.get('signal_agent_segment_id')}"
-            )
+            logger.debug(f"Generated dynamic variant {variant_id} from template {template.product_id}")
 
         except Exception as e:
             logger.error(f"Error generating variant from signal: {e}", exc_info=True)
@@ -293,7 +293,11 @@ def create_variant_from_template(
         "countries": template.countries,
         "implementation_config": template.implementation_config,
         "properties": template.properties,
+        "property_ids": template.property_ids,
         "property_tags": template.property_tags,
+        "inventory_profile_id": template.inventory_profile_id,
+        "channels": template.channels,
+        "allowed_principal_ids": template.allowed_principal_ids,
         "delivery_measurement": template.delivery_measurement,
         "product_card": template.product_card,
         "product_card_detailed": template.product_card_detailed,

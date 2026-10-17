@@ -19,6 +19,7 @@ from src.services.dynamic_products import (
     archive_expired_variants,
     generate_variants_for_brief,
 )
+from tests.factories import PricingOptionFactory
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -116,7 +117,7 @@ def _create_dynamic_template(
             description=f"Dynamic template for {name}",
             format_ids=[{"agent_url": "https://creative.example.com", "id": "display_300x250"}],
             targeting_template={"geo": ["US"]},
-            delivery_type="standard",
+            delivery_type="guaranteed",
             property_tags=["all_inventory"],
             is_dynamic=True,
             signals_agent_ids=signals_agent_ids,
@@ -126,6 +127,7 @@ def _create_dynamic_template(
             variant_description_template=variant_description_template,
             variant_ttl_days=variant_ttl_days,
         )
+        template.pricing_options = [PricingOptionFactory.build(product=template)]
         session.add(template)
         session.commit()
     return template

@@ -344,18 +344,63 @@ async def _get_products_impl(req: GetProductsRequest, identity: PublicIdentity) 
     # Resolve adapter type for delivery_measurement defaults
     tenant_adapter_type = tenant.ad_server
 
+    generated_products: dict[str, Product] = {}
+    # Generate dynamic product variants from signals agents
+    try:
+        from src.services.dynamic_products import generate_variants_for_brief
+
+        # A signals agent records its deployments against a ``destination.agent_url``, which
+        # AdCP 3.1.1 declares "format": "uri" (core/destination.json), and
+        # ``extract_activation_key`` picks ours by comparing that string to this one. So it
+        # is the URL the agent card publishes. Both use the same accessor. A bare host
+        # carries no scheme and may carry a port, so it cannot match that URI.
+        #
+        # Dynamic generation is ungraded by the AdCP 3.1.1 storyboards.
+        our_agent_url = tenant.agent_url
+
+        dynamic_variants = await generate_variants_for_brief(
+            tenant.tenant_id, brief_text, our_agent_url, adapter_type=tenant_adapter_type
+        )
+        generated_products = {product.product_id: product for product in dynamic_variants}
+    except (ImportError, RuntimeError, OSError) as e:
+        # structural-guard: fail-open is conformant at AdCP 3.1.1.
+        # get-products-response.json requires `errors` ONLY in its `if status ==
+        # "failed"` branch; on a completed response the field carries no emission
+        # condition. The nearest grading obligation is
+        # dist/compliance/3.1.1/universal/stale-response-advisory.yaml (required_tools:
+        # [get_products]), which puts STALE_RESPONSE in errors[] on a populated success
+        # and requires details.served_from_cache + cache_age_seconds, scoping
+        # itself to serving CACHE past its freshness target, which this path does not
+        # do (nothing cached is served; enrichment is simply absent).
+        # If this is ever surfaced, the correct field is `incomplete[]` with
+        # scope="products" ("not all inventory sources were searched"), NOT errors[].
+        # That is a product decision needing its own grounding, not a defect fix.
+        logger.warning(f"Failed to generate dynamic product variants: {e}. Continuing with static products only.")
+
     # Query products via repository (tenant-scoped)
     from src.core.database.repositories.uow import ProductUoW
 
     with ProductUoW(tenant.tenant_id) as uow:
         assert uow.products is not None
         db_products = uow.products.list_all()
+        parent_access = {
+            product.product_id: product.allowed_principal_ids
+            for product in db_products
+            if product.allowed_principal_ids
+        }
 
         # Convert database Product models to AdCP Product schema
         products = []
         for product_obj in db_products:
+            # Old variants may predate inherited access restrictions. Enforce the
+            # current parent policy as well as the variant's own policy below.
+            parent_allowed = parent_access.get(product_obj.parent_product_id or "")
+            if product_obj.is_dynamic_variant and parent_allowed and principal_id not in parent_allowed:
+                continue
             try:
-                validated_product = convert_product_model_to_schema(product_obj, adapter_type=tenant_adapter_type)
+                validated_product = generated_products.get(product_obj.product_id)
+                if validated_product is None:
+                    validated_product = convert_product_model_to_schema(product_obj, adapter_type=tenant_adapter_type)
                 products.append(validated_product)
                 logger.debug(f"Successfully converted product {product_obj.product_id}")
             except AdCPSalesAgentError:
@@ -425,49 +470,6 @@ async def _get_products_impl(req: GetProductsRequest, identity: PublicIdentity) 
             f"[GET_PRODUCTS] After property list filtering: {len(products)} products "
             f"(allowed {len(allowed_set)} properties)"
         )
-
-    # Generate dynamic product variants from signals agents
-    try:
-        from src.services.dynamic_products import generate_variants_for_brief
-
-        # A signals agent records its deployments against a ``destination.agent_url``, which
-        # AdCP 3.1.1 declares "format": "uri" (core/destination.json), and
-        # ``extract_activation_key`` picks ours by comparing that string to this one. So it
-        # is the URL the agent card publishes — the one accessor, so the two cannot name
-        # different agents — never the bare host, which carries no scheme and may carry a
-        # port and therefore matches no URI at all.
-        #
-        # Ungraded through this tool today: the conversion further down raises
-        # DetachedInstanceError on the rows the generator hands back, so no variant reaches a
-        # response at all (#2291).
-        our_agent_url = tenant.agent_url
-
-        dynamic_variants = await generate_variants_for_brief(tenant.tenant_id, brief_text, our_agent_url)
-        if dynamic_variants:
-            # Convert Product models to Product schemas for response
-
-            for variant_model in dynamic_variants:
-                # Convert database model to schema (returns library Product)
-                # Cast to our extended Product type for mypy compatibility
-                variant_schema = convert_product_model_to_schema(variant_model, adapter_type=tenant_adapter_type)
-                # Type: ignore - library Product is compatible with our extended Product at runtime
-                products.append(variant_schema)
-
-            logger.info(f"[GET_PRODUCTS] Added {len(dynamic_variants)} dynamic product variants")
-    except (ImportError, RuntimeError, OSError) as e:
-        # structural-guard: fail-open is conformant at AdCP 3.1.1.
-        # get-products-response.json requires `errors` ONLY in its `if status ==
-        # "failed"` branch; on a completed response the field carries no emission
-        # condition. The nearest grading obligation is
-        # dist/compliance/3.1.1/universal/stale-response-advisory.yaml (required_tools:
-        # [get_products]), which puts STALE_RESPONSE in errors[] on a populated success
-        # — but it requires details.served_from_cache + cache_age_seconds and scopes
-        # itself to serving CACHE past its freshness target, which this path does not
-        # do (nothing cached is served; enrichment is simply absent).
-        # If this is ever surfaced, the correct field is `incomplete[]` with
-        # scope="products" ("not all inventory sources were searched"), NOT errors[].
-        # That is a product decision needing its own grounding, not a defect fix.
-        logger.warning(f"Failed to generate dynamic product variants: {e}. Continuing with static products only.")
 
     logger.info(f"[GET_PRODUCTS] Total products (static + dynamic): {len(products)}")
 

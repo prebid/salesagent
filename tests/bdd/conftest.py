@@ -90,6 +90,7 @@ pytest_plugins = [
     "tests.bdd.steps.domain.admin_accounts",
     "tests.bdd.steps.domain.uc_get_products_inventory",
     "tests.bdd.steps.domain.uc_get_products_pricing",
+    "tests.bdd.steps.domain.uc_get_products_dynamic",
     "tests.bdd.steps.domain.egress_ssrf",
     "tests.bdd.steps.domain.local_constraint_relaxations",
     "tests.bdd.steps.domain.local_context_echo",
@@ -5927,6 +5928,11 @@ _UC006_WIRED_SCENARIOS = frozenset(
 )
 
 ENV_ROUTES: list[EnvRoute] = [
+    EnvRoute(
+        tag="dynamic-catalog",
+        when=lambda m: "dynamic-catalog" in m,
+        env_builder=_env("tests.harness.dynamic_products.DynamicProductEnv"),
+    ),
     # ── @ctxecho (local context-echo-on-every-outcome feature) ──────────────
     # Same reason the @egress rows below are UNSCOPED `when` rows: these
     # scenarios carry T-CTXECHO-* identity tags, not T-UC-<n>, so

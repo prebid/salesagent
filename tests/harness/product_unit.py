@@ -14,7 +14,7 @@ Usage::
 
 Available mocks via env.mock:
     "uow"                  -- ProductUoW class mock
-    "convert"              -- convert_product_model_to_schema mock (identity)
+    "convert"              -- convert_product_model_to_schema mock (stored schemas)
     "policy_service"       -- PolicyCheckService class mock
     "dynamic_variants"     -- generate_variants_for_brief AsyncMock
     "ranking_factory"      -- get_factory mock (AI ranking)
@@ -28,9 +28,10 @@ from __future__ import annotations
 from typing import Any
 from unittest.mock import MagicMock
 
+from src.core.database.models import Product as ProductModel
 from src.core.product_conversion import default_reporting_capabilities
 from src.core.schemas import Product
-from tests.factories.product import PricingOptionRequestFactory
+from tests.factories.product import PricingOptionRequestFactory, ProductFactory
 from tests.harness._base import BaseTestEnv
 from tests.harness._mixins import ProductMixin
 
@@ -102,7 +103,7 @@ class ProductEnv(ProductMixin, BaseTestEnv):
         call_impl(brief, **kw)           -- call _get_products_impl
 
     Unit-only API:
-        add_product(...)                 -- add a Product schema to the UoW repo
+        add_product(...)                 -- seed an ORM row and its converted schema
     """
 
     MODULE = "src.core.tools.products"
@@ -122,6 +123,7 @@ class ProductEnv(ProductMixin, BaseTestEnv):
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self._products: list[Product] = []
+        self._catalog_rows: list[ProductModel] = []
         self._uow_instance: MagicMock | None = None
 
     def _configure_mocks(self) -> None:
@@ -133,8 +135,10 @@ class ProductEnv(ProductMixin, BaseTestEnv):
         self._uow_instance.__exit__ = MagicMock(return_value=False)
         self.mock["uow"].return_value = self._uow_instance
 
-        # Convert: identity function (return product as-is)
-        self.mock["convert"].side_effect = lambda product_obj, **kw: product_obj
+        # The repository returns ORM rows; the converter returns their schemas.
+        self.mock["convert"].side_effect = lambda row, **kw: next(
+            product for product in self._products if product.product_id == row.product_id
+        )
 
         # Adapter: mock with supported pricing models
         mock_adapter = MagicMock()
@@ -158,9 +162,11 @@ class ProductEnv(ProductMixin, BaseTestEnv):
         delivery_measurement: dict[str, str] | None = None,
         publisher_properties: list[dict[str, Any]] | None = None,
         estimated_exposures: int | None = None,
+        parent_product_id: str | None = None,
+        is_dynamic_variant: bool = False,
         **extra: Any,
     ) -> Product:
-        """Add a Product schema instance to the UoW repository.
+        """Seed a catalog row and the schema the mocked converter returns.
 
         Returns the Product for further customization.
         """
@@ -180,9 +186,19 @@ class ProductEnv(ProductMixin, BaseTestEnv):
             **extra,
         )
         self._products.append(product)
+        self._catalog_rows.append(
+            ProductFactory.build(
+                tenant=None,
+                tenant_id=self._tenant_id,
+                product_id=product_id,
+                allowed_principal_ids=allowed_principal_ids,
+                parent_product_id=parent_product_id,
+                is_dynamic_variant=is_dynamic_variant,
+            )
+        )
 
         # Update UoW repo mock
         if self._uow_instance is not None:
-            self._uow_instance.products.list_all.return_value = list(self._products)
+            self._uow_instance.products.list_all.return_value = list(self._catalog_rows)
 
         return product
