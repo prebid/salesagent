@@ -122,6 +122,9 @@ def _make_configured_product():
     product = Mock()
     product.product_id = "prod_test"
     product.implementation_config = {"targeted_ad_unit_ids": ["123456"]}
+    # Real Product.effective_implementation_config returns implementation_config when the
+    # product has no inventory profile; the adapter reads the effective one.
+    product.effective_implementation_config = product.implementation_config
     product.gemini_api_key = None
     product.order_name_template = None
     return product
@@ -131,6 +134,7 @@ def _make_product_without_inventory():
     """A product that exists but carries no inventory targeting (no ad units, no placements)."""
     product = _make_configured_product()
     product.implementation_config = {}
+    product.effective_implementation_config = {}
     return product
 
 
@@ -176,8 +180,10 @@ class TestGAMManualApprovalPath:
             with (
                 patch.object(adapter, "_requires_manual_approval", return_value=True),
                 patch.object(adapter.workflow_manager, "create_manual_order_workflow_step") as mock_workflow,
+                patch("src.core.database.database_session.get_db_session") as mock_db_session,
             ):
                 mock_workflow.return_value = "workflow_step_123"
+                _stub_product_session(mock_db_session)
 
                 # Act
                 start_time = datetime.now()
@@ -231,8 +237,10 @@ class TestGAMManualApprovalPath:
             with (
                 patch.object(adapter, "_requires_manual_approval", return_value=True),
                 patch.object(adapter.workflow_manager, "create_manual_order_workflow_step") as mock_workflow,
+                patch("src.core.database.database_session.get_db_session") as mock_db_session,
             ):
                 mock_workflow.return_value = None  # Simulate failure
+                _stub_product_session(mock_db_session)
 
                 # Act / Assert - workflow failure raises the typed AdCPWorkflowError,
                 # whose class identity carries the WORKFLOW_CREATION_FAILED taxonomy.
@@ -303,13 +311,8 @@ class TestGAMActivationWorkflowPath:
                 mock_session = MagicMock()
                 mock_db_session.return_value.__enter__.return_value = mock_session
 
-                # Create mock products with inventory targeting (required by validation)
-                mock_product = Mock()
-                mock_product.product_id = "prod_test"
-                mock_product.implementation_config = {"targeted_ad_unit_ids": ["123456"]}
-                # Prevent MagicMock auto-generation for tenant attributes
-                mock_product.gemini_api_key = None
-                mock_product.order_name_template = None
+                # Mock product with inventory targeting (required by validation)
+                mock_product = _make_configured_product()
 
                 # Simpler approach: Always return mock_product for .first(), empty for .all()
                 mock_result = Mock()
@@ -383,13 +386,8 @@ class TestGAMSuccessPath:
                 mock_session = MagicMock()
                 mock_db_session.return_value.__enter__.return_value = mock_session
 
-                # Create mock products with inventory targeting (required by validation)
-                mock_product = Mock()
-                mock_product.product_id = "prod_test"
-                mock_product.implementation_config = {"targeted_ad_unit_ids": ["123456"]}
-                # Prevent MagicMock auto-generation for tenant attributes
-                mock_product.gemini_api_key = None
-                mock_product.order_name_template = None
+                # Mock product with inventory targeting (required by validation)
+                mock_product = _make_configured_product()
 
                 # Simpler approach: Always return mock_product for .first(), empty for .all()
                 mock_result = Mock()
