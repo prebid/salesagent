@@ -570,29 +570,27 @@
                                     {% endif %}
                                 </div>
                                 {% if tenant.favicon_url %}
-                                <form method="POST" action="{{ script_name }}/tenant/{{ tenant.tenant_id }}/remove_favicon" style="margin: 0;">
-                                    <button type="submit" class="btn btn-outline-danger btn-sm" onclick="return confirm('Remove custom favicon and use the default?')">
-                                        Remove
-                                    </button>
-                                </form>
+                                <button type="submit" form="favicon-remove-form" class="btn btn-outline-danger btn-sm" onclick="return confirm('Remove custom favicon and use the default?')">
+                                    Remove
+                                </button>
                                 {% endif %}
                             </div>
 
                             <!-- Upload form -->
                             <div style="margin-bottom: 1rem;">
-                                <form method="POST" action="{{ script_name }}/tenant/{{ tenant.tenant_id }}/upload_favicon" enctype="multipart/form-data" style="display: flex; gap: 0.5rem; align-items: center;">
-                                    <input type="file" name="favicon" accept=".ico,.png,.svg" style="flex: 1;">
-                                    <button type="submit" class="btn btn-secondary btn-sm">Upload</button>
-                                </form>
+                                <div style="display: flex; gap: 0.5rem; align-items: center;">
+                                    <input type="file" name="favicon" form="favicon-upload-form" accept=".ico,.png,.svg" style="flex: 1;">
+                                    <button type="submit" form="favicon-upload-form" class="btn btn-secondary btn-sm">Upload</button>
+                                </div>
                             </div>
 
                             <!-- URL form -->
                             <div style="margin-top: 1rem; padding-top: 1rem; border-top: 1px dashed #e2e8f0;">
                                 <label style="font-size: 0.875rem; font-weight: 500; margin-bottom: 0.5rem; display: block;">Or provide a URL:</label>
-                                <form method="POST" action="{{ script_name }}/tenant/{{ tenant.tenant_id }}/update_favicon_url" style="display: flex; gap: 0.5rem; align-items: center;">
-                                    <input type="url" name="favicon_url" value="{{ tenant.favicon_url or '' }}" placeholder="https://example.com/favicon.ico" style="flex: 1; padding: 0.5rem; border: 1px solid #e2e8f0; border-radius: 6px;">
-                                    <button type="submit" class="btn btn-secondary btn-sm">Save URL</button>
-                                </form>
+                                <div style="display: flex; gap: 0.5rem; align-items: center;">
+                                    <input type="url" name="favicon_url" form="favicon-url-form" value="{{ tenant.favicon_url or '' }}" placeholder="https://example.com/favicon.ico" style="flex: 1; padding: 0.5rem; border: 1px solid #e2e8f0; border-radius: 6px;">
+                                    <button type="submit" form="favicon-url-form" class="btn btn-secondary btn-sm">Save URL</button>
+                                </div>
                             </div>
                         </div>
                     </div>
@@ -694,6 +692,15 @@
                     <button type="submit" class="btn btn-primary">Save Account Settings</button>
                 </div>
             </form>
+
+            <!-- The favicon controls sit inside account-settings-form and reach these through form="".
+                 A form nested in a form is dropped by the HTML parser, and the first inner </form>
+                 closes the outer one, leaving the domain field and Save button in no form at all. -->
+            {% if tenant.favicon_url %}
+            <form id="favicon-remove-form" method="POST" action="{{ script_name }}/tenant/{{ tenant.tenant_id }}/remove_favicon"></form>
+            {% endif %}
+            <form id="favicon-upload-form" method="POST" action="{{ script_name }}/tenant/{{ tenant.tenant_id }}/upload_favicon" enctype="multipart/form-data"></form>
+            <form id="favicon-url-form" method="POST" action="{{ script_name }}/tenant/{{ tenant.tenant_id }}/update_favicon_url"></form>
 
             <!-- Access Control (Domain & Email Authorization) -->
             <div class="form-section" style="margin-top: 2rem; padding-top: 2rem; border-top: 1px solid #e5e7eb;">
