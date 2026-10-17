@@ -1929,11 +1929,14 @@ class ProductMixin:
             mock_pricing_instance.enrich_products_with_pricing.side_effect = lambda products, **kw: products
             self.mock["dynamic_pricing"].return_value = mock_pricing_instance  # type: ignore[attr-defined]
 
-        # Ranking factory: AI not enabled
-        self.set_ranking_disabled()
+        # Ranking factory: AI not enabled. Absent on an env that runs the real factory.
+        if "ranking_factory" in self.mock:  # type: ignore[attr-defined]
+            self.set_ranking_disabled()
 
-        # Property list resolver: returns [] (AsyncMock from ASYNC_PATCHES)
-        self.mock["resolve_property_list"].return_value = []  # type: ignore[attr-defined]
+        # Property list resolver: returns [] (AsyncMock from ASYNC_PATCHES). Absent on an
+        # env that runs the real resolver.
+        if "resolve_property_list" in self.mock:  # type: ignore[attr-defined]
+            self.mock["resolve_property_list"].return_value = []  # type: ignore[attr-defined]
 
     async def call_impl(  # type: ignore[override]
         self,

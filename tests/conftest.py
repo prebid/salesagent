@@ -429,6 +429,10 @@ def test_environment(monkeypatch, request):
 
     # Set test API keys and credentials
     monkeypatch.setenv("GEMINI_API_KEY", os.environ.get("GEMINI_API_KEY", "test_key_for_mocking"))
+    # No test reaches Google. google-genai reads this when it builds a client, so a Gemini
+    # call a test makes fails to connect at once; docker-compose.e2e.yml sets the same
+    # value on the e2e server.
+    monkeypatch.setenv("GOOGLE_GEMINI_BASE_URL", "http://127.0.0.1:1")
     monkeypatch.setenv("GOOGLE_CLIENT_ID", os.environ.get("GOOGLE_CLIENT_ID", "test_client_id"))
     monkeypatch.setenv("GOOGLE_CLIENT_SECRET", os.environ.get("GOOGLE_CLIENT_SECRET", "test_client_secret"))
     monkeypatch.setenv("SUPER_ADMIN_EMAILS", os.environ.get("SUPER_ADMIN_EMAILS", "test@example.com"))
