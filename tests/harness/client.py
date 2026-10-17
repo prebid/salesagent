@@ -244,6 +244,21 @@ def _deliver_e2e_rest(env: BaseTestEnv, address: ToolAddress, wrapped: dict[str,
         return getattr(client, method)(wrapped["url"], json=wrapped["body"], headers=headers)
 
 
+def _mcp_http_client(**kwargs: Any):
+    """Keep JSON refusal bodies readable after the SDK closes its HTTP stream."""
+    from mcp.shared._httpx_utils import create_mcp_http_client
+
+    async def _read_error_body(response):
+        if response.is_error and response.headers.get("content-type", "").startswith("application/json"):
+            await response.aread()
+
+    # The SDK factory already follows redirects and supplies MCP timeouts.
+    kwargs.pop("follow_redirects", None)
+    client = create_mcp_http_client(**kwargs)
+    client.event_hooks["response"].append(_read_error_body)
+    return client
+
+
 def _deliver_e2e_mcp(
     env: BaseTestEnv, address: ToolAddress, wrapped: dict[str, Any], credential: Any
 ) -> dict[str, Any]:
@@ -268,7 +283,7 @@ def _deliver_e2e_mcp(
     from fastmcp import Client
     from fastmcp.client.transports import StreamableHttpTransport
 
-    from tests.harness._base import WireError, _mcp_wire_envelope
+    from tests.harness._base import _mcp_wire_error
 
     if not env.e2e_config:
         raise RuntimeError("E2E dispatch requires env.e2e_config (pass e2e_config= to env)")
@@ -282,7 +297,7 @@ def _deliver_e2e_mcp(
     url = f"{env.e2e_config.base_url}/mcp/"
 
     async def _call() -> DeliverResult:
-        mcp_transport = StreamableHttpTransport(url=url, headers=headers)
+        mcp_transport = StreamableHttpTransport(url=url, headers=headers, httpx_client_factory=_mcp_http_client)
         async with Client(transport=mcp_transport) as mcp_client:
             result = await mcp_client.call_tool(address.name, wrapped)
             return DeliverResult(payload=result.structured_content, wire_response=result.structured_content)
@@ -290,14 +305,11 @@ def _deliver_e2e_mcp(
     try:
         return asyncio.run(_call())
     except Exception as exc:
-        # Byte-for-byte the in-process rule (``_run_mcp_client``): the JSON payload
-        # inside the ``ToolError`` IS the envelope the buyer received, so it is
-        # re-raised VERBATIM on a ``WireError``. No code -> class reconstruction —
-        # that map is deleted from the harness — and a ``ToolError`` carrying no
-        # envelope propagates untouched rather than being re-typed into one.
-        envelope = _mcp_wire_envelope(exc)
-        if envelope is not None:
-            raise WireError(envelope) from exc
+        # Preserve the received envelope and HTTP challenge through one reader.
+        # Unrecognized bodies remain transport failures with no invented code.
+        wire_error = _mcp_wire_error(exc, getattr(exc, "response", None))
+        if wire_error is not exc:
+            raise wire_error from exc
         raise
 
 
@@ -827,6 +839,7 @@ def unwrap_mcp_error(exc: Exception, transport: Transport = Transport.MCP) -> Tr
         # rather than a fault that produced no envelope at all.
         envelope={"transport": transport.value, "status": derive_error_status(wire)},
         wire_error_envelope=wire,
+        raw_response=getattr(exc, "response", None),
         # NO synthesized envelope. MCP HAS a wire, so a rebuilt copy here is
         # either redundant or — when the capture above came back None — a mask
         # that would let error_envelope() hand a downstream test a value

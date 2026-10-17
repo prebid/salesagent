@@ -158,7 +158,7 @@ class WireError(Exception):
 
 
 def _mcp_wire_envelope(exc: Exception) -> dict | None:
-    """The two-layer envelope inside a FastMCP ``ToolError``, or ``None``.
+    """The two-layer envelope inside an MCP tool or HTTP error, or ``None``.
 
     The MCP boundary translator raises ``AdCPToolError`` (single-arg JSON envelope)
     so FastMCP serializes ``str(exc)`` as the JSON-encoded envelope. This parses that
@@ -172,12 +172,31 @@ def _mcp_wire_envelope(exc: Exception) -> dict | None:
     import ast as _ast
     import json
 
+    import httpx
     from fastmcp.exceptions import ToolError
 
-    if not isinstance(exc, ToolError):
+    if isinstance(exc, httpx.HTTPStatusError):
+        # AuthChallengeResponder retains the JSON-RPC body when lifting its
+        # status to 401. Read those bytes, never infer an AdCP code from status.
+        try:
+            frame = exc.response.json()
+        except (ValueError, httpx.ResponseNotRead):
+            return None
+        if not isinstance(frame, dict):
+            return None
+        error = frame.get("error")
+        result = frame.get("result")
+        if isinstance(error, dict):
+            payload = error
+        elif isinstance(result, dict) and result.get("isError") is True:
+            payload = result
+        else:
+            return None
+        error_str = str(_mcp_error_to_exception(payload))
+    elif isinstance(exc, ToolError):
+        error_str = str(exc)
+    else:
         return None
-
-    error_str = str(exc)
 
     try:
         parsed = json.loads(error_str)
@@ -187,6 +206,9 @@ def _mcp_wire_envelope(exc: Exception) -> dict | None:
                 return envelope
     except (json.JSONDecodeError, TypeError):
         pass
+
+    if isinstance(exc, httpx.HTTPStatusError):
+        return None
 
     # Legacy shape (test fixtures that mock ToolError directly):
     # tuple-stringified `('CODE', 'message', 'recovery', '{"details": ...}')`.

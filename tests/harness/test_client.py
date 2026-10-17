@@ -490,6 +490,85 @@ class TestClientE2eMcpDelivery:
         result.assert_wire_error("AUTH_REQUIRED")
 
 
+class TestClientE2eMcpHttpRefusals:
+    """Exercise the real MCP SDK through an HTTP transport, including streaming."""
+
+    @pytest.mark.parametrize("container", ["result", "error"])
+    def test_http_401_retains_the_received_envelope_and_challenge(self, monkeypatch, container):
+        import json
+
+        entry = {"code": "AUTH_MISSING", "message": "Credential required", "recovery": "correctable"}
+        envelope = {"adcp_error": entry, "errors": [entry], "marker": "received verbatim"}
+        if container == "result":
+            payload = {"isError": True, "content": [{"type": "text", "text": json.dumps(envelope)}]}
+        else:
+            payload = {"code": -32603, "message": json.dumps(envelope)}
+        result = self._dispatch(monkeypatch, {"jsonrpc": "2.0", "id": 2, container: payload})
+
+        result.assert_wire_error("AUTH_MISSING", recovery="correctable")
+        assert result.wire_error_envelope == envelope
+        assert result.raw_response.status_code == 401
+        assert result.raw_response.headers["www-authenticate"] == "Bearer"
+
+    @pytest.mark.parametrize(
+        "body",
+        [
+            b"not json",
+            {"detail": "unauthorized"},
+            {"result": {"isError": False}},
+            {"result": {"isError": True, "content": [{"type": "text", "text": "('AUTH_MISSING', 'no token')"}]}},
+        ],
+    )
+    def test_http_status_alone_never_becomes_an_adcp_error(self, monkeypatch, body):
+        result = self._dispatch(monkeypatch, body)
+
+        assert result.raw_response.status_code == 401
+        assert result.wire_error_envelope is None
+
+    @staticmethod
+    def _dispatch(monkeypatch, refusal):
+        import json
+
+        import httpx
+
+        from tests.harness._base import BaseTestEnv
+        from tests.harness.transport import E2EConfig
+
+        def respond(request):
+            if request.method != "POST":
+                return httpx.Response(405)
+            frame = json.loads(request.content)
+            if frame["method"] == "initialize":
+                return httpx.Response(
+                    200,
+                    json={
+                        "jsonrpc": "2.0",
+                        "id": frame["id"],
+                        "result": {
+                            "protocolVersion": frame["params"]["protocolVersion"],
+                            "capabilities": {},
+                            "serverInfo": {"name": "refusal-test", "version": "1"},
+                        },
+                    },
+                )
+            if frame["method"] == "notifications/initialized":
+                return httpx.Response(202)
+            assert frame["method"] == "tools/call"
+            headers = {"content-type": "application/json", "www-authenticate": "Bearer"}
+            if isinstance(refusal, bytes):
+                return httpx.Response(401, content=refusal, headers=headers)
+            return httpx.Response(401, json={**refusal, "id": frame["id"]}, headers=headers)
+
+        real_client = httpx.AsyncClient
+
+        def client_factory(**kwargs):
+            return real_client(transport=httpx.MockTransport(respond), **kwargs)
+
+        monkeypatch.setattr("mcp.shared._httpx_utils.httpx.AsyncClient", client_factory)
+        env = BaseTestEnv(e2e_config=E2EConfig(base_url="http://refusal-test", postgres_url="postgresql://unused/db"))
+        return AdCPTestClient(env).call("list_accounts", {}, Transport.E2E_MCP, credential={})
+
+
 class TestClientE2eA2aDelivery:
     """``_deliver_e2e_a2a`` (the wire-grading work) — real JSON-RPC
     ``message/send`` HTTP delivery, HTTP layer mocked (unit-level; genuine
