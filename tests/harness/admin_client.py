@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from tests.helpers.admin_session import admin_auth_session, admin_test_app, authenticate_http_session
+from tests.helpers.admin_session import admin_auth_session, admin_test_app, authenticate_http_session, sign_session
 
 
 class _CaseInsensitiveHeaders(dict):
@@ -114,6 +114,15 @@ class AdminClient:
             admin_auth_session(self._flask_client, tenant_id)
         else:
             authenticate_http_session(self._http, self._base_url or "", tenant_id)
+
+    def state_session(self, payload: dict[str, Any]) -> None:
+        """State *payload* as the session, replacing whatever the client held."""
+        if self._flask_client is not None:
+            with self._flask_client.session_transaction() as session:
+                session.clear()
+                session.update(payload)
+        else:
+            self._http.cookies.set("session", sign_session(payload), path="/")
 
     def clear_auth(self) -> None:
         """Drop the admin session, so the next request arrives anonymous."""

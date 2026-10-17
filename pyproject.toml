@@ -127,6 +127,7 @@ dev = [
     "pylint>=4.0.5",
     # Security patches for transitive dev dependencies
     "black>=26.3.1",  # GHSA-3936-cmfr-pm3m
+    "virtualenv>=21.7.13",  # via pre-commit; GHSA-94p9-xgh2-xp45 + GHSA-9h9j-4vrj-gf7g + GHSA-p58f-9548-mpm2 + GHSA-x78j-v8h9-3j2q (PYSEC-2026-4011..4014)
     "types-python-dateutil>=2.9.0.20260408",
     # Added in PR 2 of issue #1234: randomly for test order randomisation to
     # surface order-dependent failures. xdist floor kept at >=3.5.0 (union of
