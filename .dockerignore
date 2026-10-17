@@ -4,6 +4,9 @@
 logs/
 .mypy_cache/
 .ruff_cache/
+# Tool caches written into the checkout, e.g. trivy-action's ~2.6GB vulnerability DB
+# at .cache/trivy in the release workflow, which otherwise lands in the image via COPY . .
+.cache/
 coverage.json
 product_coverage.json
 .duplication-baseline
