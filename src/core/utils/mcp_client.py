@@ -44,8 +44,10 @@ request, recovered from fastmcp's own exception wrapping and re-raised UNRETRIED
 Nothing is dialled in the clear.
 
 Key features:
-- Consistent URL handling (uses user's URL; if it fails after retries, does one
-  final fallback attempt by appending "/mcp" when missing)
+- Consistent URL handling (uses user's URL; if it fails after retries, or answers
+  without MCP, does one final fallback attempt by appending "/mcp" when missing).
+  An answer that is not MCP (a web page, a 403, a 404) is not retried: an agent
+  configured by its base URL costs one request at the base, then ``/mcp``.
 - Standardized auth header building
 - Built-in retry logic with exponential backoff, driven by the shared
   egress Attempts machine — connect AND tool-call failures share ONE
@@ -67,8 +69,9 @@ Usage:
     payload = result.structured_content
 """
 
+import json
 import logging
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from typing import Any, NoReturn, Protocol
 
 # All three bound PRIVATELY: a plain import would publish `mcp_client.Client`,
@@ -96,6 +99,7 @@ from src.core.security.outbound_http import (
     guarded_client_factory,
     sleep_backoff,
     validate_url,
+    wrapped_failure,
 )
 
 logger = logging.getLogger(__name__)
@@ -280,26 +284,90 @@ def _install_signing_hook(client: _httpx.AsyncClient, sign: SignMcpAttempt) -> N
                 request=request,
             )
 
+    _append_event_hook(client, "request", _sign_hook)
+
+
+def _append_event_hook(client: _httpx.AsyncClient, event: str, hook: Callable[..., Awaitable[None]]) -> None:
+    """Add *hook* after any *event* hooks *client* already has (httpx replaces the dict on assignment)."""
     hooks = dict(client.event_hooks)
-    hooks["request"] = [*(hooks.get("request") or []), _sign_hook]
+    hooks[event] = [*(hooks.get(event) or []), hook]
     client.event_hooks = hooks
 
 
+class _NotAnMcpAnswer(Exception):
+    """The endpoint answered the MCP ``initialize`` POST with a success that is not MCP.
+
+    Never leaves this module except as the ``__cause__`` of :class:`MCPConnectionError`
+    (server log only). Its job is to make :func:`call_mcp_tool` stop spending attempts on
+    a URL that has already said what it is.
+    """
+
+    def __init__(self, status: int, content_type: str) -> None:
+        super().__init__(f"answered the MCP initialize request with HTTP {status} {content_type!r}")
+
+
+# The two content types the MCP Streamable HTTP transport allows in answer to a
+# JSON-RPC request (MCP 2025-06-18, basic/transports: "the server MUST either return
+# Content-Type: text/event-stream ... or Content-Type: application/json").
+_MCP_ANSWER_CONTENT_TYPES = ("application/json", "text/event-stream")
+
+
+def _is_initialize(request: _httpx.Request) -> bool:
+    """True when *request* is the JSON-RPC ``initialize`` request that opens an MCP session."""
+    try:
+        message = json.loads(request.content)
+    except (_httpx.RequestNotRead, ValueError):
+        return False
+    return isinstance(message, dict) and message.get("method") == "initialize"
+
+
+async def _refuse_non_mcp_handshake(response: _httpx.Response) -> None:
+    """Raise when the answer to ``initialize`` shows this URL is not an MCP endpoint.
+
+    The MCP transport handles two such answers by leaving the handshake pending: a 2xx
+    with any other content type (a web page at the agent's base URL) is reported to a
+    session that never fails the request for it, and a 404 becomes "Session terminated"
+    with no status attached. Raising here makes both fail at once, with the status on
+    the exception chain where :func:`call_mcp_tool` classifies it. Only ``initialize``
+    is judged: a 404 later in a session means the session ended, and a 202 answers a
+    notification.
+    """
+    if response.request.method != "POST" or not _is_initialize(response.request):
+        return
+    response.raise_for_status()
+    content_type = response.headers.get("content-type", "").lower()
+    if not content_type.startswith(_MCP_ANSWER_CONTENT_TYPES):
+        raise _NotAnMcpAnswer(response.status_code, content_type)
+
+
+def _answered_terminally(exc: BaseException, attempts: Attempts) -> bool:
+    """True when the endpoint ANSWERED and the answer will not change on a retry.
+
+    A success that is not MCP, or an HTTP status the egress seam's own attempt policy
+    calls terminal (every 3xx and 4xx except 429, BR-RULE-029). Recording the status on
+    *attempts* also lets a retryable answer's ``Retry-After`` reach the backoff.
+    """
+    if find_wrapped(exc, _NotAnMcpAnswer) is not None:
+        return True
+    answer = wrapped_failure(exc)
+    if answer is None:
+        attempts.record_transport_failure()
+        return False
+    return attempts.record_response(answer.status, answer.retry_after) is Attempts.Outcome.TERMINAL
+
+
 def _mcp_client_factory(url: str, sign: SignMcpAttempt | None) -> McpClientFactory:
-    """The pinned client factory for *url*, teaching it to sign when asked.
+    """The pinned client factory for *url*, with the handshake check and, when asked, signing.
 
     Wraps :func:`~src.core.security.outbound_http.guarded_client_factory` rather than
     replacing it, so every SSRF guarantee is untouched and unrestated: the resolve-once
     IP pin, ``follow_redirects=False``, ``trust_env=False``, the port and scheme policy
     and the refusal are all still decided in the egress seam, on the same ``url`` the
-    transport is constructed to dial. Signing is strictly additive to the client that
-    function already built — this adds a header hook and nothing else. Returned
-    unwrapped when there is nothing to sign, so an unsigned dial is byte-for-byte the
-    call it was before this parameter existed.
+    transport is constructed to dial. Both additions are event hooks on the client that
+    function already built: :func:`_refuse_non_mcp_handshake` reads the answer to
+    ``initialize``, and signing adds headers. Neither changes where a request goes.
     """
     guarded = guarded_client_factory(url)
-    if sign is None:
-        return guarded
 
     def factory(
         headers: Mapping[str, str] | None = None,
@@ -308,7 +376,9 @@ def _mcp_client_factory(url: str, sign: SignMcpAttempt | None) -> McpClientFacto
         follow_redirects: bool | None = None,
     ) -> _httpx.AsyncClient:
         client = guarded(headers, timeout, auth, follow_redirects)
-        _install_signing_hook(client, sign)
+        _append_event_hook(client, "response", _refuse_non_mcp_handshake)
+        if sign is not None:
+            _install_signing_hook(client, sign)
         return client
 
     return factory
@@ -405,8 +475,10 @@ async def call_mcp_tool(
               Format: {"type": "bearer"|"api_key", "credentials": "token_value"}
         auth_header: Optional custom auth header name
                     (defaults: "Authorization" for bearer, "x-api-key" for api_key)
-        timeout: Request timeout in seconds (default: 30)
-        max_attempts: Maximum attempts against the primary URL (default: 3)
+        timeout: Timeout for the MCP handshake, in seconds (default: 30)
+        max_attempts: Maximum attempts against the primary URL (default: 3). An
+            answer that will not change on a retry (not MCP, or a 3xx/4xx other than
+            429) ends the primary's attempts at once.
         sign: Optional :class:`SignMcpAttempt`. When given, EVERY HTTP request this
             dial makes — every JSON-RPC message of the session, on every attempt — is
             signed over the exact bytes, target URI and headers that go on the wire,
@@ -461,16 +533,11 @@ async def call_mcp_tool(
     # Build auth headers
     headers = _build_auth_headers(auth, auth_header)
 
-    # Prepare connection candidates: primary URL first, then a single '/mcp' fallback (if missing)
-    primary_url = agent_url
-    fallback_url = None
-    if not primary_url.endswith("/mcp"):
-        fallback_url = f"{primary_url}/mcp"
-
-    candidates: list[tuple[str, int]] = [(primary_url, max_attempts)]
-    if fallback_url:
-        # Per requirement: try once again with '/mcp' after primary retries fail
-        candidates.append((fallback_url, 1))
+    # Connection candidates: the URL as given, then, when it does not already end in
+    # '/mcp', one try at '<url>/mcp' once the primary is exhausted or answered without MCP.
+    candidates: list[tuple[str, int]] = [(agent_url, max_attempts)]
+    if not agent_url.endswith("/mcp"):
+        candidates.append((f"{agent_url}/mcp", 1))
 
     last_exception: BaseException | None = None
 
@@ -491,7 +558,13 @@ async def call_mcp_tool(
                     headers=headers,
                     httpx_client_factory=_mcp_client_factory(current_url, sign),
                 )
-                client = _Client(transport=transport)
+                # ``timeout`` bounds the HANDSHAKE. fastmcp disables its init timeout by
+                # default, and an endpoint whose answer the MCP session cannot use
+                # (a JSON body that is not JSON-RPC, a stream that never answers)
+                # otherwise leaves ``initialize`` pending forever. Tool calls keep
+                # fastmcp's own read timeout: a generative ``build_creative`` may
+                # legitimately outlast an agent's connect-sized ``timeout``.
+                client = _Client(transport=transport, init_timeout=timeout)
 
                 # Connect and call the tool inside the SAME try — a tool-level
                 # failure is caught by the except below and retried on this
@@ -548,7 +621,16 @@ async def call_mcp_tool(
                         internal_detail=e,
                     ) from e
 
-                attempts.record_transport_failure()
+                if _answered_terminally(e, attempts):
+                    # The URL answered, with something other than MCP (a web page, a
+                    # CSRF 403, a 404) or a status the seam never retries: the attempt
+                    # budget is for failures that might clear, and this one will not.
+                    # Move straight to the next candidate.
+                    logger.warning(
+                        f"MCP endpoint {current_url} gave an answer a retry will not change, not retried: "
+                        f"{type(e).__name__}: {e}"
+                    )
+                    break
 
                 # Log and retry for this candidate
                 logger.warning(

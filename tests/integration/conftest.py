@@ -135,12 +135,13 @@ def mcp_origin_tls(monkeypatch):
 
     with ExitStack() as stack:
 
-        def start(**tools) -> MCPOrigin:
+        def start(root_answer: tuple[int, str] | None = None, **tools) -> MCPOrigin:
             return stack.enter_context(
                 run_mcp_origin(
                     tools=tools,
                     certfile=gen_test_tls.SERVER_CERT,
                     keyfile=gen_test_tls.SERVER_KEY,
+                    root_answer=root_answer,
                 )
             )
 
