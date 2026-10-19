@@ -483,21 +483,8 @@ class TestMainFlow:
         result = await _call_get_products(brief="rank test")
         assert len(result.products) > 0
 
-    @pytest.mark.asyncio
-    async def test_ai_ranking_service_failure_fail_open(self, uc001_products):
-        """When AI ranking service is unavailable, products are returned unranked.
-
-        Covers: UC-001-MAIN-32
-        """
-        result = await _call_get_products(
-            brief="ranking test",
-            tenant_overrides={
-                "brand_manifest_policy": "public",
-                "product_ranking_prompt": "Rank these products",
-            },
-        )
-        # Should still return products even if ranking fails
-        assert result is not None
+    # The ranking-provider fail-open (UC-001-MAIN-32) is graded by
+    # tests/bdd/features/BR-UC-GET-PRODUCTS-ranking-fail-open.feature on every transport.
 
     @pytest.mark.asyncio
     async def test_adapter_support_annotation(self, uc001_products):

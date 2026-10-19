@@ -1,9 +1,10 @@
 """ProductEnv — integration test environment for _get_products_impl.
 
-Two envs live here: ``ProductEnv`` (everything external mocked) and
+Three envs live here: ``ProductEnv`` (everything external mocked),
 ``RealResolverProductEnv`` (identical, minus the ``resolve_property_list``
 patch) for the tests that must reach the real property-list resolver and the
-real egress seam.
+real egress seam, and ``RealRankingProductEnv`` (minus the ``get_factory``
+patch) for the tests that must reach the real AI ranking path.
 
 Patches: PolicyCheckService, generate_variants_for_brief,
          get_factory (ranking), resolve_property_list.
@@ -43,7 +44,6 @@ from __future__ import annotations
 
 import asyncio
 from typing import Any
-from unittest.mock import MagicMock
 
 from src.core.schemas import GetProductsResponse
 from tests.harness._base import IntegrationEnv
@@ -155,11 +155,9 @@ class RealResolverProductEnv(EgressHatchMixin, ProductEnv):
     produced by production code, or the wire envelope proves nothing.
 
     TRAP: because the mock is gone, ``self.mock["resolve_property_list"]`` does
-    not exist after ``__enter__`` — the stand-in below is deleted as soon as
-    ``ProductMixin``'s happy-path wiring has finished with it. Any Given step
-    calling ``ProductMixin.set_property_list()`` on this env will ``KeyError``.
-    A scenario that needs a SUCCESSFUL property-list fetch wants plain
-    ``ProductEnv`` (mocked resolver) or a real local origin, not this class.
+    not exist. Any Given step calling ``ProductMixin.set_property_list()`` on this
+    env will ``KeyError``. A scenario that needs a SUCCESSFUL property-list fetch
+    wants plain ``ProductEnv`` (mocked resolver) or a real local origin, not this class.
     """
 
     EXTERNAL_PATCHES = {
@@ -167,12 +165,20 @@ class RealResolverProductEnv(EgressHatchMixin, ProductEnv):
     }
     ASYNC_PATCHES = ProductEnv.ASYNC_PATCHES - {"resolve_property_list"}
 
-    def _configure_mocks(self) -> None:
-        # ProductMixin's happy-path wiring pokes ``self.mock["resolve_property_list"]``.
-        # A throwaway stand-in keeps that one line harmless without forking the
-        # rest of the wiring, which this env does want.
-        self.mock["resolve_property_list"] = MagicMock()
-        try:
-            super()._configure_mocks()
-        finally:
-            del self.mock["resolve_property_list"]
+
+class RealRankingProductEnv(ProductEnv):
+    """``ProductEnv`` with the AI ranking factory left UNPATCHED.
+
+    ``get_products`` builds the real model from the tenant's ``ai_config`` and calls
+    the provider. No test reaches a real provider: every test process points
+    ``GOOGLE_GEMINI_BASE_URL`` at a closed local port (``tests/conftest.py``, and the
+    e2e server in ``docker-compose.e2e.yml``), so a tenant configured for Gemini gets
+    the provider failure production gets when its endpoint is down.
+
+    TRAP: ``self.mock["ranking_factory"]`` does not exist, so
+    ``ProductMixin.set_ranking_disabled()`` will ``KeyError`` on this env.
+    """
+
+    EXTERNAL_PATCHES = {
+        name: target for name, target in ProductEnv.EXTERNAL_PATCHES.items() if name != "ranking_factory"
+    }

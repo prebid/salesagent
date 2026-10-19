@@ -673,16 +673,20 @@ async def _get_products_impl(req: GetProductsRequest, identity: PublicIdentity) 
     # AI-powered product ranking (when tenant has product_ranking_prompt configured)
     product_ranking_prompt = tenant.product_ranking_prompt
     if product_ranking_prompt and brief_text and eligible_products:
+        from src.services.ai.factory import AIProviderError
+
         try:
             from src.services.ai.agents.ranking_agent import (
                 create_ranking_agent,
                 rank_products_async,
             )
+            from src.services.ai.config import resolve_tenant_ai_config
             from src.services.ai.factory import get_factory
 
             factory = get_factory()
-            if factory.is_ai_enabled():
-                model = factory.create_model()
+            ai_config = resolve_tenant_ai_config(tenant.ai_config, tenant.gemini_api_key)
+            if factory.is_ai_enabled(ai_config):
+                model = factory.create_model(ai_config)
                 agent = create_ranking_agent(model)
 
                 # Convert products to dicts for ranking
@@ -717,12 +721,14 @@ async def _get_products_impl(req: GetProductsRequest, identity: PublicIdentity) 
                 )
             else:
                 logger.debug("[GET_PRODUCTS] AI ranking configured but AI not enabled (no API key)")
-        except (ImportError, RuntimeError, OSError) as e:
+        except (ImportError, RuntimeError, OSError, AIProviderError) as e:
             # structural-guard: no spec surface covers ranking.
             # This degrades ORDER only — and the set returned is a SUPERSET, because
             # the <0.1 relevance filter stops running too, so the buyer loses nothing
             # they were entitled to. AdCP 3.1.1 defines no ordering guarantee for
             # get_products and no `incomplete[]` scope for ranking.
+            # AIProviderError is the provider failing the call, an unreachable endpoint
+            # included (#2334); see run_agent.
             logger.warning(f"Failed to apply AI product ranking: {e}. Returning unranked products.")
 
     # Filter pricing data for anonymous users

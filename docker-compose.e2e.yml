@@ -94,6 +94,10 @@ services:
       SKIP_NGINX: "true"
       SKIP_CRON: "true"
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      # No test reaches Google: google-genai reads this when it builds a client, so a
+      # Gemini call fails to connect at once. tests/conftest.py sets the same value on
+      # the test processes.
+      GOOGLE_GEMINI_BASE_URL: http://127.0.0.1:1
       SUPER_ADMIN_EMAILS: ${SUPER_ADMIN_EMAILS:-}
       ADCP_TESTING: ${ADCP_TESTING:-true}
       FLASK_SECRET_KEY: "${FLASK_SECRET_KEY:-adcp-test-stack-session-signing-key}"
