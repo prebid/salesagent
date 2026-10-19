@@ -13,7 +13,9 @@ value through ``enum_value()``.
 
 This drives the real ``_create_media_buy_impl`` GAM auto-config path and calls
 through to the real config generator; only the captured arguments/output are
-asserted.
+asserted. It also pins that one adapter instance serves the whole create_media_buy
+(#1516): the adapter that places the order is the adapter whose per-order state the
+creative push reads.
 """
 
 from datetime import UTC, datetime, timedelta
@@ -89,3 +91,26 @@ class TestGAMAutoConfigDeliveryTypeNormalization:
         assert captured["delivery_type"] == "guaranteed"
         # ... which makes generate_default_config fall through to non_guaranteed.
         assert captured["config"]["line_item_type"] == "STANDARD"
+
+
+@pytest.mark.requires_db
+def test_create_media_buy_builds_one_adapter_per_request(integration_db):
+    """The order and its creatives go through one adapter instance.
+
+    GAM fills per-order state in create_media_buy (``_placement_targeting_map``,
+    ``_native_template_ids``) that add_creative_assets reads back on the same object. A
+    second get_adapter call between the two hands the upload an instance whose maps are
+    empty, so the inline path must reuse the adapter it already built.
+    """
+    with MediaBuyCreateEnv(tenant_id=_TENANT_ID, principal_id=_PRINCIPAL_ID) as env:
+        tenant, _principal = env.setup_default_data()
+        PropertyTagFactory(tenant=tenant, tag_id="all_inventory", name="All Inventory")
+        product = ProductFactory(tenant=tenant, product_id="prod_one", property_tags=["all_inventory"])
+        PricingOptionFactory(product=product, pricing_model="cpm", currency="USD", is_fixed=True)
+
+        env.call_impl(req=_make_request("prod_one"))
+
+        adapters_built = env.mock["adapter"].call_count
+        assert adapters_built == 1, (
+            f"create_media_buy built {adapters_built} adapters; the order and its creatives must share one"
+        )
