@@ -209,8 +209,8 @@ def _process_assignments(
                     continue
 
                 for package_id, (requested_weight, placement_ids) in terms_by_package.items():
-                    # Find which media buy this package belongs to
-                    pkg_result = assignment_repo.find_package_with_media_buy(package_id)
+                    # Find which of the caller's media buys this package belongs to
+                    pkg_result = assignment_repo.find_package_with_media_buy(package_id, principal_id)
 
                     media_buy_id = None
                     actual_package_id = None
