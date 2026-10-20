@@ -40,6 +40,7 @@ import httpx
 import pytest
 from sqlalchemy import delete
 
+from src.core.http_utils import hostname_of
 from tests.e2e.conftest import e2e_ca_bundle, e2e_tls_base_url
 from tests.e2e.utils import _LiveDBEnv, live_db_env, live_repo_session
 from tests.helpers.admin_session import authenticate_http_session, drop_stated_session_cookie
@@ -510,7 +511,9 @@ def provisioned_trust_root_tenant(
                 virtual_host=host,
             )
             key = SigningKeyFactory(tenant=tenant, kid=f"adcp-{slug}-key") if mint_key else None
-            AuthorizedPropertyFactory(tenant=tenant, publisher_domain=host, tags=["premium_news"])
+            # publisher_domain is a hostname (its pattern admits no colon); *host* carries the
+            # port the stack listens on, and the adagents.json lookup drops it.
+            AuthorizedPropertyFactory(tenant=tenant, publisher_domain=hostname_of(host), tags=["premium_news"])
             if buyer_access_token is not None:
                 _seed_buying_surface(env, tenant, access_token=buyer_access_token)
             for access_token, agent_url in (counterparty_principals or {}).items():

@@ -534,18 +534,6 @@ def then_response_has_success_fields(ctx: dict) -> None:
     assert status in valid_statuses, f"Expected valid success status (one of {valid_statuses}), got: {status!r}"
 
 
-@then('the response should NOT have an "errors" field')
-def then_response_no_errors_field(ctx: dict) -> None:
-    """Assert the success response has no errors field on the wire.
-
-    Step says 'NOT have an "errors" field' — the key must be absent, not merely an empty
-    list. Asserted on the WIRE rather than by unwrapping the typed result: the old form
-    hand-rolled a CreateMediaBuyResult unwrap plus a dict/object branch, both of which are
-    shape-guessing that wire_absent does not need.
-    """
-    wire_absent(ctx, "errors")
-
-
 @then('the response should have an "errors" array')
 @then('the response should contain an "errors" array')
 def then_response_has_errors_array(ctx: dict) -> None:
@@ -761,4 +749,4 @@ def then_error_has_retry_after(ctx: dict) -> None:
 
 # Single source of truth lives in _outcome_helpers; re-exported for backward compat.
 from tests.bdd.steps._outcome_helpers import _get_response_field as _get_response_field  # noqa: F811, PLC0414
-from tests.bdd.steps._outcome_helpers import payload_or_none, require_payload, wire_absent
+from tests.bdd.steps._outcome_helpers import payload_or_none, require_payload
