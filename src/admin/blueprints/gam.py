@@ -475,6 +475,10 @@ def configure_gam(tenant_id):
                 # Only update service_account_json if provided (to allow network code updates without resending JSON)
                 if service_account_json:
                     adapter_config.gam_service_account_json = service_account_json
+                    # Upstream sets gam_service_account_email only on the auto-provision path;
+                    # tenant_status needs it too, or the landing page shows "Pending Configuration".
+                    # validate_gam_config() already guaranteed the key parses and has client_email.
+                    adapter_config.gam_service_account_email = json.loads(service_account_json)["client_email"]
                 adapter_config.gam_refresh_token = None
 
             # Also update tenant's ad_server field
