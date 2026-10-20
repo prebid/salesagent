@@ -2,6 +2,7 @@
 
 import json
 import logging
+import re
 import uuid
 from datetime import UTC, datetime
 
@@ -13,6 +14,7 @@ from src.admin.services import DashboardService
 from src.admin.utils import require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action, record_admin_action_failure
 from src.core.database.database_session import get_db_session
+from src.core.database.integrity import resolve_or_write
 from src.core.database.models import MediaBuy, PushNotificationConfig, Tenant
 from src.core.database.repositories.principal import PrincipalRepository
 from src.core.database.repositories.uow import PushNotificationConfigUoW
@@ -119,6 +121,37 @@ def list_principals(tenant_id):
         return redirect(url_for("core.index"))
 
 
+#: Literals audit rows carry in ``principal_id`` for unauthenticated or unattributed calls
+#: (products.py, activity_helpers.py, tool_error_logging.py, task_management.py). The
+#: dashboard names the actor by looking the id up among the tenant's advertisers, so an
+#: advertiser holding one would inherit that activity.
+_AUDIT_SENTINEL_IDS = frozenset({"anonymous", "unknown"})
+
+
+def _issue_unless_taken(db_session, tenant_id: str, principal_id: str, **fields):
+    """``(token, None)`` when the advertiser was issued, ``(None, refusal)`` when the ID is taken.
+
+    ``principals_pkey`` is the authority; the loser of a race gets the pre-check's answer.
+    """
+    repository = PrincipalRepository(db_session, tenant_id)
+
+    def already_in_use():
+        if repository.get(principal_id) is None:
+            return None
+        record_admin_action_failure("advertiser ID already in use")
+        flash("Advertiser ID is already in use", "error")
+        return redirect(url_for("principals.create_principal", tenant_id=tenant_id))
+
+    issued: list[str] = []
+    refusal = resolve_or_write(
+        db_session,
+        conflict=already_in_use,
+        write=lambda: issued.append(repository.issue(principal_id=principal_id, **fields)[1]),
+        constraint="principals_pkey",
+    )
+    return (None, refusal) if refusal is not None else (issued[0], None)
+
+
 @principals_bp.route("/principals/create", methods=["GET", "POST"])
 @require_tenant_access()
 @log_admin_action(
@@ -150,9 +183,14 @@ def create_principal(tenant_id):
         principal_name = request.form.get("name", "").strip()
         if not principal_name:
             flash("Principal name is required", "error")
-            return redirect(request.url)
+            return redirect(url_for("principals.create_principal", tenant_id=tenant_id))
 
-        principal_id = f"prin_{uuid.uuid4().hex[:8]}"
+        supplied_id = request.form.get("principal_id")
+        principal_id = supplied_id.strip() if supplied_id is not None else f"prin_{uuid.uuid4().hex[:8]}"
+        if not re.fullmatch(r"[a-zA-Z0-9_-]{1,50}", principal_id) or principal_id.lower() in _AUDIT_SENTINEL_IDS:
+            record_admin_action_failure("invalid advertiser ID")
+            flash("Advertiser ID must contain 1 to 50 letters, numbers, underscores, or hyphens", "error")
+            return redirect(url_for("principals.create_principal", tenant_id=tenant_id))
 
         # Build platform mappings
         platform_mappings = {}
@@ -169,7 +207,7 @@ def create_principal(tenant_id):
                     "Please select a valid advertiser from the dropdown.",
                     "error",
                 )
-                return redirect(request.url)
+                return redirect(url_for("principals.create_principal", tenant_id=tenant_id))
 
             platform_mappings["google_ad_manager"] = {
                 "advertiser_id": gam_advertiser_id,
@@ -193,13 +231,17 @@ def create_principal(tenant_id):
 
             # The token is minted here and shown ONCE, in the flash below; the row keeps
             # its hash. An operator who loses it rotates it.
-            principal, token = PrincipalRepository(db_session, tenant_id).issue(
-                principal_id=principal_id,
+            token, refusal = _issue_unless_taken(
+                db_session,
+                tenant_id,
+                principal_id,
                 name=principal_name,
                 platform_mappings=platform_mappings,  # JSONType handles serialization
                 created_at=datetime.now(UTC),
                 updated_at=datetime.now(UTC),
             )
+            if refusal is not None:
+                return refusal
             db_session.commit()
 
             flash(
@@ -211,7 +253,7 @@ def create_principal(tenant_id):
     except Exception as e:
         logger.error(f"Error creating principal: {e}", exc_info=True)
         flash("Error creating advertiser", "error")
-        return redirect(request.url)
+        return redirect(url_for("principals.create_principal", tenant_id=tenant_id))
 
 
 @principals_bp.route("/principals/<principal_id>/edit", methods=["GET", "POST"])

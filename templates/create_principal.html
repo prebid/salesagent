@@ -25,8 +25,8 @@
     <form method="POST" style="margin-top: 2rem;">
         <div class="form-group">
             <label for="principal_id">Advertiser ID</label>
-            <input type="text" id="principal_id" name="principal_id" required
-                   pattern="[a-zA-Z0-9_-]+"
+            <input type="text" id="principal_id" name="principal_id" required maxlength="50"
+                   pattern="[a-zA-Z0-9_\-]+"
                    placeholder="e.g., nike, coca_cola, ford_motors"
                    title="Only letters, numbers, underscores, and hyphens allowed"
                    value="{{ principal.principal_id if edit_mode else (form_data.principal_id if form_data else '') }}"
