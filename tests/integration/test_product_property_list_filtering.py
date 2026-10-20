@@ -31,9 +31,14 @@ from adcp.types.generated_poc.core.publisher_property_selector import (  # TODO:
 )
 
 from tests.factories import PricingOptionFactory, PrincipalFactory, ProductFactory, TenantFactory
+from tests.factories.product import authorize_publishers
 from tests.harness.product import ProductEnv
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
+
+#: Every publisher these tests' products name; the seller holds a verified property on each,
+#: so property-list filtering is what decides which products are offered (#1845).
+_PUBLISHERS = ("example.com", "other.com")
 
 
 # ---------------------------------------------------------------------------
@@ -141,6 +146,7 @@ class TestPropertyListFilteringAllSelectorE2E:
         """Product with selection_type='all' is included regardless of resolved property list."""
         with ProductEnv(tenant_id="plf-all", principal_id="plf-all-p") as env:
             tenant = TenantFactory(tenant_id="plf-all", subdomain="plf-all")
+            authorize_publishers(tenant, *_PUBLISHERS)
             PrincipalFactory(tenant=tenant, principal_id="plf-all-p")
 
             p = ProductFactory(
@@ -172,6 +178,7 @@ class TestPropertyListFilteringNoOverlapE2E:
         """Product whose property IDs have zero overlap with resolved list is excluded."""
         with ProductEnv(tenant_id="plf-noovlp", principal_id="plf-noovlp-p") as env:
             tenant = TenantFactory(tenant_id="plf-noovlp", subdomain="plf-noovlp")
+            authorize_publishers(tenant, *_PUBLISHERS)
             PrincipalFactory(tenant=tenant, principal_id="plf-noovlp-p")
 
             p = ProductFactory(
@@ -210,6 +217,7 @@ class TestPropertyListFilteringTargetingAllowedE2E:
         """Product with property_targeting_allowed=true is included with partial overlap."""
         with ProductEnv(tenant_id="plf-partial", principal_id="plf-partial-p") as env:
             tenant = TenantFactory(tenant_id="plf-partial", subdomain="plf-partial")
+            authorize_publishers(tenant, *_PUBLISHERS)
             PrincipalFactory(tenant=tenant, principal_id="plf-partial-p")
 
             p = ProductFactory(
@@ -248,6 +256,7 @@ class TestPropertyListFilteringTargetingNotAllowedE2E:
         """Product with property_targeting_allowed=false is excluded with partial overlap."""
         with ProductEnv(tenant_id="plf-strict", principal_id="plf-strict-p") as env:
             tenant = TenantFactory(tenant_id="plf-strict", subdomain="plf-strict")
+            authorize_publishers(tenant, *_PUBLISHERS)
             PrincipalFactory(tenant=tenant, principal_id="plf-strict-p")
 
             p = ProductFactory(
@@ -282,6 +291,7 @@ class TestPropertyListFilteringTargetingNotAllowedE2E:
         """Product with property_targeting_allowed=false is included when all its props are in allowed set."""
         with ProductEnv(tenant_id="plf-subset", principal_id="plf-subset-p") as env:
             tenant = TenantFactory(tenant_id="plf-subset", subdomain="plf-subset")
+            authorize_publishers(tenant, *_PUBLISHERS)
             PrincipalFactory(tenant=tenant, principal_id="plf-subset-p")
 
             p = ProductFactory(
@@ -316,6 +326,7 @@ class TestPropertyListFilteringTargetingNotAllowedE2E:
         """Product with property_targeting_allowed=false is included with exact match."""
         with ProductEnv(tenant_id="plf-exact", principal_id="plf-exact-p") as env:
             tenant = TenantFactory(tenant_id="plf-exact", subdomain="plf-exact")
+            authorize_publishers(tenant, *_PUBLISHERS)
             PrincipalFactory(tenant=tenant, principal_id="plf-exact-p")
 
             p = ProductFactory(
@@ -354,6 +365,7 @@ class TestPropertyListFilteringEmptyResolvedListE2E:
         """Empty resolved set excludes by_id products but keeps selection_type='all'."""
         with ProductEnv(tenant_id="plf-empty", principal_id="plf-empty-p") as env:
             tenant = TenantFactory(tenant_id="plf-empty", subdomain="plf-empty")
+            authorize_publishers(tenant, *_PUBLISHERS)
             PrincipalFactory(tenant=tenant, principal_id="plf-empty-p")
 
             p_all = ProductFactory(
@@ -401,6 +413,7 @@ class TestPropertyListFilteringCombinedE2E:
         """End-to-end test with 5 products covering all filtering scenarios."""
         with ProductEnv(tenant_id="plf-combo", principal_id="plf-combo-p") as env:
             tenant = TenantFactory(tenant_id="plf-combo", subdomain="plf-combo")
+            authorize_publishers(tenant, *_PUBLISHERS)
             PrincipalFactory(tenant=tenant, principal_id="plf-combo-p")
 
             # 1. selection_type="all" — always matches

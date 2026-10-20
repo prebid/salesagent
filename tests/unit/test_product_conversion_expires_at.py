@@ -13,7 +13,7 @@ from datetime import UTC, datetime
 from src.core.product_conversion import convert_product_model_to_schema
 from src.core.schemas import GetProductsResponse
 from src.core.tools._wire import to_wire
-from tests.factories.product import PricingOptionFactory, ProductFactory
+from tests.factories.product import ONE_AUTHORIZED_PROPERTY, PricingOptionFactory, ProductFactory
 
 
 def _row(**overrides):
@@ -24,7 +24,11 @@ def _row(**overrides):
 
 def _served(row) -> dict:
     """The product as the buyer receives it: converted, then through the wire function."""
-    (product,) = to_wire(GetProductsResponse(products=[convert_product_model_to_schema(row)]))["products"]
+    (product,) = to_wire(
+        GetProductsResponse(
+            products=[convert_product_model_to_schema(row, authorized_properties=ONE_AUTHORIZED_PROPERTY)]
+        )
+    )["products"]
     return product
 
 

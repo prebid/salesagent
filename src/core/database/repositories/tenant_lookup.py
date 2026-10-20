@@ -37,6 +37,8 @@ would make a second lookup unrepresentable.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
+
 from sqlalchemy import ColumnElement, or_, select
 from sqlalchemy.orm import Session
 
@@ -81,6 +83,15 @@ class TenantLookupRepository:
         matters: routing must not answer for a tenant a deployment has turned off.
         """
         return self._session.get(Tenant, tenant_id)
+
+    def find_by_ids(self, tenant_ids: Iterable[str]) -> dict[str, Tenant]:
+        """The tenants with these ids, active or not, keyed by tenant_id, in ONE query.
+
+        The bulk sibling of :meth:`find_by_id`, for an admin view of many tenants at once.
+        An id no tenant holds is absent from the result.
+        """
+        stmt = select(Tenant).where(Tenant.tenant_id.in_(list(tenant_ids)))
+        return {tenant.tenant_id: tenant for tenant in self._session.scalars(stmt).all()}
 
     def find_by_id_or_subdomain(self, tenant_id: str, subdomain: str) -> Tenant | None:
         """The tenant holding either key — the pair a tenant INSERT can collide on.

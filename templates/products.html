@@ -3,6 +3,13 @@
 {% block title %}Products - {{ tenant_name }} - Sales Agent Admin{% endblock %}
 
 {% block content %}
+{% macro not_offered_badge(product) %}
+{% if not product.offered %}
+<span class="badge" style="background: #dc3545; color: white;" data-not-offered="{{ product.product_id }}"
+      title="Buyers are not offered this product: it names no publisher with a verified authorized property. Add or verify its publisher under Authorized Properties.">Not offered to buyers</span>
+{% endif %}
+{% endmacro %}
+
 <!-- Back button (consistent positioning) -->
 <div class="back-button-container">
     <a href="{{ url_for('tenants.dashboard', tenant_id=tenant_id) }}" class="btn btn-secondary btn-back">
@@ -80,6 +87,7 @@
 
                 <div class="product-card-content">
                     <h3 class="product-card-title">{{ product.name }}</h3>
+                    {{ not_offered_badge(product) }}
 
                     <div class="product-card-description">
                         {% if product.description %}
@@ -162,6 +170,7 @@
                         </span>
                     {% endif %}
                     {{ product.name }}
+                    {{ not_offered_badge(product) }}
                     {% if product.is_dynamic_variant and product.activation_key %}
                         <br>
                         <small style="color: #666;">

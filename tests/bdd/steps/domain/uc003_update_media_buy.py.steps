@@ -68,7 +68,6 @@
 @then("the response should contain an implementation_date that is not null")
 @then("the response should contain implementation_date that is null")
 @then("the response should contain media_buy_id")
-@then('the response should NOT contain an "errors" field')
 @then(parsers.parse("the affected package should show the updated budget of {budget:d}"))
 @then(parsers.parse("the old assignments [{old_ids}] should be removed"))
 @then(parsers.parse("the response should contain a revision with value {expected:d}"))

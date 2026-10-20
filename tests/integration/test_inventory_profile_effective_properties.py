@@ -8,7 +8,7 @@ SQLAlchemy relationship between Product and InventoryProfile models.
 
 Tests cover:
 - effective_formats: Returns profile.format_ids or product.format_ids
-- effective_properties: Returns profile.publisher_properties or product.properties
+- resolve_publisher_properties: Returns profile.publisher_properties or product.properties
 - effective_property_tags: Returns None for profiles, product.property_tags for custom
 - effective_implementation_config: Builds GAM config from profile or returns custom config
 """
@@ -20,6 +20,7 @@ import pytest
 from src.core.database.database_session import get_db_session
 from src.core.database.models import InventoryProfile, Product, Tenant
 from tests.factories import PricingOptionFactory
+from tests.factories.product import authorized_refs
 from tests.helpers import assert_effective_properties_normalized
 from tests.helpers.adcp_factories import create_test_db_product
 
@@ -219,7 +220,7 @@ class TestEffectiveFormats:
 
 
 class TestEffectiveProperties:
-    """Tests for Product.effective_properties property."""
+    """Tests for Product.resolve_publisher_properties."""
 
     @pytest.mark.requires_db
     def test_effective_properties_returns_profile_properties_when_profile_set(
@@ -243,7 +244,7 @@ class TestEffectiveProperties:
             assert product.inventory_profile is not None
 
             # effective_properties should return profile data + selection_type (non-destructive)
-            effective = product.effective_properties
+            effective = product.resolve_publisher_properties(authorized_refs("example.com"))
             assert_effective_properties_normalized(
                 effective, test_profile.publisher_properties, expected_selection_type="by_id"
             )
@@ -275,14 +276,6 @@ class TestEffectiveProperties:
             # Custom product uses property_tags, so properties should be None
             assert product.properties is None
             assert product.property_tags == ["premium", "video"]
-
-            # effective_properties should synthesize by_tag variant from property_tags
-            effective = product.effective_properties
-            assert effective is not None
-            assert len(effective) == 1
-            assert effective[0]["selection_type"] == "by_tag"
-            assert effective[0]["property_tags"] == ["premium", "video"]
-            assert "publisher_domain" in effective[0]
 
 
 class TestEffectivePropertyTags:
@@ -475,7 +468,7 @@ class TestEffectiveImplementationConfig:
             assert len(effective_formats) == 2
 
             # effective_properties uses profile (non-destructive normalization)
-            effective_properties = product.effective_properties
+            effective_properties = product.resolve_publisher_properties(authorized_refs("example.com"))
             assert_effective_properties_normalized(
                 effective_properties, test_profile.publisher_properties, expected_selection_type="by_id"
             )

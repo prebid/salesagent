@@ -43,7 +43,7 @@ Feature: A publisher's adagents.json authorizes this agent by its origin or an e
   @T-ADMIN-PUBAUTH-sync
   Scenario Outline: Partner sync reads the publisher's entry for this agent
     Given the tenant runs the "google_ad_manager" ad server
-    And the tenant has registered publisher partnerships with domains "pub.example"
+    And the tenant has unverified publisher partnerships with domains "pub.example"
     And the publisher "pub.example" authorizes "<entry>" for property "front_page"
     When the operator syncs publisher partners
     Then the partnership with "pub.example" is <partnership>
@@ -75,7 +75,7 @@ Feature: A publisher's adagents.json authorizes this agent by its origin or an e
   @T-ADMIN-PUBAUTH-sync-mock
   Scenario Outline: A mock tenant's partner sync takes the publisher's properties only for an entry naming this agent
     Given the tenant runs the "mock" ad server
-    And the tenant has registered publisher partnerships with domains "pub.example"
+    And the tenant has unverified publisher partnerships with domains "pub.example"
     And the publisher "pub.example" authorizes "<entry>" for property "front_page"
     When the operator syncs publisher partners
     Then the tenant holds <properties> from "pub.example"
@@ -104,7 +104,7 @@ Feature: A publisher's adagents.json authorizes this agent by its origin or an e
 
   @T-ADMIN-PUBAUTH-view
   Scenario Outline: The partner's properties view reads the publisher's entry for this agent
-    Given the tenant has registered publisher partnerships with domains "pub.example"
+    Given the tenant has unverified publisher partnerships with domains "pub.example"
     And the publisher "pub.example" authorizes "<entry>" for property "front_page"
     When the operator opens the properties of the partnership with "pub.example"
     Then the view reports this agent <view>

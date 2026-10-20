@@ -19,8 +19,13 @@ from src.core.database.database_session import get_db_session
 from src.core.database.integrity import resolve_or_write
 from src.core.database.models import PersistedMediaBuyStatus, PricingOption, Product, ProductInventoryMapping, Tenant
 from src.core.database.product_pricing import get_product_pricing_options
+from src.core.database.repositories.authorized_property import AuthorizedPropertyRepository
 from src.core.database.repositories.media_buy import MediaBuyRepository
 from src.core.database.repositories.principal import PrincipalRepository
+from src.core.helpers.publisher_property_helpers import (
+    id_selection,
+    publisher_tag_selection,
+)
 from src.core.schemas import Format
 from src.services.gam_product_config_service import GAMProductConfigService
 
@@ -489,6 +494,10 @@ def list_products(tenant_id):
                     "custom_keys": custom_key_count,
                 }
 
+            # What a buyer is sold is resolved against these, so the page marks a product
+            # get_products leaves out (#1845): it names no verified publisher.
+            verified_properties = AuthorizedPropertyRepository(db_session, tenant_id).list_refs()
+
             # Convert products to dict format for template
             products_list = []
             for product in products:
@@ -599,6 +608,7 @@ def list_products(tenant_id):
                         },
                     ),
                     "inventory_profile": inventory_profile_dict,
+                    "offered": bool(product.resolve_publisher_properties(verified_properties)),
                     # Dynamic product fields
                     "is_dynamic": getattr(product, "is_dynamic", False),
                     "is_dynamic_variant": getattr(product, "is_dynamic_variant", False),
@@ -617,6 +627,24 @@ def list_products(tenant_id):
         logger.error(f"Error loading products: {e}", exc_info=True)
         flash("Error loading products", "error")
         return redirect(url_for("tenants.dashboard", tenant_id=tenant_id))
+
+
+#: The form field holding the choices of each property mode that builds selectors.
+_SELECTION_FIELDS = {"tags": "selected_property_tags", "property_ids": "selected_property_ids"}
+
+
+def _selectors_from_product_form(db_session, tenant_id: str, property_mode: str) -> tuple[list[dict], str | None]:
+    """The product form's ``tags`` (``domain:tag``) or ``property_ids`` choices as selectors, or why not.
+
+    Checked against the seller's VERIFIED properties by the validators the inventory-profile
+    form uses (``publisher_property_helpers.tag_selection`` / ``id_selection``), because a
+    selection only a pending property backs is one ``get_products`` would not sell.
+    """
+    authorized = AuthorizedPropertyRepository(db_session, tenant_id).list_refs()
+    choices = request.form.getlist(_SELECTION_FIELDS[property_mode])
+    if property_mode == "tags":
+        return publisher_tag_selection(choices, authorized)
+    return id_selection(choices, authorized)
 
 
 def _render_add_product_form(tenant_id, tenant, adapter_type, currencies, form_data=None):
@@ -1041,119 +1069,12 @@ def add_product(tenant_id):
                 # Handle property authorization (AdCP requirement)
                 # Default to empty property_tags if not specified (satisfies DB constraint)
                 property_mode = form_data.get("property_mode", "tags")
-                if property_mode == "tags":
-                    # Get selected property tags (format: "domain:tag")
-                    selected_tags = request.form.getlist("selected_property_tags")
-
-                    if not selected_tags:
-                        flash("Please select at least one property tag", "error")
+                if property_mode in _SELECTION_FIELDS:
+                    selectors, refusal = _selectors_from_product_form(db_session, tenant_id, property_mode)
+                    if refusal:
+                        flash(refusal, "error")
                         return _render_add_product_form(tenant_id, tenant, adapter_type, currencies, form_data)
-
-                    # Parse domain:tag pairs and group by publisher_domain
-                    import re
-                    from collections import defaultdict
-
-                    tags_by_domain: dict[str, list[str]] = defaultdict(list)
-                    tag_pattern = re.compile(r"^[a-z0-9_]+$")
-
-                    for selection in selected_tags:
-                        if ":" not in selection:
-                            flash(f"Invalid tag selection format: {selection}", "error")
-                            return _render_add_product_form(tenant_id, tenant, adapter_type, currencies, form_data)
-
-                        domain, tag = selection.split(":", 1)
-
-                        # Validate tag format
-                        if not tag_pattern.match(tag):
-                            flash(f"Invalid tag '{tag}': use only lowercase letters, numbers, and underscores", "error")
-                            return _render_add_product_form(tenant_id, tenant, adapter_type, currencies, form_data)
-
-                        if tag not in tags_by_domain[domain]:
-                            tags_by_domain[domain].append(tag)
-
-                    # Validate that tags exist for properties from these publishers
-                    from src.core.database.models import AuthorizedProperty
-
-                    for domain, tags in tags_by_domain.items():
-                        # Check that properties with these tags exist for this publisher
-                        props_with_tags = db_session.scalars(
-                            select(AuthorizedProperty).filter(
-                                AuthorizedProperty.tenant_id == tenant_id,
-                                AuthorizedProperty.publisher_domain == domain,
-                            )
-                        ).all()
-
-                        available_tags = set()
-                        for prop in props_with_tags:
-                            if prop.tags:
-                                available_tags.update(prop.tags)
-
-                        missing_tags = set(tags) - available_tags
-                        if missing_tags:
-                            flash(
-                                f"Tags not found for publisher {domain}: {', '.join(missing_tags)}",
-                                "error",
-                            )
-                            return _render_add_product_form(tenant_id, tenant, adapter_type, currencies, form_data)
-
-                    # Build AdCP 2.13.0 discriminated union format
-                    publisher_properties = []
-                    for domain, tags in tags_by_domain.items():
-                        publisher_properties.append(
-                            {
-                                "publisher_domain": domain,
-                                "property_tags": tags,
-                                "selection_type": "by_tag",
-                            }
-                        )
-
-                    # Store in the properties field (supports full publisher_properties structure)
-                    product_kwargs["properties"] = publisher_properties
-                elif property_mode == "property_ids":
-                    # Get selected property IDs and store in AdCP discriminated union format
-                    # grouped by publisher_domain
-                    property_ids_list = request.form.getlist("selected_property_ids")
-
-                    if not property_ids_list:
-                        flash("Please select at least one property", "error")
-                        return _render_add_product_form(tenant_id, tenant, adapter_type, currencies, form_data)
-
-                    from src.core.database.models import AuthorizedProperty
-
-                    # Query by property_id (string), not integer id
-                    properties = db_session.scalars(
-                        select(AuthorizedProperty).filter(
-                            AuthorizedProperty.property_id.in_(property_ids_list),
-                            AuthorizedProperty.tenant_id == tenant_id,
-                        )
-                    ).all()
-
-                    # Verify all requested IDs were found (prevent TOCTOU)
-                    if len(properties) != len(property_ids_list):
-                        flash("One or more selected properties not found or not authorized", "error")
-                        return _render_add_product_form(tenant_id, tenant, adapter_type, currencies, form_data)
-
-                    # Group property_ids by publisher_domain for correct AdCP format
-                    from collections import defaultdict
-
-                    properties_by_domain: dict[str, list[str]] = defaultdict(list)
-                    for prop in properties:
-                        properties_by_domain[prop.publisher_domain].append(prop.property_id)
-
-                    # Build AdCP 2.13.0 discriminated union format
-                    publisher_properties = []
-                    for domain, prop_ids in properties_by_domain.items():
-                        publisher_properties.append(
-                            {
-                                "publisher_domain": domain,
-                                "property_ids": prop_ids,
-                                "selection_type": "by_id",
-                            }
-                        )
-
-                    # Store in the properties field (supports full publisher_properties structure)
-                    product_kwargs["properties"] = publisher_properties
-
+                    product_kwargs["properties"] = selectors
                 elif property_mode == "full":
                     # Get selected property IDs and load full property objects (legacy mode)
                     property_ids_list = request.form.getlist("full_property_ids")
@@ -1502,76 +1423,19 @@ def edit_product(tenant_id, product_id):
 
                 # Handle publisher properties (AdCP requirement)
                 property_mode = form_data.get("property_mode", "tags")
-                if property_mode == "tags":
-                    # Get selected property tags (format: "domain:tag")
-                    selected_tags = request.form.getlist("selected_property_tags")
-                    if selected_tags:
-                        import re
-                        from collections import defaultdict
-
-                        tags_by_domain: dict[str, list[str]] = defaultdict(list)
-                        tag_pattern = re.compile(r"^[a-z0-9_]+$")
-
-                        for selection in selected_tags:
-                            if ":" in selection:
-                                domain, tag = selection.split(":", 1)
-                                if tag_pattern.match(tag) and tag not in tags_by_domain[domain]:
-                                    tags_by_domain[domain].append(tag)
-
-                        # Build AdCP discriminated union format
-                        publisher_properties = []
-                        for domain, tags in tags_by_domain.items():
-                            publisher_properties.append(
-                                {
-                                    "publisher_domain": domain,
-                                    "property_tags": tags,
-                                    "selection_type": "by_tag",
-                                }
+                if property_mode in _SELECTION_FIELDS:
+                    # An empty selection leaves the stored one as it is.
+                    if request.form.getlist(_SELECTION_FIELDS[property_mode]):
+                        selectors, refusal = _selectors_from_product_form(db_session, tenant_id, property_mode)
+                        if refusal:
+                            flash(refusal, "error")
+                            return redirect(
+                                url_for("products.edit_product", tenant_id=tenant_id, product_id=product_id)
                             )
-
-                        if publisher_properties:
-                            product.properties = publisher_properties
-                            product.property_tags = None
-                            product.property_ids = None
-                            attributes.flag_modified(product, "properties")
-
-                elif property_mode == "property_ids":
-                    # Get selected property IDs
-                    property_ids_list = request.form.getlist("selected_property_ids")
-                    if property_ids_list:
-                        from collections import defaultdict
-
-                        from src.core.database.models import AuthorizedProperty
-
-                        # Query properties to get their publisher_domain
-                        properties = db_session.scalars(
-                            select(AuthorizedProperty).filter(
-                                AuthorizedProperty.property_id.in_(property_ids_list),
-                                AuthorizedProperty.tenant_id == tenant_id,
-                            )
-                        ).all()
-
-                        # Group by publisher_domain
-                        properties_by_domain: dict[str, list[str]] = defaultdict(list)
-                        for prop in properties:
-                            properties_by_domain[prop.publisher_domain].append(prop.property_id)
-
-                        # Build AdCP discriminated union format
-                        publisher_properties = []
-                        for domain, prop_ids in properties_by_domain.items():
-                            publisher_properties.append(
-                                {
-                                    "publisher_domain": domain,
-                                    "property_ids": prop_ids,
-                                    "selection_type": "by_id",
-                                }
-                            )
-
-                        if publisher_properties:
-                            product.properties = publisher_properties
-                            product.property_tags = None
-                            product.property_ids = None
-                            attributes.flag_modified(product, "properties")
+                        product.properties = selectors
+                        product.property_tags = None
+                        product.property_ids = None
+                        attributes.flag_modified(product, "properties")
 
                 elif property_mode == "full":
                     # Get selected full property IDs (legacy mode)
@@ -1989,8 +1853,11 @@ def edit_product(tenant_id, product_id):
                 for p in authorized_properties_query
             ]
 
-            # Get current publisher properties from product (for pre-selecting in edit form)
-            selected_publisher_properties = product.effective_properties
+            # Pre-select what the product sells: its selectors resolved against the VERIFIED
+            # properties, as list_products and get_products resolve them.
+            selected_publisher_properties = product.resolve_publisher_properties(
+                AuthorizedPropertyRepository(db_session, tenant_id).list_refs()
+            )
 
             # Show adapter-specific form
             if adapter_type == "google_ad_manager":

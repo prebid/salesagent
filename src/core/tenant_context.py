@@ -90,20 +90,6 @@ class TenantContext(BaseModel):
 
         return canonical_agent_url(self)
 
-    @property
-    def primary_domain(self) -> str:
-        """The publisher domain this tenant is known by: a HOSTNAME, never an origin.
-
-        The same accessor the ORM row carries, over the same derivation
-        (:func:`src.core.http_utils.hostname_of`), because ``publisher_domain`` is
-        constrained by AdCP to a pattern admitting no colon while ``virtual_host`` carries
-        the port. A reader holding the projection asks for the fact by this name rather than
-        stripping the port itself.
-        """
-        from src.core.http_utils import hostname_of
-
-        return hostname_of(self.virtual_host)
-
     # --- Construction helpers ---
 
     @classmethod

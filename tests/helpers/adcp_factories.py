@@ -22,6 +22,7 @@ from src.core.schemas import Package, PackageRequest, url
 from src.core.schemas.product import Product
 from tests.factories import PricingOptionFactory
 from tests.factories.creative_asset import build_assets, image_spec
+from tests.factories.product import default_publisher_properties
 
 
 def create_test_product(
@@ -860,9 +861,10 @@ def create_test_db_product(
         name: Product name
         description: Product description
         format_ids: List of format ID dicts with {agent_url: str, id: str}. Defaults to display_300x250
-        property_tags: List of property tags (e.g., ["all_inventory", "premium"]). Default: ["all_inventory"]
+        property_tags: List of property tags (e.g., ["all_inventory", "premium"]), resolved against the
+            tenant's authorized properties (alternative to properties)
         property_ids: List of property IDs (alternative to property_tags)
-        properties: List of full Property objects (legacy, alternative to property_tags/property_ids)
+        properties: Explicit publisher_properties selectors. Default: default_publisher_properties()
         delivery_type: "guaranteed" or "non_guaranteed"
         targeting_template: Targeting template dict. Defaults to empty dict
         inventory_profile_id: Optional inventory profile ID to link
@@ -902,9 +904,10 @@ def create_test_db_product(
             }
         ]
 
-    # Default property_tags if no property authorization provided
+    # An explicit selector if no property authorization provided. It is offered only where the
+    # tenant holds the verified property ONE_AUTHORIZED_PROPERTY names (#1845)
     if property_tags is None and property_ids is None and properties is None:
-        property_tags = ["all_inventory"]
+        properties = default_publisher_properties()
 
     # Default targeting_template
     if targeting_template is None:
@@ -964,7 +967,7 @@ def create_test_db_product_with_pricing(
 
             # Product can now be converted to AdCP schema
             from src.core.product_conversion import convert_product_model_to_schema
-            adcp_product = convert_product_model_to_schema(product)
+            adcp_product = convert_product_model_to_schema(product, authorized_properties=ONE_AUTHORIZED_PROPERTY)
     """
     from decimal import Decimal
 

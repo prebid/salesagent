@@ -129,17 +129,15 @@ def init_db(exit_on_error=False):
                     db_session.add(currency_limit)
 
                 # Add authorized property for demo
-                authorized_property = AuthorizedProperty(
-                    tenant_id="default",
-                    property_id="default-property",
-                    property_type="website",
-                    name="Default Property",
-                    identifiers=[{"type": "domain", "value": "example.com"}],
-                    tags=["default"],
-                    publisher_domain="example.com",
-                    verification_status="verified",
+                db_session.add(
+                    AuthorizedProperty.verified_website(
+                        tenant_id="default",
+                        property_id="default-property",
+                        domain="example.com",
+                        name="Default Property",
+                        tags=["default"],
+                    )
                 )
-                db_session.add(authorized_property)
 
                 # Add SSO configuration for demo (simulates configured SSO)
                 auth_config = TenantAuthConfig(

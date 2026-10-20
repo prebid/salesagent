@@ -11,10 +11,11 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from src.core.database.models import Principal
+from src.core.database.repositories.tenant_counts import count_by_tenant
 
 
 def find_principal_by_token_hash(session: Session, token_hash: str) -> Principal | None:
@@ -36,9 +37,4 @@ def count_principals_by_tenant(session: Session, tenant_ids: Iterable[str]) -> d
     A tenant with no principals is absent from the result. Takes the caller's session
     because it runs beside the sibling per-tenant counts in the same transaction.
     """
-    stmt = (
-        select(Principal.tenant_id, func.count())
-        .where(Principal.tenant_id.in_(list(tenant_ids)))
-        .group_by(Principal.tenant_id)
-    )
-    return dict(session.execute(stmt).tuples().all())
+    return count_by_tenant(session, Principal.tenant_id, tenant_ids)

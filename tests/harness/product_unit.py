@@ -30,7 +30,7 @@ from unittest.mock import MagicMock
 
 from src.core.product_conversion import default_reporting_capabilities
 from src.core.schemas import Product
-from tests.factories.product import PricingOptionRequestFactory
+from tests.factories.product import PricingOptionRequestFactory, default_publisher_properties
 from tests.harness._base import BaseTestEnv
 from tests.harness._mixins import ProductMixin
 
@@ -40,11 +40,6 @@ from tests.harness._mixins import ProductMixin
 #: ``exclude_none`` keeps it) — measured: the ``Product`` built from either dict
 #: round-trips identically.
 _DEFAULT_PRICING_OPTION = PricingOptionRequestFactory.payload()
-
-_DEFAULT_PUBLISHER_PROPERTY = {
-    "selection_type": "all",
-    "publisher_domain": "test-publisher.com",
-}
 
 
 def _make_product(
@@ -82,7 +77,7 @@ def _make_product(
         allowed_principal_ids=allowed_principal_ids,
         channels=channels or [],
         delivery_measurement=delivery_measurement or {"provider": "publisher"},
-        publisher_properties=publisher_properties or [_DEFAULT_PUBLISHER_PROPERTY],
+        publisher_properties=publisher_properties or default_publisher_properties(),
         estimated_exposures=estimated_exposures,
         **extra,
     )

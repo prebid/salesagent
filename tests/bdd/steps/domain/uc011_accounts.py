@@ -34,7 +34,7 @@ from tests.bdd.steps._outcome_helpers import (
 )
 from tests.bdd.steps.generic._account_resolution import ensure_tenant_principal
 from tests.bdd.steps.generic._dispatch import dispatch_request, dispatch_via_client, gate_and_record
-from tests.bdd.steps.generic._table import as_bool
+from tests.bdd.steps.generic._table import as_bool, comma_list
 from tests.bdd.steps.generic._table import rows as table_rows
 from tests.bdd.steps.generic.then_error import _wire_code
 from tests.factories.account import AccountFactory, AgentAccountAccessFactory
@@ -3604,11 +3604,6 @@ def then_per_account_error_suggestion_mentions(ctx: dict, needle: str) -> None:
 # ═══════════════════════════════════════════════════════════════════════
 
 
-def _parse_event_types(ets: str) -> list[str]:
-    """Split a comma-space-separated event_types string into a list of names."""
-    return [e.strip() for e in ets.split(",") if e.strip()]
-
-
 def _notif_config(
     subscriber_id: str, url: str, event_types: str, *, active: bool, authentication: dict | None = None
 ) -> dict[str, Any]:
@@ -3616,7 +3611,7 @@ def _notif_config(
     entry: dict[str, Any] = {
         "subscriber_id": subscriber_id,
         "url": url,
-        "event_types": _parse_event_types(event_types),
+        "event_types": comma_list(event_types),
         "active": active,
     }
     if authentication is not None:
@@ -3787,7 +3782,7 @@ def then_echoed_subscriber_event_types(ctx: dict, ets: str) -> None:
     """
     subs = _echoed_subscribers(ctx)
     assert subs, f"No echoed subscribers to check event_types on: {subs!r}"
-    expected = _parse_event_types(ets)
+    expected = comma_list(ets)
     actual = [str(e) for e in (_sub_attr(subs[0], "event_types") or [])]
     assert actual == expected, f"Expected event_types {expected}, got {actual}"
 

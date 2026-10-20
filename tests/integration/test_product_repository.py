@@ -21,6 +21,7 @@ from src.core.database.repositories.uow import ProductUoW
 from src.core.product_conversion import convert_product_model_to_schema
 from src.core.schemas import Product as ProductSchema
 from tests.factories import PricingOptionFactory
+from tests.factories.product import ONE_AUTHORIZED_PROPERTY
 
 
 def _create_test_tenant(session, unique_id: str) -> TenantModel:
@@ -165,7 +166,7 @@ class TestProductRepositoryGetAllForTenant:
             products = repo.list_all()
 
         # Should convert to Pydantic schema without errors
-        schema = convert_product_model_to_schema(products[0])
+        schema = convert_product_model_to_schema(products[0], authorized_properties=ONE_AUTHORIZED_PROPERTY)
         assert isinstance(schema, ProductSchema)
         assert schema.product_id == f"prod-{uid}"
         assert len(schema.pricing_options) > 0

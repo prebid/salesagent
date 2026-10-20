@@ -48,6 +48,21 @@ ISO_TEST_VIRTUAL_HOST = "iso-test.adcp.test"
 CI_TEST_TOKEN = "ci-test-token"
 
 
+def _ensure_example_property(session, tenant_id: str) -> None:
+    """Give *tenant_id* the CI seed's one authorized property, ``example.com``, unless it has it.
+
+    The setup checklist counts authorized properties, and a product names only the
+    publishers of verified rows on the wire (#1845).
+    """
+    from scripts.setup.seed_products import seed_verified_website
+
+    if not seed_verified_website(session, tenant_id, "example.com", name="Example Website"):
+        print("  ℹ️  Authorized property already exists: example.com")
+        return
+    session.commit()
+    print("  ✓ Created authorized property: example.com")
+
+
 def init_db_ci():
     """Initialize database with migrations only for CI testing."""
     try:
@@ -65,7 +80,6 @@ def init_db_ci():
         from src.core.database.models import (
             Account,
             AgentAccountAccess,
-            AuthorizedProperty,
             CurrencyLimit,
             GAMInventory,
             Product,
@@ -423,24 +437,7 @@ def init_db_ci():
 
             # Create authorized property for setup checklist completion
             print("\nCreating authorized property for setup checklist...")
-            stmt_check_property = select(AuthorizedProperty).filter_by(tenant_id=tenant_id, property_id="example_com")
-            existing_property = session.scalars(stmt_check_property).first()
-
-            if not existing_property:
-                authorized_prop = AuthorizedProperty(
-                    tenant_id=tenant_id,
-                    property_id="example_com",
-                    property_type="website",
-                    name="Example Website",
-                    identifiers=[{"type": "domain", "value": "example.com"}],
-                    publisher_domain="example.com",
-                    verification_status="verified",
-                )
-                session.add(authorized_prop)
-                session.commit()
-                print("  ✓ Created authorized property: example.com")
-            else:
-                print("  ℹ️  Authorized property already exists: example.com")
+            _ensure_example_property(session, tenant_id)
 
             # Create GAM inventory for setup checklist completion (inventory sync)
             print("\nCreating GAM inventory for setup checklist...")
@@ -653,6 +650,10 @@ def init_db_ci():
                     "pricing": {"model": "cpm", "rate": 10.0, "is_fixed": True},
                 },
             ]
+
+            # The isolation tenant's products name a publisher too: a product no authorized
+            # property backs is not offered (#1845), and this tenant's catalogue is graded.
+            _ensure_example_property(iso_session, iso_tenant_id)
 
             for p in iso_products_data:
                 if seed_product(iso_session, iso_tenant_id, p):

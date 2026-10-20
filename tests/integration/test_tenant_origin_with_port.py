@@ -5,9 +5,8 @@ parts of it, and satisfying two while breaking the third is the failure this gra
 
 * the agent card publishes the origin VERBATIM — a client connects to what the card says,
   so dropping the port sends every A2A client to a closed one;
-* ``publisher_properties[].publisher_domain`` wants the HOSTNAME — AdCP's pattern admits
-  no colon, and feeding one in fails every product of the tenant, so ``get_products``
-  answers INTERNAL_ERROR for the whole catalogue;
+* ``Tenant.virtual_host_name`` wants the HOSTNAME — the adagents.json route looks up the
+  properties on the tenant's own host by it, and ``publisher_domain`` admits no colon;
 * tenant resolution wants to match either spelling, because a deployment should not have
   to know which form a proxy forwards.
 
@@ -33,8 +32,8 @@ def test_one_stored_origin_serves_all_three_readers(integration_db):
         PrincipalFactory(tenant=tenant, principal_id="port-p")
         env._commit_factory_data()
 
-        # Publisher identity: the hostname, so the AdCP pattern accepts it.
-        assert tenant.primary_domain == HOSTNAME
+        # The bare name: the hostname, so the AdCP domain pattern accepts it.
+        assert tenant.virtual_host_name == HOSTNAME
 
         # Resolution: either spelling names the same tenant; a host nobody declares, none.
         assert tenant_id_for(virtual_host=ORIGIN) == "port-t"

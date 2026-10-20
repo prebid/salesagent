@@ -41,5 +41,5 @@ Feature: The agent card publishes the host its tenant declares
   @T-AGENTCARD-unserved-host
   Scenario: A card fetch naming no tenant this deployment serves is refused
     When the buyer fetches the agent card naming a seller nobody serves
-    Then no card is published
+    Then no agent card is published
     And the refusal names a seller-side misconfiguration

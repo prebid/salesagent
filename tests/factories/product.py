@@ -8,9 +8,61 @@ import factory
 from factory import LazyAttribute, Sequence, SubFactory
 
 from src.core.database.models import PricingOption, Product
+from src.core.helpers.publisher_property_helpers import AuthorizedPropertyRef
 from src.core.schemas.pricing import PricingOption as PricingOptionSchema
-from tests.factories.core import TenantFactory
+from tests.factories.core import AuthorizedPropertyFactory, TenantFactory
 from tests.factories.request import _RequestFactory
+
+
+def authorized_refs(*domains: str) -> tuple[AuthorizedPropertyRef, ...]:
+    """One verified untagged property per publisher domain, as ``list_refs`` returns them."""
+    return tuple(
+        AuthorizedPropertyRef(property_id=domain.replace(".", "_").replace("-", "_"), publisher_domain=domain, tags=())
+        for domain in domains
+    )
+
+
+def authorize_publishers(tenant, *domains: str) -> None:
+    """Store *tenant*'s verified property on each publisher domain its test products name.
+
+    A product's selectors are offered only for a publisher the seller holds a verified
+    property of (#1845), so a test seeding explicit selectors seeds this too.
+    """
+    for domain in domains:
+        AuthorizedPropertyFactory(tenant=tenant, publisher_domain=domain)
+
+
+#: The seller's one verified property on the publisher a test product sells. The ONE
+#: spelling of the default publisher: a product names only publishers the seller holds a
+#: verified property of (#1845).
+ONE_AUTHORIZED_PROPERTY = authorized_refs("publisher.example.com")
+DEFAULT_PUBLISHER_DOMAIN = ONE_AUTHORIZED_PROPERTY[0].publisher_domain
+
+
+def default_publisher_properties() -> list[dict]:
+    """The explicit selector a test product carries unless it asks for the legacy columns.
+
+    The shape the admin product form stores: it names its publisher, and the product is
+    offered because ``ProductFactory`` also seeds the seller's verified property there
+    (:class:`DefaultPublisherPropertyFactory`). A legacy ``property_tags`` product names
+    no publisher and resolves against the tenant's verified properties instead.
+    """
+    return [{"publisher_domain": DEFAULT_PUBLISHER_DOMAIN, "selection_type": "all"}]
+
+
+class DefaultPublisherPropertyFactory(AuthorizedPropertyFactory):
+    """The verified property behind :func:`default_publisher_properties`, once per tenant.
+
+    Created only by ``ProductFactory`` and in the session that created the product, so it
+    needs no binding of its own and is not in ``ALL_FACTORIES``.
+    """
+
+    class Meta:
+        sqlalchemy_get_or_create = ("tenant_id", "property_id")
+        sqlalchemy_session_factory = lambda: ProductFactory._meta.sqlalchemy_session  # noqa: E731
+
+    property_id = ONE_AUTHORIZED_PROPERTY[0].property_id
+    publisher_domain = DEFAULT_PUBLISHER_DOMAIN
 
 
 class ProductFactory(factory.alchemy.SQLAlchemyModelFactory):
@@ -33,8 +85,27 @@ class ProductFactory(factory.alchemy.SQLAlchemyModelFactory):
     )
     targeting_template = factory.LazyFunction(lambda: {"geo": ["US"]})
     delivery_type = "guaranteed"
-    property_tags = factory.LazyFunction(lambda: ["all_inventory"])
+    #: ``default_publisher_properties()`` unless the test names a legacy column, which then
+    #: comes with ``properties=None``: the table holds exactly one of ``properties`` /
+    #: ``property_tags`` (``ck_product_properties_xor``).
+    property_tags = None
+    property_ids = None
+    properties = LazyAttribute(
+        lambda o: None if o.property_tags is not None or o.property_ids is not None else default_publisher_properties()
+    )
     delivery_measurement = factory.LazyFunction(lambda: {"provider": "publisher"})
+
+    @factory.post_generation
+    def authorize_publisher(obj, create, extracted, **kwargs):  # noqa: N805 -- factory_boy hook
+        """Seed the seller's verified property on the default publisher a product names.
+
+        A product is offered only for a publisher the seller holds a verified property of,
+        so the default selector comes with that property rather than past the check.
+        ``authorize_publisher=False`` leaves it out, for a product that is tenant data only
+        (a catalogue's channels) and must not add a publisher to the seller's portfolio.
+        """
+        if create and extracted is not False and obj.properties == default_publisher_properties():
+            DefaultPublisherPropertyFactory(tenant=obj.tenant)
 
 
 class PricingOptionFactory(factory.alchemy.SQLAlchemyModelFactory):

@@ -20,6 +20,7 @@ from sqlalchemy import ColumnElement, select
 from sqlalchemy.orm import Session
 
 from src.core.database.models import AuthorizedProperty
+from src.core.helpers.publisher_property_helpers import AuthorizedPropertyRef
 
 
 class AuthorizedPropertyRepository:
@@ -42,13 +43,29 @@ class AuthorizedPropertyRepository:
         """The tenant isolation term EVERY query composes."""
         return (AuthorizedProperty.tenant_id == self._tenant_id,)
 
-    def list_for_publisher_domain(self, publisher_domain: str) -> list[AuthorizedProperty]:
-        """This tenant's properties on *publisher_domain*, oldest-registered first.
+    def _verified(self) -> tuple[ColumnElement[bool], ...]:
+        """The tenant scope narrowed to VERIFIED properties.
 
-        Used to build the adagents.json served at that domain. A tenant whose
-        agent host is not itself a publisher property domain gets an empty list
-        — and therefore a document claiming no authorization, which is the
-        honest answer rather than a self-attested one.
+        A pending or failed property is one whose publisher has not been seen to
+        authorize this agent (``PropertyVerificationService`` fetches that publisher's
+        adagents.json and finds this agent there, or does not). So every read that names
+        a publisher to a buyer composes this predicate rather than the bare scope: every
+        surface that tells a buyer which publishers this seller represents must give the
+        same answer, and one clause is how they agree.
+        """
+        return (*self._scope_prefix(), AuthorizedProperty.verification_status == "verified")
+
+    def list_for_publisher_domain(self, publisher_domain: str) -> list[AuthorizedProperty]:
+        """This tenant's properties on *publisher_domain*, oldest-registered first, whatever their status.
+
+        Used to build the adagents.json served at the tenant's own host, where the tenant
+        IS the publisher. That is the one read that does not compose :meth:`_verified`:
+        verifying a property fetches the adagents.json at its domain, so for a property on
+        this host the verification reads the very document built from this list. Requiring
+        ``verified`` here would mean no self-hosted property could ever become verified.
+
+        A tenant whose agent host is not itself a publisher property domain gets an empty
+        list, and the route then serves no document at all rather than a self-attested one.
         """
         stmt = (
             select(AuthorizedProperty)
@@ -83,3 +100,35 @@ class AuthorizedPropertyRepository:
         prop.verification_checked_at = now
         prop.verification_error = error
         prop.updated_at = now
+
+    def list_refs(self) -> list[AuthorizedPropertyRef]:
+        """This tenant's VERIFIED properties, as values, by publisher.
+
+        What a product's selectors resolve against (#1845): a product names the publishers
+        these rows belong to, never the tenant's own host. Composes :meth:`_verified`, so a
+        product names exactly the publishers the capabilities portfolio names; a pending
+        property from the add form or an upload is not sold until its publisher is seen to
+        authorize this agent. Values rather than rows because ``get_products`` reads them
+        again after its session has closed.
+        """
+        stmt = (
+            select(AuthorizedProperty)
+            .where(*self._verified())
+            .order_by(AuthorizedProperty.publisher_domain.asc(), AuthorizedProperty.property_id.asc())
+        )
+        return [
+            AuthorizedPropertyRef(
+                property_id=row.property_id, publisher_domain=row.publisher_domain, tags=tuple(row.tags or ())
+            )
+            for row in self._session.scalars(stmt)
+        ]
+
+    def list_verified_publisher_domains(self) -> list[str]:
+        """The distinct publisher domains of this tenant's verified properties, sorted."""
+        stmt = (
+            select(AuthorizedProperty.publisher_domain)
+            .where(*self._verified())
+            .distinct()
+            .order_by(AuthorizedProperty.publisher_domain)
+        )
+        return list(self._session.scalars(stmt).all())
