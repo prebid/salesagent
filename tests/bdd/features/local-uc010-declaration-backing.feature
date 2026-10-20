@@ -18,6 +18,7 @@
 # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/protocol/get-adcp-capabilities-response.json pointer=/properties/specialisms
 # @source repo=adcp ref=v3.1.1 path=dist/compliance/3.1.1/specialisms/signal-owned/index.yaml pointer=/required_tools
 # @source repo=adcp ref=v3.1.1 path=dist/compliance/3.1.1/protocols/signals/index.yaml pointer=/required_tools
+# @source repo=adcp ref=v3.1.1 path=docs/protocol/get_adcp_capabilities.mdx
 Feature: UC-010 get_adcp_capabilities — capability declarations must be implementation-backed (local)
 
   @T-UC-010-local-backed-specialism @v31 @invariant
@@ -73,3 +74,20 @@ Feature: UC-010 get_adcp_capabilities — capability declarations must be implem
     # (protocols/<p>/index.yaml#required_tools). Generative creative is unimplemented
     # here, so advertising `creative` would route buyer traffic to a domain that
     # cannot answer. Tracked by #1724.
+
+  @T-UC-010-local-gam-postal @invariant
+  Scenario: a Google Ad Manager seller declares countries, regions and Nielsen DMAs, and no postal targeting
+    Given a tenant is resolvable from the request context
+    And the seller's ad server is Google Ad Manager
+    When the Buyer Agent calls get_adcp_capabilities
+    Then the response is compliant with the get_adcp_capabilities spec
+    And media_buy.execution.targeting.geo_countries should equal true
+    And media_buy.execution.targeting.geo_regions should equal true
+    And media_buy.execution.targeting.geo_metros.nielsen_dma should equal true
+    And media_buy.execution.targeting should not contain geo_postal_areas
+    # The Capability Contract (get_adcp_capabilities.mdx): "If a capability is declared,
+    # the seller MUST honor it", including geo_postal_areas.US containing zip. The GAM
+    # adapter refuses every postal code, so it declares no postal targeting. geo_regions and
+    # nielsen_dma are declared while the adapter still refuses a region outside its geo data
+    # and a DMA sent beside geo_regions; the 3.1.1 capability schema has no way to state
+    # either narrowing, so this scenario grades the declared levels, not every code.

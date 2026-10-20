@@ -69,6 +69,7 @@ pytest_plugins = [
     "tests.bdd.steps.domain.uc004_delivery",
     "tests.bdd.steps.domain.uc002_create_media_buy",
     "tests.bdd.steps.domain.uc002_nfr",
+    "tests.bdd.steps.domain.gam_seller",
     "tests.bdd.steps.domain.uc003_update_media_buy",
     "tests.bdd.steps.domain.uc003_ext_error_scenarios",
     "tests.bdd.steps.domain.uc003_storyboard_generic_client",
@@ -4809,6 +4810,10 @@ def _uc010_wired_tags() -> frozenset[str]:
             "T-UC-010-v31-request-signing-posture",
             "T-UC-010-v31-request-signing-subset",
             "T-UC-010-v31-webhook-signing",
+            # Batch 17 — a GAM seller declares only the geo targeting it books
+            # (local-uc010-declaration-backing.feature): the real GoogleAdManager class
+            # answers get_targeting_capabilities.
+            "T-UC-010-local-gam-postal",
         }
     )
     return _UC010_WIRED_TAGS
@@ -6190,6 +6195,11 @@ ENV_ROUTES: list[EnvRoute] = [
                 # plain ValueError") had expired. Neither reason was the reason.
                 or "T-UC-002-partition-daily-spend-cap" in m
                 or "T-UC-002-boundary-daily-spend-cap" in m
+                # Every scenario of local-gam-seller.feature needs exactly this row: the
+                # create chain, and dispatch_mode="create" so the shared When dispatches the
+                # request the Givens built. The row claims that feature's tag prefix once, so
+                # a new GAM scenario joins it without editing this predicate.
+                or any(t.startswith("T-UC-002-local-gam-") for t in m)
             ),
         ),
         env_builder=_env("tests.harness.media_buy_create.MediaBuyCreateEnv"),

@@ -1539,7 +1539,8 @@ def given_negative_keywords_remove_param(ctx: dict, nk_value: str) -> None:
 def given_targeting_overlay(ctx: dict, overlay_value: str) -> None:
     """Set the full targeting_overlay on the first package update.
 
-    Accepts a JSON object or '<not provided>' (omit the field).
+    Accepts a JSON object or '<not provided>' (omit the field). The create request's
+    overlay is ``the package targeting_overlay is {...}`` (given_media_buy.py).
     """
     import json
 

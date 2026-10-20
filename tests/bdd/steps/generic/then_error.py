@@ -9,6 +9,8 @@ an operation fails. Errors are real exceptions from production code:
 
 from __future__ import annotations
 
+import json
+
 from pytest_bdd import parsers, then
 
 from tests.bdd.steps._outcome_helpers import (
@@ -1149,6 +1151,17 @@ def then_wire_error_details_include(ctx: dict, key: str, value: str) -> None:
         assert value in _scalar_leaves(actual), f"expected {value!r} among errors[0].details[{key!r}] = {actual!r}"
     else:
         assert str(actual) == value, f"expected errors[0].details[{key!r}] == {value!r}, got {actual!r}"
+
+
+@then(parsers.parse("the wire error {code} details {key} should be {value}"))
+def then_wire_error_details_equal(ctx: dict, code: str, key: str, value: str) -> None:
+    """Assert the wire error is ``code`` and ``errors[0].details[key]`` equals the JSON ``value``.
+
+    Equality, not membership: a list of records must be exactly the scenario's records,
+    so a record naming the wrong field, or carrying a key its declared shape does not
+    have, fails here.
+    """
+    ctx["result"].assert_wire_error(code, details={key: json.loads(value)})
 
 
 @then(parsers.parse('the wire error object carries no "{key}" key'))
