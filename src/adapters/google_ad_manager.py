@@ -98,6 +98,7 @@ class GoogleAdManager(AdServerAdapter):
 
     capabilities = AdapterCapabilities(
         supports_realtime_reporting=True,  # Snapshots via cached GAM line item stats
+        supports_creative_trafficking=True,
     )
 
     # GAM supports display, olv (online video), and social advertising

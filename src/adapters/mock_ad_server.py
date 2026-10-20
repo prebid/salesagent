@@ -936,11 +936,7 @@ class MockAdServer(AdServerAdapter):
         )
 
         self.log(f"[DEBUG] MockAdapter: Returning {len(packages)} packages in response")
-        return self._build_create_success(
-            media_buy_id,
-            packages,
-            include_product_id=True,
-        )
+        return self._build_create_success(media_buy_id, packages)
 
     def add_creative_assets(
         self, media_buy_id: str, assets: list[dict[str, Any]], today: datetime

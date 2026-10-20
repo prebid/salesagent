@@ -190,7 +190,7 @@ def ca_creatives(integration_db, ca_tenant, ca_principal):
                             "width": 300,
                             "height": 250,
                             "primary": {"url": "https://example.com/creative.jpg"},
-                            "platform_creative_id": f"mock_creative_{cid}",
+                            "ad_server_creative_id": f"mock_creative_{cid}",
                         },
                     )
                 )

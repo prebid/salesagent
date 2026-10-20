@@ -102,8 +102,6 @@ def _ordinal_keys(found: list[tuple[str, str, int]]) -> list[tuple[str, str, int
 SILENT_LOOP_HANDLER_ALLOWLIST: set[tuple[str, str, int]] = {
     # FIXME(#1566): unparseable Broadstreet template dropped from formats silently
     ("src/core/tools/creative_formats.py", "_list_creative_formats_impl", 0),
-    # FIXME(#1566): creative-association failure logged only, absent from response
-    ("src/core/tools/media_buy_create.py", "_create_media_buy_impl", 0),
 }
 
 #: Logger method names. Used by BOTH rules: a handler that calls one is admitting

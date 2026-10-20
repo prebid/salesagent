@@ -1195,8 +1195,14 @@ def _wire_creatives_entry(ctx: dict, creative_id: str) -> dict:
 @then(parsers.parse('the creatives entry for "{creative_id}" is assigned to the package'))
 def then_creatives_entry_assigned_to_package(ctx: dict, creative_id: str) -> None:
     """The wire entry selected by creative_id names the scenario's package in ``assigned_to``."""
+    then_creative_assigned_to_package(ctx, creative_id, ctx["package"].package_id)
+
+
+@then(parsers.parse('creative "{creative_id}" is assigned to package "{package_id}"'))
+def then_creative_assigned_to_package(ctx: dict, creative_id: str, package_id: str) -> None:
+    """The wire entry selected by creative_id lists exactly that package in ``assigned_to``."""
     entry = _wire_creatives_entry(ctx, creative_id)
-    expected = [ctx["package"].package_id]
+    expected = [package_id]
     assert entry.get("assigned_to") == expected, (
         f"expected the entry for {creative_id!r} to carry assigned_to={expected}, got {entry.get('assigned_to')!r}"
     )
@@ -1204,7 +1210,15 @@ def then_creatives_entry_assigned_to_package(ctx: dict, creative_id: str) -> Non
 
 @then(parsers.parse('the creatives entry for "{creative_id}" reports the package as an assignment error'))
 def then_creatives_entry_reports_package_assignment_error(ctx: dict, creative_id: str) -> None:
-    """The entry names the scenario's package in ``assignment_errors`` and assigns nothing.
+    """The entry names the scenario's package in ``assignment_errors`` and assigns nothing."""
+    then_creative_package_in_assignment_errors(ctx, creative_id, ctx["package"].package_id)
+
+
+@then(
+    parsers.parse('creative "{creative_id}" reports package "{package_id}" in assignment_errors and not in assigned_to')
+)
+def then_creative_package_in_assignment_errors(ctx: dict, creative_id: str, package_id: str) -> None:
+    """The entry names the package in ``assignment_errors`` and assigns nothing.
 
     Both halves matter: ``assignment_errors`` keyed by the package is the report the
     response schema defines for a skipped assignment, and an empty ``assigned_to`` is
@@ -1212,7 +1226,6 @@ def then_creatives_entry_reports_package_assignment_error(ctx: dict, creative_id
     violation surfacing as a 500).
     """
     entry = _wire_creatives_entry(ctx, creative_id)
-    package_id = ctx["package"].package_id
     assignment_errors = entry.get("assignment_errors") or {}
     assert package_id in assignment_errors, (
         f"expected assignment_errors on the entry for {creative_id!r} to name {package_id!r}, got {assignment_errors!r}"
@@ -3021,6 +3034,8 @@ def when_sync_creative_with_assignments(ctx: dict) -> None:
         kwargs["assignments"] = ctx["assignment_entries"]
     if "validation_mode" in ctx:
         kwargs["validation_mode"] = ctx["validation_mode"]
+    if "dry_run" in ctx:
+        kwargs["dry_run"] = ctx["dry_run"]
     dispatch_request(ctx, **kwargs)
 
 

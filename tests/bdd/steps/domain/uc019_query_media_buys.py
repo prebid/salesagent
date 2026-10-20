@@ -2932,7 +2932,30 @@ def given_captured_media_buy_id_from_create(ctx: dict) -> None:
     the create response in ctx, the When's query would early-return, and the Then
     steps would grade the WRONG document.
     """
-    kwargs = build_create_request_kwargs(ctx, po_number="PO-UC019-POST-CREATE-POLL")
+    _capture_created_media_buy_id(ctx, build_create_request_kwargs(ctx, po_number="PO-UC019-POST-CREATE-POLL"))
+
+
+@given(
+    parsers.parse(
+        "the buyer captured a media_buy_id from a successful create_media_buy response "
+        'for one package spending {budget:d} targeting country "{country}"'
+    )
+)
+def given_captured_media_buy_id_with_package_terms(ctx: dict, budget: int, country: str) -> None:
+    """The create above, with the one package's budget and a country targeting overlay stated.
+
+    The request is kept on ``ctx["created_request_package"]`` so the Then compares the
+    polled package with what the buyer sent, not with what a seed wrote.
+    """
+    kwargs = build_create_request_kwargs(ctx, po_number="PO-UC019-PACKAGE-RECORD", budget=float(budget))
+    (package,) = kwargs["packages"]
+    package["targeting_overlay"] = {"geo_countries": [country]}
+    ctx["created_request_package"] = package
+    _capture_created_media_buy_id(ctx, kwargs)
+
+
+def _capture_created_media_buy_id(ctx: dict, kwargs: dict[str, Any]) -> None:
+    """Dispatch *kwargs* as create_media_buy and keep the media_buy_id the response carried."""
     dispatch_request(ctx, **kwargs)
 
     assert ctx.get("error") is None, f"create_media_buy failed, so nothing was captured: {ctx.get('error')!r}"
@@ -2990,17 +3013,36 @@ def then_included_entry_exposes_id_and_status(ctx: dict, expected_status: str) -
     with no assigned/approved creatives (priority 2, ahead of the future start_time
     that would otherwise make it pending_start).
     """
-    media_buy_id = ctx["created_media_buy_id"]
-    document = wire_dict(ctx)
-    matching = [buy for buy in document.get("media_buys", []) if buy.get("media_buy_id") == media_buy_id]
-    assert len(matching) == 1, (
-        f"expected exactly one entry for the freshly-created buy {media_buy_id!r}, "
-        f"got {len(matching)} in {[b.get('media_buy_id') for b in document.get('media_buys', [])]!r}"
-    )
-
-    status = matching[0].get("status")
+    status = _wire_media_buy(ctx, ctx["created_media_buy_id"]).get("status")
     assert status == expected_status, (
         f"post-create poll: expected media_buys[0].status {expected_status!r} for a freshly-created buy, got {status!r}"
+    )
+
+
+@then(
+    parsers.parse(
+        "the freshly-created buy's package reports the requested product_id, budget {budget:d} "
+        'and targeting_overlay geo_countries "{country}"'
+    )
+)
+def then_created_package_reports_request(ctx: dict, budget: int, country: str) -> None:
+    """The polled buy's one package carries the product, budget and countries the buyer booked.
+
+    get-media-buys-response.json (3.1.1): packages[].product_id MUST echo the request
+    package's product_id; packages[].targeting_overlay SHOULD echo persisted targeting.
+    The product id is compared with the request the Given sent, the budget and country with
+    the scenario's literals.
+    """
+    packages = _wire_media_buy(ctx, ctx["created_media_buy_id"]).get("packages") or []
+    assert len(packages) == 1, f"expected the buy's one package, got {packages!r}"
+    reported = (
+        packages[0].get("product_id"),
+        packages[0].get("budget"),
+        (packages[0].get("targeting_overlay") or {}).get("geo_countries"),
+    )
+    expected = (ctx["created_request_package"]["product_id"], float(budget), [country])
+    assert reported == expected, (
+        f"expected the package to report (product_id, budget, geo_countries) {expected!r}; it reported {reported!r}"
     )
 
 
