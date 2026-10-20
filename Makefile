@@ -27,7 +27,7 @@ quality-ci:
 	# the hook declares, because this repo's workflow merges locally and never pushes, so
 	# a pre-push-only rule never executes at all.
 	uv run ast-grep scan --config sgconfig.yml
-	uv run mypy src/ --config-file=mypy.ini
+	uv run mypy src/ .claude/scripts/ scripts/graduate_pending.py --config-file=mypy.ini
 	# Layer-2 ratchets. These are declared stages:[pre-push] in .pre-commit-config.yaml, and
 	# this repo's documented workflow (ephemeral branches merged LOCALLY, `git push` never run)
 	# means the pre-push stage NEVER FIRES. They therefore ran nowhere, and drift accumulated
@@ -61,6 +61,7 @@ quality-ci:
 	uv run python .pre-commit-hooks/check_docs_links.py
 	uv run python .pre-commit-hooks/check_hardcoded_urls.py $$(find templates static -type f \( -name '*.html' -o -name '*.js' \) 2>/dev/null)
 
+
 # tests/harness/ is NOT optional here: tox's `unit` env runs
 # `pytest tests/unit/ tests/harness/`, so anything under tests/harness/ was
 # graded ONLY by a full-suite run and was invisible to the per-change gate.
@@ -88,7 +89,7 @@ lint:
 	uv run ruff check .
 
 typecheck:
-	uv run mypy src/ --config-file=mypy.ini
+	uv run mypy src/ .claude/scripts/ scripts/graduate_pending.py --config-file=mypy.ini
 
 test-fast:
 	uv run pytest tests/unit/ -x

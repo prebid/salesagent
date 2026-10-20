@@ -30,7 +30,7 @@ from count_ratchet import (
 )
 
 BASELINE_FILE = ".duplication-baseline"
-SCOPES = ("src", "tests", "scripts")
+SCOPES = ("src", "tests", "scripts", ".claude/scripts")
 
 #: pylint's exit status is a bitmask: 1 fatal, 2 error, 4 warning, 8 refactor,
 #: 16 convention, 32 usage error. ``--disable=all --enable=R0801`` leaves
@@ -101,6 +101,7 @@ def main() -> int:
         "src": count_duplications("src/"),
         "tests": count_duplications("tests/"),
         "scripts": count_duplications("scripts/"),
+        ".claude/scripts": count_duplications(".claude/scripts/"),
     }
 
     return run_count_ratchet(
