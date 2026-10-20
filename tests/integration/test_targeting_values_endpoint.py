@@ -198,6 +198,34 @@ def test_get_targeting_values_empty_result(authenticated_admin_session, integrat
     assert data["values"] == []
 
 
+def test_get_targeting_values_is_never_cached(authenticated_admin_session, bound_factory_session):
+    """The values come from GAM live, so no cache may serve an earlier answer (#1045)."""
+    from tests.factories import AdapterConfigFactory, GAMInventoryFactory, TenantFactory
+
+    tenant = TenantFactory(ad_server="google_ad_manager")
+    AdapterConfigFactory(
+        tenant=tenant,
+        adapter_type="google_ad_manager",
+        gam_network_code="123456",
+        gam_refresh_token="test_refresh_token",
+    )
+    key = GAMInventoryFactory(
+        tenant=tenant,
+        inventory_type="custom_targeting_key",
+        inventory_id="1045",
+        name="sport",
+    )
+
+    with patch("src.adapters.gam_inventory_discovery.GAMInventoryDiscovery") as mock_gam_class:
+        mock_gam_class.return_value.discover_custom_targeting_values_for_key.return_value = []
+        response = authenticated_admin_session.get(
+            f"/api/tenant/{tenant.tenant_id}/targeting/values/{key.inventory_id}"
+        )
+
+    assert response.status_code == 200, response.data
+    assert response.headers.get("Cache-Control") == "no-store"
+
+
 def test_get_targeting_values_tenant_isolation(authenticated_admin_session, integration_db):
     """Test endpoint requires GAM configuration (validates tenant isolation at config level)."""
     with get_db_session() as db_session:
