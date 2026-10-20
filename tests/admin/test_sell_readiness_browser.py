@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import uuid
 from typing import Any
 
@@ -12,6 +13,7 @@ import pytest
 from fastmcp.client import Client
 from fastmcp.client.transports import StreamableHttpTransport
 
+from src.core.credentials import hash_token
 from tests.admin.browser_flow_helpers import browser_page, build_admin_test_session, login_as_tenant_admin
 from tests.e2e.adcp_request_builder import build_adcp_media_buy_request, get_test_date_range, parse_tool_result
 from tests.helpers.credentials import credential_headers
@@ -175,7 +177,7 @@ def _get_principal_record(live_server: dict[str, str], principal_id: str) -> tup
         with conn.cursor() as cursor:
             cursor.execute(
                 """
-                SELECT principal_id, name, access_token
+                SELECT principal_id, name, token_hash
                 FROM principals
                 WHERE tenant_id = %s AND principal_id = %s
                 """,
@@ -246,7 +248,28 @@ def _create_pending_media_buy(live_server: dict[str, str], auth_token: str) -> s
             ),
         )
     )
-    media_buy_id = create_result["media_buy_id"]
+    # AdCP 3.1.1 media-buy/create-media-buy-response.json, CreateMediaBuySubmitted:
+    # the wire response carries a task_id; media_buy_id arrives after approval.
+    assert create_result["status"] == "submitted"
+    assert "media_buy_id" not in create_result
+    with psycopg2.connect(live_server["postgres"]) as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT mb.media_buy_id
+                FROM media_buys mb
+                JOIN object_workflow_mapping owm
+                    ON owm.object_type = 'media_buy' AND owm.object_id = mb.media_buy_id
+                JOIN workflow_steps ws ON ws.step_id = owm.step_id
+                JOIN contexts ctx ON ctx.context_id = ws.context_id
+                WHERE ws.step_id = %s AND mb.tenant_id = %s
+                    AND ctx.tenant_id = mb.tenant_id AND ws.status = 'requires_approval'
+                """,
+                (create_result["task_id"], TENANT_ID),
+            )
+            rows = cursor.fetchall()
+    assert len(rows) == 1, "Submitted task must identify one pending media buy in this tenant"
+    media_buy_id = rows[0][0]
     state = _get_media_buy_state(live_server, media_buy_id)
     assert state["media_buy_status"] == "pending_approval", (
         f"Expected pending approval media buy, got {state['media_buy_status']}"
@@ -297,7 +320,7 @@ def test_add_product_browser_flow(docker_services_e2e, live_server, test_auth_to
 
     with browser_page(live_server["admin"]) as page:
         login_as_tenant_admin(page, TENANT_ID)
-        page.goto(f"/tenant/{TENANT_ID}/products/add", wait_until="networkidle")
+        page.goto(f"/tenant/{TENANT_ID}/products/add", wait_until="domcontentloaded")
         _fill_product_form(
             page,
             product_id=product_id,
@@ -308,7 +331,7 @@ def test_add_product_browser_flow(docker_services_e2e, live_server, test_auth_to
             property_selection=property_selection,
         )
         page.get_by_role("button", name="Create Product").click()
-        page.wait_for_url(f"**/tenant/{TENANT_ID}/products", wait_until="networkidle")
+        page.wait_for_url(f"**/tenant/{TENANT_ID}/products/", wait_until="domcontentloaded")
         page.wait_for_selector(f"text={product_id}")
 
     discovered = _lookup_product(live_server, test_auth_token, product_id)
@@ -336,13 +359,13 @@ def test_edit_product_browser_flow(docker_services_e2e, live_server, test_auth_t
 
     with browser_page(live_server["admin"]) as page:
         login_as_tenant_admin(page, TENANT_ID)
-        page.goto(f"/tenant/{TENANT_ID}/products/{product_id}/edit", wait_until="networkidle")
+        page.goto(f"/tenant/{TENANT_ID}/products/{product_id}/edit", wait_until="domcontentloaded")
         assert page.locator("#name").input_value() == original_name
         page.locator("#name").fill(updated_name)
         page.locator("#description").fill("Updated through browser UI E2E")
         page.locator("#delivery_measurement_provider").fill("IAS")
         page.get_by_role("button", name="Save Changes").click()
-        page.wait_for_url(f"**/tenant/{TENANT_ID}/products", wait_until="networkidle")
+        page.wait_for_url(f"**/tenant/{TENANT_ID}/products/", wait_until="domcontentloaded")
         page.wait_for_selector(f"text={updated_name}")
 
     discovered = _lookup_product(live_server, test_auth_token, product_id)
@@ -357,17 +380,21 @@ def test_create_principal_browser_flow(docker_services_e2e, live_server):
 
     with browser_page(live_server["admin"]) as page:
         login_as_tenant_admin(page, TENANT_ID)
-        page.goto(f"/tenant/{TENANT_ID}/principals/create", wait_until="networkidle")
+        page.goto(f"/tenant/{TENANT_ID}/principals/create", wait_until="domcontentloaded")
         page.locator("#principal_id").fill(principal_id)
         page.locator("#name").fill(principal_name)
         page.get_by_role("button", name="Add Advertiser").click()
-        page.wait_for_url(f"**/tenant/{TENANT_ID}/settings*", wait_until="networkidle")
+        page.wait_for_url(f"**/tenant/{TENANT_ID}/settings/advertisers", wait_until="domcontentloaded")
         page.wait_for_selector(f"text={principal_name}")
+        token_notice = page.get_by_text(re.compile("Its API token, shown only now:")).inner_text()
+        token_match = re.search(r"shown only now: (tok_[A-Za-z0-9_-]+)", token_notice)
+        assert token_match, "The new principal's token must be shown once"
+        issued_token = token_match.group(1)
 
     record = _get_principal_record(live_server, principal_id)
     assert record is not None, "Principal should be persisted"
     assert record[1] == principal_name
-    assert len(record[2]) > 0, "Principal access token should be generated"
+    assert record[2] == hash_token(issued_token), "Persisted hash must match the token shown in the browser"
 
 
 def test_workflow_approval_browser_flow(docker_services_e2e, live_server, test_auth_token, restore_auto_approval):
@@ -376,10 +403,10 @@ def test_workflow_approval_browser_flow(docker_services_e2e, live_server, test_a
 
     with browser_page(live_server["admin"]) as page:
         login_as_tenant_admin(page, TENANT_ID)
-        page.goto(f"/tenant/{TENANT_ID}/media-buy/{media_buy_id}", wait_until="networkidle")
+        page.goto(f"/tenant/{TENANT_ID}/media-buy/{media_buy_id}", wait_until="domcontentloaded")
         assert page.locator("text=Manual Approval Required").count() > 0, "Media buy should require manual approval"
+        page.once("dialog", lambda dialog: dialog.accept())
         page.locator("#approveBtn").click()
-        page.wait_for_load_state("networkidle")
         page.wait_for_selector("#approveBtn", state="detached")
 
     state = _get_media_buy_state(live_server, media_buy_id)
@@ -394,12 +421,11 @@ def test_workflow_rejection_browser_flow(docker_services_e2e, live_server, test_
 
     with browser_page(live_server["admin"]) as page:
         login_as_tenant_admin(page, TENANT_ID)
-        page.goto(f"/tenant/{TENANT_ID}/media-buy/{media_buy_id}", wait_until="networkidle")
+        page.goto(f"/tenant/{TENANT_ID}/media-buy/{media_buy_id}", wait_until="domcontentloaded")
         assert page.locator("text=Manual Approval Required").count() > 0, "Media buy should require manual approval"
         page.get_by_role("button", name="Reject").click()
         page.locator("#reason").fill(rejection_reason)
         page.get_by_role("button", name="Reject Media Buy").click()
-        page.wait_for_load_state("networkidle")
         page.wait_for_selector("text=REJECTED")
         assert not page.locator("#approveBtn").count(), "Rejected media buy should not remain actionable"
 
