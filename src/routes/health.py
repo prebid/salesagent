@@ -8,14 +8,14 @@ import logging
 from typing import Any
 
 from fastapi import APIRouter, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 from sqlalchemy import select
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Product as ModelProduct
 from src.core.database.models import Tenant as ModelTenant
 from src.core.database.repositories.principal import PrincipalRepository
-from src.core.domain_routing import RoutingResult, route_landing_page
+from src.core.domain_routing import RoutingResult, is_served_host, route_landing_page
 from src.landing import generate_tenant_landing_page
 
 logger = logging.getLogger(__name__)
@@ -47,11 +47,26 @@ def _routed_page(headers: dict) -> tuple[RoutingResult, str | None, str | None]:
 # exist at all. No per-request check: a route that is not mounted cannot be reached.
 debug_router = APIRouter()
 
+# Mounted the same way, when ``get_settings().runtime.tls_ask_enabled`` says so: only a
+# deployment behind an on-demand TLS proxy needs it.
+tls_ask_router = APIRouter()
+
 
 @router.get("/health")
 async def health(request: Request):
     """Health check endpoint."""
     return JSONResponse({"status": "healthy", "service": "mcp"})
+
+
+@tls_ask_router.get("/tls/ask", include_in_schema=False)
+def tls_ask(domain: str = "") -> Response:
+    """Reverse-proxy on-demand TLS gate: 200 if this deployment serves ``domain``, else 403.
+
+    Caddy's ``on_demand_tls { ask ... }`` calls this before requesting a certificate and
+    issues only on a 2xx. A database failure raises, and the resulting 500 is a refusal too.
+    Sync, so FastAPI runs the blocking lookup in its thread pool.
+    """
+    return Response(status_code=200 if is_served_host(domain) else 403)
 
 
 @debug_router.post("/_internal/reset-db-pool")

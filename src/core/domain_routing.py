@@ -15,16 +15,27 @@ serves what it decides, and the ``/debug/*`` reports in :mod:`src.routes.health`
 it decided rather than repeating the lookup — a debug endpoint naming a detection the
 deployment does not have is worse than no endpoint. A tool never comes here; its tenant is
 resolved once by the boundary and carried on the identity.
+
+``is_served_host`` answers the reverse proxy's on-demand TLS question from the same decision.
 """
 
+import re
 from dataclasses import dataclass
 from typing import Literal
 
 # Import existing tenant lookup functions from config_loader
 # This ensures all servers (MCP, Admin, A2A) use the same lookup logic
 from src.core.config_loader import get_tenant_by_virtual_host
-from src.core.domain_config import is_admin_domain
+from src.core.domain_config import get_sales_agent_domain, is_admin_domain
 from src.core.http_utils import requested_host
+
+# A DNS hostname: 1-253 characters of dot-separated labels, each 1-63 of [a-z0-9-] with no
+# leading or trailing hyphen. No port, no wildcard, no path. ``re.ASCII`` keeps IGNORECASE
+# from folding non-ASCII letters (the Kelvin sign, a dotless i) into ``[a-z]``.
+_HOSTNAME = re.compile(
+    r"(?=.{1,253}\Z)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*\Z",
+    re.ASCII | re.IGNORECASE,
+)
 
 
 @dataclass
@@ -102,3 +113,35 @@ def route_landing_page(request_headers: dict) -> RoutingResult:
     # for a tenant we do not serve" (it can offer signup) from "no host at all" (the generic
     # fallback above). Which of those to show is the caller's decision, not this function's.
     return RoutingResult("custom_domain", tenant, effective_host)
+
+
+def normalize_hostname(host: str) -> str | None:
+    """``host`` lower-cased with any trailing dot dropped, or None when it is not a DNS hostname.
+
+    Matched BEFORE folding: ``str.lower`` maps the Kelvin sign to ``k``, so folding first would
+    let a non-ASCII name through as an ASCII one.
+    """
+    candidate = host.strip().removesuffix(".")
+    return candidate.lower() if _HOSTNAME.match(candidate) else None
+
+
+def is_served_host(host: str) -> bool:
+    """Whether this deployment serves ``host``: the on-demand TLS gate's decision.
+
+    Served: the hosts :func:`route_landing_page` routes -- the admin domain and an active
+    tenant's ``virtual_host`` (whose port, if it stores one, a certificate does not carry) --
+    plus ``SALES_AGENT_DOMAIN``, which the deployment answers on for the OAuth callbacks it
+    builds from it (``get_oauth_redirect_uri``). Nothing is derived from a subdomain: a tenant
+    served at ``acme.<SALES_AGENT_DOMAIN>`` declares that as its ``virtual_host``.
+
+    The endpoint asking this is unauthenticated, so a malformed host is refused before any
+    query; the rest cost one lookup on the unique ``virtual_host_name`` index.
+    """
+    normalized = normalize_hostname(host)
+    if normalized is None:
+        return False
+    # ``normalized`` is never empty, so an unset domain matches nothing here.
+    if normalized == (get_sales_agent_domain() or "").lower():
+        return True
+    routed = route_landing_page({"Host": normalized})
+    return routed.type == "admin" or routed.tenant is not None
