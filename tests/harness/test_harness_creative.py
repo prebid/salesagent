@@ -38,6 +38,8 @@ class TestCreativeSyncEnvContract:
             "slack_notifier",
             "audit_log",
             "ai_review_executor",
+            # Google's GAM SOAP client (GAM_CLIENT_PATCH): inert unless the tenant sells through GAM.
+            "gam_client",
         }
         assert set(CreativeSyncEnv.EXTERNAL_PATCHES.keys()) == expected_keys
 
@@ -62,7 +64,8 @@ class TestCreativeSyncEnvContract:
             assert "send_notifications" in env.mock
             assert "slack_notifier" in env.mock
             assert "audit_log" in env.mock
-            assert len(env.mock) == 6
+            assert "gam_client" in env.mock
+            assert len(env.mock) == 7
             # The Gemini key is a settings field, pinned on the settings object for the
             # env's lifetime rather than mocked through a config accessor.
             from src.core.config import get_settings

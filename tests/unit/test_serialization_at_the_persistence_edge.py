@@ -12,7 +12,7 @@ from decimal import Decimal
 from unittest.mock import MagicMock
 
 from src.core.database.models import MediaBuy
-from src.core.database.repositories.media_buy import MediaBuyRepository
+from src.core.database.repositories.media_buy import MediaBuyRepository, RequestedPackage
 from src.core.schemas import CreateMediaBuyRequest
 
 
@@ -85,7 +85,7 @@ class TestMediaBuyRepositoryCreateFromRequest:
         assert "brand" in result.raw_request
 
     def test_create_from_request_injects_package_ids(self):
-        """When package_id_map is provided, package_ids must be injected into serialized packages."""
+        """The minted package ids are injected into the serialized packages, by position."""
         session = MagicMock()
         repo = MediaBuyRepository(session=session, tenant_id="tenant_1")
         req = _make_minimal_request()
@@ -100,7 +100,7 @@ class TestMediaBuyRepositoryCreateFromRequest:
             start_time=datetime.now(UTC) + timedelta(days=1),
             end_time=datetime.now(UTC) + timedelta(days=8),
             status="pending_approval",
-            package_id_map={0: "pkg_prod_1_abc123_1"},
+            packages=[RequestedPackage(package_id="pkg_prod_1_abc123_1", request=req.packages[0], pricing_info=None)],
         )
 
         # Package ID should be injected into the serialized packages

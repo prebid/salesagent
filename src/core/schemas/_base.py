@@ -2461,7 +2461,9 @@ class MediaPackage(SalesAgentBaseModel):
 
 class AssetStatus(SalesAgentBaseModel):
     asset_id: str | None = None  # Asset identifier
-    creative_id: str | None = None  # GAM creative ID (may be None for pending/failed)
+    creative_id: str | None = None  # The asset's creative_id, echoed
+    # The ad server's own id for the creative it created; None when nothing was created.
+    platform_creative_id: str | None = None
     status: str  # Status: draft, active, submitted, failed, etc.
     message: str | None = None  # Status message
     # Seller-side concept enrichment (#1506). AdCP exposes read-only
