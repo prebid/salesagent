@@ -135,9 +135,11 @@ async def lifespan_context(app):
 
 mcp = FastMCP(
     name="AdCPSalesAgent",
-    # Sessions enabled for HTTP context (tenant detection via headers)
-    # Note: stateless_http is now configured at runtime via run() or global settings
     lifespan=lifespan_context,
+    # tools/list publishes each tool's `parameters` (the DTO's model_json_schema(), JSON Schema
+    # 2020-12 per MCP 2025-11-25) as-is, $defs and $ref intact. FastMCP's default inlines every
+    # $ref on every listing.
+    dereference_schemas=False,
 )
 
 # (Deleted) MCPAuthMiddleware resolved an identity before every tool call and stashed it on

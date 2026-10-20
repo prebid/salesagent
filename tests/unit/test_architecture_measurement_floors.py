@@ -79,6 +79,9 @@ EXPECTED_WIRED_ROUTES: frozenset[str] = frozenset(
         # The agent card is a root endpoint, not a registry tool, so its scenarios reach it
         # through `env.fetch_agent_card` rather than `call_via`.
         "agentcard",
+        # tools/list graded on the MCP wire (local-mcp-tool-discovery.feature). Pinned in the
+        # change that registered the route.
+        "mcptools",
         "tenantid",
         # A publisher's adagents.json naming this agent, graded through the three admin
         # actions that read it. Pinned in the change that registered the route.
