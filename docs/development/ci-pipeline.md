@@ -97,15 +97,12 @@ Each shard runs against a GitHub Actions service container (Postgres 15).
 
 ## E2E Tests
 
-The workflow sets `ADCP_TESTING: true` at the top level. The **E2E job**
-pre-starts the stack (pinned `creative-agent` build + `compose up -d --wait`
-with healthchecks and the host-ports overlay), then runs pytest with
-`ADCP_TESTING: "true"` set explicitly on the pytest step so
-`docker_services_e2e` is verify-only. Do **not** clear or omit it on that
-step — an empty/false value forces the fixture into the standalone cold-build
-path under `pytest --timeout=300` (setup timeouts / ENOSPC on cold runners).
-Local standalone runs (no pre-started stack) still clear or omit
-`ADCP_TESTING` so conftest owns build+up.
+The **E2E job** runs in-network: `./run_all_tests.sh e2e` builds the image,
+starts `docker-compose.e2e.yml`, and runs pytest inside the compose network.
+Host pytest cannot resolve compose-only names such as
+`counterparty.adcp-e2e.dev`, so do not add a host-side "start the stack, then
+pytest" step. The job frees runner disk (`.github/actions/_free-disk`) before
+the image build.
 
 ## Reference Creative Agent
 

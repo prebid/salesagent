@@ -133,40 +133,6 @@ def _is_adcp_testing_true(value: object) -> bool:
     return value is True or str(value).lower() == "true"
 
 
-def _code_of(line: str) -> str:
-    """Strip a shell ``#`` comment — shared so flag/substring helpers agree on \"code\"."""
-    return line.split("#", 1)[0]
-
-
-def _shell_has_flag(script: str, flag: str) -> bool:
-    """True if ``flag`` appears as its own argv token on a non-comment code line.
-
-    Substring checks like ``\"up -d --wait\" in run`` are vacuous against
-    ``up -d --wait-timeout 600`` — ``--wait`` is a prefix of ``--wait-timeout``.
-    Shell comments (``# --wait gates ...``) must not count as the flag either.
-    """
-    for line in script.splitlines():
-        if flag in _code_of(line).split():
-            return True
-    return False
-
-
-def _shell_flag_value(script: str, flag: str) -> str | None:
-    """Return the argv token immediately after ``flag`` on a non-comment line."""
-    for line in script.splitlines():
-        tokens = _code_of(line).split()
-        for i, token in enumerate(tokens):
-            if token == flag and i + 1 < len(tokens):
-                return tokens[i + 1]
-    return None
-
-
-def _shell_has_non_comment_substr(script: str, *needles: str) -> bool:
-    """True if every needle appears on some non-comment code line (not only comments)."""
-    code = "\n".join(_code_of(line) for line in script.splitlines())
-    return all(n in code for n in needles)
-
-
 def _parse_compose_duration_seconds(value: object) -> float:
     """Parse compose duration strings like ``60s`` / ``1m`` / ints into seconds."""
     if value is None:
@@ -239,26 +205,6 @@ class TestCISuiteCoverage:
     """BDD and E2E suites must run in CI and gate the test summary."""
 
     pytestmark = pytest.mark.arch_guard
-
-    def test_shell_has_flag_rejects_wait_timeout_prefix(self):
-        """``--wait`` must not match as a prefix of ``--wait-timeout`` (vacuous guard class)."""
-        wait_timeout_only = "docker compose up -d --wait-timeout 600"
-        assert not _shell_has_flag(wait_timeout_only, "--wait")
-        assert _shell_has_flag(wait_timeout_only, "--wait-timeout")
-        both = "docker compose up -d --wait --wait-timeout 600"
-        assert _shell_has_flag(both, "--wait")
-        assert _shell_has_flag(both, "--wait-timeout")
-        # Comments must not satisfy the flag contract (CI pre-start run has `# --wait gates…`).
-        comment_only = "# --wait gates postgres\nup -d --wait-timeout 600"
-        assert not _shell_has_flag(comment_only, "--wait")
-        assert _shell_has_flag(comment_only, "--wait-timeout")
-        # Adjacent argv after --wait-timeout — comment token "600" must not satisfy.
-        assert _shell_flag_value("up -d --wait-timeout 600", "--wait-timeout") == "600"
-        assert _shell_flag_value("# budget 600\nup -d --wait-timeout 120", "--wait-timeout") == "120"
-        assert _shell_flag_value("# --wait-timeout 600\nup -d --wait-timeout 120", "--wait-timeout") == "120"
-        # curl /health must be on a non-comment line.
-        assert _shell_has_non_comment_substr("curl -sf http://127.0.0.1:8080/health", "curl -sf", "/health")
-        assert not _shell_has_non_comment_substr("# curl -sf /health\necho ok", "curl -sf", "/health")
 
     def test_free_disk_action_requires_run_step_body(self):
         """Tokens only in description must not satisfy the reclaim contract.
@@ -551,15 +497,12 @@ class TestCISuiteCoverage:
         assert "DELIVERY_WEBHOOK_INTERVAL: ${DELIVERY_WEBHOOK_INTERVAL:-5}" in compose_e2e, (
             "docker-compose.e2e.yml must default DELIVERY_WEBHOOK_INTERVAL to 5."
         )
-        assert int(job.get("timeout-minutes") or 0) >= 40, (
-            f"e2e-tests timeout-minutes must be >= 40 (got {job.get('timeout-minutes')!r})."
-        )
 
     def test_e2e_compose_proxy_waits_for_adcp_healthy(self):
-        """Proxy must not race adcp start_period under ``compose up --wait``.
+        """Proxy must not start until adcp-server is healthy.
 
         Regression: proxy healthcheck (no start_period) could fail with 502
-        while adcp was still inside its start_period; ``up --wait`` flaked.
+        while adcp-server was still inside its start_period.
         """
         services = _load_e2e_compose()["services"]
         assert "adcp-server" in services and "proxy" in services, (
@@ -599,9 +542,9 @@ class TestCISuiteCoverage:
         assert int(str(proxy_hc.get("retries", 0))) >= 12, (
             f"proxy healthcheck retries must be >= 12 (got {proxy_hc.get('retries')!r})."
         )
-        # compose --wait only waits services that declare healthchecks (creative-agent hard gate).
+        # service_healthy dependents of creative-agent need a real healthcheck to wait on.
         creative_test = creative_hc.get("test")
-        assert creative_test, "creative-agent healthcheck.test must be non-empty (compose --wait hard gate)."
+        assert creative_test, "creative-agent healthcheck.test must be non-empty."
         assert _parse_compose_duration_seconds(creative_hc.get("start_period")) > 0, (
             f"creative-agent start_period must be positive (got {creative_hc.get('start_period')!r})."
         )
