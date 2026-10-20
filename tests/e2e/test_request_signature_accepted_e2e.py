@@ -87,10 +87,10 @@ graded by a POSITIVE observable rather than by the absence of a rejection.
         ``_map_brand_json_resolver_error`` (``verifier.py`` :601) maps to exactly this
         code and ``_FailedDiscoveryJwksResolver`` (:174) raises at checklist step 7.
         Tier 3 is the SECOND consumer of the same document and is simply not reached
-        on this input — the walk fails first. The registry branch cannot produce this
-        code at all: with no ``agent_url`` there is no walk, and an unmatched keyid
-        yields the generic ``request_signature_key_unknown``. So a regression that
-        resolved this key from config instead of from the published trust root —
+        on this input — the walk fails first. The pinned branch cannot produce this
+        code at all: the test counterparty's accepted JWKS replaces the walk, and this
+        principal carries no grading record. So a regression that resolved this key from pinned
+        keys instead of from the published trust root —
         which would otherwise yield a byte-identical 2xx AND an identical metric
         increment — is visible here and nowhere else in this module.]
   Every 401 is read with ``rejection_code()`` (``tests/helpers/signing.py``), which
@@ -99,10 +99,10 @@ graded by a POSITIVE observable rather than by the absence of a rejection.
 
 **DOES NOT PROVE.**
 
-* The REGISTRY key-trust source (``settings.signing.counterparty_registry``). It is
-  consulted only when ``agent_url`` is falsy (``_resolution_for`` :511-545), i.e.
-  exactly when no trust root was walked, and that branch reaches no Tier 3 — so it
-  cannot satisfy this module's title and is not graded here.
+* The PINNED key-trust source (the test counterparty's ``signed_requests_grading`` record).
+  It applies only to the test-kit counterparty, which walks no trust root and
+  reaches no Tier 3 — so it cannot satisfy this module's title and is not graded here
+  (the request-signing BDD scenarios grade it).
 * The MCP and A2A naming surfaces for the accepted leg. The refused-leg sibling
   grades MCP; the accepted leg's novel evidence is the checklist-pass branch, which
   is transport-independent once the operation is named — all three transports reach
@@ -495,7 +495,7 @@ async def test_a_signed_request_from_a_walked_counterparty_is_accepted_and_count
             # BrandJsonResolverError("agent_not_found"), which _map_brand_json_resolver_error
             # maps to the code below and _FailedDiscoveryJwksResolver raises at checklist
             # step 7. Every other assertion in this module stays green if the key were
-            # resolved from the registry instead — including the metric delta, which would
+            # resolved from pinned keys instead — including the metric delta, which would
             # be byte-identical.
             unlisted = await client.post(
                 _ADCP_PATH, content=_REQUEST_BODY, headers=_sign(unlisted_key, _UNLISTED_TOKEN, _UNLISTED_KID)

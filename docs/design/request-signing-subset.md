@@ -24,7 +24,11 @@ paths that can produce an `AgentResolution`:
 | path | how the location is established |
 |---|---|
 | the brand.json walk (`_resolution_for`) | the SDK resolves a `jwks_uri`; a resolution naming anything but the derived location is REFUSED with `request_signature_jwks_untrusted` and a cooldown, so the counterparty's operator gets a diagnosable answer rather than a key that never matches |
-| the counterparty registry (`build_registry_resolution`) | the location is DERIVED, not declared, so a config entry cannot name one the walk would refuse |
+| the test counterparty's accepted JWKS (`build_pinned_resolution`) | the location is DERIVED from the counterparty's `agent_url`, not declared, so the `signed_requests_grading` record cannot name one the walk would refuse |
+
+The counterparty itself is chosen by the keyid of the `sig1` label, the one the checklist
+verifies (security.mdx L1028): the bearer's principal when a bearer resolved one, otherwise
+the principal the tenant onboarded that keyid for (`principal_signing_keyids`).
 
 **What follows, and is the whole point:** `identity.key_origins` is not consulted. The map
 exists to declare where keys live when location can vary, and here it cannot — with one
@@ -60,7 +64,7 @@ what keeps the `required_when` trigger list from firing on itself.
 **Deleted:** `_expected_key_origins`; the `expected_key_origins=` argument;
 `_BrandJsonJwksResolver` (it existed only to engage the SDK's step-7 key-origin check, which
 needs the map we no longer pass — keeping it bought a `UserWarning` on every verified
-request); `CounterpartyRegistryEntry.jwks_uri` and `.key_origin` (both derivable);
+request); a declared `jwks_uri` and `key_origin` on pinned keys (both derivable);
 `tests/unit/test_expected_key_origins.py`;
 `test_request_signature_discovery.py::TestKeyOriginMissingIsGraded`.
 
