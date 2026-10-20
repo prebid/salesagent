@@ -1,57 +1,98 @@
-"""Regression test for per-format resilient ingestion.
+"""Per-format resilient ingestion (#1333).
 
-The owner-flagged invariant: a single non-conforming format in a creative
-agent's list_creative_formats response must NOT invalidate the whole batch.
-``src/core/creative_agent_registry.py::_validate_formats_tolerant`` today
-tolerates ONLY the *additive asset_type* path (line ~135-137 ``continue``);
-any other ``ValidationError`` hits line ~138 ``raise`` and nukes the batch.
-No existing test demonstrates this gap — this file fills it.
+The invariant: a single non-conforming format in a creative agent's
+``list_creative_formats`` response must NOT invalidate the whole batch.
+``_validate_formats_tolerant`` drops what the pinned adcp schema cannot validate,
+logs one aggregated warning, and returns the conforming remainder.
 
-Pattern: the test is the failing-test gate for the production fix
-(``). It is wrapped in ``xfail(strict=True)`` so:
-- ``--runxfail`` shows the test fail today (proving the gap)
-- normal run xfails clean (no suite redness)
-- when ``az8d`` lands and the helper salvages the conforming formats, the
-  test xpasses -> strict-fail -> forces marker removal.
+Seen live on 2026-09-15: the public reference agent added ``pixel_ratio`` to
+``display_image.accepts_parameters``; adcp 6.6.0 knows only ``dimensions`` and
+``duration``; the old ``raise`` turned that one entry into "0 formats" for every
+buyer (``list_creative_formats``) and every admin format picker.
 """
 
 import logging
 
-import pytest
-
 from src.core.creative_agent_registry import _validate_formats_tolerant
+
+AGENT = "https://example.com"
 
 
 def _good(format_id: str, name: str) -> dict:
     """Minimal Format dict that the adcp library validates cleanly."""
-    return {"format_id": {"id": format_id, "agent_url": "https://example.com"}, "name": name}
+    return {"format_id": {"id": format_id, "agent_url": AGENT}, "name": name}
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        ": per-format resilience for non-asset-type ValidationError "
-        "is not implemented — _validate_formats_tolerant raises (L138) and nukes the "
-        "whole batch when any format fails for a non-additive-asset_type reason. "
-        "Lands green when az8d implements drop+log per-format for ANY ValidationError."
-    ),
-)
-def test_non_asset_type_malformed_format_must_not_nuke_batch():
-    """One malformed format (missing required ``name``) must be dropped+logged.
-
-    The remaining well-formed formats MUST be returned. Today the helper raises
-    a Pydantic ``ValidationError`` and discards every format, including the
-    conforming ones.
-    """
+def test_non_asset_type_malformed_format_must_not_nuke_batch(caplog):
+    """One malformed format (missing required ``name``) is dropped and logged."""
     good_a = _good("good_a", "Good A")
-    bad_missing_name = {"format_id": {"id": "bad", "agent_url": "https://example.com"}}  # required `name` missing
+    bad_missing_name = {"format_id": {"id": "bad", "agent_url": AGENT}}  # required `name` missing
     good_b = _good("good_b", "Good B")
 
-    logger = logging.getLogger("salesagent.tests.az8d")
-    result = _validate_formats_tolerant([good_a, bad_missing_name, good_b], logger)
+    logger = logging.getLogger("salesagent.tests.tolerance")
+    with caplog.at_level(logging.WARNING, logger=logger.name):
+        result = _validate_formats_tolerant([good_a, bad_missing_name, good_b], logger)
 
-    returned_ids = {fmt.format_id.id for fmt in result}
-    assert returned_ids == {"good_a", "good_b"}, (
-        f"az8d invariant: only the two conforming formats must survive, got {returned_ids}"
-    )
-    assert len(result) == 2, f"expected exactly 2 conforming formats, got {len(result)}"
+    assert {fmt.format_id.id for fmt in result} == {"good_a", "good_b"}
+    assert len(result) == 2
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(warnings) == 1, "one aggregated warning, not one per format"
+    assert "bad" in warnings[0].getMessage()
+    assert "name" in warnings[0].getMessage()
+
+
+def test_live_reference_agent_pixel_ratio_entry_is_kept_minus_the_parameter(caplog):
+    """The exact shape the public reference agent served on 2026-09-15.
+
+    ``display_image`` is the format most products name; it must survive, with the
+    parameter values the pinned schema does model.
+    """
+    display_image = {
+        "format_id": {"id": "display_image", "agent_url": AGENT},
+        "name": "Display Image",
+        "accepts_parameters": ["dimensions", "pixel_ratio"],  # pixel_ratio unknown to adcp 6.6.0
+    }
+    display_html = _good("display_html", "Display HTML")
+
+    logger = logging.getLogger("salesagent.tests.tolerance")
+    with caplog.at_level(logging.WARNING, logger=logger.name):
+        result = _validate_formats_tolerant([display_image, display_html], logger)
+
+    by_id = {fmt.format_id.id: fmt for fmt in result}
+    assert set(by_id) == {"display_image", "display_html"}
+    assert [p.value for p in by_id["display_image"].accepts_parameters] == ["dimensions"]
+    assert len(caplog.records) == 1
+    assert caplog.records[0].levelno == logging.WARNING
+    assert "display_image" in caplog.records[0].getMessage()
+    assert "pixel_ratio" in caplog.records[0].getMessage()
+
+
+def test_unknown_parameter_plus_another_defect_is_dropped(caplog):
+    """Stripping the parameter only rescues a format that is otherwise valid."""
+    bad = {
+        "format_id": {"id": "bad", "agent_url": AGENT},
+        "accepts_parameters": ["pixel_ratio"],  # and `name` is missing
+    }
+    logger = logging.getLogger("salesagent.tests.tolerance")
+    with caplog.at_level(logging.WARNING, logger=logger.name):
+        result = _validate_formats_tolerant([bad, _good("ok", "OK")], logger)
+    assert [fmt.format_id.id for fmt in result] == ["ok"]
+    assert "name" in caplog.records[-1].getMessage()
+
+
+def test_batch_where_nothing_survives_is_logged_as_error(caplog):
+    """An empty remainder is contract breakage, so it is loud (ERROR), but still not an exception."""
+    logger = logging.getLogger("salesagent.tests.tolerance")
+    bad = {"format_id": {"id": "bad", "agent_url": AGENT}}
+    with caplog.at_level(logging.WARNING, logger=logger.name):
+        result = _validate_formats_tolerant([bad], logger)
+    assert result == []
+    assert caplog.records[-1].levelno == logging.ERROR
+
+
+def test_all_conforming_formats_pass_through_silently(caplog):
+    logger = logging.getLogger("salesagent.tests.tolerance")
+    with caplog.at_level(logging.WARNING, logger=logger.name):
+        result = _validate_formats_tolerant([_good("a", "A"), _good("b", "B")], logger)
+    assert len(result) == 2
+    assert not caplog.records
