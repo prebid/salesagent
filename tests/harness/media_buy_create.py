@@ -1,7 +1,13 @@
 """MediaBuyCreateEnv — integration test environment for _create_media_buy_impl.
 
-Patches: adapter, audit logger, slack notifier, context manager.
+Patches: adapter, audit logger, slack notifier, context manager, Google's GAM SOAP client,
+and the creative agent registry's preview and build calls (format lookups stay the
+deployment's registry).
 Real: get_db_session, MediaBuyRepository, all validation (all hit real DB).
+``GamSellerMixin.sell_through_tenant_adapter`` (``tests/harness/gam.py``) turns the adapter
+patch into production's ``get_adapter``, so the tenant's own adapter runs: the real Mock
+adapter, or after ``sell_through_gam`` the real ``GoogleAdManager`` adapter over the stand-in
+SOAP client.
 
 Requires: integration_db fixture.
 
@@ -11,16 +17,23 @@ from __future__ import annotations
 
 import asyncio
 import uuid
+from collections.abc import Mapping, Sequence
 from typing import Any, cast
 from unittest.mock import MagicMock
 
 from src.adapters.base import AdapterCreateResult, ResponsePackage
+
+# The registry the deployment selected, bound before any patch starts, so the stand-in below
+# wraps the real one rather than a class chosen here.
+from src.core.creative_agent_registry import get_creative_agent_registry as deployment_creative_agent_registry
 from src.core.schemas import CreateMediaBuyRequest
 from src.core.schemas._base import CreateMediaBuyResult
 from tests.factories.mint import mint
 from tests.harness._base import IntegrationEnv, json_safe
 from tests.harness.egress import EgressHatchMixin
+from tests.harness.gam import GAM_CLIENT_PATCH, GamSellerMixin
 from tests.harness.transport import DeliverResult
+from tests.helpers.creative_test_helpers import make_registry_mock
 
 # Sentinel for missing-key tests: pass idempotency_key=OMIT_IDEMPOTENCY_KEY to send a
 # request with NO key (the schema rejects it as "Field required" — AdCP 3.0.1).
@@ -56,7 +69,7 @@ def _restore_creative_ids(req: CreateMediaBuyRequest, flat: dict[str, Any]) -> N
             flat_pkgs[i]["creative_ids"] = cids
 
 
-class MediaBuyCreateEnv(EgressHatchMixin, IntegrationEnv):
+class MediaBuyCreateEnv(GamSellerMixin, EgressHatchMixin, IntegrationEnv):
     """Integration test environment for _create_media_buy_impl.
 
     Mocks external services (adapter, audit, slack, context manager).
@@ -72,6 +85,11 @@ class MediaBuyCreateEnv(EgressHatchMixin, IntegrationEnv):
         "slack": "src.core.tools.media_buy_create.get_slack_notifier",
         "context_mgr": "src.core.tools.media_buy_create.get_context_manager",
         "format_spec": "src.core.tools.media_buy_create._get_format_spec_sync",
+        # Inline creatives are synced inside create_media_buy, and the sync asks the
+        # registry for a preview, which the deployment's registry answers by dialing the
+        # creative agent. CreativeSyncEnv's target, so both envs stand in the same seam.
+        "creative_registry": "src.core.creative_agent_registry.get_creative_agent_registry",
+        **GAM_CLIENT_PATCH,
     }
     REST_ENDPOINT = "/api/v1/media-buys"
 
@@ -162,15 +180,19 @@ class MediaBuyCreateEnv(EgressHatchMixin, IntegrationEnv):
         currency: str = "USD",
         with_pricing: bool = True,
         format_ids: list[dict[str, str]] | None = None,
+        delivery_type: str = "non_guaranteed",
+        pricing_options: Sequence[Mapping[str, Any]] = ({},),
     ) -> tuple:
         """Seed a real PropertyTag ("all_inventory") + Product + PricingOption row set.
 
         The "all_inventory" tag is created once per env (idempotent across repeated
-        calls). Returns ``(product, pricing_option)``; ``pricing_option`` is ``None``
-        when ``with_pricing=False``.
+        calls). *pricing_options* holds one mapping of ``PricingOptionFactory`` fields per
+        option, over a fixed CPM option in *currency*; the default is that one option.
+        Returns ``(product, pricing_option)``, the product's first option; ``pricing_option``
+        is ``None`` when ``with_pricing=False``.
         """
-        from tests.factories import PricingOptionFactory, ProductFactory
         from tests.factories.core import PropertyTagFactory
+        from tests.factories.product import priced_product
 
         if not getattr(self, "_seeded_all_inventory_tag", False):
             PropertyTagFactory(tenant=tenant, tag_id="all_inventory", name="All Inventory")
@@ -179,19 +201,18 @@ class MediaBuyCreateEnv(EgressHatchMixin, IntegrationEnv):
         if format_ids is None:
             format_ids = [{"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"}]
 
-        product = ProductFactory(
-            tenant=tenant,
+        product, options = priced_product(
+            tenant,
             product_id=product_id,
-            delivery_type="non_guaranteed",
+            delivery_type=delivery_type,
             format_ids=format_ids,
             property_tags=["all_inventory"],
+            pricing_options=[
+                {"pricing_model": "cpm", "currency": currency, "is_fixed": True, **terms}
+                for terms in (pricing_options if with_pricing else ())
+            ],
         )
-        pricing_option = None
-        if with_pricing:
-            pricing_option = PricingOptionFactory(
-                product=product, pricing_model="cpm", currency=currency, is_fixed=True
-            )
-        return product, pricing_option
+        return product, options[0] if options else None
 
     def _build_mock_context_manager(self, tool_name: str) -> MagicMock:
         """Mock context manager that delegates create_context / create_workflow_step /
@@ -329,6 +350,13 @@ class MediaBuyCreateEnv(EgressHatchMixin, IntegrationEnv):
         # linked to a media buy, so no real ObjectWorkflowMapping FK row is needed.
         self.mock["context_mgr"].return_value = self._build_mock_context_manager(tool_name="create_media_buy")
 
+        self._configure_gam_client()
+
+        # Creative agent: format lookups (and RealFormatResolverMediaBuyCreateEnv's real
+        # format_resolver chain) run the deployment's registry; a preview or build answers
+        # the inert no-result instead of dialing the agent.
+        self.mock["creative_registry"].return_value = make_registry_mock(base=deployment_creative_agent_registry())
+
         # Setup checklist: pass by default
 
         # Format spec: mock _get_format_spec_sync to avoid asyncio.run() inside
@@ -352,12 +380,9 @@ class MediaBuyCreateEnv(EgressHatchMixin, IntegrationEnv):
             # live server resolves under ADCP_TESTING (format_cache), so
             # in-process and e2e format resolution agree by construction.
             # Synthetic ids stay unresolvable (None), matching the server.
-            from src.core.format_cache import load_reference_formats
+            from tests.factories.format import reference_format
 
-            for fmt in load_reference_formats():
-                if fmt.format_id.id == format_id:
-                    return fmt
-            return None
+            return reference_format(format_id)
 
         self.mock["format_spec"].side_effect = _format_spec_side_effect
 

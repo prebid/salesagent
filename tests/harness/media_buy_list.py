@@ -19,7 +19,7 @@ from __future__ import annotations
 from typing import Any, cast
 
 from src.core.schemas._base import GetMediaBuysRequest, GetMediaBuysResponse
-from tests.harness._base import IntegrationEnv
+from tests.harness._base import IntegrationEnv, rest_body_from_kwargs
 from tests.harness.transport import DeliverResult
 
 
@@ -148,41 +148,15 @@ class MediaBuyListDispatchMixin:
         handled only the flat form returned ``{}`` for the poll and graded an
         unfiltered listing under a scenario name that says "by media_buy_id".
 
-        Not equivalent to the inherited ``BaseTestEnv.build_rest_body`` either: that
-        one serializes a ``req`` model wholesale via ``model_dump(mode="json",
-        exclude_none=True)`` and returns ``{}`` when there is no ``req``, so it can
-        shape neither of the two forms this tool is called with.
+        Both shapes are ``rest_body_from_kwargs``, the builder every verb dispatched in
+        both shapes shares. A ``req`` model is dumped whole: the REST body model IS the
+        DTO, so every field it carries is one the route accepts.
         """
-        req = kwargs.get("req")
-        if req is not None:
-            # Narrowed to what the tool implements, the same "DTO fields INTERSECT
-            # parameters" rule the transports use (and the same narrowing
-            # The whole DTO, unfiltered. This used to drop every field the hand-written
-            # wrapper did not declare, because the DTO was then a SUPERSET of what the tool
-            # accepted -- GetMediaBuysRequest declares include_history,
-            # include_webhook_activity, pagination and more that get_media_buys did not take,
-            # so dumping it whole sent fields the route rejected. The REST body model IS the
-            # DTO now, so every field it carries is a field the route accepts and the filter
-            # could only drop one the scenario meant to send.
-            #
-            # exclude_unset, not exclude_none: GetMediaBuysRequest is re-based on the library
-            # type, so it inherits include_snapshot with a default of False rather than None
-            # -- exclude_none stopped dropping it and the built body grew a key the caller
-            # never set. exclude_unset is "send only what was set", which is also what the
-            # flat branch below does.
-            body = req.model_dump(mode="json", exclude_unset=True)
-        else:
-            body = {}
-            # "account" belongs here: the steps dispatch account={"account_id": ...}
-            # (the AdCP 3.x reference shape), so a list naming only the legacy
-            # "account_id" silently dropped the filter on REST -- the request then
-            # SUCCEEDED where MCP and A2A correctly rejected it with
-            # UNSUPPORTED_FEATURE. Invisible until UC-019 regained REST
-            # parametrization (#1762); the same shape of harness gap as
-            # CreativeFormatsEnv.build_rest_body in salesagent-3dawm.16.
-            for key in ("media_buy_ids", "status_filter", "account", "account_id", "context"):
-                if key in kwargs and kwargs[key] is not None:
-                    body[key] = kwargs[key]
+        # "account" belongs in the flat fields: the steps dispatch account={"account_id": ...}
+        # (the AdCP 3.x reference shape), so a list naming only the legacy "account_id"
+        # silently dropped the filter on REST -- the request then SUCCEEDED where MCP and
+        # A2A correctly rejected it with UNSUPPORTED_FEATURE (#1762).
+        body = rest_body_from_kwargs(kwargs, ("media_buy_ids", "status_filter", "account", "account_id", "context"))
         if kwargs.get("include_snapshot"):
             body["include_snapshot"] = True
         return body

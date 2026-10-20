@@ -105,6 +105,29 @@ def json_safe(value: Any) -> Any:
     return value
 
 
+def rest_body_from_kwargs(kwargs: dict[str, Any], flat_fields: tuple[str, ...]) -> dict[str, Any]:
+    """The REST body for a verb a step dispatches in either call shape.
+
+    Steps send some verbs as flat kwargs (scenarios grading how the route treats one wire
+    field) and others as a built ``req=<Request>(...)`` (the composite envs route on the
+    request type). A builder serving only the flat form returns ``{}`` for a ``req=``
+    dispatch, which the route reads as an unfiltered request: the REST leg then grades a
+    different request than the other transports.
+
+    Not ``BaseTestEnv.build_rest_body``: that dumps with ``exclude_none`` and returns ``{}``
+    for the flat form, so it can shape neither call.
+    """
+    req = kwargs.get("req")
+    if req is not None:
+        # exclude_unset, not exclude_none: a request model re-based on its library type
+        # inherits defaults of False rather than None (GetMediaBuysRequest.include_snapshot,
+        # GetMediaBuyDeliveryRequest.include_package_daily_breakdown), so exclude_none adds
+        # keys the caller never set. exclude_unset is "send only what was set", which is
+        # what the flat branch does too.
+        return req.model_dump(mode="json", exclude_unset=True)
+    return {key: kwargs[key] for key in flat_fields if kwargs.get(key) is not None}
+
+
 def _presents_a_credential(credential: Any) -> bool:
     """Whether a caller-supplied headers mapping actually carries a CREDENTIAL.
 

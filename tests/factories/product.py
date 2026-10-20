@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Mapping
 from decimal import Decimal
+from typing import Any
 
 import factory
 from factory import LazyAttribute, Sequence, SubFactory
@@ -92,6 +94,23 @@ class PricingOptionFactory(factory.alchemy.SQLAlchemyModelFactory):
         ):
             del kwargs["product"]
         return kwargs
+
+
+def priced_product(
+    tenant: Any,
+    *,
+    pricing_options: Iterable[Mapping[str, Any]] = ({},),
+    **product_fields: Any,
+) -> tuple[Product, list[PricingOption]]:
+    """A ``Product`` row and its ``PricingOption`` rows, in the order *pricing_options* lists them.
+
+    Each mapping is the ``PricingOptionFactory`` fields of one option; ``{}`` is the
+    factory's fixed USD CPM option. *product_fields* go to ``ProductFactory``. The one
+    writer of a product with its pricing, which the env's ``setup_product_chain`` and the
+    scenario Givens call.
+    """
+    product = ProductFactory(tenant=tenant, **product_fields)
+    return product, [PricingOptionFactory(product=product, **terms) for terms in pricing_options]
 
 
 #: The id a default-shaped pricing option carries, read off the factory rather than

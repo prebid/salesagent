@@ -10,6 +10,7 @@ the repository owns the query, the helper owns the assertion.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
 from tests.harness.transport import TransportResult
@@ -159,6 +160,53 @@ def wire_dict(ctx: dict, path: str | None = None) -> dict:
     value = wire_field(ctx, path)
     assert isinstance(value, dict), f"{path!r} is not a JSON object on the wire: {value!r}"
     return value
+
+
+def capture_created_media_buy(ctx: dict) -> str:
+    """Record the ``media_buy_id`` the create_media_buy response carried, as the buyer captures it.
+
+    Read off the wire (``wire_field``), so a later read names the buy the buyer was told
+    about, not one the harness seeded. Stored as ``ctx["created_media_buy_id"]``.
+    """
+    ctx["created_media_buy_id"] = wire_field(ctx, "media_buy_id")
+    return ctx["created_media_buy_id"]
+
+
+def assert_by_package_exactly(
+    delivery: dict,
+    rows: list[dict[str, str]],
+    *,
+    package_of: Callable[[str], str] = lambda cell: cell,
+) -> None:
+    """A ``media_buy_deliveries`` entry reports exactly *rows*' packages, each with these figures.
+
+    Each row is a scenario table row: its ``package`` cell names the package, which
+    *package_of* maps to the ``package_id`` expected on the wire (by default the cell is
+    the id), and its other columns (``impressions``, ``spend``, ``pricing_model``,
+    ``rate``, ``currency``, ``clicks``, any subset) are that package's figures. The set of
+    ``by_package[].package_id`` must equal the expected ids, so a package the seller
+    invented or dropped fails; then each named column is compared exactly against that
+    package's entry, numbers parsed from the table.
+    """
+    expected = {package_of(row["package"]): {k: v for k, v in row.items() if k != "package"} for row in rows}
+    assert len(expected) == len(rows), f"the table names a package twice: {[row['package'] for row in rows]}"
+    entries = delivery.get("by_package")
+    assert isinstance(entries, list), f"by_package is not a JSON array on the wire: {entries!r}"
+    by_id = {entry.get("package_id"): entry for entry in entries}
+    assert len(by_id) == len(entries), f"by_package repeats a package_id: {[e.get('package_id') for e in entries]}"
+    assert set(by_id) == set(expected), (
+        f"by_package reports packages {sorted(map(str, by_id))}; expected exactly {sorted(expected)}"
+    )
+    for package_id, columns in expected.items():
+        entry = by_id[package_id]
+        for column, value in columns.items():
+            actual = entry.get(column)
+            if column in ("impressions", "spend", "rate", "clicks"):
+                assert actual is not None and float(actual) == float(value), (
+                    f"by_package {package_id!r} {column}: expected {value}, got {actual!r}"
+                )
+            else:
+                assert actual == value, f"by_package {package_id!r} {column}: expected {value!r}, got {actual!r}"
 
 
 def _locate_entry(ctx: dict, collection: str, index: int | None, match: dict[str, Any]) -> dict:

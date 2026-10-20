@@ -41,19 +41,16 @@ from src.core.schemas import (
     DeliveryTotals,
     GetMediaBuyDeliveryRequest,
     GetMediaBuyDeliveryResponse,
-    PricingModel,
     ReportingPeriod,
 )
 from src.core.tools.media_buy_delivery import _get_media_buy_delivery_impl
 from src.services.webhook_delivery_service import CircuitBreaker, CircuitState, WebhookDeliveryService
 from tests.factories.media_buy import (
     default_request_packages,
-    pricing_options_for,
-    pricing_options_named,
     request_package,
 )
 from tests.factories.principal import PrincipalFactory
-from tests.factories.product import PricingOptionFactory
+from tests.harness._mock_uow import delivery_mock_uow
 from tests.harness.delivery_poll_unit import DeliveryPollEnv
 
 # ---------------------------------------------------------------------------
@@ -154,7 +151,6 @@ def _standard_patches(
     principal_obj: MagicMock | None = None,
     adapter: MagicMock | None = None,
     target_buys: list | None = None,
-    pricing_options: dict | None = None,
 ):
     if principal_obj is None:
         principal_obj = MagicMock()
@@ -167,12 +163,9 @@ def _standard_patches(
     if target_buys is None:
         target_buys = []
 
-    # Mock UoW so _get_media_buy_delivery_impl doesn't hit real DB.
-    # The __enter__ must return an object with a media_buys attribute (the repo).
-    mock_uow = MagicMock()
-    mock_uow.__enter__ = MagicMock(return_value=mock_uow)
-    mock_uow.__exit__ = MagicMock(return_value=False)
-    mock_uow.media_buys = MagicMock()
+    # Mock UoW so _get_media_buy_delivery_impl doesn't hit real DB. The buys' packages are
+    # their rows, each carrying the terms create stores with it.
+    mock_uow = delivery_mock_uow(target_buys)
 
     return {
         "adapter": patch(
@@ -182,18 +175,6 @@ def _standard_patches(
         "target_buys": patch(
             f"{_PATCH_PREFIX}._get_target_media_buys",
             return_value=target_buys,
-        ),
-        # Answers about the ids production asked for, derived the way the real lookup
-        # derives them, unless the caller pins its own map. The delivery report REQUIRES
-        # pricing_model/rate/currency per package (get-media-buy-delivery-response.json)
-        # and these mock buys have no MediaPackage row, so this is their pricing source.
-        "pricing_options": patch(
-            f"{_PATCH_PREFIX}._get_pricing_options",
-            # NOT ``{}`` — the pin REQUIRES pricing_model/rate/currency on every
-            # by_package entry, so an empty map makes the response unbuildable.
-            side_effect=lambda option_ids, **_: (
-                pricing_options if pricing_options is not None else pricing_options_for(option_ids)
-            ),
         ),
         "uow": patch(
             f"{_PATCH_PREFIX}.MediaBuyUoW",
@@ -207,7 +188,6 @@ def _run_impl_with_patches(
     identity: ResolvedIdentity | None = None,
     adapter: MagicMock | None = None,
     target_buys: list | None = None,
-    pricing_options: dict | None = None,
     principal_obj: MagicMock | None = None,
 ) -> GetMediaBuyDeliveryResponse:
     """Helper to run _get_media_buy_delivery_impl with standard mocking."""
@@ -218,7 +198,6 @@ def _run_impl_with_patches(
     patches = _standard_patches(
         adapter=mock_adapter,
         target_buys=target_buys or [],
-        pricing_options=pricing_options,
         principal_obj=principal_obj,
     )
 
@@ -228,7 +207,6 @@ def _run_impl_with_patches(
     with (
         patches["adapter"],
         patches["target_buys"],
-        patches["pricing_options"],
         patches["uow"],
     ):
         return _get_media_buy_delivery_impl(req, identity)
@@ -549,7 +527,6 @@ class TestDeliveryStatusFilter:
         with (
             patches["adapter"],
             patches["target_buys"] as mock_target,
-            patches["pricing_options"],
             patches["uow"],
         ):
             _get_media_buy_delivery_impl(req, identity)
@@ -823,247 +800,8 @@ class TestDeliveryDateRange:
 
 
 # ===========================================================================
-# 6. PricingOption Lookup Correctness (UC-004-UPG-01, UPG-02) -- CRITICAL
-# ===========================================================================
-
-
-class TestDeliveryPricingOptionLookup:
-    """UC-004-UPG: pricing_option_id type safety for 3.6 upgrade.
-
-    CRITICAL: identified that _get_pricing_options compares
-    string pricing_option_id from JSON to integer PK column, which always
-    silently fails. These tests validate the fix.
-    """
-
-    def test_pricing_option_lookup_uses_string_field_not_integer_pk(self):
-        """_get_pricing_options resolves via synthetic ID (model_currency_type), not integer PK.
-
-        Spec: UNSPECIFIED (implementation-defined ID resolution strategy).
-
-        Our implementation constructs synthetic IDs like "cpm_usd_fixed" from
-        PricingOption fields and matches against requested IDs.
-
-        Covers: UC-004-PRICINGOPTION-TYPE-CONSISTENCY-01
-        """
-        from src.core.tools.media_buy_delivery import _get_pricing_options
-
-        # A real (unpersisted) row. A bare MagicMock fabricates every attribute it is
-        # asked for, ``root`` included — so the RootModel unwrap production performs
-        # returns a child mock and the id is built from Mock repr, not from these values.
-        pricing_option = PricingOptionFactory.build(
-            id=42, pricing_model="cpm", currency="USD", is_fixed=True, rate=Decimal("5.00")
-        )
-        pricing_option.tenant_id = "test_tenant"
-
-        mock_repo = MagicMock()
-        mock_repo.get_all_pricing_options.return_value = [pricing_option]
-
-        result = _get_pricing_options(["cpm_usd_fixed"], tenant_id="test_tenant", product_repo=mock_repo)
-
-        # Must find the pricing option keyed by synthetic ID
-        assert "cpm_usd_fixed" in result
-        assert result["cpm_usd_fixed"].id == 42
-
-    def test_delivery_spend_correct_with_cpm_pricing(self):
-        """CPM pricing: adapter returns correct impressions/spend with CPM pricing.
-
-        Spec: https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/dist/schemas/3.0.0-beta.3/core/delivery-metrics.json
-        CONFIRMED: spend (type: number, minimum: 0) and impressions (type: number, minimum: 0) are defined.
-        Covers: UC-004-PRICINGOPTION-TYPE-CONSISTENCY-03
-        """
-        # Real (unpersisted) rows, not MagicMocks: every by_package entry must state
-        # currency, and a MagicMock attribute is not a string. The map's KEY is derived by
-        # production's own ``synthetic_pricing_option_id``, and the package names that same
-        # derived id — so the lookup the impl performs is the one this fixture answers.
-        pricing_options = pricing_options_named(pricing_model="cpm", rate="5.00")
-        [pricing_option_id] = pricing_options
-
-        buy = _make_mock_media_buy(
-            media_buy_id="mb_cpm",
-            budget=10000.0,
-            raw_request={
-                "packages": [
-                    request_package(package_id="pkg_cpm", product_id="prod_1", pricing_option_id=pricing_option_id)
-                ]
-            },
-        )
-
-        mock_adapter = MagicMock()
-        mock_adapter.get_media_buy_delivery.return_value = _make_adapter_response(
-            media_buy_id="mb_cpm",
-            impressions=10000,
-            spend=50.0,
-            packages=[{"package_id": "pkg_cpm", "impressions": 10000, "spend": 50.0}],
-        )
-
-        req = GetMediaBuyDeliveryRequest(
-            media_buy_ids=["mb_cpm"],
-            start_date="2025-01-01",
-            end_date="2025-06-30",
-        )
-
-        response = _run_impl_with_patches(
-            req,
-            adapter=mock_adapter,
-            target_buys=[("mb_cpm", buy)],
-            pricing_options=pricing_options,
-        )
-
-        assert response.aggregated_totals.impressions == 10000.0
-        assert response.aggregated_totals.spend == 50.0
-        delivery = response.media_buy_deliveries[0]
-        assert delivery.totals.impressions == 10000
-        assert delivery.totals.spend == 50.0
-
-    def test_delivery_spend_correct_with_cpc_pricing(self):
-        """CPC pricing: clicks computed from spend / rate.
-
-        Spec: https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/dist/schemas/3.0.0-beta.3/core/delivery-metrics.json
-        CONFIRMED: clicks (type: number, minimum: 0) and spend are defined metrics.
-        Covers: UC-004-PRICINGOPTION-TYPE-CONSISTENCY-04
-        """
-        # "cpc" as a plain string: the DB column is String(20), not the enum.
-        pricing_options = pricing_options_named(pricing_model="cpc", rate="0.50")
-        [pricing_option_id] = pricing_options
-
-        buy = _make_mock_media_buy(
-            media_buy_id="mb_cpc",
-            budget=5000.0,
-            raw_request={
-                "packages": [
-                    request_package(package_id="pkg_cpc", product_id="prod_1", pricing_option_id=pricing_option_id)
-                ]
-            },
-        )
-
-        mock_adapter = MagicMock()
-        mock_adapter.get_media_buy_delivery.return_value = _make_adapter_response(
-            media_buy_id="mb_cpc",
-            impressions=5000,
-            spend=250.0,
-            clicks=500,
-            packages=[{"package_id": "pkg_cpc", "impressions": 5000, "spend": 250.0}],
-        )
-
-        req = GetMediaBuyDeliveryRequest(
-            media_buy_ids=["mb_cpc"],
-            start_date="2025-01-01",
-            end_date="2025-06-30",
-        )
-
-        response = _run_impl_with_patches(
-            req,
-            adapter=mock_adapter,
-            target_buys=[("mb_cpc", buy)],
-            pricing_options=pricing_options,
-        )
-
-        delivery = response.media_buy_deliveries[0]
-        assert delivery.totals.spend == 250.0
-        # CPC: clicks = floor(spend / rate) = floor(250 / 0.50) = 500
-        pkg = delivery.by_package[0]
-        assert pkg.clicks == 500
-
-    def test_delivery_spend_correct_with_flat_rate_pricing(self):
-        """FLAT_RATE pricing: adapter returns spend, no click computation.
-
-        Spec: https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/dist/schemas/3.0.0-beta.3/core/pricing-option.json
-        CONFIRMED: flat-rate-option is one of the pricing option types.
-        Covers: UC-004-PRICINGOPTION-TYPE-CONSISTENCY-05
-        """
-        pricing_options = pricing_options_named(pricing_model="flat_rate", rate="5000.00")
-        [pricing_option_id] = pricing_options
-
-        buy = _make_mock_media_buy(
-            media_buy_id="mb_flat",
-            budget=5000.0,
-            raw_request={
-                "packages": [
-                    request_package(package_id="pkg_flat", product_id="prod_1", pricing_option_id=pricing_option_id)
-                ]
-            },
-        )
-
-        mock_adapter = MagicMock()
-        mock_adapter.get_media_buy_delivery.return_value = _make_adapter_response(
-            media_buy_id="mb_flat",
-            impressions=20000,
-            spend=5000.0,
-            clicks=0,
-            packages=[{"package_id": "pkg_flat", "impressions": 20000, "spend": 5000.0}],
-        )
-
-        req = GetMediaBuyDeliveryRequest(
-            media_buy_ids=["mb_flat"],
-            start_date="2025-01-01",
-            end_date="2025-06-30",
-        )
-
-        response = _run_impl_with_patches(
-            req,
-            adapter=mock_adapter,
-            target_buys=[("mb_flat", buy)],
-            pricing_options=pricing_options,
-        )
-
-        delivery = response.media_buy_deliveries[0]
-        assert delivery.totals.spend == 5000.0
-        # FLAT_RATE: no click computation (clicks should be None)
-        pkg = delivery.by_package[0]
-        assert pkg.clicks is None
-
-    def test_by_package_carries_the_resolved_pricing_options_terms(self):
-        """The three pin-REQUIRED pricing fields on by_package come from the resolved option.
-
-        Spec: get-media-buy-delivery-response.json (AdCP 3.1, the pinned version) lists
-        ``pricing_model``, ``rate`` and ``currency`` in the by_package item's ``required``
-        set and types all three non-nullable (rate {type: number, minimum: 0}, currency
-        {type: string, pattern: ^[A-Z]{3}$}).
-
-        This grades the VALUES, which nothing else did: the sibling cases above assert
-        clicks and spend, and the failure mode this pins -- ``_package_pricing`` refusing a
-        package whose buy names no pricing option -- reaches every one of them as a crash,
-        so a green suite never proved the writer put the right numbers on the wire.
-
-        Covers: UC-004-PRICINGOPTION-TYPE-CONSISTENCY-02
-        """
-        pricing_options = pricing_options_named(pricing_model="cpm", rate="5.00", currency="USD")
-        [pricing_option_id] = pricing_options
-
-        buy = _make_mock_media_buy(
-            media_buy_id="mb_terms",
-            raw_request={"packages": [request_package(package_id="pkg_terms", pricing_option_id=pricing_option_id)]},
-        )
-
-        mock_adapter = MagicMock()
-        mock_adapter.get_media_buy_delivery.return_value = _make_adapter_response(
-            media_buy_id="mb_terms",
-            impressions=20000,
-            spend=100.0,
-            packages=[{"package_id": "pkg_terms", "impressions": 20000, "spend": 100.0}],
-        )
-
-        response = _run_impl_with_patches(
-            GetMediaBuyDeliveryRequest(media_buy_ids=["mb_terms"]),
-            adapter=mock_adapter,
-            target_buys=[("mb_terms", buy)],
-            pricing_options=pricing_options,
-        )
-
-        pkg = response.media_buy_deliveries[0].by_package[0]
-        assert (pkg.pricing_model, pkg.rate, pkg.currency) == (PricingModel.cpm, 5.0, "USD")
-        # ...and they SURVIVE serialization. The SDK base dumps with exclude_none=True, so
-        # an unset one is dropped rather than emitted as null, which is how a delivery
-        # response went schema-invalid without any model complaining (GH #2130).
-        dumped = response.model_dump()["media_buy_deliveries"][0]["by_package"][0]
-        assert {"pricing_model", "rate", "currency"} <= dumped.keys()
-
-
-# ===========================================================================
 # 7. 3.6 Upgrade Compatibility (UC-004-UPG-03, UPG-04, UPG-05)
 # ===========================================================================
-
-
 class TestDeliveryUpgradeCompat:
     """UC-004-UPG: 3.6 upgrade schema compatibility."""
 
@@ -1273,7 +1011,6 @@ class TestDeliveryInvalidDateRange:
         with (
             patches["adapter"],
             patches["target_buys"] as mock_target,
-            patches["pricing_options"],
             patches["uow"],
         ):
             with pytest.raises(AdCPValidationError):

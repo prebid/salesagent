@@ -18,10 +18,10 @@ from pytest_bdd import given, parsers, then, when
 from src.core.schemas._base import GetMediaBuysRequest
 from tests.bdd.steps._outcome_helpers import (
     WIRE_MISSING,
+    capture_created_media_buy,
     payload_or_none,
     require_payload,
     wire_dict,
-    wire_field,
     wire_lookup,
 )
 from tests.bdd.steps.generic._create_request import build_create_request_kwargs
@@ -2922,7 +2922,7 @@ def then_confirmed_at_at_moment_equals(ctx: dict, moment: str, timestamp: str) -
 def given_captured_media_buy_id_from_create(ctx: dict) -> None:
     """Perform a REAL create_media_buy through the scenario's transport and capture its id.
 
-    The id comes from ``wire_field`` — the buyer captures what the RESPONSE
+    The id comes from the wire (``capture_created_media_buy``) — the buyer captures what the RESPONSE
     carried, so reading the reconstructed typed payload would grade the
     reconstruction instead. wire_field also raises on a wire transport that
     stashed no wire, which is what keeps this from degrading into a silent
@@ -2936,7 +2936,18 @@ def given_captured_media_buy_id_from_create(ctx: dict) -> None:
     dispatch_request(ctx, **kwargs)
 
     assert ctx.get("error") is None, f"create_media_buy failed, so nothing was captured: {ctx.get('error')!r}"
-    ctx["created_media_buy_id"] = wire_field(ctx, "media_buy_id")
+    capture_created_media_buy(ctx)
+
+
+@when("the Buyer Agent calls get_media_buys for the media buy it just created")
+def when_query_media_buy_just_created(ctx: dict) -> None:
+    """Capture the id the scenario's create response carried, and poll get_media_buys for it.
+
+    The create ran in an earlier When on the same env, transport and identity; the id is
+    read off its wire, as a buyer captures it.
+    """
+    capture_created_media_buy(ctx)
+    when_query_captured_media_buy_id(ctx)
 
 
 @when("the Buyer Agent calls get_media_buys with that media_buy_id under the same account")
@@ -2985,10 +2996,9 @@ def then_included_entry_exposes_id_and_status(ctx: dict, expected_status: str) -
     Membership in the pinned ten-member enums/media-buy-status.json enum was the
     previous assertion and could not do this job: ``completed`` and ``failed`` are
     both members, so a freshly-created buy reported as terminal passed. The literal
-    is the state this flow actually starts in — the request assigns no creatives,
-    and media_buy_create._resolve_status returns ``pending_creatives`` for a buy
-    with no assigned/approved creatives (priority 2, ahead of the future start_time
-    that would otherwise make it pending_start).
+    is the state the scenario's create starts the buy in: the UC-019 poll assigns no
+    creatives, so ``pending_creatives``; a create carrying approved creatives starts
+    in its flight state (local-uc002-initial-status.feature).
     """
     media_buy_id = ctx["created_media_buy_id"]
     document = wire_dict(ctx)

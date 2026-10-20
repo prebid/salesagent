@@ -170,10 +170,9 @@ ALLOWLIST_UNIT_ONLY_ENV: frozenset[tuple[str, str]] = frozenset(
         # construction (tests/CLAUDE.md env-hierarchy table: "Unit" mode).
         ("tests/harness/delivery_circuit_breaker_unit.py", "make_webhook_config"),
         ("tests/harness/delivery_circuit_breaker_unit.py", "set_db_webhooks"),
-        ("tests/harness/delivery_poll_unit.py", "set_pricing_options"),
-        # Same class as the row above -- DeliveryPollEnv(DeliveryPollMixin, BaseTestEnv),
-        # verified by walking the bases rather than by the filename's "_unit" suffix.
-        # Arrived with feature/spec-gaps-1210's delivery-fixture rebuild.
+        # DeliveryPollEnv(DeliveryDispatchMixin, DeliveryPollMixin, BaseTestEnv), verified by
+        # walking the bases rather than by the filename's "_unit" suffix. Arrived with
+        # feature/spec-gaps-1210's delivery-fixture rebuild.
         ("tests/harness/delivery_poll_unit.py", "set_circuit_open"),
         ("tests/harness/media_buy_update.py", "set_currency_limit"),
         ("tests/harness/media_buy_update.py", "set_media_buy"),

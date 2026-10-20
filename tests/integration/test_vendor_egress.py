@@ -51,8 +51,6 @@ the cause if either host were ever inlined back into a call site.
 
 from __future__ import annotations
 
-import gzip
-import io
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
@@ -67,6 +65,7 @@ from src.core.security.outbound_http import OutboundError
 from tests.factories import TenantFactory, UserFactory
 from tests.harness._base import IntegrationEnv
 from tests.helpers.egress_backoff import fast_backoff
+from tests.helpers.gam_client import gam_report_csv_dump, serve_gam_report, stub_gam_client
 from tests.helpers.local_http_origin import LocalOrigin, OriginResponse
 
 # Reused rather than restated: which escape hatches a case opens is one decision
@@ -453,7 +452,7 @@ def test_mock_ad_server_webhook_does_not_retry_a_failing_origin(local_origin_tls
 def test_gam_report_download_does_not_retry_a_failing_origin(local_origin_tls, monkeypatch):
     """A failed GAM report download costs one hit.
 
-    The GAM SOAP client is a plain fake, not a transport mock: it stands in for
+    The GAM SOAP client is the shared GAM SOAP stand-in, not a transport mock: it stands in for
     the external ad server that hands back a download URL, which is the only
     way this call site can be reached at all. The HTTP that follows is real.
 
@@ -848,10 +847,8 @@ def test_gam_report_download_parses_the_gzipped_csv(local_origin_tls, monkeypatc
     allow_local_origin(monkeypatch)
     monkeypatch.setattr(grs.ReportingConfig, "ALLOWED_DOMAINS", ["127.0.0.1"])
 
-    buffer = io.BytesIO()
-    with gzip.GzipFile(fileobj=buffer, mode="wb") as gz:
-        gz.write(b"Dimension.DATE,Column.AD_SERVER_IMPRESSIONS\n2026-07-29,100\n")
-    local_origin_tls.respond_with(200, body=buffer.getvalue(), content_type="application/octet-stream")
+    body = gam_report_csv_dump([{"Dimension.DATE": "2026-07-29", "Column.AD_SERVER_IMPRESSIONS": 100}])
+    local_origin_tls.respond_with(200, body=body, content_type="application/octet-stream")
 
     service = _gam_reporting_service(local_origin_tls)
     rows = service._run_report({"reportQuery": {}})
@@ -1161,30 +1158,6 @@ def test_an_unauthenticated_xandr_adapter_holds_no_vendor_client(local_origin_tl
 # ---------------------------------------------------------------------------
 
 
-class _FakeReportService:
-    """The four ``ReportService`` methods ``_run_report`` calls, and nothing else."""
-
-    def __init__(self, download_url: str) -> None:
-        self._download_url = download_url
-
-    def runReportJob(self, report_job):  # noqa: N802 - GAM SOAP name
-        return {"id": "report_job_1"}
-
-    def getReportJobStatus(self, report_job_id):  # noqa: N802 - GAM SOAP name
-        return "COMPLETED"
-
-    def getReportDownloadURL(self, report_job_id, export_format):  # noqa: N802 - GAM SOAP name
-        return self._download_url
-
-
-class _FakeGAMClient:
-    def __init__(self, download_url: str) -> None:
-        self._report_service = _FakeReportService(download_url)
-
-    def GetService(self, name):  # noqa: N802 - GAM SDK name
-        return self._report_service
-
-
 def _gam_reporting_service(origin: LocalOrigin):
     """A reporting service whose report downloads land on *origin*.
 
@@ -1193,7 +1166,6 @@ def _gam_reporting_service(origin: LocalOrigin):
     """
     from src.adapters.gam_reporting_service import GAMReportingService
 
-    return GAMReportingService(
-        _FakeGAMClient(f"{origin.base_url}/report.csv.gz"),
-        network_timezone="America/New_York",
-    )
+    client = stub_gam_client()
+    serve_gam_report(client, download_url=f"{origin.base_url}/report.csv.gz")
+    return GAMReportingService(client, network_timezone="America/New_York")

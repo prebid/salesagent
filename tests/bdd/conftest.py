@@ -69,6 +69,7 @@ pytest_plugins = [
     "tests.bdd.steps.domain.uc004_delivery",
     "tests.bdd.steps.domain.uc002_create_media_buy",
     "tests.bdd.steps.domain.uc002_nfr",
+    "tests.bdd.steps.domain.gam_seller",
     "tests.bdd.steps.domain.uc003_update_media_buy",
     "tests.bdd.steps.domain.uc003_ext_error_scenarios",
     "tests.bdd.steps.domain.uc003_storyboard_generic_client",
@@ -5506,6 +5507,18 @@ def _seed_media_buy_chain_create_dispatch(ctx: dict, env: object) -> None:
     ctx["dispatch_mode"] = "create"
 
 
+def _seed_buy_readback(ctx: dict, env: object) -> None:
+    """The create chain on a seller whose adapter is production's, on every transport.
+
+    The read-back scenarios grade what a real adapter's create leaves behind, so the
+    in-process transports run the tenant's own adapter as the live server does: the Mock
+    adapter (whose creative upload is #2420), or ``GoogleAdManager`` once a Given makes the
+    tenant a GAM seller.
+    """
+    _seed_media_buy_chain_create_dispatch(ctx, env)
+    env.sell_through_tenant_adapter()
+
+
 def _seed_media_buy_chain_full_create(ctx: dict, env: object) -> None:
     """The chain, plus the manual-approval full-create flag (PR #1567)."""
     _seed_media_buy_chain(ctx, env)
@@ -5968,6 +5981,17 @@ ENV_ROUTES: list[EnvRoute] = [
         env_builder=_build_media_buy_create_list_env,
         seed=_seed_media_buy_chain,
     ),
+    # A real create through the scenario's transport, then a read of that buy on the same
+    # env and identity: the initial status (get_media_buys) and a GAM buy's packages
+    # (get_media_buy_delivery). A factory-seeded buy cannot stand in, because it carries its
+    # package ids in raw_request and so cannot show what create persisted. Unscoped and
+    # ahead of the UC rows, so neither uc002-not-wired nor uc004-poll claims these tags.
+    EnvRoute(
+        tag="local-buy-readback",
+        when=lambda m: any(t.startswith(("T-UC-002-local-initial-status-", "T-UC-004-local-gam-readback-")) for t in m),
+        env_builder=_build_media_buy_create_list_env,
+        seed=_seed_buy_readback,
+    ),
     # ── @tenantid (local tenant-identification-routes feature) ──────────────
     # An UNSCOPED `when` row for the same reason as the rows above and below: the
     # scenarios carry a @tenantid tag rather than a T-UC-<n> identity, so
@@ -6190,6 +6214,11 @@ ENV_ROUTES: list[EnvRoute] = [
                 # plain ValueError") had expired. Neither reason was the reason.
                 or "T-UC-002-partition-daily-spend-cap" in m
                 or "T-UC-002-boundary-daily-spend-cap" in m
+                # Every scenario of local-gam-seller.feature needs exactly this row: the
+                # create chain, and dispatch_mode="create" so the shared When dispatches the
+                # request the Givens built. The row claims that feature's tag prefix once, so
+                # a new GAM scenario joins it without editing this predicate.
+                or any(t.startswith("T-UC-002-local-gam-") for t in m)
             ),
         ),
         env_builder=_env("tests.harness.media_buy_create.MediaBuyCreateEnv"),
