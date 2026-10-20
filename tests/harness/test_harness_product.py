@@ -71,14 +71,16 @@ class TestProductEnvContract:
         from tests.harness.product_unit import _make_product
 
         with ProductEnv() as env:
+            env.add_product(product_id="variant_001", name="Stored Variant")
             variant = _make_product(product_id="variant_001", name="Dynamic Variant")
             env.set_dynamic_variants([variant])
 
-            # The convert mock is identity, so variant passes through
+            # Generation persists the row before the catalog reads it.
             response = await env.call_impl(brief="test")
 
             product_ids = [p.product_id for p in response.products]
-            assert "variant_001" in product_ids
+            assert product_ids == ["variant_001"]
+            assert response.products[0].name == "Dynamic Variant"
 
     async def test_custom_identity(self):
         """Constructor kwargs override identity fields."""
