@@ -393,7 +393,6 @@ class AdServerAdapter(ABC):
         packages: list[MediaPackage],
         *,
         paused: bool = False,
-        include_product_id: bool = False,
     ) -> list[ResponsePackage]:
         """Build AdCP-compliant package responses from MediaPackage list.
 
@@ -403,22 +402,11 @@ class AdServerAdapter(ABC):
         Args:
             packages: List of MediaPackage objects from the request.
             paused: Whether packages should be marked as paused (e.g. for HITL).
-            include_product_id: Whether to include product_id in the response
-                (useful for adapters that need product tracking, e.g. Mock).
 
         Returns:
             List of ResponsePackage objects ready for AdapterCreateResult.
         """
-        responses = []
-        for package in packages:
-            kwargs: dict[str, Any] = {
-                "package_id": package.package_id,
-                "paused": paused,
-            }
-            if include_product_id:
-                kwargs["product_id"] = package.product_id
-            responses.append(ResponsePackage(**kwargs))
-        return responses
+        return [ResponsePackage(package_id=package.package_id, paused=paused) for package in packages]
 
     def _build_create_success(
         self,
@@ -428,7 +416,6 @@ class AdServerAdapter(ABC):
         paused: bool = False,
         creative_deadline_days: int | None = 2,
         package_responses: list[ResponsePackage] | None = None,
-        include_product_id: bool = False,
         platform_line_item_ids: dict[str, str] | None = None,
     ) -> AdapterCreateResult:
         """Build an AdapterCreateResult with standard fields.
@@ -447,8 +434,6 @@ class AdServerAdapter(ABC):
             creative_deadline_days: Days from now for creative deadline.
                 None means no creative deadline (e.g. GAM sets this explicitly).
             package_responses: Pre-built package responses (overrides packages).
-            include_product_id: Whether to include product_id in package responses
-                (only used when package_responses is None).
             platform_line_item_ids: package_id -> ad-server line-item id, for adapters
                 that create one line item per package.
 
@@ -456,9 +441,7 @@ class AdServerAdapter(ABC):
             AdapterCreateResult.
         """
         if package_responses is None:
-            package_responses = self._build_package_responses(
-                packages, paused=paused, include_product_id=include_product_id
-            )
+            package_responses = self._build_package_responses(packages, paused=paused)
         creative_deadline = (
             datetime.now(UTC) + timedelta(days=creative_deadline_days) if creative_deadline_days is not None else None
         )
