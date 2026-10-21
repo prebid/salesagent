@@ -111,14 +111,14 @@ def _all_suites_from_runner() -> list[str]:
 
 
 def _required_summary_gates() -> frozenset[str]:
-    """Mapped Summary gates for ALL_SUITES that have CI jobs.
+    """Every mapped Summary job, plus the CI-only extras.
 
-    Unmapped / ungated growth is graded by
-    ``test_local_suites_map_or_explicit_exclusion`` (ratchet), not at import.
+    The floor is the map's values, not whichever suites ``ALL_SUITES`` currently
+    lists. Dropping a suite name from the runner must not drop its gate from
+    ``summary.needs``. A map key that ``ALL_SUITES`` no longer lists is graded
+    by ``test_local_suites_map_or_explicit_exclusion``, not at import.
     """
-    suites = _all_suites_from_runner()
-    mapped = {_LOCAL_SUITE_TO_SUMMARY_GATE[s] for s in suites if s in _LOCAL_SUITE_TO_SUMMARY_GATE}
-    return frozenset(mapped | _EXTRA_SUMMARY_GATES)
+    return frozenset(set(_LOCAL_SUITE_TO_SUMMARY_GATE.values()) | _EXTRA_SUMMARY_GATES)
 
 
 # Used by tests below (computed once at import; no import-time membership assert).
@@ -374,6 +374,12 @@ class TestCISuiteCoverage:
         """ALL_SUITES must map to summary gates or UNGATED_LOCAL_SUITES (no silent drops)."""
         suites = _all_suites_from_runner()
         assert "ui" in suites, "run_all_tests.sh ALL_SUITES must still list ui (exclusion is at the gate map)"
+        stale = sorted(set(_LOCAL_SUITE_TO_SUMMARY_GATE) - set(suites))
+        assert not stale, (
+            f"_LOCAL_SUITE_TO_SUMMARY_GATE still names {stale}, which ALL_SUITES no longer lists. "
+            "Remove the map entry in the same change, or put the suite back. "
+            "The Summary floor is the map, so a leftover key keeps its gate required."
+        )
         unmapped = {s for s in suites if s not in _LOCAL_SUITE_TO_SUMMARY_GATE}
         assert_violations_match_allowlist(
             unmapped,
