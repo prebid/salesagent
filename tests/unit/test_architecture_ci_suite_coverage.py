@@ -9,23 +9,229 @@ must propagate BDD/E2E failures so a red suite turns CI red.
 This is a configuration-contract assertion: the workflow file is parsed as
 YAML data and the job graph is inspected. It is NOT a source-code AST scan.
 
-No allowlist — zero tolerance. Every locally-run suite must have a gating
-CI job, or a broken suite can silently land on main again.
+Documented Summary exclusions (``ui``, ``quality``, ``storyboard``) are
+ratcheted via ``test_local_suites_map_or_explicit_exclusion``. Every
+locally-run suite in ``run_all_tests.sh`` ALL_SUITES must map to a summary
+gate **or** appear in ``UNGATED_LOCAL_SUITES`` with a ``# see #<issue>``
+anchor. CI-only gates (smoke, bdd-in-network) are listed separately.
 """
+
+import re
+from pathlib import Path
+from typing import Any
 
 import pytest
 
 from scripts.ci.workflow_helpers import load_ci_workflow
+from tests.unit._architecture_helpers import (
+    assert_violations_match_allowlist,
+    find_step,
+    job_run_text,
+    load_yaml_mapping,
+    repo_root,
+)
 
-# Suite jobs that must appear in summary.needs — a suite that runs but is absent
-# from summary.needs leaves CI green on its failure (PR #1299 silent-breakage class).
-REQUIRED_SUMMARY_GATES = frozenset({"unit-tests", "integration-tests", "e2e-tests", "bdd-tests", "admin-ui-tests"})
+# Local suite → summary.needs job. Derived from run_all_tests.sh ALL_SUITES;
+# unmapped suites must be listed in UNGATED_LOCAL_SUITES with a documented reason.
+_LOCAL_SUITE_TO_SUMMARY_GATE: dict[str, str] = {
+    "unit": "unit-tests",
+    "integration": "integration-tests",
+    "bdd": "bdd-tests",
+    "admin": "admin-ui-tests",
+    "e2e": "e2e-tests",
+}
+# Intentionally absent from CI Summary. Soften the
+# "every suite gates CI" claim: these are excluded at the source map, not
+# silently omitted from a hand-maintained list.
+#
+# Why ``ui`` stays local-only — not the same as ``admin``:
+# - ``tox -e ui`` needs the full E2E Docker compose stack (SERVER DB ``/adcp``,
+#   app health) **plus** Chromium via Playwright (``extras = ui-tests``). Same
+#   infra class as ``e2e-tests`` (heavy timeout / disk). A dedicated full-stack
+#   compose job would add another e2e-class runner-minute bill for a thin smoke
+#   suite under ``tests/ui/``; a future gate may instead piggyback on the
+#   existing in-network ``e2e-tests`` job (map many-to-one) rather than spawn a
+#   second compose bring-up.
+# - ``admin-ui-tests`` runs ``tests/admin/`` against bare Postgres via
+#   ``_pytest`` — no browser, no compose app stack. Mapping ``ui`` →
+#   ``admin-ui-tests`` would be a false Summary gate.
+# - No automated CI execution today: ``./run_all_tests.sh`` / ``tox -e ui`` and
+#   the in-network ``tests`` image (Playwright baked) are local/in-network only;
+#   no workflow job runs ``tests/ui`` or ``tox -e ui``.
+#
+# Ownership (not an unbounded park-list): ``test_local_suites_map_or_explicit_exclusion``
+# uses ``assert_violations_match_allowlist`` so growth is red and removal is
+# green when a suite is mapped — never grows without a new owned issue + per-entry
+# ``# see #<issue>`` anchor keyed from the registry below.
+#
+# Removal recipe (when product wants Summary gating — tracked on #2161):
+# 1. Add CI job (suggested name ``ui-tests``) that runs Playwright against the
+#    E2E compose stack (mirror the in-network ``e2e-tests`` job / ``ADCP_TESTING`` +
+#    ``playwright install chromium`` or image bake) — or map ``ui`` onto an
+#    existing full-stack job that already exercises ``tests/ui`` / ``tox -e ui``.
+# 2. Add that job to ``summary.needs`` + the Summary result-check step.
+# 3. Map ``"ui": "<job>"`` in ``_LOCAL_SUITE_TO_SUMMARY_GATE`` above.
+# 4. Remove ``"ui"`` from ``UNGATED_LOCAL_SUITES`` (stale-entry ratchet fails
+#    until deleted); extend arch-guard assertions for the mapped job (exists,
+#    runs ``tests/ui`` or ``tox -e ui``, Summary floor).
+# 5. Remove the ``run_all_tests.sh`` STATUS note for ``ui`` local-only (step 6
+#    below) once Summary gating lands.
+# 6. Until step 5: keep the one-line STATUS pointer in ``run_all_tests.sh`` at
+#    the ``ui`` suite row (local/in-network only — not ``admin-ui-tests``).
+#
+# ``quality`` is ``pytest tests/quality`` (slow ratchets, including baseline
+# slack). ``quality-gate`` runs the over-baseline hook scripts via
+# ``make quality-ci``; it does not run this tox env, so mapping the suite onto
+# that job would be a false Summary gate. Introduced on #1721.
+# see #1721
+#
+# ``storyboard`` has a CI job (``storyboard-conformance`` runs
+# ``./run_all_tests.sh storyboard``) that is deliberately absent from
+# ``summary.needs`` until the ledger is re-verified.
+# see #1858
+#
+# Registry is suite → owning GitHub issue (Path A live owner while ungated).
+# see #2161 — Path A ui-tests Summary gate (Path B docs: #1924 / #1966)
+UNGATED_LOCAL_SUITES: dict[str, int] = {"ui": 2161, "quality": 1721, "storyboard": 1858}
+
+# CI-only gates that are not ALL_SUITES entries but must still floor Summary.
+_EXTRA_SUMMARY_GATES = frozenset(
+    {
+        "bdd-in-network",
+        "smoke-tests",
+    }
+)
+
+
+def _all_suites_from_runner() -> list[str]:
+    runner = repo_root() / "run_all_tests.sh"
+    m = re.search(r'ALL_SUITES="([^"]+)"', runner.read_text(encoding="utf-8"))
+    assert m, "run_all_tests.sh must define ALL_SUITES"
+    return [s.strip() for s in m.group(1).split(",") if s.strip()]
+
+
+def _required_summary_gates() -> frozenset[str]:
+    """Mapped Summary jobs from the suite map, plus the CI-only extras.
+
+    Unmapped / ungated growth is graded by
+    ``test_local_suites_map_or_explicit_exclusion`` (ratchet), not at import.
+    """
+    return frozenset(set(_LOCAL_SUITE_TO_SUMMARY_GATE.values()) | _EXTRA_SUMMARY_GATES)
+
+
+# Used by tests below (computed once at import; no import-time membership assert).
+REQUIRED_SUMMARY_GATES = _required_summary_gates()
+_FREE_DISK_USES = "./.github/actions/_free-disk"
+_FREE_DISK_ACTION = repo_root() / ".github" / "actions" / "_free-disk" / "action.yml"
+_E2E_COMPOSE = repo_root() / "docker-compose.e2e.yml"
+
+
+def _is_adcp_testing_true(value: object) -> bool:
+    """GHA env is always a string at runtime; YAML may parse unquoted ``true`` as bool."""
+    return value is True or str(value).lower() == "true"
+
+
+def _parse_compose_duration_seconds(value: object) -> float:
+    """Parse compose duration strings like ``60s`` / ``1m`` / ints into seconds."""
+    if value is None:
+        raise AssertionError("duration value is missing")
+    if isinstance(value, (int, float)):
+        seconds = float(value)
+    else:
+        text = str(value).strip().lower()
+        if text.endswith("ms"):
+            seconds = float(text[:-2]) / 1000.0
+        elif text.endswith("s"):
+            seconds = float(text[:-1])
+        elif text.endswith("m"):
+            seconds = float(text[:-1]) * 60.0
+        elif text.endswith("h"):
+            seconds = float(text[:-1]) * 3600.0
+        else:
+            seconds = float(text)
+    if seconds <= 0:
+        raise AssertionError(f"duration must be positive (got {value!r})")
+    return seconds
+
+
+def _find_free_disk_step(steps: list[dict[str, Any]]) -> tuple[int, dict[str, Any]]:
+    """Locate the shared _free-disk composite step (name may be present for CI UI).
+
+    Returns ``(index, step)``. Predicate matches shared ``find_step``; index is
+    recovered here because ``find_step`` returns the step mapping only.
+    """
+    found = find_step(steps, uses_contains="_free-disk")
+    if found is None:
+        raise AssertionError(f"job must include uses: {_FREE_DISK_USES} (single source for runner reclaim).")
+    idx = next(i for i, step in enumerate(steps) if step is found)
+    return idx, found
+
+
+def _assert_free_disk_action_reclaims_runner(action: dict[str, Any] | Path | None = None) -> None:
+    """Contract lives in a composite *run* step body — not description-only tokens.
+
+    Pass a parsed action mapping (or path) to exercise fixtures; default reads the
+    production ``.github/actions/_free-disk/action.yml``.
+    """
+    label: str
+    if action is None:
+        data = load_yaml_mapping(_FREE_DISK_ACTION)
+        label = str(_FREE_DISK_ACTION)
+    elif isinstance(action, Path):
+        data = load_yaml_mapping(action)
+        label = str(action)
+    else:
+        data = action
+        label = "parsed free-disk action"
+    assert isinstance(data, dict), f"{label} must be a YAML mapping."
+    runs = data.get("runs") or {}
+    steps = runs.get("steps") if isinstance(runs, dict) else None
+    assert isinstance(steps, list) and steps, f"{label} must declare ≥1 composite step."
+    combined = job_run_text({"steps": steps})
+    assert combined, f"{label} must include a step with a run body."
+    assert "/usr/share/dotnet" in combined, "_free-disk run step must remove /usr/share/dotnet."
+    assert "docker builder prune" in combined, "_free-disk run step must prune the Docker builder cache."
+
+
+def _load_e2e_compose() -> dict[str, Any]:
+    data = load_yaml_mapping(_E2E_COMPOSE)
+    assert data.get("services"), f"{_E2E_COMPOSE} must declare services."
+    return data
 
 
 class TestCISuiteCoverage:
     """BDD and E2E suites must run in CI and gate the test summary."""
 
-    @pytest.mark.arch_guard
+    pytestmark = pytest.mark.arch_guard
+
+    def test_free_disk_action_requires_run_step_body(self):
+        """Tokens only in description must not satisfy the reclaim contract.
+
+        Mutation-shaped fixture: description mentions reclaim tokens, and a
+        non-empty ``run`` step omits them — so the ≥1-step gate passes and the
+        reclaim-token asserts are what must fail (empty ``steps: []`` never
+        reaches those asserts).
+        """
+        vacuous = {
+            "name": "Free disk space",
+            "description": "Reclaim /usr/share/dotnet and docker builder prune",
+            "runs": {
+                "using": "composite",
+                "steps": [
+                    {
+                        "name": "noop",
+                        "run": "echo 'no reclaim tokens here'",
+                        "shell": "bash",
+                    }
+                ],
+            },
+        }
+        # Live helper must reject description-only contracts (MUT8 class).
+        with pytest.raises(AssertionError):
+            _assert_free_disk_action_reclaims_runner(vacuous)
+        # Production composite still passes the real assert.
+        _assert_free_disk_action_reclaims_runner()
+
     def test_bdd_job_exists(self):
         """BDD aggregate + parallel shard jobs must exist in CI."""
         jobs = load_ci_workflow()["jobs"]
@@ -33,7 +239,6 @@ class TestCISuiteCoverage:
         assert "bdd-tests" in jobs, "No 'bdd-tests' aggregate job in .github/workflows/ci.yml."
         assert "bdd-tests-shard" in jobs, "No 'bdd-tests-shard' matrix job in .github/workflows/ci.yml."
 
-    @pytest.mark.arch_guard
     def test_bdd_shards_run_the_bdd_suite(self):
         """Each BDD shard must resolve paths via shard_paths and run pytest."""
         shard_job = load_ci_workflow()["jobs"]["bdd-tests-shard"]
@@ -49,24 +254,21 @@ class TestCISuiteCoverage:
             "bdd-tests-shard must invoke pytest (via _pytest composite or explicit run)."
         )
 
-    @pytest.mark.arch_guard
     def test_bdd_shards_have_postgres_service(self):
         """BDD harnesses use the integration_db fixture (real PostgreSQL)."""
         services = load_ci_workflow()["jobs"]["bdd-tests-shard"].get("services", {})
 
         assert "postgres" in services, "bdd-tests-shard has no postgres service."
 
-    @pytest.mark.arch_guard
     def test_bdd_aggregate_is_status_proxy_only(self):
         """Aggregate BDD job must gate shard status, not merge coverage."""
         aggregate = load_ci_workflow()["jobs"]["bdd-tests"]
-        steps_text = " ".join(str(step.get("run", "")) for step in aggregate.get("steps", []))
+        steps_text = job_run_text(aggregate)
         assert "needs.bdd-tests-shard.result" in steps_text, "bdd-tests aggregate must fail when bdd-tests-shard fails."
         assert "coverage combine" not in steps_text, (
             "bdd-tests aggregate must not merge coverage; that belongs in the Coverage job."
         )
 
-    @pytest.mark.arch_guard
     def test_admin_job_has_postgres_service(self):
         """Admin blueprint tests use integration_db and require PostgreSQL."""
         admin_job = load_ci_workflow()["jobs"]["admin-ui-tests"]
@@ -77,7 +279,6 @@ class TestCISuiteCoverage:
             "the integration_db fixture and require a real PostgreSQL instance."
         )
 
-    @pytest.mark.arch_guard
     def test_integration_job_uses_entity_shards(self):
         """Integration tests must run in parallel entity shards (legacy parity)."""
         integration_job = load_ci_workflow()["jobs"]["integration-tests"]
@@ -97,7 +298,6 @@ class TestCISuiteCoverage:
             "integration-tests must filter pytest with matrix.marker, not run the full suite serially."
         )
 
-    @pytest.mark.arch_guard
     def test_integration_shards_use_strict_partition(self):
         """Shards 2–4 must exclude earlier shard markers to avoid duplicate runs."""
         integration_job = load_ci_workflow()["jobs"]["integration-tests"]
@@ -112,16 +312,14 @@ class TestCISuiteCoverage:
         assert "and not media_buy" in markers["infra"]
         assert "and not delivery" in markers["infra"]
 
-    @pytest.mark.arch_guard
     def test_quality_gate_does_not_run_unit_tests(self):
         """Quality Gate runs static checks only; unit tests run once in unit-tests."""
         quality_job = load_ci_workflow()["jobs"]["quality-gate"]
-        run_steps = " ".join(str(step.get("run", "")) for step in quality_job.get("steps", []))
+        run_steps = job_run_text(quality_job)
 
         assert "make quality-ci" in run_steps, "quality-gate must invoke make quality-ci (no pytest)."
         assert "pytest" not in run_steps, "quality-gate must not re-run unit tests."
 
-    @pytest.mark.arch_guard
     def test_coverage_job_reuses_test_artifacts(self):
         """Coverage gate must not re-run pytest; it combines unit + BDD artifacts."""
         coverage_job = load_ci_workflow()["jobs"]["coverage"]
@@ -135,15 +333,14 @@ class TestCISuiteCoverage:
         assert steps_text.count("download-artifact") >= 2, (
             "coverage job must download unit and BDD shard coverage artifacts."
         )
-        run_steps = " ".join(str(step.get("run", "")) for step in coverage_job.get("steps", []))
+        run_steps = job_run_text(coverage_job)
         assert "pytest" not in run_steps, "coverage job must not re-run tests."
         assert "coverage combine" in run_steps, "coverage job must combine unit and BDD coverage data."
 
-    @pytest.mark.arch_guard
     def test_coverage_gate_requires_all_bdd_shard_artifacts(self):
         """Coverage must fail on partial BDD shard artifact sets, not combine survivors."""
         coverage_job = load_ci_workflow()["jobs"]["coverage"]
-        run_steps = " ".join(str(step.get("run", "")) for step in coverage_job.get("steps", []))
+        run_steps = job_run_text(coverage_job)
 
         assert "SHARD_COUNTS" in run_steps, "coverage gate must read SHARD_COUNTS from shard_split."
         assert "expected_bdd_shards" in run_steps, "coverage gate must bind BDD shard count to a variable."
@@ -160,7 +357,6 @@ class TestCISuiteCoverage:
             "BDD shard coverage artifacts must land under bdd-coverage-shards/."
         )
 
-    @pytest.mark.arch_guard
     def test_ci_jobs_declare_permissions_and_timeout(self):
         """Every CI job must declare permissions and timeout (workflow hygiene)."""
         jobs = load_ci_workflow()["jobs"]
@@ -172,13 +368,46 @@ class TestCISuiteCoverage:
                 missing.append(f"{job_name}: timeout-minutes")
         assert not missing, "CI jobs missing hygiene fields:\n" + "\n".join(f"  - {m}" for m in missing)
 
-    @pytest.mark.arch_guard
+    def test_local_suites_map_or_explicit_exclusion(self):
+        """ALL_SUITES must map to summary gates or UNGATED_LOCAL_SUITES (no silent drops)."""
+        suites = _all_suites_from_runner()
+        assert "ui" in suites, "run_all_tests.sh ALL_SUITES must still list ui (exclusion is at the gate map)"
+        stale = sorted(set(_LOCAL_SUITE_TO_SUMMARY_GATE) - set(suites))
+        assert not stale, f"_LOCAL_SUITE_TO_SUMMARY_GATE names {stale}, absent from ALL_SUITES"
+        unmapped = {s for s in suites if s not in _LOCAL_SUITE_TO_SUMMARY_GATE}
+        assert_violations_match_allowlist(
+            unmapped,
+            set(UNGATED_LOCAL_SUITES),
+            fix_hint=(
+                "Map the suite to a Summary gate job in _LOCAL_SUITE_TO_SUMMARY_GATE, "
+                "or add it to UNGATED_LOCAL_SUITES with a `# see #<issue>` anchor."
+            ),
+        )
+        module_src = (repo_root() / "tests/unit/test_architecture_ci_suite_coverage.py").read_text(encoding="utf-8")
+        runner_src = (repo_root() / "run_all_tests.sh").read_text(encoding="utf-8")
+        module_rel = "tests/unit/test_architecture_ci_suite_coverage.py"
+        for suite, issue in UNGATED_LOCAL_SUITES.items():
+            assert re.search(rf"# see #{issue}\b", module_src), (
+                f"UNGATED suite {suite!r} requires a `# see #{issue}` anchor in this module."
+            )
+            # STATUS pointer: suite row + this module path (rename-safe existence check)
+            assert re.search(
+                rf"(?m)^#\s+{re.escape(suite)}\s+",
+                runner_src,
+            ), f"run_all_tests.sh STATUS must document suite {suite!r}"
+            assert module_rel in runner_src, (
+                f"run_all_tests.sh STATUS must point at {module_rel} while {suite!r} stays ungated"
+            )
+            assert f"#{issue}" in runner_src, (
+                f"run_all_tests.sh STATUS must cite owning issue #{issue} for suite {suite!r}"
+            )
+
     def test_summary_gates_every_required_job(self):
         """summary must include every suite gate AND fail for every job in summary.needs."""
         workflow = load_ci_workflow()
         summary = workflow["jobs"]["summary"]
         needs = summary["needs"]
-        check_text = " ".join(str(step.get("run", "")) for step in summary.get("steps", []))
+        check_text = job_run_text(summary)
 
         assert isinstance(needs, list) and needs, "summary.needs must list every upstream gate job."
         missing = REQUIRED_SUMMARY_GATES - set(needs)
@@ -196,14 +425,12 @@ class TestCISuiteCoverage:
                 f"A failing {required} job would not fail CI even though it is listed in needs[]."
             )
 
-    @pytest.mark.arch_guard
     def test_type_check_uses_make_target(self):
         """Type Check job must invoke the same entrypoint as local make typecheck."""
         type_check = load_ci_workflow()["jobs"]["type-check"]
-        run_steps = " ".join(str(step.get("run", "")) for step in type_check.get("steps", []))
+        run_steps = job_run_text(type_check)
         assert "make typecheck" in run_steps, "type-check job must run make typecheck for CI/local parity."
 
-    @pytest.mark.arch_guard
     def test_smoke_tests_do_not_duplicate_skip_guard(self):
         """Skip-decorator enforcement belongs in the smoke suite, not a workflow grep step."""
         smoke_job = load_ci_workflow()["jobs"]["smoke-tests"]
@@ -214,7 +441,6 @@ class TestCISuiteCoverage:
             "TestNoSkippedTests is the single source of truth."
         )
 
-    @pytest.mark.arch_guard
     def test_skip_guard_single_source_of_truth_exists(self):
         """The SSoT the workflow delegates to must exist, or enforcement is unguarded."""
         from tests.smoke.test_smoke_basic import TestNoSkippedTests
@@ -223,7 +449,137 @@ class TestCISuiteCoverage:
             "TestNoSkippedTests.test_no_skip_decorators is the declared single source of truth for skip enforcement."
         )
 
-    @pytest.mark.arch_guard
+    def test_e2e_job_runs_in_network(self):
+        """E2E CI runs inside the compose network via ``./run_all_tests.sh e2e``.
+
+        Host pytest cannot resolve ``counterparty.adcp-e2e.dev`` (compose-only
+        DNS). The job must not grow a host "build and start, then pytest" step.
+        ``run_all_tests.sh`` owns TLS, the creative-agent image, and compose.
+        ``DELIVERY_WEBHOOK_INTERVAL`` stays a compose default, not a step env.
+        """
+        workflow = load_ci_workflow()
+        workflow_env = workflow.get("env") or {}
+        assert _is_adcp_testing_true(workflow_env.get("ADCP_TESTING")), (
+            "workflow env must set ADCP_TESTING true (compose defaults it for adcp-server)."
+        )
+
+        job = workflow["jobs"]["e2e-tests"]
+        steps = job.get("steps", [])
+        assert steps, "e2e-tests must declare steps (empty job is a vacuous pass)."
+
+        step_names = [s.get("name") for s in steps]
+        assert "Build and start E2E stack" not in step_names, (
+            "e2e-tests must not restore the host pre-start step; E2E stays in-network."
+        )
+        assert "Run E2E suite in-network" in step_names, "e2e-tests must run ./run_all_tests.sh e2e."
+        free_idx, _ = _find_free_disk_step(steps)
+        _assert_free_disk_action_reclaims_runner()
+
+        run_idx = step_names.index("Run E2E suite in-network")
+        assert free_idx < run_idx, (
+            "Free disk space must run before 'Run E2E suite in-network' "
+            f"(found Free disk at {free_idx}, run at {run_idx})."
+        )
+        run_step = steps[run_idx]
+        assert str(run_step.get("run", "")).strip() == "./run_all_tests.sh e2e", (
+            "e2e-tests must invoke ./run_all_tests.sh e2e (in-network), not host pytest."
+        )
+        run_env = run_step.get("env") or {}
+        image = str(run_env.get("CREATIVE_AGENT_GHCR_IMAGE", ""))
+        assert image.startswith("ghcr.io/"), (
+            f"Run E2E suite in-network must set CREATIVE_AGENT_GHCR_IMAGE to a ghcr.io image (got {image!r})."
+        )
+        assert "DELIVERY_WEBHOOK_INTERVAL" not in run_env, (
+            "The in-network step must not set DELIVERY_WEBHOOK_INTERVAL; default lives in "
+            "docker-compose.e2e.yml (${DELIVERY_WEBHOOK_INTERVAL:-5})."
+        )
+        compose_e2e = _E2E_COMPOSE.read_text(encoding="utf-8")
+        assert "DELIVERY_WEBHOOK_INTERVAL: ${DELIVERY_WEBHOOK_INTERVAL:-5}" in compose_e2e, (
+            "docker-compose.e2e.yml must default DELIVERY_WEBHOOK_INTERVAL to 5."
+        )
+
+    def test_e2e_compose_proxy_waits_for_adcp_healthy(self):
+        """Proxy must not start until adcp-server is healthy.
+
+        Regression: proxy healthcheck (no start_period) could fail with 502
+        while adcp-server was still inside its start_period.
+        """
+        services = _load_e2e_compose()["services"]
+        assert "adcp-server" in services and "proxy" in services, (
+            "docker-compose.e2e.yml must declare adcp-server and proxy."
+        )
+        assert "creative-agent" in services, "docker-compose.e2e.yml must declare creative-agent."
+        adcp_hc = services["adcp-server"].get("healthcheck") or {}
+        proxy = services["proxy"]
+        proxy_deps = proxy.get("depends_on") or {}
+        proxy_hc = proxy.get("healthcheck") or {}
+        creative_hc = services["creative-agent"].get("healthcheck") or {}
+
+        # Positive concrete durations — truthy "0s" must not pass.
+        assert _parse_compose_duration_seconds(adcp_hc.get("start_period")) >= 60, (
+            f"adcp-server start_period must be >= 60s (got {adcp_hc.get('start_period')!r})."
+        )
+        assert _parse_compose_duration_seconds(adcp_hc.get("interval")) == 5, (
+            f"adcp-server interval must be 5s (got {adcp_hc.get('interval')!r})."
+        )
+        assert int(str(adcp_hc.get("retries", 0))) >= 36, (
+            f"adcp-server retries must be >= 36 (got {adcp_hc.get('retries')!r})."
+        )
+        # Mapping form with condition — list form ``- adcp-server`` is the race.
+        assert isinstance(proxy_deps, dict), (
+            f"proxy depends_on must be a mapping with condition: service_healthy (got {type(proxy_deps).__name__})."
+        )
+        adcp_dep = proxy_deps.get("adcp-server") or {}
+        assert isinstance(adcp_dep, dict) and adcp_dep.get("condition") == "service_healthy", (
+            f"proxy must depends_on adcp-server with condition: service_healthy (got {adcp_dep!r})."
+        )
+        assert _parse_compose_duration_seconds(proxy_hc.get("start_period")) >= 15, (
+            f"proxy start_period must be >= 15s (got {proxy_hc.get('start_period')!r})."
+        )
+        assert _parse_compose_duration_seconds(proxy_hc.get("interval")) == 5, (
+            f"proxy interval must be 5s (got {proxy_hc.get('interval')!r})."
+        )
+        assert int(str(proxy_hc.get("retries", 0))) >= 12, (
+            f"proxy healthcheck retries must be >= 12 (got {proxy_hc.get('retries')!r})."
+        )
+        # service_healthy dependents of creative-agent need a real healthcheck to wait on.
+        creative_test = creative_hc.get("test")
+        assert creative_test, "creative-agent healthcheck.test must be non-empty."
+        assert _parse_compose_duration_seconds(creative_hc.get("start_period")) > 0, (
+            f"creative-agent start_period must be positive (got {creative_hc.get('start_period')!r})."
+        )
+
+    def test_bdd_in_network_frees_disk_before_compose(self):
+        """In-network e2e_rest must reclaim runner disk before image build.
+
+        Regression: ``uv sync`` into ``tox_data`` hit ENOSPC on ubuntu-latest
+        (image + /opt/venv + second full tox env). The job must free
+        preinstalled toolchains and cap PGDATA tmpfs for the serial leg.
+        """
+        job = load_ci_workflow()["jobs"]["bdd-in-network"]
+        steps = job.get("steps", [])
+        assert steps, "bdd-in-network must declare steps (empty job is a vacuous pass)."
+
+        step_names = [s.get("name") for s in steps]
+        assert "Run BDD suite in-network" in step_names, "bdd-in-network must run ./run_all_tests.sh bdd_e2e."
+        free_idx, _ = _find_free_disk_step(steps)
+        _assert_free_disk_action_reclaims_runner()
+        run_idx = step_names.index("Run BDD suite in-network")
+        assert free_idx < run_idx, (
+            "Free disk space must run before 'Run BDD suite in-network' "
+            f"(found Free disk at {free_idx}, run at {run_idx})."
+        )
+
+        run_step = steps[run_idx]
+        env = run_step.get("env") or {}
+        assert env.get("PGDATA_TMPFS_SIZE") == "2g", (
+            "bdd-in-network must set PGDATA_TMPFS_SIZE=2g "
+            "(serial leg; default 10g wastes RAM — tmpfs size= is a RAM ceiling)."
+        )
+        assert "run_all_tests.sh bdd_e2e" in str(run_step.get("run", "")), (
+            "bdd-in-network must invoke ./run_all_tests.sh bdd_e2e."
+        )
+
     def test_bdd_and_e2e_run_on_pull_request(self):
         """The gate is worthless if it doesn't run on PRs.
 

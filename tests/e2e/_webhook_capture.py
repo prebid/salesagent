@@ -100,7 +100,7 @@ class WebhookReadbackError(RuntimeError):
 def _readback_base_url() -> str:
     """The host-reachable readback origin for the ``.adcp.test`` flavor."""
     host = os.getenv("WEBHOOK_CAPTURE_HOST", "localhost")
-    port = os.getenv("WEBHOOK_CAPTURE_PORT", "8080")
+    port = os.getenv("WEBHOOK_CAPTURE_PORT", "8090")
     return f"http://{host}:{port}"
 
 
