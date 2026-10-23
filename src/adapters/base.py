@@ -515,6 +515,18 @@ class AdServerAdapter(ABC):
         end_time: datetime,
         package_pricing_info: dict[str, dict] | None = None,
     ) -> list[ErrorProblem]:
+        """Use the same class-level validation for live and simulated execution."""
+        return self.validate_request(request, packages, start_time, end_time, package_pricing_info)
+
+    @classmethod
+    def validate_request(
+        cls,
+        request: AdapterCreateRequest,
+        packages: list[MediaPackage],
+        start_time: datetime,
+        end_time: datetime,
+        package_pricing_info: dict[str, dict] | None = None,
+    ) -> list[ErrorProblem]:
         """Pre-validate a media buy request without creating anything.
 
         Called before adapter execution to catch
@@ -534,7 +546,7 @@ class AdServerAdapter(ABC):
             One problem per violation. Empty list means validation passed.
         """
         problems: list[ErrorProblem] = []
-        supported = self.get_supported_pricing_models()
+        supported = cls.get_supported_pricing_models()
 
         if package_pricing_info:
             # Position, not just id: package_field_path builds an INDEXED pointer

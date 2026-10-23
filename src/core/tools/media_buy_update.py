@@ -67,7 +67,7 @@ from src.core.errors.details import (
     ValidationDetails,
 )
 from src.core.helpers.adapter_helpers import get_adapter
-from src.core.resolved_identity import AccountIdentity, ResolvedIdentity
+from src.core.resolved_identity import AccountIdentity
 from src.core.schemas import (
     AffectedPackage,
     SyncCreativesRequest,
@@ -173,6 +173,53 @@ def _requested_actions(req: UpdateMediaBuyRequest) -> list[str]:
     if req.packages:
         actions.append("update_packages")
     return actions
+
+
+def _persist_sandbox_package_state(
+    repo: MediaBuyRepository,
+    media_buy_id: str,
+    package_id: str,
+    *,
+    paused: bool | None,
+    budget: float | None,
+    currency: str | None,
+) -> AffectedPackage:
+    """Apply simulated package execution in the controller's current transaction."""
+    package = repo.get_package_or_raise(media_buy_id, package_id)
+    config = dict(package.package_config or {})
+    fields: dict[str, Any] = {"package_config": config}
+    changes: dict[str, Any] = {}
+    if paused is not None:
+        config["paused"] = paused
+    if budget is not None:
+        config["budget"] = budget
+        fields["budget"] = Decimal(str(budget))
+        changes["budget"] = {"updated": budget, "currency": currency}
+    # The repository updates the canonical columns and JSON together and advances
+    # the parent revision. The sandbox adapter must never open a nested write UoW.
+    repo.update_package_fields(media_buy_id, package_id, **fields)
+    return AffectedPackage(
+        package_id=package_id,
+        paused=bool(config.get("paused", False)),
+        buyer_package_ref=package_id,
+        changes_applied=changes,
+    )
+
+
+def _sandbox_affected_packages(
+    repo: MediaBuyRepository, media_buy_id: str, changes: list[AffectedPackage]
+) -> list[AffectedPackage]:
+    """Return each changed package once with its final persisted pause state."""
+    by_package: dict[str, AffectedPackage] = {}
+    for change in changes:
+        if change.package_id in by_package:
+            previous = by_package[change.package_id]
+            previous.changes_applied = {**(previous.changes_applied or {}), **(change.changes_applied or {})}
+        else:
+            package = repo.get_package_or_raise(media_buy_id, change.package_id)
+            change.paused = bool((package.package_config or {}).get("paused", False))
+            by_package[change.package_id] = change
+    return list(by_package.values())
 
 
 def _validate_creatives_for_assignment(
@@ -313,7 +360,7 @@ def _validate_creatives_for_assignment(
 
 def _verify_principal(
     media_buy_id: str,
-    identity: "ResolvedIdentity",
+    identity: "AccountIdentity",
     repo: MediaBuyRepository,
 ) -> None:
     """Verify that the principal from identity owns the media buy.
@@ -352,6 +399,7 @@ def _verify_principal(
         raise AdCPAuthorizationError(
             details=EntityRefDetails(principal_id=principal_id, media_buy_id=media_buy_id),
         )
+    repo.get_by_id_for_account_or_raise(media_buy_id, principal_id, identity.account.account_id)
 
 
 def _update_media_buy_impl(
@@ -826,14 +874,29 @@ def _update_media_buy_impl(
 
                         # Track budget update in affected_packages
                         # At this point, pkg_update.package_id is guaranteed to be str (checked above)
+                        if not identity.account.sandbox:
+                            affected_packages_list.append(
+                                AffectedPackage(
+                                    package_id=pkg_update.package_id,  # Required by AdCP (guaranteed str)
+                                    paused=False,  # Package not paused (active)
+                                    buyer_package_ref=pkg_update.package_id,  # Internal field (for backward compat)
+                                    changes_applied={
+                                        "budget": {"updated": budget_amount, "currency": currency}
+                                    },  # Internal field
+                                )
+                            )
+
+                    if identity.account.sandbox and (pkg_update.paused is not None or pkg_update.budget is not None):
+                        if not pkg_update.package_id:
+                            raise AdCPValidationError(field=package_field_path("package_id", pkg_index))
                         affected_packages_list.append(
-                            AffectedPackage(
-                                package_id=pkg_update.package_id,  # Required by AdCP (guaranteed str)
-                                paused=False,  # Package not paused (active)
-                                buyer_package_ref=pkg_update.package_id,  # Internal field (for backward compat)
-                                changes_applied={
-                                    "budget": {"updated": budget_amount, "currency": currency}
-                                },  # Internal field
+                            _persist_sandbox_package_state(
+                                uow.media_buys,
+                                req.media_buy_id,
+                                pkg_update.package_id,
+                                paused=pkg_update.paused,
+                                budget=budget_amount if pkg_update.budget is not None else None,
+                                currency=currency if pkg_update.budget is not None else None,
                             )
                         )
 
@@ -1256,6 +1319,11 @@ def _update_media_buy_impl(
                 action="update",
             )
             session.add(mapping)
+
+            if identity.account.sandbox:
+                affected_packages_list = _sandbox_affected_packages(
+                    uow.media_buys, req.media_buy_id, affected_packages_list
+                )
 
             # Build final response first
             logger.info(f"[update_media_buy] Final affected_packages before return: {affected_packages_list}")

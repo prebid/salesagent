@@ -27,6 +27,7 @@ from tests.factories.media_buy import default_request_packages, pricing_options_
 from tests.harness._base import BaseTestEnv
 from tests.harness._mixins import DeliveryPollMixin
 from tests.harness._mock_uow import make_mock_uow
+from tests.helpers.unit_identity import UNIT_ACCOUNT_ID, fabricated_account_identity
 
 
 class DeliveryPollEnv(DeliveryPollMixin, BaseTestEnv):
@@ -52,6 +53,9 @@ class DeliveryPollEnv(DeliveryPollMixin, BaseTestEnv):
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
+        self._identity = fabricated_account_identity(
+            principal_id=self._principal_id, tenant_id=self._tenant_id, **self._tenant_overrides
+        )
         self._buys: list[MagicMock] = []
         self._adapter_responses: dict[str, AdapterGetMediaBuyDeliveryResponse] = {}
         self._adapter_error: Exception | None = None
@@ -105,6 +109,7 @@ class DeliveryPollEnv(DeliveryPollMixin, BaseTestEnv):
         """
         buy = MagicMock()
         buy.media_buy_id = media_buy_id
+        buy.account_id = UNIT_ACCOUNT_ID
         buy.start_date = start_date
         buy.end_date = end_date
         buy.start_time = None

@@ -20,6 +20,7 @@ Introduced in PR #1163, redesigned in PR #1171.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any
 
 from sqlalchemy import select
@@ -28,6 +29,34 @@ from sqlalchemy.orm import Session
 from src.core.database.models import AdapterConfig
 from src.core.errors.details import ConfigurationDetails
 from src.core.exceptions import AdCPConfigurationError
+
+
+@dataclass(frozen=True)
+class AdapterExecutionPolicy:
+    """Non-secret facts needed before choosing sandbox or live execution."""
+
+    adapter_type: str
+    manual_approval_required: bool | None
+
+
+def effective_manual_approval(
+    adapter_type: str, gam: bool | None, mock: bool | None, kevel: bool | None
+) -> bool | None:
+    """Preserve the live factory's adapter-specific null handling."""
+    if adapter_type == "google_ad_manager":
+        return gam
+    if adapter_type in {"mock", "kevel"}:
+        flag = mock if adapter_type == "mock" else kevel
+        return flag if flag is not None else True
+    return False
+
+
+def read_adapter_execution_policy(tenant_id: str, fallback_adapter_type: str) -> AdapterExecutionPolicy:
+    """Project policy without loading credentials or closing a caller's scoped session."""
+    from src.core.database.database_session import get_engine
+
+    with Session(get_engine()) as session:
+        return AdapterConfigRepository(session, tenant_id).get_execution_policy(fallback_adapter_type)
 
 
 class TenantNotConfiguredError(AdCPConfigurationError):
@@ -91,6 +120,29 @@ class AdapterConfigRepository:
         """
         stmt = select(AdapterConfig).filter_by(tenant_id=self._tenant_id)
         return self._session.scalars(stmt).first()
+
+    def get_execution_policy(self, fallback_adapter_type: str) -> AdapterExecutionPolicy:
+        """Read only adapter selection and approval columns into detached scalar facts."""
+        row = self._session.execute(
+            select(
+                AdapterConfig.adapter_type,
+                AdapterConfig.gam_manual_approval_required,
+                AdapterConfig.mock_manual_approval_required,
+                AdapterConfig.kevel_manual_approval_required,
+            ).where(AdapterConfig.tenant_id == self._tenant_id)
+        ).one_or_none()
+        if row is None:
+            return AdapterExecutionPolicy(fallback_adapter_type or "mock", False)
+        adapter_type = row.adapter_type or fallback_adapter_type or "mock"
+        return AdapterExecutionPolicy(
+            adapter_type,
+            effective_manual_approval(
+                row.adapter_type,
+                row.gam_manual_approval_required,
+                row.mock_manual_approval_required,
+                row.kevel_manual_approval_required,
+            ),
+        )
 
     def get_adapter_type(self) -> str | None:
         """Get the adapter type string (e.g., 'google_ad_manager', 'mock'), or None.

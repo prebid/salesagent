@@ -213,14 +213,14 @@ class TestDeliveryPollEnvContract:
         as a kwarg. call_impl must pop it before building the request (identity
         is not a GetMediaBuyDeliveryRequest field) and pass it to _impl separately.
         """
-        from tests.factories.principal import PrincipalFactory
+        from tests.helpers.unit_identity import fabricated_account_identity
 
         with DeliveryPollEnv() as env:
             env.add_buy(media_buy_id="mb_001")
             env.set_adapter_response("mb_001", impressions=5000)
 
             # Simulate what call_via does: inject identity as kwarg
-            custom_identity = PrincipalFactory.make_identity(
+            custom_identity = fabricated_account_identity(
                 principal_id="custom_agent",
                 tenant_id="test_tenant",
             )

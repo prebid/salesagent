@@ -23,7 +23,7 @@ from src.adapters.base import AdapterCreateResult
 from src.core.database.models import PersistedMediaBuyStatus
 from src.core.database.repositories.creative import CreativeAssignmentRepository
 from src.core.tools.media_buy_create import ApprovalOutcome
-from tests.factories.principal import PrincipalFactory
+from tests.helpers.unit_identity import UNIT_ACCOUNT_ID, fabricated_account_identity
 
 # Who approved, and when. Passed in by the caller and written by the same
 # ``update_status`` call as the status, so the assertion can name all three.
@@ -37,6 +37,7 @@ def _make_mock_media_buy():
     mb.media_buy_id = "mb_test_001"
     mb.tenant_id = "tenant_1"
     mb.principal_id = "principal_1"
+    mb.account_id = UNIT_ACCOUNT_ID
     mb.status = "pending_approval"
     mb.order_name = "Test Order"
     mb.advertiser_name = "Test Advertiser"
@@ -59,7 +60,7 @@ def _make_mock_media_buy():
         "start_time": (datetime.now(UTC) + timedelta(days=1)).isoformat(),
         "end_time": (datetime.now(UTC) + timedelta(days=8)).isoformat(),
         "packages": [{"product_id": "prod_1", "pricing_option_id": "po_1", "budget": 5000.0}],
-        "account": {"account_id": "acct_test"},
+        "account": {"account_id": UNIT_ACCOUNT_ID},
         "idempotency_key": "approved-exec-key-0001",
     }
     return mb
@@ -129,11 +130,12 @@ class TestExecuteApprovedStatusUpdate:
         mock_adapter = MagicMock()
         mock_adapter.orders_manager = None
 
-        # Set up four UoW instances the function opens:
+        # Set up the work phases the function opens:
         # 1. Load tenant, media_buy, packages, products
-        # 2. Persist platform_order_id after adapter success
-        # 3. Handle creative uploads
-        # 4. Re-fetch the row and write the resolved status
+        # 2. Recheck stored ownership after identity resolution (reuse the read mock)
+        # 3. Persist platform_order_id after adapter success
+        # 4. Handle creative uploads
+        # 5. Re-fetch the row and write the resolved status
         mock_session_1 = MagicMock()
         mock_session_2 = MagicMock()
         mock_session_3 = MagicMock()
@@ -170,18 +172,18 @@ class TestExecuteApprovedStatusUpdate:
         mock_uow_2.session = mock_session_2
         mock_uow_2.media_buys = MagicMock()
 
-        # UoW 4 re-fetches the row and writes the resolved status. get_by_id must
+        # The last UoW re-fetches the row through the scoped ownership lookup. It must
         # return the buy itself: the resolver reads its flight window off that row,
         # and a bare MagicMock has no orderable datetimes.
         mock_repo_3 = MagicMock()
-        mock_repo_3.get_by_id.return_value = media_buy
+        mock_repo_3.get_by_id_for_account_or_raise.return_value = media_buy
         mock_uow_3 = MagicMock()
         mock_uow_3.__enter__ = MagicMock(return_value=mock_uow_3)
         mock_uow_3.__exit__ = MagicMock(return_value=None)
         mock_uow_3.session = mock_session_3
         mock_uow_3.media_buys = mock_repo_3
 
-        uow_iter = iter([mock_uow_1, mock_uow_plids, mock_uow_2, mock_uow_3])
+        uow_iter = iter([mock_uow_1, mock_uow_1, mock_uow_plids, mock_uow_2, mock_uow_3])
 
         with (
             patch("src.core.database.repositories.MediaBuyUoW", side_effect=lambda _: next(uow_iter)),
@@ -194,14 +196,14 @@ class TestExecuteApprovedStatusUpdate:
             # The identity it would have built comes from the factory instead.
             patch(
                 "src.core.tools.media_buy_create.identity_of",
-                return_value=PrincipalFactory.make_identity(principal_id="principal_1", tenant_id="tenant_1"),
+                return_value=fabricated_account_identity(principal_id="principal_1", tenant_id="tenant_1"),
             ),
             patch(
                 "src.core.tools.media_buy_create._execute_adapter_media_buy_creation",
                 return_value=adapter_response,
             ),
             patch("src.core.tools.media_buy_create._validate_creatives_before_adapter_call"),
-            patch("src.core.helpers.adapter_helpers.get_adapter", return_value=mock_adapter),
+            patch("src.core.tools.media_buy_create.get_adapter", return_value=mock_adapter),
             # The creative gate is a separate concern with its own tests; this buy has
             # nothing outstanding, so the run reaches the adapter and the status write.
             patch.object(CreativeAssignmentRepository, "unapproved_creative_ids", return_value=[]),

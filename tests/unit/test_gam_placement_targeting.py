@@ -9,7 +9,7 @@ These tests verify the creative-level placement targeting implementation:
 
 from unittest.mock import MagicMock
 
-from tests.factories.principal import PrincipalFactory
+from tests.helpers.unit_identity import fabricated_account_identity
 
 
 class TestPlacementTargetingSchema:
@@ -118,9 +118,10 @@ class TestPlacementIdsValidation:
         MODULE = "src.core.tools.media_buy_update"
         DB_MODULE = "src.core.database.database_session"
 
-        identity = PrincipalFactory.make_identity(
+        identity = fabricated_account_identity(
             principal_id="principal_test",
             tenant_id="t1",
+            account_id="acct_test",
             tenant={"tenant_id": "t1", "name": "Test"},
         )
 
@@ -226,9 +227,10 @@ class TestPlacementIdsValidation:
         MODULE = "src.core.tools.media_buy_update"
         DB_MODULE = "src.core.database.database_session"
 
-        identity = PrincipalFactory.make_identity(
+        identity = fabricated_account_identity(
             principal_id="principal_test",
             tenant_id="t1",
+            account_id="acct_test",
             tenant={"tenant_id": "t1", "name": "Test"},
         )
 

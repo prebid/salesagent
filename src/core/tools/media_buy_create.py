@@ -76,7 +76,8 @@ from enum import StrEnum
 
 from sqlalchemy.exc import SQLAlchemyError
 
-from src.adapters.base import AdapterCreateRequest, AdapterCreateResult
+from src.adapters.base import AdapterCreateRequest, AdapterCreateResult, AdServerAdapter
+from src.adapters.sandbox import SandboxAdServerAdapter
 from src.core.audit_logger import get_audit_logger
 from src.core.context_manager import get_context_manager
 from src.core.database.models import AdapterConfig, CurrencyLimit, MediaBuy, PersistedMediaBuyStatus, Tenant
@@ -541,6 +542,121 @@ def _pre_validate_package_creatives(
         if step:
             ctx_manager.update_workflow_step(step.step_id, status="failed", error_message="Creative validation failed")
         raise
+
+
+def identity_for_stored_buy(
+    tenant_id: str,
+    principal_id: str,
+    account_id: str | None,
+    media_buy_id: str,
+    *,
+    resolved_identity: ResolvedIdentity | None = None,
+) -> AccountIdentity:
+    """Validate stored ownership, then use the central resolver with no UoW open."""
+    if account_id is None:
+        raise AdCPPersistedStateError(details=ConfigurationDetails(media_buy_id=media_buy_id))
+    if (
+        isinstance(resolved_identity, AccountIdentity)
+        and resolved_identity.tenant_id == tenant_id
+        and resolved_identity.principal.principal_id == principal_id
+        and resolved_identity.account.account_id == account_id
+    ):
+        return resolved_identity
+    try:
+        return identity_of(tenant_id, principal_id, account_id)
+    except AdCPConfigurationError as exc:
+        raise AdCPPersistedStateError(details=ConfigurationDetails(media_buy_id=media_buy_id)) from exc
+
+
+def _uses_gam_configuration(adapter: AdServerAdapter) -> bool:
+    return (
+        adapter.configured_adapter_type == "google_ad_manager"
+        if isinstance(adapter, SandboxAdServerAdapter)
+        else adapter.__class__.__name__ == "GoogleAdManager"
+    )
+
+
+def _validated_gam_product_configs(products: Sequence[Product]) -> dict[str, dict[str, Any]]:
+    """Validate local configuration copies without changing shared catalog rows."""
+    validator = GAMProductConfigService()
+    configs: dict[str, dict[str, Any]] = {}
+    errors = []
+    for product in products:
+        config = (
+            dict(product.implementation_config)
+            if product.implementation_config
+            else validator.generate_default_config(
+                delivery_type=enum_value(product.delivery_type) or "non_guaranteed",
+                formats=[fmt.id for fmt in product.format_ids] if product.format_ids else None,
+            )
+        )
+        valid, reason = validator.validate_config(config)
+        if not valid:
+            errors.append(
+                f"Product '{product.name}' ({product.product_id}) has invalid GAM configuration: {reason or 'Unknown error'}"
+            )
+        configs[product.product_id] = config
+    if errors:
+        raise AdCPValidationError(details=ValidationDetails(reasons=errors))
+    return configs
+
+
+def _dispatch_creative_upload(
+    adapter: AdServerAdapter, platform_order_id: str, assets: list[dict[str, Any]], *, gam_manager: bool = False
+) -> list[AssetStatus]:
+    """Sandbox uses the adapter contract; existing GAM callbacks retain their manager."""
+    if isinstance(adapter, SandboxAdServerAdapter):
+        return adapter.add_creative_assets(
+            platform_order_id, [dict(asset, id=asset["creative_id"]) for asset in assets], datetime.now(UTC)
+        )
+    target = getattr(adapter, "creatives_manager", None) if gam_manager else adapter
+    if target is None:
+        raise AdCPAdapterError()
+    return target.add_creative_assets(platform_order_id, assets, datetime.now(UTC))
+
+
+def _persist_buy_creative_result(
+    adapter: AdServerAdapter,
+    status: AssetStatus,
+    creative: DBCreative,
+    media_buy_id: str,
+    assignments: list[PackageAssignmentDict],
+    media_repo: "MediaBuyRepository",
+    creative_repo: CreativeRepository,
+) -> str | None:
+    """Keep simulated references on their buy's packages, away from shared live data."""
+    if isinstance(adapter, SandboxAdServerAdapter):
+        if status.status == "failed" or not status.creative_id:
+            return None
+        for assignment in assignments:
+            package = media_repo.get_package_or_raise(media_buy_id, assignment["package_id"])
+            config = dict(package.package_config or {})
+            config["sandbox_creative_ids"] = {
+                **config.get("sandbox_creative_ids", {}),
+                creative.creative_id: status.creative_id,
+            }
+            media_repo.update_package_config(media_buy_id, package.package_id, config)
+            if line_id := config.get("platform_line_item_id"):
+                adapter.associate_creatives([line_id], [status.creative_id])
+        return status.creative_id
+    merged = _apply_creative_enrichment(creative, status)
+    if merged is not None:
+        creative_repo.update_data(creative, merged)
+    return (creative.data or {}).get("platform_creative_id")
+
+
+def _validate_adapter_creation(
+    adapter: AdServerAdapter,
+    request: AdapterCreateRequest,
+    packages: list[MediaPackage],
+    start_time: datetime,
+    end_time: datetime,
+    package_pricing_info: dict[str, dict[str, Any]],
+) -> None:
+    """Enforce the configured input rules before immediate or deferred execution."""
+    problems = adapter.validate_media_buy_request(request, packages, start_time, end_time, package_pricing_info)
+    if problems:
+        raise AdCPValidationError(details=ValidationDetails(problems=problems))
 
 
 def _execute_adapter_media_buy_creation(
@@ -1166,7 +1282,24 @@ def execute_approved_media_buy(
         # anything it wrote afterwards committed on its own transaction or not at all
         # (GH #1644). Only the two ids cross the boundary, which is why the capture above
         # is separate from this line.
-        identity = identity_of(tenant_id, buy_principal_id, buy_account_id)
+        identity = identity_for_stored_buy(tenant_id, buy_principal_id, buy_account_id, media_buy_id)
+        with MediaBuyUoW(tenant_id) as ownership_uow:
+            assert ownership_uow.media_buys is not None
+            ownership_uow.media_buys.get_by_id_for_account_or_raise(media_buy_id, buy_principal_id, buy_account_id)
+        if identity.account.sandbox:
+            approval_adapter = get_adapter(identity)
+            if isinstance(approval_adapter, SandboxAdServerAdapter) and _uses_gam_configuration(approval_adapter):
+                from src.core.tools.products import get_product_catalog
+
+                product_ids = {package.product_id for package in packages}
+                _validated_gam_product_configs(
+                    [
+                        product
+                        for product in get_product_catalog(tenant_id=tenant_id)
+                        if product.product_id in product_ids
+                    ]
+                )
+            _validate_adapter_creation(approval_adapter, request, packages, start_time, end_time, package_pricing_info)
 
         # Execute adapter creation (outside session to avoid conflicts)
         # Set BEFORE the call, not after: the condition is whether the ad server was
@@ -1193,6 +1326,7 @@ def execute_approved_media_buy(
         if response.media_buy_id:
             with MediaBuyUoW(tenant_id) as uow_plids:
                 assert uow_plids.media_buys is not None
+                uow_plids.media_buys.get_by_id_for_account_or_raise(media_buy_id, buy_principal_id, buy_account_id)
                 _persist_adapter_package_ids(
                     uow_plids.media_buys,
                     media_buy_id=media_buy_id,
@@ -1206,13 +1340,12 @@ def execute_approved_media_buy(
         # Upload and associate inline creatives if any exist
         # This handles inline creatives that were uploaded during initial media buy creation
         with MediaBuyUoW(tenant_id) as uow2:
+            assert uow2.media_buys is not None
+            uow2.media_buys.get_by_id_for_account_or_raise(media_buy_id, buy_principal_id, buy_account_id)
             # FIXME(#1788): creative handling should use repository methods
             assert uow2.session is not None
             session = uow2.session
             from src.core.database.models import CreativeAssignment
-
-            # Import adapter helper here (used for both creative upload and order approval)
-            from src.core.helpers.adapter_helpers import get_adapter
 
             # Get all creative assignments for this media buy
             stmt_assignments = select(CreativeAssignment).filter_by(media_buy_id=media_buy_id)
@@ -1295,10 +1428,10 @@ def execute_approved_media_buy(
                     gam_order_id: str = response.media_buy_id
 
                     try:
-                        if hasattr(adapter, "creatives_manager") and adapter.creatives_manager and gam_order_id:
-                            asset_statuses = adapter.creatives_manager.add_creative_assets(
-                                gam_order_id, assets, datetime.now(UTC)
-                            )
+                        if gam_order_id and (
+                            isinstance(adapter, SandboxAdServerAdapter) or getattr(adapter, "creatives_manager", None)
+                        ):
+                            asset_statuses = _dispatch_creative_upload(adapter, gam_order_id, assets, gam_manager=True)
                             logger.info(f"[APPROVAL] Creative upload completed: {len(asset_statuses)} assets processed")
 
                             # Enrich creatives (concept + platform id) on success; log failures.
@@ -1316,12 +1449,23 @@ def execute_approved_media_buy(
                                     continue
                                 if not status.creative_id:
                                     continue
-                                creative = creative_map.get(status.creative_id)
+                                result_creative_id = (
+                                    status.asset_id
+                                    if isinstance(adapter, SandboxAdServerAdapter)
+                                    else status.creative_id
+                                )
+                                creative = creative_map.get(result_creative_id or "")
                                 if creative is None:
                                     continue
-                                merged = _apply_creative_enrichment(creative, status)
-                                if merged is not None:
-                                    creatives_repo.update_data(creative, merged)
+                                _persist_buy_creative_result(
+                                    adapter,
+                                    status,
+                                    creative,
+                                    media_buy_id,
+                                    packages_by_creative[creative.creative_id],
+                                    uow2.media_buys,
+                                    creatives_repo,
+                                )
                         else:
                             logger.warning("[APPROVAL] Adapter does not support creative upload, skipping")
                     except Exception as creative_error:
@@ -1372,9 +1516,7 @@ def execute_approved_media_buy(
         # down rather than remove it.
         with MediaBuyUoW(tenant_id) as uow3:
             assert uow3.media_buys is not None
-            fresh = uow3.media_buys.get_by_id(media_buy_id)
-            if fresh is None:
-                return ApprovalResult.failed(f"media buy {media_buy_id!r} vanished during approval")
+            fresh = uow3.media_buys.get_by_id_for_account_or_raise(media_buy_id, buy_principal_id, buy_account_id)
             resolved = resolve_flight_window_status(
                 fresh,
                 now=datetime.now(UTC),
@@ -1466,9 +1608,14 @@ def push_creative_to_existing_buy(
             if owner_row is None:
                 return False, f"Creative {creative_id} not found"
             owner_principal_id = owner_row.principal_id
+            assert owner_uow.media_buys is not None
+            buy = owner_uow.media_buys.get_by_id_or_raise(media_buy_id)
+            if buy.principal_id != owner_principal_id:
+                return False, f"Creative {creative_id} does not belong to media buy {media_buy_id}"
+            buy_account_id = buy.account_id
 
         # Nothing is open here. This is the whole point of the split.
-        identity = identity_of(tenant_id, owner_principal_id)
+        identity = identity_for_stored_buy(tenant_id, owner_principal_id, buy_account_id, media_buy_id)
 
         with AdminCreativeUoW(tenant_id) as uow:
             assert uow.creatives is not None
@@ -1476,6 +1623,7 @@ def push_creative_to_existing_buy(
             assert uow.media_buys is not None
             assert uow.tenant_config is not None
 
+            uow.media_buys.get_by_id_for_account_or_raise(media_buy_id, owner_principal_id, identity.account.account_id)
             tenant_obj = uow.tenant_config.get_tenant()
             if not tenant_obj:
                 return False, f"Tenant {tenant_id} not found"
@@ -1486,23 +1634,26 @@ def push_creative_to_existing_buy(
             if creative.status not in {"approved", "active"}:
                 return False, f"Creative {creative_id} is not approved (status={creative.status})"
 
-            if (creative.data or {}).get("platform_creative_id"):
-                logger.info(
-                    log_safe(
-                        f"[GATE-PUSH] Creative {creative_id} already has platform_creative_id — "
-                        f"skipping adapter call (already uploaded)"
-                    )
-                )
-                return True, None
-
             all_assignments = uow.assignments.get_by_creative(creative_id)
             matching = [a for a in all_assignments if a.media_buy_id == media_buy_id]
             if not matching:
                 return False, f"No assignment of creative {creative_id} to media buy {media_buy_id}"
 
+            if identity.account.sandbox:
+                packages = [
+                    uow.media_buys.get_package_or_raise(media_buy_id, assignment.package_id) for assignment in matching
+                ]
+                if all(
+                    (package.package_config or {}).get("sandbox_creative_ids", {}).get(creative_id)
+                    for package in packages
+                ):
+                    return True, None
+            elif (creative.data or {}).get("platform_creative_id"):
+                return True, None
+
             # Resolved above, outside every unit. See the comment at the top of the try.
             adapter = get_adapter(identity)
-            if not (hasattr(adapter, "creatives_manager") and adapter.creatives_manager):
+            if not (isinstance(adapter, SandboxAdServerAdapter) or getattr(adapter, "creatives_manager", None)):
                 return False, "Adapter does not support creative upload"
 
             # platform_order_id is per-buy — any package on this buy has the same value
@@ -1523,11 +1674,7 @@ def push_creative_to_existing_buy(
             assert asset is not None
 
             try:
-                asset_statuses = adapter.creatives_manager.add_creative_assets(
-                    platform_order_id,
-                    [asset],
-                    datetime.now(UTC),
-                )
+                asset_statuses = _dispatch_creative_upload(adapter, platform_order_id, [asset], gam_manager=True)
             except Exception as e:
                 logger.error(
                     log_safe(f"[GATE-PUSH] Adapter raised pushing creative {creative_id} to buy {media_buy_id}: {e}"),
@@ -1536,12 +1683,19 @@ def push_creative_to_existing_buy(
                 return False, str(e)
 
             for status in asset_statuses:
-                if status.creative_id == creative_id:
+                result_id = status.asset_id if isinstance(adapter, SandboxAdServerAdapter) else status.creative_id
+                if result_id == creative_id:
                     if status.status == "failed":
                         return False, status.message or "Adapter reported upload failure"
-                    merged_data = _apply_creative_enrichment(creative, status)
-                    if merged_data is not None:
-                        uow.creatives.update_data(creative, merged_data)
+                    _persist_buy_creative_result(
+                        adapter,
+                        status,
+                        creative,
+                        media_buy_id,
+                        package_assignments,
+                        uow.media_buys,
+                        uow.creatives,
+                    )
                     logger.info(
                         log_safe(
                             f"[GATE-PUSH] Pushed creative {creative_id} to live buy "
@@ -3020,54 +3174,22 @@ async def _create_media_buy_impl(
         product_ids = req.get_product_ids()
         products_in_buy = [p for p in catalog if p.product_id in product_ids]
 
-        # Validate and auto-generate GAM implementation_config for each product if needed
-        if adapter.__class__.__name__ == "GoogleAdManager":
-            gam_validator = GAMProductConfigService()
-            config_errors = []
-
+        # Validate the configured adapter's rules even when execution is sandboxed.
+        if _uses_gam_configuration(adapter):
+            if isinstance(adapter, SandboxAdServerAdapter):
+                products_in_buy = [product.model_copy(deep=True) for product in products_in_buy]
+            configs = _validated_gam_product_configs(products_in_buy)
             for schema_product in products_in_buy:
-                # Auto-generate default config if missing
                 if not schema_product.implementation_config:
-                    logger.info(
-                        f"Product '{schema_product.name}' ({schema_product.product_id}) is missing GAM configuration. "
-                        f"Auto-generating defaults based on product type."
-                    )
-                    # Generate defaults based on product delivery type and formats.
-                    # delivery_type is a plain DeliveryType enum; normalize to its
-                    # value ('guaranteed'/'non_guaranteed') so generate_default_config's
-                    # equality check selects the right config branch (str(enum) would
-                    # yield 'DeliveryType.guaranteed' and silently mis-route — PR1399).
-                    delivery_type_str = enum_value(schema_product.delivery_type) or "non_guaranteed"
-                    # Extract format IDs as strings for config generation
-                    formats_list: list[str] | None = None
-                    if schema_product.format_ids:
-                        formats_list = [fmt.id for fmt in schema_product.format_ids]
-                    schema_product.implementation_config = gam_validator.generate_default_config(
-                        delivery_type=delivery_type_str, formats=formats_list
-                    )
-
-                    # Persist the auto-generated config to database
-                    with MediaBuyUoW(tenant.tenant_id) as gam_uow:
-                        # FIXME(#1119): product update should use ProductRepository
-                        assert gam_uow.session is not None
-                        product_stmt = select(ModelProduct).filter_by(product_id=schema_product.product_id)
-                        db_product = gam_uow.session.scalars(product_stmt).first()
-                        if db_product:
-                            db_product.implementation_config = schema_product.implementation_config
-                            # UoW auto-commits on clean exit
-                            logger.info(f"Saved auto-generated GAM config for product {schema_product.product_id}")
-
-                # Validate the config (whether existing or auto-generated)
-                impl_config = schema_product.implementation_config if schema_product.implementation_config else {}
-                is_valid, error_msg_temp = gam_validator.validate_config(impl_config)
-                error_msg = error_msg_temp if error_msg_temp else "Unknown error"
-                if not is_valid:
-                    config_errors.append(
-                        f"Product '{schema_product.name}' ({schema_product.product_id}) has invalid GAM configuration: {error_msg}"
-                    )
-
-            if config_errors:
-                raise AdCPValidationError(details=ValidationDetails(reasons=config_errors))
+                    schema_product.implementation_config = configs[schema_product.product_id]
+                    if not isinstance(adapter, SandboxAdServerAdapter):
+                        with MediaBuyUoW(tenant.tenant_id) as gam_uow:
+                            # FIXME(#1119): product update should use ProductRepository
+                            assert gam_uow.session is not None
+                            product_stmt = select(ModelProduct).filter_by(product_id=schema_product.product_id)
+                            db_product = gam_uow.session.scalars(product_stmt).first()
+                            if db_product:
+                                db_product.implementation_config = schema_product.implementation_config
 
         product_auto_create = all(
             p.implementation_config.get("auto_create_enabled", True) if p.implementation_config else True
@@ -3395,20 +3517,15 @@ async def _create_media_buy_impl(
 
         # Pre-validate adapter-specific constraints (pricing models, budget limits)
         # This runs regardless of dry_run so adapter restrictions are always enforced.
-        pre_creation_problems: list[ErrorProblem] = adapter.validate_media_buy_request(
-            adapter_request, packages, start_time, end_time, package_pricing_info
-        )
-        if pre_creation_problems:
-            logger.error(f"[PRE-VALIDATE] Adapter validation failed: {pre_creation_problems}")
+        try:
+            _validate_adapter_creation(adapter, adapter_request, packages, start_time, end_time, package_pricing_info)
+        except AdCPSalesAgentError:
+            logger.exception("[PRE-VALIDATE] Adapter validation failed")
             if step:
                 ctx_manager.update_workflow_step(
                     step.step_id, status="failed", error_message="Adapter validation failed"
                 )
-            # Forwarded unchanged into `problems`, not `reasons` (salesagent-rys3u.4).
-            # The adapter now returns classified facts rather than sentences, and
-            # ValidationDetails.problems is already typed list[ErrorProblem] -- so the
-            # type system, not a review, is what stops a string arriving here.
-            raise AdCPValidationError(details=ValidationDetails(problems=pre_creation_problems))
+            raise
 
         # Call adapter using shared creation logic
         # Note: start_time variable already resolved from 'asap' to actual datetime if needed
@@ -3742,7 +3859,11 @@ async def _create_media_buy_impl(
                                 continue
 
                             # Get platform_creative_id from creative.data JSON
-                            platform_creative_id = creative.data.get("platform_creative_id") if creative.data else None
+                            platform_creative_id = (
+                                (creative.data or {}).get("platform_creative_id")
+                                if not isinstance(adapter, SandboxAdServerAdapter)
+                                else None
+                            )
                             if platform_creative_id:
                                 # Already in GAM — add to association list
                                 platform_creative_ids.append(platform_creative_id)
@@ -3767,10 +3888,8 @@ async def _create_media_buy_impl(
                                         )
                                     assert asset is not None
 
-                                    upload_result = adapter.add_creative_assets(
-                                        response.media_buy_id if response.media_buy_id else "",
-                                        [asset],
-                                        datetime.now(UTC),
+                                    upload_result = _dispatch_creative_upload(
+                                        adapter, response.media_buy_id or "", [asset]
                                     )
                                     logger.info(
                                         log_safe(
@@ -3780,12 +3899,16 @@ async def _create_media_buy_impl(
 
                                     if upload_result and len(upload_result) > 0:
                                         uploaded_status = upload_result[0]
-                                        merged_data = _apply_creative_enrichment(creative, uploaded_status)
-                                        if merged_data is not None:
-                                            CreativeRepository(session, tenant.tenant_id).update_data(
-                                                creative, merged_data
-                                            )
-                                        pcid = (creative.data or {}).get("platform_creative_id")
+                                        assert creative_uow.media_buys is not None
+                                        pcid = _persist_buy_creative_result(
+                                            adapter,
+                                            uploaded_status,
+                                            creative,
+                                            response.media_buy_id,
+                                            pkg_assignments,
+                                            creative_uow.media_buys,
+                                            CreativeRepository(session, tenant.tenant_id),
+                                        )
                                         if pcid:
                                             platform_creative_ids.append(pcid)
                                 except AdCPSalesAgentError:

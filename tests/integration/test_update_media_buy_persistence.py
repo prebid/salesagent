@@ -21,17 +21,17 @@ from src.core.database.models import (
     Principal as ModelPrincipal,
 )
 from src.core.exceptions import AdCPMediaBuyNotFoundError
-from src.core.resolved_identity import AccountIdentity
+from src.core.resolved_identity import AccountIdentity, identity_of
 from src.core.schemas import UpdateMediaBuyRequest, UpdateMediaBuyResponse, UpdateMediaBuyResult
-from src.core.schemas.account import Account
 from src.core.tools.media_buy_update import _update_media_buy_impl
-from tests.factories.principal import PrincipalFactory, plaintext_token_for
-from tests.utils.database_helpers import vhost_for
+from tests.factories.account import DEFAULT_TEST_ACCOUNT_ID, seed_default_account
+from tests.factories.principal import plaintext_token_for
+from tests.utils.database_helpers import bind_factories_to_session, vhost_for
 
 # Note: _verify_principal is now internal to _update_media_buy_impl
 # Tests that used _verify_principal directly will need to test through the public API
 
-_ACCOUNT_ID = "acct_test"
+_ACCOUNT_ID = DEFAULT_TEST_ACCOUNT_ID
 
 
 def _make_identity(tenant_id: str, principal_id: str) -> AccountIdentity:
@@ -41,10 +41,7 @@ def _make_identity(tenant_id: str, principal_id: str) -> AccountIdentity:
     annotated ``AccountIdentity`` and reads ``identity.account``; the boundary resolved the
     reference before the tool ran.
     """
-    return PrincipalFactory.make_account_identity(
-        PrincipalFactory.make_identity(principal_id=principal_id, tenant_id=tenant_id, tenant={"tenant_id": tenant_id}),
-        Account(account_id=_ACCOUNT_ID, name="Test Account", status="active"),
-    )
+    return identity_of(tenant_id, principal_id, _ACCOUNT_ID)
 
 
 @pytest.fixture
@@ -54,7 +51,7 @@ def test_tenant_setup(integration_db):
     principal_id = "test_adv_persist"
     token = "test_token_persist_123"
 
-    with get_db_session() as session:
+    with get_db_session() as session, bind_factories_to_session(session):
         # Create tenant
         tenant = Tenant(
             tenant_id=tenant_id,
@@ -78,6 +75,8 @@ def test_tenant_setup(integration_db):
             platform_mappings={"mock": {"id": "adv_persist"}},
         )
         session.add(principal)
+        session.flush()
+        seed_default_account(tenant_id, principal_id, account_id=_ACCOUNT_ID)
 
         # Create currency limit (required for budget validation)
         currency_limit = CurrencyLimit(
@@ -122,6 +121,7 @@ def test_update_media_buy_with_database_persisted_buy(test_tenant_setup):
         media_buy = MediaBuy(
             tenant_id=tenant_id,
             principal_id=principal_id,
+            account_id=_ACCOUNT_ID,
             media_buy_id=media_buy_id,
             order_name="Test Order",
             advertiser_name="Test Advertiser",

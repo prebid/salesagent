@@ -19,6 +19,7 @@ from rich.console import Console
 from src.core.errors.codes import AppErrorCode, ErrorCode
 from src.core.errors.details import EntityRefDetails
 from src.core.exceptions import (
+    AdCPConfigurationError,
     AdCPInternalError,
     AdCPSalesAgentError,
     AdCPValidationError,
@@ -83,9 +84,10 @@ PLATFORM_DEFAULT_ATTRIBUTION_MODEL = AttributionModel.last_touch
 from src.core.database.models import MediaBuy, PricingOption
 from src.core.database.repositories import MediaBuyRepository, MediaBuyUoW
 from src.core.database.repositories.delivery import POLL_SEQUENCE_TASK_TYPE, DeliveryRepository
+from src.core.database.repositories.media_buy import DeliveryWebhookBuy
 from src.core.database.repositories.product import ProductRepository
 from src.core.helpers.adapter_helpers import get_adapter
-from src.core.resolved_identity import ResolvedIdentity, identity_of
+from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import (
     AggregatedTotals,
     DeliveryTotals,
@@ -107,6 +109,7 @@ from src.core.tools._media_buy_status import (
     NO_MORE_DATA_STATUSES,
     resolve_canonical_status,
 )
+from src.core.tools.media_buy_create import identity_for_stored_buy
 
 
 def _is_circuit_breaker_open(tenant_id: str) -> bool:
@@ -135,7 +138,7 @@ def _get_media_buy_delivery_impl(
 
 
 def delivery_for_media_buy(
-    media_buy: MediaBuy,
+    media_buy: DeliveryWebhookBuy,
     *,
     start_date: str,
     end_date: str,
@@ -160,7 +163,9 @@ def delivery_for_media_buy(
             end_date=end_date,
         ),
         # Resolution from stored ids: the job acts as the buy's owner, on the buy's account.
-        identity=identity_of(media_buy.tenant_id, media_buy.principal_id, media_buy.account_id),
+        identity=identity_for_stored_buy(
+            media_buy.tenant_id, media_buy.principal_id, media_buy.account_id, media_buy.media_buy_id
+        ),
     )
 
 
@@ -175,7 +180,7 @@ def get_media_buy_delivery(
     """
     principal_id = identity.principal.principal_id
     tenant = identity.tenant
-    adapter = get_adapter(identity)
+    account_filter = identity.account.account_id if identity.account is not None else None
 
     # Determine reporting period
     if req.start_date and req.end_date:
@@ -195,6 +200,27 @@ def get_media_buy_delivery(
     # Determine reference date for status calculations use end_date, it either will be today or the user provided end_date.
     reference_date = end_dt.date()
 
+    # Resolve once per stored account after the read unit closes. Resolution opens
+    # its own thread-scoped sessions, so none of the work rows may be alive here.
+    with MediaBuyUoW(tenant.tenant_id) as read_uow:
+        assert read_uow.media_buys is not None
+        account_buys = {
+            buy.account_id: buy_id
+            for buy_id, buy in _get_target_media_buys(
+                req, principal_id, read_uow.media_buys, reference_date, account_id=account_filter
+            )
+        }
+    adapters = {}
+    account_errors: dict[str | None, Exception] = {}
+    for account_id, buy_id in account_buys.items():
+        try:
+            account_identity = identity_for_stored_buy(
+                tenant.tenant_id, principal_id, account_id, buy_id, resolved_identity=identity
+            )
+            adapters[account_id] = get_adapter(account_identity)
+        except Exception as exc:
+            account_errors[account_id] = exc
+
     # Determine which media buys to fetch from database
     # UoW scope encompasses all code that accesses MediaBuy ORM objects to prevent
     # DetachedInstanceError — the session must stay open while we read attributes
@@ -203,7 +229,7 @@ def get_media_buy_delivery(
         assert uow.media_buys is not None
         repo = uow.media_buys
 
-        target_media_buys = _get_target_media_buys(req, principal_id, repo, reference_date)
+        target_media_buys = _get_target_media_buys(req, principal_id, repo, reference_date, account_id=account_filter)
 
         # Diff requested IDs vs found IDs to report missing ones
         not_found_errors: list[Error] = []
@@ -285,6 +311,9 @@ def get_media_buy_delivery(
                 # Call adapter to get per-package delivery metrics
                 # Note: Mock adapter returns simulated data, GAM adapter returns real data from Reporting API
                 try:
+                    if buy.account_id in account_errors:
+                        raise account_errors[buy.account_id]
+                    adapter = adapters[buy.account_id]
                     adapter_response = adapter.get_media_buy_delivery(
                         media_buy_id=media_buy_id,
                         date_range=reporting_period,
@@ -319,6 +348,9 @@ def get_media_buy_delivery(
                     adapter_conversion_value = float(raw_conversion_value) if raw_conversion_value is not None else None
                     adapter_viewability = getattr(adapter_response.totals, "viewability", None)
 
+                except AdCPConfigurationError:
+                    # CONFIGURATION_ERROR requires transport failure markers in AdCP 3.1.1.
+                    raise
                 except Exception as e:
                     logger.error("Error getting delivery for %s: %s", media_buy_id, e)
                     # Write adapter failure to audit trail (NFR-003)
@@ -339,7 +371,9 @@ def get_media_buy_delivery(
                     except Exception as audit_err:
                         logger.error("Failed to write adapter failure audit log: %s", audit_err)
                     adapter_errors.append(
-                        Error.of(  # structural-guard: advisory per-buy result in GetMediaBuyDeliveryResponse.errors[]
+                        Error.from_exception(e)
+                        if isinstance(e, AdCPSalesAgentError)
+                        else Error.of(  # structural-guard: advisory per-buy result in GetMediaBuyDeliveryResponse.errors[]
                             ErrorCode.SERVICE_UNAVAILABLE,
                             details=EntityRefDetails(media_buy_id=media_buy_id),
                         )
@@ -677,6 +711,8 @@ def _get_target_media_buys(
     principal_id: str,
     repo: MediaBuyRepository,
     reference_date: date,
+    *,
+    account_id: str | None = None,
 ) -> list[tuple[str, MediaBuy]]:
     # The internal delivery filter vocabulary is exactly the canonical status
     # set (pending_creatives, pending_start, active, paused, completed,
@@ -694,9 +730,9 @@ def _get_target_media_buys(
 
     # Fetch media buys by IDs or all for principal
     if req.media_buy_ids:
-        fetched_buys = repo.get_by_principal(principal_id, media_buy_ids=req.media_buy_ids)
+        fetched_buys = repo.get_by_principal(principal_id, media_buy_ids=req.media_buy_ids, account_id=account_id)
     else:
-        fetched_buys = repo.get_by_principal(principal_id)
+        fetched_buys = repo.get_by_principal(principal_id, account_id=account_id)
 
     # Filter on the persisted status (authoritative), date-refined against the same
     # reference date the reported status uses.

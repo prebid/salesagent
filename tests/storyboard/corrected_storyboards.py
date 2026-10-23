@@ -1,4 +1,4 @@
-"""Storyboard corrections: give ``webhook_emission`` a product to buy.
+"""Corrections to setup fixtures in the pinned compliance storyboards.
 
 Filed upstream as adcontextprotocol/adcp#7609.
 
@@ -25,10 +25,18 @@ knows which to drive").
 THE PINNED TREE IS NOT EDITED. This runs over the sibling corrected tree that
 :func:`tests.storyboard.corrected_vectors.corrected_compliance_tree` materializes.
 
-What is corrected, and nothing else: one step is ADDED. No existing step, validation or
+For ``webhook_emission``, one step is ADDED. No existing step, validation or
 expected outcome is touched, so every check the storyboard graded before it still grades
 the same thing — the four triggers simply reach the agent's create path instead of
 dying on a placeholder.
+
+``invalid_transitions`` also needs one sandbox account across its lifecycle. The SDK
+adds ``sandbox: true`` to ordinary requests but sends expected-error samples directly,
+so an omitted selector switches those probes to the live account. AdCP v3.1.1's
+``docs/media-buy/advanced-topics/sandbox.mdx`` requires the selector on every natural-key
+request. Upstream adcontextprotocol/adcp#8216 (closing #8179) adds it to all six samples;
+we backport exactly that change to the copied protocol/domain fixture. Its error oracles
+and invalid entity IDs are unchanged.
 """
 
 from __future__ import annotations
@@ -37,6 +45,8 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+
+from tests.storyboard import corrected_vectors
 
 #: Relative to the compliance root the runner is pointed at.
 _WEBHOOK_EMISSION = Path("universal") / "webhook-emission.yaml"
@@ -117,3 +127,92 @@ def correct_webhook_emission(tree: Path) -> Path:
 
     path.write_text(yaml.safe_dump(document, sort_keys=False, width=100), encoding="utf-8")
     return path
+
+
+_INVALID_TRANSITIONS = Path("media-buy/scenarios/invalid_transitions.yaml")
+_INVALID_TRANSITION_STEPS = (
+    "update_unknown_media_buy",
+    "get_products_brief",
+    "create_buy",
+    "update_unknown_package",
+    "first_cancel",
+    "second_cancel",
+)
+_INVALID_TRANSITIONS_ACCOUNT = {"brand": {"domain": "acmeoutdoor.example"}, "operator": "pinnacle-agency.example"}
+
+
+def correct_invalid_transitions_accounts(tree: Path) -> Path:
+    """Backport adcp#8216's six sandbox selectors without changing any probe oracle.
+
+    Validate both copies before writing either. A changed step sequence or account
+    needs a fresh upstream comparison, rather than silently applying this correction
+    to different fixtures. Already-corrected files remain byte-for-byte unchanged.
+    """
+    protocol = tree / "protocols" / _INVALID_TRANSITIONS
+    if not protocol.is_file():
+        raise FileNotFoundError(f"no invalid_transitions storyboard at {protocol}")
+    paths = [protocol]
+    domain = tree / "domains" / _INVALID_TRANSITIONS
+    if domain.is_file():
+        paths.append(domain)
+
+    corrections = []
+    for path in paths:
+        document = yaml.safe_load(path.read_text(encoding="utf-8"))
+        if document.get("id") != "media_buy_seller/invalid_transitions":
+            raise ValueError(f"{path}: invalid_transitions storyboard identity changed")
+        steps = [step for phase in document.get("phases", []) for step in phase.get("steps", [])]
+        if tuple(step.get("id") for step in steps) != _INVALID_TRANSITION_STEPS:
+            raise ValueError(f"{path}: invalid_transitions step sequence changed")
+        accounts = []
+        for step in steps:
+            account = step.get("sample_request", {}).get("account")
+            if (
+                not isinstance(account, dict)
+                or {key: value for key, value in account.items() if key != "sandbox"} != _INVALID_TRANSITIONS_ACCOUNT
+                or ("sandbox" in account and account["sandbox"] is not True)
+            ):
+                raise ValueError(f"{path}: invalid_transitions account changed at {step['id']}")
+            accounts.append(account)
+        corrections.append((path, document, accounts))
+
+    for path, document, accounts in corrections:
+        if all(account.get("sandbox") is True for account in accounts):
+            continue
+        for account in accounts:
+            account["sandbox"] = True
+        path.write_text(yaml.safe_dump(document, sort_keys=False, width=100), encoding="utf-8")
+    return protocol
+
+
+def graded_compliance_tree(source: Path) -> Path:
+    """The compliance tree the runner is pointed at: the pinned one, fixtures corrected.
+
+    THE PINNED TREE IS NOT EDITED. This writes a sibling (``adcp-<version>-corrected/``,
+    covered by the runner directory's existing ``adcp-*/`` ignore) and hands the runner
+    that. These corrections repair fixtures while preserving what each check grades:
+
+    * request-signing vector BODIES (``corrected_vectors``, adcp#7567). A seller
+      validates the payload before it authenticates the caller, so the corpus's stub
+      bodies (``{"plan_id":"plan_001"}``) are answered ``INVALID_REQUEST`` and the RFC
+      9421 checklist never runs — measured here as all 27 graded signed-requests checks
+      failing with ``got 200 (error="(none)")``.
+    * a product for ``webhook_emission`` to buy (``corrected_storyboards``, adcp#7609).
+      That storyboard discovers no product, so its four ``create_media_buy`` triggers
+      ship the SDK's ``"test-product"`` placeholder and are answered
+      ``PRODUCT_NOT_FOUND`` — measured as 4 of the 7 webhook_emission failures in run
+      innet_200926_0635.
+
+    * one sandbox account throughout ``invalid_transitions`` (adcp#8179/#8216).
+      Expected-error samples bypass the SDK's account enrichment; without an explicit
+      selector they reference a live account after setup created a sandbox buy.
+      Backport the merged upstream six-selector correction while retaining every oracle.
+
+    Everything else is copied through byte-for-byte. These local corrections preserve
+    the pinned version until its replacement includes the upstream fixture fixes.
+    """
+    dest = source.parent.parent / f"{source.parent.name}-corrected" / source.name
+    tree = corrected_vectors.corrected_compliance_tree(source, dest)
+    correct_webhook_emission(tree)
+    correct_invalid_transitions_accounts(tree)
+    return tree

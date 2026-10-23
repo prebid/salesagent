@@ -172,8 +172,49 @@ class MockAdServer(AdServerAdapter):
             uk_itl2=True,
         )
 
-    def validate_media_buy_request(
-        self,
+    @staticmethod
+    def _validate_package_targeting(packages: list[MediaPackage]) -> None:
+        """Preserve the mock configuration's ordered local targeting refusals."""
+        for package in packages:
+            targeting = package.targeting_overlay
+            if targeting:
+                if targeting.device_form_factors:
+                    raise AdCPCapabilityNotSupportedError(
+                        details=CapabilityRefusalDetails(
+                            capability="device_type_any_of" if targeting.device_type_any_of else "device_platform",
+                            rejected_value=targeting.device_form_factors,
+                        )
+                    )
+
+                if getattr(targeting, "os_any_of", None):
+                    raise AdCPCapabilityNotSupportedError(
+                        details=CapabilityRefusalDetails(capability="os_any_of", rejected_value=targeting.os_any_of)
+                    )
+
+                if getattr(targeting, "browser_any_of", None):
+                    raise AdCPCapabilityNotSupportedError(
+                        details=CapabilityRefusalDetails(
+                            capability="browser_any_of", rejected_value=targeting.browser_any_of
+                        )
+                    )
+
+                if getattr(targeting, "content_cat_any_of", None):
+                    raise AdCPCapabilityNotSupportedError(
+                        details=CapabilityRefusalDetails(
+                            capability="content_cat_any_of", rejected_value=targeting.content_cat_any_of
+                        )
+                    )
+
+                if getattr(targeting, "keywords_any_of", None):
+                    raise AdCPCapabilityNotSupportedError(
+                        details=CapabilityRefusalDetails(
+                            capability="keywords_any_of", rejected_value=targeting.keywords_any_of
+                        )
+                    )
+
+    @classmethod
+    def validate_request(
+        cls,
         request: AdapterCreateRequest,
         packages: list[MediaPackage],
         start_time: datetime,
@@ -188,7 +229,9 @@ class MockAdServer(AdServerAdapter):
         (salesagent-rys3u.4): the same facts, in fields a machine can read, with the
         sentence coming from CODE_TABLE.
         """
-        problems = super().validate_media_buy_request(request, packages, start_time, end_time, package_pricing_info)
+        problems = super().validate_request(request, packages, start_time, end_time, package_pricing_info)
+
+        cls._validate_package_targeting(packages)
 
         # Date validation (like GAM)
         if start_time >= end_time:
@@ -679,46 +722,6 @@ class MockAdServer(AdServerAdapter):
                 finally:
                     self.sync_delay_ms = original_delay
                 return result
-
-        # NO QUIET FAILURES policy - Check for unsupported targeting at package level
-        # Per AdCP spec, targeting is at the package level (MediaPackage.targeting_overlay)
-        for package in packages:
-            targeting = package.targeting_overlay
-            if targeting:
-                # Mock adapter mirrors GAM behavior - these targeting types are not supported
-                if targeting.device_form_factors:
-                    raise AdCPCapabilityNotSupportedError(
-                        details=CapabilityRefusalDetails(
-                            capability="device_type_any_of" if targeting.device_type_any_of else "device_platform",
-                            rejected_value=targeting.device_form_factors,
-                        )
-                    )
-
-                if getattr(targeting, "os_any_of", None):
-                    raise AdCPCapabilityNotSupportedError(
-                        details=CapabilityRefusalDetails(capability="os_any_of", rejected_value=targeting.os_any_of)
-                    )
-
-                if getattr(targeting, "browser_any_of", None):
-                    raise AdCPCapabilityNotSupportedError(
-                        details=CapabilityRefusalDetails(
-                            capability="browser_any_of", rejected_value=targeting.browser_any_of
-                        )
-                    )
-
-                if getattr(targeting, "content_cat_any_of", None):
-                    raise AdCPCapabilityNotSupportedError(
-                        details=CapabilityRefusalDetails(
-                            capability="content_cat_any_of", rejected_value=targeting.content_cat_any_of
-                        )
-                    )
-
-                if getattr(targeting, "keywords_any_of", None):
-                    raise AdCPCapabilityNotSupportedError(
-                        details=CapabilityRefusalDetails(
-                            capability="keywords_any_of", rejected_value=targeting.keywords_any_of
-                        )
-                    )
 
         # GAM-like validation (based on real GAM behavior)
         validation_errors = self.validate_media_buy_request(
