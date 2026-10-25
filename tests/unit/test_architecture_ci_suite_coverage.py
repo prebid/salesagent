@@ -372,8 +372,12 @@ class TestCISuiteCoverage:
         """ALL_SUITES must map to summary gates or UNGATED_LOCAL_SUITES (no silent drops)."""
         suites = _all_suites_from_runner()
         assert "ui" in suites, "run_all_tests.sh ALL_SUITES must still list ui (exclusion is at the gate map)"
-        stale = sorted(set(_LOCAL_SUITE_TO_SUMMARY_GATE) - set(suites))
-        assert not stale, f"_LOCAL_SUITE_TO_SUMMARY_GATE names {stale}, absent from ALL_SUITES"
+        assert_violations_match_allowlist(
+            set(suites) & set(_LOCAL_SUITE_TO_SUMMARY_GATE),
+            set(_LOCAL_SUITE_TO_SUMMARY_GATE),
+            fix_hint="_LOCAL_SUITE_TO_SUMMARY_GATE names a suite ALL_SUITES no longer lists: "
+            "drop the map entry in the same change, or restore the suite.",
+        )
         unmapped = {s for s in suites if s not in _LOCAL_SUITE_TO_SUMMARY_GATE}
         assert_violations_match_allowlist(
             unmapped,
