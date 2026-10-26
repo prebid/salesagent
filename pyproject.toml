@@ -80,10 +80,10 @@ dependencies = [
 # (Playwright-based UI test infra, not part of the standard dev workflow).
 [project.optional-dependencies]
 ui-tests = [
-    "playwright==1.60.0",
+    "playwright==1.64.1",
     "pytest-playwright>=0.7.2",  # 0.6.x caps pytest<9.0.0; bump to allow pytest>=9.0.3 (GHSA-6w46-j5rx-g56g)
     "pytest-asyncio>=1.1.0",
-    "allure-pytest==2.16.0",
+    "allure-pytest==2.16.2",
 ]
 
 [project.urls]
@@ -106,7 +106,7 @@ dev = [
     # exemption in tests/ is written in the form the pinned version honours. A floor
     # would let CI resolve a version that silently un-suppresses all of them;
     # tests/unit/test_ast_grep_credential_header_ban.py grades the pin for that reason.
-    "ast-grep-cli==0.45.3",
+    "ast-grep-cli==0.51.0",
     "factory-boy>=3.3.0",
     "mypy>=1.18.2",
     "pytest>=9.0.3",  # GHSA-6w46-j5rx-g56g
