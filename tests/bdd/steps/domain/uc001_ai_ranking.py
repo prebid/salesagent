@@ -95,7 +95,6 @@ def given_catalog_in_order(ctx: dict, datatable: Sequence[Sequence[object]]) -> 
     for row in rows:
         product = ProductFactory(tenant=tenant, product_id=row["product_id"], name=row["name"])
         PricingOptionFactory(product=product)
-    ctx["catalog_product_ids"] = product_ids
 
 
 @given(parsers.parse('the seller configured AI ranking {where} with the prompt "{prompt}"'))

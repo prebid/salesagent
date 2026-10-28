@@ -7,6 +7,7 @@ from typing import Any
 from pydantic import BaseModel, Field, ValidationError
 
 from src.core.config import get_settings
+from src.core.logging_config import log_safe
 
 logger = logging.getLogger(__name__)
 
@@ -103,11 +104,15 @@ class TenantAIConfig(BaseModel):
         try:
             return cls.model_validate(value)
         except ValidationError as exc:
+            # log_safe on exc: a ValidationError's message embeds the value it
+            # rejected, which is seller-stored JSON, and pydantic renders it over
+            # several lines. Without the escape the rejected value picks the line
+            # breaks in this log entry.
             logger.warning(
                 "Ignoring malformed %s (%s); the AI feature degrades instead of failing the request: %s",
                 source,
                 type(value).__name__,
-                exc,
+                log_safe(exc),
             )
             return cls()
 

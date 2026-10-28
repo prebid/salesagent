@@ -26,6 +26,7 @@ from src.core.exceptions import (
 )
 from src.core.helpers import enum_value
 from src.core.helpers.channel_helpers import effective_channel_names
+from src.core.logging_config import log_safe
 from src.core.resolved_identity import PublicIdentity
 from src.core.schemas import (
     GetProductsRequest,  # OURS, extending the SDK's — the accepted shape
@@ -747,7 +748,8 @@ async def _get_products_impl(req: GetProductsRequest, identity: PublicIdentity) 
             # the <0.1 relevance filter stops running too, so the buyer loses nothing
             # they were entitled to. AdCP 3.1.1 defines no ordering guarantee for
             # get_products and no `incomplete[]` scope for ranking.
-            logger.warning(f"Failed to apply AI product ranking: {e}. Returning unranked products.")
+            # log_safe: a provider exception carries the remote response body verbatim.
+            logger.warning(f"Failed to apply AI product ranking: {log_safe(e)}. Returning unranked products.")
 
     # Filter pricing data for anonymous users
     # Do this BEFORE serialization to avoid reconstruction issues
