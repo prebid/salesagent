@@ -9,9 +9,14 @@ Advertisers (also called "principals") are the entities that can access your MCP
 1. Navigate to **Advertisers** in the Admin UI
 2. Click **Add Advertiser**
 3. Enter advertiser details:
+   - **Advertiser ID**: 1 to 45 letters, numbers, underscores or hyphens, unique within
+     the tenant. It cannot be changed later. `anonymous`, `unknown` and `admin` are
+     reserved, because audit records use them for actions no advertiser took.
    - **Name**: Display name
-   - **Contact Email**: For notifications
-   - **GAM Advertiser ID** (if using GAM): Links to existing GAM advertiser
+   - **GAM Advertiser** (if using GAM): Links to existing GAM advertiser
+
+Deleting an advertiser does not remove its ID from products restricted to it. An advertiser
+created later with the same ID can see those products.
 
 ### API Token
 
