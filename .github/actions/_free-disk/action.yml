@@ -1,0 +1,33 @@
+name: Free disk space
+description: >-
+  Reclaim ubuntu-latest headroom before heavy Docker/compose builds
+  (unused preinstalled toolchains + Docker builder cache).
+runs:
+  using: composite
+  steps:
+    - name: Free disk space
+      shell: bash
+      run: |
+        # -x traces the reclaim. pipefail matches the other shell bodies under .github/.
+        set -euo pipefail
+        set -x
+        avail() { df -B1 --output=avail / | tail -1; }
+        before="$(avail)"
+        sudo rm -rf \
+          /usr/share/dotnet \
+          /usr/local/lib/android \
+          /opt/ghc \
+          /opt/hostedtoolcache/CodeQL \
+          /usr/local/share/boost \
+          /usr/share/swift \
+          || true
+        docker builder prune -af 2>/dev/null || true
+        after="$(avail)"
+        # Fresh ubuntu-latest. The full list frees about 25 GiB. /usr/share/dotnet
+        # alone frees about 2 GiB, which stays under this floor.
+        min=$((8 * 1024 * 1024 * 1024))
+        gained=$((after - before))
+        if (( gained < min )); then
+          echo "reclaimed ${gained} bytes, below ${min}" >&2
+          exit 1
+        fi

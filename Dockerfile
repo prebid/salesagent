@@ -6,9 +6,9 @@ ARG PYTHON_BASE_DIGEST=sha256:423ed6ab25b1921a477529254bfeeabf5855151dc2c3141699
 # Consumed by BuildKit for reproducible layer timestamps (PR 6 release pipeline).
 ARG SOURCE_DATE_EPOCH=0
 # Canonical uv version: .uv-version (CI reads the file; guard keeps this ARG in sync).
-ARG UV_VERSION=0.11.15
-# Manifest-list digest for uv 0.11.15 (resolves per TARGETPLATFORM; do not pin a single-arch manifest).
-ARG UV_IMAGE_DIGEST=sha256:e590846f4776907b254ac0f44b5b380347af5d90d668138ca7938d1b0c2f98d3
+ARG UV_VERSION=0.13.6
+# Manifest-list digest for uv 0.13.6 (resolves per TARGETPLATFORM; do not pin a single-arch manifest).
+ARG UV_IMAGE_DIGEST=sha256:af22a52f5eafef3d78e551599d405c02df61919d18028f0cea8eda93bc9986d0
 
 FROM --platform=$TARGETPLATFORM ghcr.io/astral-sh/uv:${UV_VERSION}@${UV_IMAGE_DIGEST} AS uv
 

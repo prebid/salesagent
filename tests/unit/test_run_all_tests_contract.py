@@ -61,9 +61,9 @@ def _tox_env_list() -> set[str]:
 
 
 def _runner_all_suites() -> set[str]:
-    m = re.search(r'ALL_SUITES="([^"]+)"', RUNNER.read_text())
-    assert m, "run_all_tests.sh has no ALL_SUITES"
-    return {s.strip() for s in m.group(1).split(",") if s.strip()}
+    from tests.unit._architecture_helpers import all_suites_from_runner
+
+    return set(all_suites_from_runner())
 
 
 def _host_runner_collect_suites() -> set[str]:

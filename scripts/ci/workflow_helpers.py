@@ -9,16 +9,24 @@ import yaml
 CI_WORKFLOW_PATH = Path(__file__).resolve().parents[2] / ".github" / "workflows" / "ci.yml"
 
 
+def load_yaml_mapping(path: Path) -> dict:
+    """Read a YAML file and require a top-level mapping.
+
+    Raises ``FileNotFoundError`` when *path* is missing and ``ValueError`` when
+    the document is not a mapping. ``assert`` is the wrong tool here: ``python -O``
+    strips it and the annotated ``dict`` return would hand back a string.
+    """
+    if not path.is_file():
+        raise FileNotFoundError(path)
+    data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise ValueError(f"{path} must parse to a mapping, got {type(data).__name__}")
+    return data
+
+
 def load_ci_workflow() -> dict:
     """Load and parse the canonical CI workflow file."""
-    if not CI_WORKFLOW_PATH.is_file():
-        msg = f"CI workflow file not found: {CI_WORKFLOW_PATH}"
-        raise FileNotFoundError(msg)
-
-    workflow = yaml.safe_load(CI_WORKFLOW_PATH.read_text(encoding="utf-8"))
-    if not isinstance(workflow, dict):
-        msg = f"CI workflow YAML must parse to a mapping, got {type(workflow).__name__}"
-        raise ValueError(msg)
+    workflow = load_yaml_mapping(CI_WORKFLOW_PATH)
     if "jobs" not in workflow or not isinstance(workflow["jobs"], dict):
         msg = "CI workflow is missing a top-level 'jobs' mapping."
         raise ValueError(msg)
