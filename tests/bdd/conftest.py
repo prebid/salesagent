@@ -5094,8 +5094,8 @@ def _reset_e2e_db(e2e_config) -> None:
     TRUNCATE takes an AccessExclusiveLock on every table it names, one relation
     at a time, in whatever order ``pg_tables`` returned them. The server running
     against this same database sweeps it from background schedulers --
-    ``delivery_webhook_scheduler`` every DELIVERY_WEBHOOK_INTERVAL (5s under
-    run_all_tests.sh) and ``media_buy_status_scheduler`` every 60s -- and each
+    ``delivery_webhook_scheduler`` at the interval docker-compose.e2e.yml sets
+    and ``media_buy_status_scheduler`` every 60s -- and each
     sweep reads ``media_buys`` FIRST and a second table (webhook_delivery_log,
     creative_assignments, creatives) LATER in the SAME transaction, taking an
     AccessShareLock on each. AccessShareLock and AccessExclusiveLock conflict, the

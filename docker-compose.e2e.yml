@@ -226,7 +226,7 @@ services:
       SSL_CERT_FILE: /app/.test-tls/ca-bundle.pem
       ADCP_SIGNING_KEY_PASSPHRASE_ENV: "ADCP_SIGNING_DEV_KEK"
       ADCP_SIGNING_DEV_KEK: "dev-only-signing-kek-not-a-secret"
-      DELIVERY_WEBHOOK_INTERVAL: ${DELIVERY_WEBHOOK_INTERVAL:-}
+      DELIVERY_WEBHOOK_INTERVAL: ${DELIVERY_WEBHOOK_INTERVAL:-5}
       # GH #1802: the breaker's RECOVERY timeout only. Reaching
       # HALF_OPEN honestly means waiting this out inside the server, and 60s per
       # scenario is wall clock the suite should not spend. This is a VALUE, not a
@@ -274,14 +274,15 @@ services:
       - "${TEST_GID:-0}"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      # 60s, not creative-agent's 30s (below) -- adcp-server does more work
-      # at startup (DB migrations, etc.) and is the service that actually
-      # showed this bug live: marked genuinely UNHEALTHY (not just
-      # `starting`) under heavy concurrent test-suite load, because there
-      # was no grace period for Docker to report `starting` during
+      # 5s probes so dependents (proxy waits on service_healthy) start soon
+      # after the server is up instead of a full 30s interval later; 36
+      # retries give alembic plus cold import a 3-minute budget.
+      # start_period 60s, not creative-agent's 30s: adcp-server runs DB
+      # migrations at startup and was marked UNHEALTHY under concurrent
+      # test load when it had no grace period.
+      interval: 5s
+      timeout: 5s
+      retries: 36
       start_period: 60s
 
   # ─── The agent the STORYBOARD grades, and only the storyboard ───────────────
@@ -368,16 +369,20 @@ services:
     image: nginx:stable
     volumes:
       - ./config/nginx/nginx-development.conf:/etc/nginx/nginx.conf:ro
+    # Start nginx only once adcp-server is healthy; otherwise /health returns
+    # 502 while adcp-server is still inside its 60s start_period.
     depends_on:
-      - adcp-server
+      adcp-server:
+        condition: service_healthy
     # NO host port here either — see the postgres note above. Publishing for the
     # host paths is in docker-compose.e2e.ports.yml; the in-network runner reaches
     # the proxy by service name (proxy:8000).
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
-      interval: 10s
+      interval: 5s
       timeout: 5s
-      retries: 5
+      retries: 12
+      start_period: 15s
 
   # ─── TLS listener (GH #1291 / salesagent-tgzb, collapsed onto one front —
   # amht.2 + mp53.8/.9) ──────────────────────────────────────────────────────
@@ -421,13 +426,17 @@ services:
       - ./config/nginx/nginx-tls-test.conf.template:/etc/nginx/templates/tls-test.conf.template:ro
       - ./.test-tls:/app/.test-tls:ro
     depends_on:
-      # One entry per fronted upstream, so the terminator never comes up ahead
-      # of something it routes to.
-      - adcp-server
-      - adcp-server-storyboard
-      - creative-agent
-      - webhook-capture
-      - counterparty-origin
+      # Mapping form. The list form starts nginx before /health answers.
+      adcp-server:
+        condition: service_healthy
+      adcp-server-storyboard:
+        condition: service_healthy
+      creative-agent:
+        condition: service_healthy
+      webhook-capture:
+        condition: service_healthy
+      counterparty-origin:
+        condition: service_healthy
     networks:
       default:
         # Dotted aliases are the whole mechanism for the SHARED stack — one per
@@ -771,7 +780,7 @@ services:
       # needs the public roots this combined file still carries.
       SSL_CERT_FILE: /app/.test-tls/combined-ca.pem
       CREATE_SAMPLE_DATA: "true"
-      DELIVERY_WEBHOOK_INTERVAL: "5"
+      DELIVERY_WEBHOOK_INTERVAL: ${DELIVERY_WEBHOOK_INTERVAL:-5}
       # The source is bind-mounted, so the host's in-tree __pycache__ comes with
       # it — and those .pyc embed host absolute paths in co_filename, which makes
       # pytest-bdd's scenarios() resolve feature files to /Users/... instead of
