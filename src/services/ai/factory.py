@@ -4,8 +4,12 @@ import logging
 from functools import lru_cache
 from typing import Any
 
+from pydantic_ai import Agent, AgentRunResult
+from pydantic_ai.exceptions import AgentRunError, UserError
+
 from src.core.errors.details import ConfigurationDetails
 from src.core.exceptions import AdCPConfigurationError
+from src.core.security.outbound_http import is_transport_failure
 from src.services.ai.config import (
     CANONICAL_GOOGLE_PROVIDER,
     TenantAIConfig,
@@ -273,3 +277,29 @@ def get_factory() -> AIServiceFactory:
         AIServiceFactory instance
     """
     return AIServiceFactory()
+
+
+class AIProviderError(Exception):
+    """The AI provider failed the call: unreachable, refused it, or answered unusably.
+
+    Raised by :func:`run_agent` so a caller that degrades when the model is unavailable
+    can catch one type, while a defect in its own code still propagates.
+    """
+
+
+async def run_agent[OutputT](agent: Agent[None, OutputT], prompt: str) -> AgentRunResult[OutputT]:
+    """Run *agent* on *prompt*, raising :class:`AIProviderError` when the provider fails.
+
+    pydantic-ai wraps most provider failures in ``AgentRunError`` (``ModelAPIError``,
+    ``ModelHTTPError``, ``UnexpectedModelBehavior``, ``UsageLimitExceeded``, ...) and
+    reports a misconfigured model as ``UserError``. It does not wrap every SDK's
+    transport: google-genai raises ``httpx.ConnectError`` unwrapped for an unreachable
+    endpoint, which ``is_transport_failure`` recognises. Anything else is not the
+    provider and propagates unchanged.
+    """
+    try:
+        return await agent.run(prompt)
+    except Exception as e:
+        if isinstance(e, AgentRunError | UserError) or is_transport_failure(e):
+            raise AIProviderError(f"{type(e).__name__}: {e}") from e
+        raise

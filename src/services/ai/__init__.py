@@ -32,6 +32,7 @@ from src.services.ai.config import (
     TenantAIConfig,
     build_model_string,
     get_platform_defaults,
+    resolve_tenant_ai_config,
 )
 from src.services.ai.factory import (
     AIServiceFactory,
@@ -47,4 +48,5 @@ __all__ = [
     "get_factory",
     "get_platform_defaults",
     "build_model_string",
+    "resolve_tenant_ai_config",
 ]

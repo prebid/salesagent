@@ -94,3 +94,17 @@ def build_model_string(provider: str, model: str) -> str:
     """
     provider = canonicalize_google_provider(provider)
     return f"{provider}:{model}"
+
+
+def resolve_tenant_ai_config(
+    ai_config: dict | TenantAIConfig | None, gemini_api_key: str | None
+) -> dict | TenantAIConfig | None:
+    """A tenant's AI configuration, falling back to its legacy Gemini key.
+
+    Tenants configured before ``ai_config`` existed carry only ``gemini_api_key``; that
+    key is the configuration they chose, so it is read as a Gemini provider config.
+    ``None`` means the tenant configured nothing and the platform defaults apply.
+    """
+    if not ai_config and gemini_api_key:
+        return {"provider": "gemini", "api_key": gemini_api_key}
+    return ai_config
