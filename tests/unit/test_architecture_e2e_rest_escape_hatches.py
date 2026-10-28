@@ -776,6 +776,31 @@ EXPECTED_UNSUPPORTED_DECLARATIONS: frozenset[tuple[str, str, str]] = frozenset(
             "no server fault-injection surface for a genuinely untyped exception on a live "
             "remote process (same structural limitation prkv.8's own e2e-verify atom hit)",
         ),
+        # PR #2167, the scenarios grading the seller's own AI configuration. Their setup
+        # is an in-process fact about THIS process, which is why none is a silent
+        # parametrize drop: the platform AI key belongs to the live server's own
+        # environment, and the relevance scores and policy verdict stand in for model
+        # calls the live server would really make. Declared at the env methods so the reason
+        # travels with the setup instead of living in a nodeid ledger.
+        (
+            "tests/harness/product.py",
+            "enable_policy_checks",
+            "with policy checks enabled the live server calls its real policy model; the verdict "
+            "can only be scripted in-process (set_policy_blocked / set_policy_approved)",
+        ),
+        (
+            "tests/harness/product.py",
+            "set_tenant_ai_ranking",
+            "the platform GEMINI_API_KEY is read from the LIVE SERVER's own process environment "
+            "(and cached there in its settings), so the harness cannot remove it; "
+            "'the tenant's own ai_config is the only AI configuration present' has no server surface",
+        ),
+        (
+            "tests/harness/product.py",
+            "set_ranking_scores",
+            "the ranking factory has no live-server injection surface: over e2e the server builds a "
+            "real model and calls the provider, so scripted relevance scores cannot be realized",
+        ),
     }
 )
 

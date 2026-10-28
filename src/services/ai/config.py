@@ -115,8 +115,8 @@ class TenantAIConfig(BaseModel):
     def from_tenant(cls, tenant: Any) -> "TenantAIConfig | None":
         """Resolve 'given a tenant, what is its AI configuration?' - the one owner of that rule.
 
-        Accepts every shape a tenant travels as: the ORM Tenant row, TenantContext /
-        LazyTenantContext, and the plain tenant dict. The field names `ai_config` and
+        Accepts every shape a tenant travels as: the ORM Tenant row, TenantContext,
+        and the plain tenant dict. The field names `ai_config` and
         `gemini_api_key` are identical across all three; only the ACCESS MECHANISM
         differs (the ORM row has no `.get()`, the plain dict has no attribute access),
         which is why the read goes through `_read_tenant_field`.

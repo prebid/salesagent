@@ -1861,8 +1861,9 @@ class ProductMixin:
     def set_policy_approved(self) -> None:
         """Configure PolicyCheckService to approve the brief.
 
-        Note: Policy checks are only invoked when the tenant dict has
-        ``advertising_policy.enabled = True`` AND ``gemini_api_key`` set.
+        Note: Policy checks are only invoked when the tenant has
+        ``advertising_policy.enabled = True`` AND an AI configuration of its own
+        (``TenantAIConfig.from_tenant`` resolves one).
         By default the harness identity has neither, so this is a no-op
         unless the test explicitly configures the tenant.
         """

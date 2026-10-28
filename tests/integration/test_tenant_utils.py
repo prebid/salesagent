@@ -148,3 +148,77 @@ def test_account_approval_mode_defaults_to_none_when_unset(integration_db):
         assert ctx.account_approval_mode is None
         # Creative approval_mode keeps its own default, unaffected
         assert ctx.approval_mode == "require-human"
+
+
+@pytest.mark.requires_db
+def test_ai_config_round_trips_through_both_tenant_projections(integration_db):
+    """ai_config and product_ranking_prompt survive every tenant projection.
+
+    _get_products_impl resolves the tenant's AI configuration out of whatever shape the
+    tenant arrived in, so a field that the ORM model stores but a projection drops makes
+    ranking and policy checks silently fall back to the platform key. There are two
+    projections and they are maintained independently — serialize_tenant_to_dict (the
+    plain dict) and TenantContext — so both are graded here.
+    """
+    from src.core.tenant_context import TenantContext
+    from tests.factories import TenantFactory
+    from tests.harness._base import IntegrationEnv
+
+    ai_config = {"provider": "anthropic", "model": "claude-x", "api_key": "tenant-key"}
+
+    with IntegrationEnv(tenant_id="test_aicfg"):
+        tenant = TenantFactory(
+            tenant_id="test_aicfg",
+            ai_config=ai_config,
+            product_ranking_prompt="rank by relevance to the brief",
+        )
+
+        # 1. serialize_tenant_to_dict exposes both keys
+        d = serialize_tenant_to_dict(tenant)
+        assert d["ai_config"] == ai_config
+        assert d["product_ranking_prompt"] == "rank by relevance to the brief"
+
+        # 2. TenantContext.from_orm_model populates the fields
+        ctx = TenantContext.from_orm_model(tenant)
+        assert ctx.ai_config == ai_config
+        assert ctx.product_ranking_prompt == "rank by relevance to the brief"
+
+        # 3. Round-trip via from_dict preserves the values
+        ctx2 = TenantContext.from_dict(d)
+        assert ctx2.ai_config == ai_config
+        assert ctx2.product_ranking_prompt == "rank by relevance to the brief"
+
+
+@pytest.mark.requires_db
+def test_ai_config_survives_the_resolver_chain(integration_db):
+    """TenantContext.load carries ai_config through the chain the resolver walks.
+
+    The resolver builds every request's tenant with ``TenantContext.load``:
+    get_tenant_by_id -> serialize_tenant_to_dict -> TenantContext.from_dict. This is the
+    assertion that fails if EITHER projection stops carrying ai_config, which would make
+    ranking and the policy gate silently fall back as if the seller had configured nothing.
+    """
+    from src.core.tenant_context import TenantContext
+    from src.services.ai.config import TenantAIConfig
+    from tests.factories import TenantFactory
+    from tests.harness._base import IntegrationEnv
+
+    ai_config = {"provider": "anthropic", "model": "claude-x", "api_key": "tenant-key"}
+
+    with IntegrationEnv(tenant_id="test_aicfg_load"):
+        TenantFactory(
+            tenant_id="test_aicfg_load",
+            ai_config=ai_config,
+            product_ranking_prompt="rank by relevance to the brief",
+        )
+
+        loaded = TenantContext.load("test_aicfg_load")
+
+        assert loaded is not None
+        assert loaded.ai_config == ai_config
+        assert loaded.product_ranking_prompt == "rank by relevance to the brief"
+        # And the resolution rule reads it off the loaded projection unchanged, the shape
+        # ranking and the policy gate both consume.
+        assert TenantAIConfig.from_tenant(loaded) == TenantAIConfig(
+            provider="anthropic", model="claude-x", api_key="tenant-key"
+        )

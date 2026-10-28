@@ -90,6 +90,7 @@ pytest_plugins = [
     "tests.bdd.steps.domain.admin_accounts",
     "tests.bdd.steps.domain.uc_get_products_inventory",
     "tests.bdd.steps.domain.uc_get_products_pricing",
+    "tests.bdd.steps.domain.uc001_ai_ranking",
     "tests.bdd.steps.domain.egress_ssrf",
     "tests.bdd.steps.domain.local_constraint_relaxations",
     "tests.bdd.steps.domain.local_context_echo",
@@ -5680,14 +5681,24 @@ _UC_BUCKET_ROUTES: dict[str, EnvRoute] = {
         env_builder=_build_uc003_storyboard_generic_client_env,
         seed=_seed_uc003_storyboard_generic_client,
     ),
-    # The five rows below are keyed by the coarse `uc` bucket (from
+    # The seven rows below are keyed by the coarse `uc` bucket (from
     # storyboard_spec.detect_uc), not a per-scenario tag: they are what a scenario in these
     # UCs falls back to when no predicate row above claims it. ADMIN, COMPAT,
-    # UC-GET-PRODUCTS and UC-005 have no predicate rows at all — one env + one
-    # seed serves every scenario. UC-019 does have one (@post-create-poll needs
-    # create + list in a single scenario), so its bucket row is the remainder.
+    # UC-001, UC-GET-PRODUCTS and UC-005 have no predicate rows at all — one env
+    # + one seed serves every scenario. UC-019 does have one (@post-create-poll
+    # needs create + list in a single scenario), so its bucket row is the
+    # remainder.
     "ADMIN": EnvRoute(tag="ADMIN", env_builder=_build_admin_env),
     "COMPAT": EnvRoute(tag="COMPAT", env_builder=_build_product_env),
+    # UC-001 is get_products discovery, so it takes the SAME env as
+    # UC-GET-PRODUCTS. It had no row at all until now, which meant a
+    # `@T-UC-001-*` scenario xfailed with "No harness wired for UC-001" — the
+    # catch-all that exists for UCs whose harness does not exist yet, standing in
+    # for a harness that has existed all along. Adding the row binds nothing on
+    # its own: the generated BR-UC-001 feature carries 121 scenarios and NO
+    # `scenarios()` call anywhere binds it, so the only collected UC-001
+    # scenarios are the ones test_uc001_ai_ranking_tenant_config.py binds.
+    "UC-001": EnvRoute(tag="UC-001", env_builder=_build_product_env),
     "UC-GET-PRODUCTS": EnvRoute(tag="UC-GET-PRODUCTS", env_builder=_build_product_env),
     # UC-005 seeds the tenant on EVERY transport, not e2e only. The e2e-only row said
     # "in-process the registry is mocked and the DB is per-test, so the in-process status
@@ -6496,8 +6507,8 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
     """Provide the appropriate harness for each BDD scenario.
 
     - A ``uc`` bucket with no marker_names-based sub-branching (ADMIN, COMPAT,
-      UC-GET-PRODUCTS, UC-005, UC-019) is a row in ``ENV_ROUTES`` and goes
-      through the one generic ``_run_env_route`` consumer.
+      UC-001, UC-GET-PRODUCTS, UC-005, UC-019) is a row in ``ENV_ROUTES`` and
+      goes through the one generic ``_run_env_route`` consumer.
     - UC-004 @polling → DeliveryPollEnv
     - UC-004 @webhook → WebhookEnv (unit variant, no DB needed)
     - UC-004 @webhook-reliability → CircuitBreakerEnv (unit variant)
