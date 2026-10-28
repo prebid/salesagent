@@ -11,6 +11,8 @@ import pytest
 from tests.unit._architecture_helpers import (
     assert_anchor_consistency,
     assert_violations_match_allowlist,
+    find_step,
+    find_step_index,
     iter_call_expressions,
     iter_git_tracked_files,
     postgres_image_ref,
@@ -92,6 +94,31 @@ def test_assert_violations_match_allowlist_flags_stale_entries() -> None:
             {("src/core/fixed.py", "was_bad")},
             fix_hint="Remove fixed entries from the allowlist.",
         )
+
+
+@pytest.mark.arch_guard
+def test_find_step_requires_a_predicate() -> None:
+    with pytest.raises(ValueError, match="at least one"):
+        find_step([])
+
+
+@pytest.mark.arch_guard
+def test_find_step_returns_none_when_nothing_matches() -> None:
+    assert find_step([{"name": "a", "uses": "local"}], name_contains="missing") is None
+
+
+@pytest.mark.arch_guard
+def test_find_step_requires_every_predicate() -> None:
+    steps = [{"name": "free", "uses": "./.github/actions/_free-disk"}]
+    assert find_step(steps, name_contains="free", uses_contains="_free-disk") is steps[0]
+    assert find_step(steps, name_contains="free", uses_contains="other") is None
+
+
+@pytest.mark.arch_guard
+def test_find_step_index_matches_the_whole_uses_value() -> None:
+    steps = [{"name": "a"}, {"name": "free", "uses": "./.github/actions/_free-disk"}]
+    assert find_step_index(steps, uses_equals="./.github/actions/_free-disk") == (1, steps[1])
+    assert find_step_index(steps, uses_equals="evil-org/_free-disk-action@v1") is None
 
 
 @pytest.mark.arch_guard

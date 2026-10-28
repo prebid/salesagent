@@ -31,6 +31,8 @@ from typing import Any, NamedTuple
 
 import yaml
 
+from scripts.ci.workflow_helpers import load_yaml_mapping as load_yaml_mapping
+
 # ---------------------------------------------------------------------------
 # Repo-root anchor
 # ---------------------------------------------------------------------------
@@ -1336,21 +1338,67 @@ def runtime_user_directives(lines: Iterable[str]) -> list[str]:
 _PRE_COMMIT_CONFIG_PATH = Path(".pre-commit-config.yaml")
 
 
-def load_yaml_mapping(path: Path) -> dict[str, Any]:
-    """Read a YAML file and require a top-level mapping (shared guard preamble)."""
-    assert path.is_file(), f"missing {path}"
-    data = yaml.safe_load(path.read_text(encoding="utf-8"))
-    assert isinstance(data, dict), f"{path} must parse to a mapping"
-    return data
+def all_suites_from_runner(repo: Path | None = None) -> tuple[str, ...]:
+    """The suite names in ``run_all_tests.sh`` ``ALL_SUITES``, in file order.
+
+    One reader for every guard. A re-quoted assignment fails every caller
+    together instead of leaving two of three green.
+    """
+    root = repo or repo_root()
+    text = (root / "run_all_tests.sh").read_text(encoding="utf-8")
+    match = re.search(r'ALL_SUITES="([^"]+)"', text)
+    if match is None:
+        raise ValueError("run_all_tests.sh must define ALL_SUITES")
+    return tuple(part.strip() for part in match.group(1).split(",") if part.strip())
+
+
+def steps_text(steps: list[dict[str, Any]] | None, *, keys: tuple[str, ...] = ("run",)) -> str:
+    """Join selected fields of a workflow step list into one string."""
+    chunks: list[str] = []
+    for step in steps or []:
+        if not isinstance(step, dict):
+            continue
+        for key in keys:
+            value = step.get(key)
+            if isinstance(value, str):
+                chunks.append(value)
+            elif value is not None and key in step:
+                chunks.append(str(value))
+    return "\n".join(chunks)
 
 
 def job_run_text(job: dict[str, Any]) -> str:
     """Flatten all ``run:`` step bodies from a workflow job into one string."""
-    chunks: list[str] = []
-    for step in job.get("steps") or []:
-        if isinstance(step, dict) and isinstance(step.get("run"), str):
-            chunks.append(step["run"])
-    return "\n".join(chunks)
+    return steps_text(job.get("steps") or [])
+
+
+def find_step_index(
+    steps: list[dict[str, Any]],
+    *,
+    name_contains: str | None = None,
+    uses_contains: str | None = None,
+    uses_equals: str | None = None,
+) -> tuple[int, dict[str, Any]] | None:
+    """Return ``(index, step)`` for the first step matching the predicates.
+
+    At least one predicate is required. When several are set, all must match.
+    ``uses_equals`` compares the whole ``uses:`` value, so a substring such as
+    ``_free-disk`` cannot accept a third-party action.
+    """
+    if name_contains is None and uses_contains is None and uses_equals is None:
+        raise ValueError("at least one of name_contains, uses_contains, uses_equals is required")
+    for index, step in enumerate(steps):
+        if not isinstance(step, dict):
+            continue
+        if name_contains is not None and name_contains not in str(step.get("name", "")):
+            continue
+        uses = str(step.get("uses", ""))
+        if uses_contains is not None and uses_contains not in uses:
+            continue
+        if uses_equals is not None and uses != uses_equals:
+            continue
+        return index, step
+    return None
 
 
 def find_step(
@@ -1358,25 +1406,18 @@ def find_step(
     *,
     name_contains: str | None = None,
     uses_contains: str | None = None,
+    uses_equals: str | None = None,
 ) -> dict[str, Any] | None:
-    """Locate the first workflow step matching name/uses substring predicates.
-
-    Returns the matched step mapping, or ``None``. At least one of
-    ``name_contains`` / ``uses_contains`` must be provided; when both are set,
-    both must match. Callers that need the index should enumerate ``steps``
-    themselves (see ``_find_free_disk_step``).
-    """
-    if name_contains is None and uses_contains is None:
-        raise ValueError("at least one of name_contains, uses_contains is required")
-    for step in steps:
-        if not isinstance(step, dict):
-            continue
-        if name_contains is not None and name_contains not in str(step.get("name", "")):
-            continue
-        if uses_contains is not None and uses_contains not in str(step.get("uses", "")):
-            continue
-        return step
-    return None
+    """Return the first workflow step matching the predicates, or ``None``."""
+    found = find_step_index(
+        steps,
+        name_contains=name_contains,
+        uses_contains=uses_contains,
+        uses_equals=uses_equals,
+    )
+    if found is None:
+        return None
+    return found[1]
 
 
 def load_pre_commit_config(path: Path | None = None, repo: Path | None = None) -> dict[str, Any]:

@@ -25,7 +25,6 @@ from tests.unit._architecture_helpers import (
 COVERAGE_MAP_PATH = Path(".pre-commit-coverage-map.yml")
 MAKEFILE_PATH = Path("Makefile")
 TOX_PATH = Path("tox.ini")
-RUNNER_PATH = Path("run_all_tests.sh")
 
 ALLOWED_ENFORCED_BY = frozenset(
     {
@@ -123,8 +122,13 @@ def _gate_env_runs_in_the_full_suite(repo: Path, env_name: str) -> bool:
     env_list = re.search(r"^env_list\s*=\s*(.+)$", tox_body, re.MULTILINE)
     if not env_list or env_name not in {part.strip() for part in env_list.group(1).split(",")}:
         return False
-    all_suites = re.search(r'ALL_SUITES="([^"]+)"', (repo / RUNNER_PATH).read_text(encoding="utf-8"))
-    return bool(all_suites) and env_name in {part.strip() for part in all_suites.group(1).split(",")}
+    from tests.unit._architecture_helpers import all_suites_from_runner
+
+    try:
+        suites = all_suites_from_runner(repo)
+    except (OSError, ValueError):
+        return False
+    return env_name in suites
 
 
 def _gate_env_name(location: str) -> str | None:

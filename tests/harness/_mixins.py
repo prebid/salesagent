@@ -209,7 +209,7 @@ def _e2e_raw_captures(env: Any) -> list[dict]:
 def _e2e_captures_since_trigger(env: Any) -> list[dict]:
     """The wire entries that arrived AFTER the scenario's delivery trigger.
 
-    The server's own background sweep (DELIVERY_WEBHOOK_INTERVAL=5) keeps delivering the
+    The server's own background sweep (the compose sweep interval) keeps delivering the
     same row for as long as the scenario runs, so an absolute capture count conflates the
     sender's retry behaviour with the scenario's wall-clock duration. The watermark is set
     by :func:`_e2e_deliver_webhook` immediately before it asks the server to deliver; with
@@ -225,7 +225,7 @@ def _e2e_attempts_at_one_delivery(env: Any) -> list[dict]:
 
     The watermark in :func:`_e2e_deliver_webhook` excludes everything the background sweep
     delivered BEFORE the trigger, but the sweep keeps running during the window too:
-    DELIVERY_WEBHOOK_INTERVAL=5 against a retry ladder that is ~4s wide means a second,
+    The compose sweep interval against a retry ladder that is ~4s wide means a second,
     independent delivery of the same row can land in the middle of the first one's retries.
     Counting the window naively conflates the two, which is how a correct 3-attempt ladder
     (``max_attempts=3`` at webhook_delivery_service.py:753, and the seam counts TOTAL
@@ -494,9 +494,9 @@ def _deliver_via_live_server(
     ``return True`` — registration performed, route never driven — the graduated
     ``T-UC-004-webhook-9421`` e2e_rest leg still PASSED, in 3.1s against 0.6s on the
     unmutated tree (bdd_e2e ``innet_210826_0257`` vs ``innet_210826_0240``, both
-    542 passed / 1 failed / 2033 xfailed / 18 xpassed / 2 skipped). ``run_all_tests.sh``
-    exports ``DELIVERY_WEBHOOK_INTERVAL=5``, so the server's OWN background delivery
-    scheduler picks the row up within about five seconds of
+    542 passed / 1 failed / 2033 xfailed / 18 xpassed / 2 skipped). docker-compose.e2e.yml
+    sets the sweep interval, so the server's OWN background delivery
+    scheduler picks the row up within about one interval of
     :func:`_attach_reporting_webhook` writing it. Both senders are the deployment under
     test, so what the receiver captures is still a real server-made delivery — but the
     route is a way to ask PROMPTLY, not the reason a delivery exists, and a scenario
@@ -527,8 +527,8 @@ def _deliver_via_live_server(
     if env.webhook_capture_key_was_handed_out:
         _attach_reporting_webhook(env, media_buy)
     # The TRIGGER WINDOW opens here, and everything the scenario counts is read relative
-    # to it. ``run_all_tests.sh`` exports DELIVERY_WEBHOOK_INTERVAL=5, so the server's own
-    # background sweep is delivering the same row every five seconds; a raw capture count
+    # to it. docker-compose.e2e.yml sets the sweep interval, so the server's own
+    # background sweep keeps delivering the same row; a raw capture count
     # therefore measures "how long the scenario took" as much as "how many attempts the
     # sender made", and the retry gaps read off those captures would include a sweep
     # interval sitting between two real retries. Watermarking is the smaller of the two

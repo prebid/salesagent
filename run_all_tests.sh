@@ -13,7 +13,7 @@
 # `postgres`/`proxy` here can never collide with another stack's — many of these
 # can run concurrently with zero port coordination.
 #
-# STATUS — all six suites run in-network, addressing every dependency by SERVICE
+# STATUS — all eight suites run in-network, addressing every dependency by SERVICE
 # NAME (postgres:5432, proxy:8000, creative-agent:8080, runner alias `tests`):
 #   unit              -> no DB (DATABASE_URL unset by the unit tox env)
 #   integration       -> suite DB (/adcp_test) + creative-agent for the 18
@@ -23,18 +23,9 @@
 #   e2e               -> SERVER DB (/adcp via E2E_DATABASE_URL, per-suite tox
 #                        override); server reached at proxy:8000; webhooks call
 #                        back to the runner via ADCP_WEBHOOK_HOST=tests
-#   ui                -> SERVER DB (/adcp) + playwright chromium baked into
-#                        Dockerfile.test; browser drives proxy:8000
-#                        NOTE: local/in-network only until Summary gating — see
-#                        tests/unit/test_architecture_ci_suite_coverage.py (#2161).
-#   quality           -> no DB; slow ratchets (mypy --check-untyped-defs, pylint
-#                        R0801) including baseline slack. Not a Summary job:
-#                        quality-gate runs the hook scripts, not this tox env.
-#                        see tests/unit/test_architecture_ci_suite_coverage.py (#1721).
-#   storyboard        -> adcp-server-storyboard. CI job storyboard-conformance
-#                        runs this suite and is report-only (not Summary) until
-#                        the ledger is re-verified. see
-#                        tests/unit/test_architecture_ci_suite_coverage.py (#1858).
+#   ui                -> tests/unit/test_architecture_ci_suite_coverage.py
+#   quality           -> tests/unit/test_architecture_ci_suite_coverage.py
+#   storyboard        -> tests/unit/test_architecture_ci_suite_coverage.py
 #
 # Per-suite DB split: integration/bdd/admin use the runner's DATABASE_URL
 # (/adcp_test); e2e/ui override it to E2E_DATABASE_URL (/adcp) in their tox envs.
@@ -42,7 +33,7 @@
 # collision, and NO published host ports anywhere.
 #
 # Usage:
-#   ./run_all_tests.sh                          # all six suites in-network (default)
+#   ./run_all_tests.sh                          # all eight suites in-network (default)
 #   ./run_all_tests.sh ci                       # same, explicit
 #   ./run_all_tests.sh unit,integration         # explicit suite list
 #   ./run_all_tests.sh quick                    # no-Docker unit+integration (delegates to host runner)
@@ -64,11 +55,8 @@ export COMPOSE_PROJECT_NAME="$(printf '%s' "${COMPOSE_PROJECT_NAME:-adcp-innet-$
 # /app/logs unwritable and killed adcp-server at import. .tox moved back onto a
 # named volume in the same change, so the `.tox` ownership failure that
 # motivated deriving it no longer has a bind mount to happen on.
-# The delivery-webhook scheduler runs on the SERVER (adcp-server), gated by this
-# interval. docker-compose.e2e.yml defaults it empty (scheduler off); the host
-# e2e path sets it to 5 via conftest. Mirror that so test_daily_delivery_webhook
-# gets a report. Compose interpolates this into the adcp-server service env.
-export DELIVERY_WEBHOOK_INTERVAL="${DELIVERY_WEBHOOK_INTERVAL:-5}"
+# The delivery-webhook scheduler runs on adcp-server. docker-compose.e2e.yml is
+# the only writer for that sweep interval (adcp-server and the tests service).
 
 # Parallelism defaults, sized against DOCKER'S memory rather than the host's.
 #
@@ -136,7 +124,7 @@ export E2E_WORKERS="${E2E_WORKERS:-$_e2e_workers}"
 echo "Parallelism: docker_mem=${_docker_mem_gb}GB cores=${_cores} -> unit=$UNIT_XDIST_N integration=$INTEGRATION_XDIST_N e2e_workers=$E2E_WORKERS" >&2
 # Argument contract — back-compat with the historical MODE words so the
 # pre-existing callers (Makefile quality-full/test-full, docs) keep working:
-#   (no arg) | ci                 -> all six suites, in-network (the default)
+#   (no arg) | ci                 -> all eight suites, in-network (the default)
 #   ci <pytest-target> [args...]  -> targeted run  (delegated to the host runner)
 #   quick                         -> no-Docker unit+integration (host runner)
 #   <comma,list>                  -> explicit tox suite list, in-network
@@ -569,7 +557,7 @@ fi
 # can call webhooks back to it (ADCP_WEBHOOK_HOST=tests) by name.
 #
 # PARALLEL (`-p`): this was serial from 2026-06-18
-# to 2026-08-16 over an OOM observed running all six suites concurrently in one
+# to 2026-08-16 over an OOM observed running all eight suites concurrently in one
 # container, where bdd's `-n auto` alone could spawn one worker per host CPU
 # (~17), each loading the app. That OOM predates PYTEST_XDIST_AUTO_NUM_WORKERS
 # (added the same day, in response) ever reaching this container correctly —

@@ -301,6 +301,9 @@ jobs:
       # run_all_tests.sh's argument contract sends `ci <target> [args]` to the
       # HOST runner, so a marker-scoped run cannot stay in-network. See the
       # wall-clock note on salesagent-2xnqw.
+      - name: Free disk space
+        if: matrix.group == 'creative'
+        uses: ./.github/actions/_free-disk
       - name: Run integration suite in-network
         if: matrix.group == 'creative'
         run: ./run_all_tests.sh integration
@@ -519,6 +522,8 @@ jobs:
       # the conformance run itself uses none of it.)
       # Identical shape to the BDD In-Network job above; hand-rolling a compose
       # lifecycle here is what made this job fail on every earlier attempt.
+      - name: Free disk space
+        uses: ./.github/actions/_free-disk
       - name: Run storyboard conformance in-network
         run: ./run_all_tests.sh storyboard
         env:

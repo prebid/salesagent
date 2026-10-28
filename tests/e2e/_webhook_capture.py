@@ -98,9 +98,19 @@ class WebhookReadbackError(RuntimeError):
 
 
 def _readback_base_url() -> str:
-    """The host-reachable readback origin for the ``.adcp.test`` flavor."""
-    host = os.getenv("WEBHOOK_CAPTURE_HOST", "localhost")
-    port = os.getenv("WEBHOOK_CAPTURE_PORT", "8090")
+    """The readback origin the fixture or the in-network tests service published.
+
+    No default. A fallback addresses whatever sibling stack is published on
+    that port, which is the cross-wiring this error exists to name.
+    """
+    host = os.getenv("WEBHOOK_CAPTURE_HOST")
+    port = os.getenv("WEBHOOK_CAPTURE_PORT")
+    if not host or not port:
+        raise WebhookReadbackError(
+            "WEBHOOK_CAPTURE_HOST and WEBHOOK_CAPTURE_PORT must be set by the "
+            "docker_services_e2e fixture in tests/e2e/conftest.py, or by the "
+            "in-network tests service. There is no default."
+        )
     return f"http://{host}:{port}"
 
 
