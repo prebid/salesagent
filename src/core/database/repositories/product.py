@@ -8,6 +8,9 @@ is set at construction time and injected into all queries automatically.
 from __future__ import annotations
 
 import logging
+from collections.abc import Iterator
+from contextlib import contextmanager
+from copy import deepcopy
 from typing import Any
 
 from sqlalchemy import select
@@ -99,6 +102,19 @@ class ProductRepository:
         )
         return list(self._session.scalars(stmt).all())
 
+    def list_dynamic_templates(self, *, for_update: bool = False) -> list[Product]:
+        """Active templates with the pricing their generated variants inherit."""
+        stmt = (
+            select(Product)
+            .options(selectinload(Product.pricing_options), selectinload(Product.inventory_profile))
+            .where(Product.tenant_id == self._tenant_id, Product.is_dynamic.is_(True), Product.archived_at.is_(None))
+            .order_by(Product.product_id)
+        )
+        if for_update:
+            # Lock in a stable order and refresh after waiting for another writer.
+            stmt = stmt.with_for_update().execution_options(populate_existing=True)
+        return list(self._session.scalars(stmt).all())
+
     def list_by_ids(self, product_ids: list[str]) -> list[Product]:
         """Get products by a list of IDs within the tenant.
 
@@ -119,6 +135,12 @@ class ProductRepository:
     # ------------------------------------------------------------------
     # Writes
     # ------------------------------------------------------------------
+
+    @contextmanager
+    def variant_write(self) -> Iterator[None]:
+        """A failed signal rolls back its own rows without aborting the batch."""
+        with self._session.begin_nested():
+            yield
 
     def create(self, product: Product) -> Product:
         """Persist a new product within this tenant.
@@ -161,6 +183,28 @@ class ProductRepository:
     # ------------------------------------------------------------------
     # PricingOption queries
     # ------------------------------------------------------------------
+
+    def inherit_missing_variant_pricing(self, variant: Product, template: Product) -> None:
+        """Complete an unpriced variant once, preserving any existing pricing."""
+        if variant.tenant_id != self._tenant_id or template.tenant_id != self._tenant_id:
+            raise ValueError("Variant and template must belong to the repository tenant")
+        if variant.pricing_options:
+            return
+        variant.pricing_options = [
+            PricingOption.create(
+                tenant_id=self._tenant_id,
+                product_id=variant.product_id,
+                pricing_option_id=option.pricing_option_id,
+                pricing_model=option.pricing_model,
+                currency=option.currency,
+                is_fixed=option.is_fixed,
+                rate=option.rate,
+                price_guidance=deepcopy(option.price_guidance),
+                parameters=deepcopy(option.parameters),
+                min_spend_per_package=option.min_spend_per_package,
+            )
+            for option in template.pricing_options
+        ]
 
     def get_all_pricing_options(self) -> list[PricingOption]:
         """Get all pricing options for the tenant."""

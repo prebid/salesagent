@@ -13,6 +13,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from src.core.schemas import GetProductsRequest
+from tests.factories import ProductFactory
 from tests.helpers.unit_identity import fabricated_identity
 
 
@@ -43,14 +44,24 @@ def _mock_uow_with_products(products):
     mock_uow = MagicMock()
     mock_uow.__enter__ = MagicMock(return_value=mock_uow)
     mock_uow.__exit__ = MagicMock(return_value=False)
-    mock_uow.products.list_all.return_value = products
+    mock_uow.schemas = {product.product_id: product for product in products}
+    mock_uow.products.list_all.return_value = [
+        ProductFactory.build(
+            tenant=None,
+            tenant_id="test-tenant",
+            product_id=product.product_id,
+            allowed_principal_ids=product.allowed_principal_ids,
+            is_dynamic_variant=False,
+        )
+        for product in products
+    ]
     return mock_uow
 
 
 def _base_patches(mock_uow, convert_fn=None):
     """Patches for a minimal _get_products_impl call (no enrichment)."""
     if convert_fn is None:
-        convert_fn = lambda p, **kw: p  # noqa: E731
+        convert_fn = lambda row, **kw: mock_uow.schemas[row.product_id]  # noqa: E731
     return [
         patch("src.core.database.repositories.uow.ProductUoW", return_value=mock_uow),
         patch("src.core.tools.products.convert_product_model_to_schema", side_effect=convert_fn),
@@ -157,9 +168,7 @@ class TestDynamicPricingExceptionPropagation:
             "'NoneType' object is not subscriptable"
         )
 
-        patches = [
-            patch("src.core.database.repositories.uow.ProductUoW", return_value=mock_uow),
-            patch("src.core.tools.products.convert_product_model_to_schema", side_effect=lambda p, **kw: p),
+        patches = _base_patches(mock_uow) + [
             patch(
                 "src.services.dynamic_products.generate_variants_for_brief",
                 new_callable=AsyncMock,
@@ -193,9 +202,7 @@ class TestDynamicPricingExceptionPropagation:
         mock_pricing_cls = MagicMock()
         mock_pricing_cls.return_value.enrich_products_with_pricing.side_effect = RuntimeError("Connection refused")
 
-        patches = [
-            patch("src.core.database.repositories.uow.ProductUoW", return_value=mock_uow),
-            patch("src.core.tools.products.convert_product_model_to_schema", side_effect=lambda p, **kw: p),
+        patches = _base_patches(mock_uow) + [
             patch(
                 "src.services.dynamic_products.generate_variants_for_brief",
                 new_callable=AsyncMock,
