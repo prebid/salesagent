@@ -34,7 +34,6 @@ class TargetingWidget {
         };
         this.keyMetadata = {};        // { keyId: { name, display_name } }
         this.valueMetadata = {};      // { keyId: { valueId: displayName } }
-        this.loadedValuesByKey = {};  // { keyId: [values] }
         this.editingCriterion = null; // { groupIndex, criterionIndex }
         this.loadedSuccessfully = false; // Track if existing targeting loaded OK
 
@@ -163,6 +162,26 @@ class TargetingWidget {
     }
 
     /**
+     * Fetch a key's current values from GAM and record their display names.
+     * Never cached: values can be added in GAM while this page is open (#1045).
+     * Throws on a failed request; each caller decides how to surface it.
+     */
+    async fetchValuesForKey(keyId) {
+        const url = `${this.scriptRoot}/api/tenant/${this.tenantId}/targeting/values/${keyId}`;
+        const response = await fetch(url, { credentials: 'same-origin', cache: 'no-store' });
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status}`);
+        }
+        const values = (await response.json()).values || [];
+
+        const labels = (this.valueMetadata[keyId] ??= {});
+        values.forEach(val => {
+            labels[val.id] = val.display_name || val.name || val.id;
+        });
+        return values;
+    }
+
+    /**
      * Load value metadata (display names) for all keys used in existing targeting criteria.
      * This ensures values are displayed with human-readable names instead of IDs.
      */
@@ -189,23 +208,7 @@ class TargetingWidget {
         // Load values for each key in parallel
         const loadPromises = Array.from(keyIds).map(async (keyId) => {
             try {
-                const url = `${this.scriptRoot}/api/tenant/${this.tenantId}/targeting/values/${keyId}`;
-                const response = await fetch(url, { credentials: 'same-origin' });
-                if (!response.ok) {
-                    console.warn(`[TargetingWidget] Failed to load values for key ${keyId}: HTTP ${response.status}`);
-                    return;
-                }
-                const data = await response.json();
-
-                this.loadedValuesByKey[keyId] = data.values || [];
-
-                // Cache value metadata (id -> display_name mapping)
-                if (!this.valueMetadata[keyId]) {
-                    this.valueMetadata[keyId] = {};
-                }
-                (data.values || []).forEach(val => {
-                    this.valueMetadata[keyId][val.id] = val.display_name || val.name || val.id;
-                });
+                await this.fetchValuesForKey(keyId);
             } catch (error) {
                 console.warn(`[TargetingWidget] Error loading values for key ${keyId}:`, error);
             }
@@ -670,25 +673,7 @@ class TargetingWidget {
         valuesList.innerHTML = '<div class="loading">Loading values...</div>';
 
         try {
-            // Check cache first
-            if (!this.loadedValuesByKey[keyId]) {
-                const url = `${this.scriptRoot}/api/tenant/${this.tenantId}/targeting/values/${keyId}`;
-                const response = await fetch(url, { credentials: 'same-origin' });
-                if (!response.ok) throw new Error(`HTTP ${response.status}`);
-                const data = await response.json();
-
-                this.loadedValuesByKey[keyId] = data.values || [];
-
-                // Cache value metadata
-                if (!this.valueMetadata[keyId]) {
-                    this.valueMetadata[keyId] = {};
-                }
-                this.loadedValuesByKey[keyId].forEach(val => {
-                    this.valueMetadata[keyId][val.id] = val.display_name || val.name || val.id;
-                });
-            }
-
-            const values = this.loadedValuesByKey[keyId];
+            const values = await this.fetchValuesForKey(keyId);
 
             if (values.length === 0) {
                 valuesList.innerHTML = '<div class="empty-state">No values available for this key</div>';
