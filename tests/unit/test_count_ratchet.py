@@ -937,7 +937,10 @@ def test_a_short_pylint_run_does_not_lower_the_committed_baseline(
 def test_a_complete_pylint_run_still_auto_lowers_the_baseline(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Auto-lowering is the ratchet working. Proving completion must not stop it."""
     baseline = tmp_path / ".duplication-baseline"
-    baseline.write_text(json.dumps({"src": 29, "tests": 63, "scripts": 5}, indent=2) + "\n", encoding="utf-8")
+    baseline.write_text(
+        json.dumps({"src": 29, "tests": 63, "scripts": 5, ".claude/scripts": 5}, indent=2) + "\n",
+        encoding="utf-8",
+    )
     (tmp_path / "src").mkdir()
 
     complete = "a.py:1:0: R0801: Similar lines in 2 files" + _PYLINT_SCORE
@@ -955,4 +958,9 @@ def test_a_complete_pylint_run_still_auto_lowers_the_baseline(tmp_path: Path, mo
     monkeypatch.setattr(count_ratchet, "resolve_upstream_ceiling", lambda **_kwargs: {})
 
     assert check_code_duplication.main() == 0
-    assert json.loads(baseline.read_text(encoding="utf-8")) == {"src": 1, "tests": 1, "scripts": 1}
+    assert json.loads(baseline.read_text(encoding="utf-8")) == {
+        "src": 1,
+        "tests": 1,
+        "scripts": 1,
+        ".claude/scripts": 1,
+    }
