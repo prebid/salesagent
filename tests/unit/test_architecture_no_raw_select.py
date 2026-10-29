@@ -165,7 +165,8 @@ ALLOWLIST: set[tuple[str, str]] = {
     # PushNotificationConfigRepository via PushNotificationConfigUoW (salesagent-tayg;
     # both sides removed these independently). manage_webhooks below deliberately KEEPS
     # its raw select — it must list INACTIVE rows, which list_active_by_principal cannot.
-    ("src/admin/blueprints/principals.py", "edit_principal"),
+    # edit_principal removed — the row comes from PrincipalRepository.get() and the
+    # advertiser's OAuth client from OAuthClientRepository.get_active()
     ("src/admin/blueprints/principals.py", "get_gam_advertisers"),
     ("src/admin/blueprints/principals.py", "list_principals"),
     ("src/admin/blueprints/principals.py", "manage_webhooks"),

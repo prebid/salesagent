@@ -1,6 +1,6 @@
 """The one renderer of a refused credential as HTTP: ``AuthChallengeResponder``.
 
-It reads nothing off the request and resolves nothing. Each transport hands its request
+It reads the request host for discovery links and resolves no identity. Each transport hands its request
 headers to the boundary, whose resolver is the one reader of a credential; this module
 lifts the AdCP auth code out of a FINISHED JSON body onto the status line and attaches the
 ``WWW-Authenticate`` challenge beside it.
@@ -13,8 +13,10 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from typing import Final
 
+from starlette.datastructures import Headers
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from src.core.errors.codes import CODE_BY_VALUE, CODE_TABLE, CodeGroup
@@ -40,10 +42,11 @@ def _is_signature_code(code: str | None) -> bool:
     return member is not None and CODE_TABLE[member].group is CodeGroup.SIGNATURE
 
 
-#: The challenge a 401 carries, per code.
+#: The bearer codes, and the RFC 6750 ``error`` parameter each one earns.
 #:
 #: RFC 6750 §3: a bearer challenge names the scheme and, when a credential WAS presented and
-#: rejected, the ``invalid_token`` error code. Both credentials this seller accepts are
+#: rejected, the ``invalid_token`` error code -- so AUTH_MISSING maps to no ``error`` at all
+#: and AUTH_INVALID to ``invalid_token``. Both credentials this seller accepts are
 #: carried in ``Authorization: Bearer`` -- the only header this seller reads a credential
 #: from -- so ``Bearer`` is the scheme to name. No ``realm``: AdCP defines none for this,
 #: and RFC 7235
@@ -55,13 +58,66 @@ def _is_signature_code(code: str | None) -> bool:
 #: the function are generated from the SDK's own taxonomy in
 #: :mod:`src.core.errors.signature_codes`. A 27-row copy here would be a second source for a
 #: string the pinned compliance vectors grade BYTE-FOR-BYTE.
-_CHALLENGE_BY_CODE: Final[dict[str, str]] = {
-    "AUTH_MISSING": "Bearer",
-    "AUTH_INVALID": 'Bearer error="invalid_token"',
+_BEARER_ERROR_BY_CODE: Final[dict[str, str | None]] = {
+    "AUTH_MISSING": None,
+    "AUTH_INVALID": "invalid_token",
 }
 
 
-def _challenge_for_code(code: str | None) -> str | None:
+def _bearer_challenge(code: str, host: str | None = None) -> str | None:
+    """The ``Bearer`` challenge for *code*, with the OAuth discovery pointer on it.
+
+    ``resource_metadata`` is the parameter RFC 9728 §5.1 defines and MCP's authorization
+    text profiles: the URL of this deployment's protected-resource metadata document, which
+    names the authorization server a client with no usable token must go to. Without it a
+    401 says only "authenticate", which a client that was never configured with an issuer
+    cannot act on -- and answering it is the entirety of what #2028 added.
+
+    IT IS DERIVED HERE, in the one function that writes the header, and that placement is
+    the fix rather than a detail. ``_flush`` strips the inbound ``WWW-Authenticate``
+    unconditionally, so when #2028 shipped a /mcp-mount middleware that wrote its own
+    challenge, that challenge was deleted and replaced by this table's parameterless
+    ``Bearer``: discovery was silently neutered while both changes looked correct in
+    isolation. Deriving the parameter from the CODE means no surface can lose it and none can
+    write a competing one -- which is why that middleware could then be deleted outright
+    (``src/app.py``) rather than taught to cooperate.
+
+    APP-WIDE, not MCP-only, because the credential it points at is. The first-party OAuth
+    access token this issuer mints is accepted by ``get_principal_from_token`` for every
+    transport -- the resolver is one, shared by MCP, A2A and REST -- so a bearer refusal on
+    any of them is correctly answered with where to get one. The metadata document is served
+    at the app root for the same reason (``src/routes/oauth.py``).
+
+    The document URL, and the issuer in it, belong to the deployment's OAuth layer, so they
+    are read from its owner rather than rebuilt here.
+
+    THE POINTER IS OPTIONAL AND THE CHALLENGE IS NOT. A deployment that names neither
+    ``SALES_AGENT_DOMAIN`` nor ``MCP_OAUTH_ISSUER`` has no protected-resource document to
+    point at, and ``get_mcp_oauth_issuer`` REFUSES rather than guess ``http://localhost:8000``
+    -- correct for a surface that publishes the issuer, wrong here. This is a refused
+    CREDENTIAL, and raising a configuration error while writing its header would replace the
+    401 with a 500 and the AUTH_MISSING envelope with CONFIGURATION_ERROR, so the caller
+    would learn nothing about the credential it presented. So the ``_or_none`` form is read:
+    no issuer means no ``resource_metadata`` parameter, leaving ``Bearer`` (plus RFC 6750
+    §3's ``error`` where one is owed), which RFC 7235 permits and which still says
+    authenticate. The pointer is an aid to discovery; the challenge is the answer.
+    """
+    if code not in _BEARER_ERROR_BY_CODE:
+        return None
+    from src.core.oauth_service import get_mcp_oauth_issuer_or_none, mcp_resource_for_host
+
+    params = []
+    if (bearer_error := _BEARER_ERROR_BY_CODE[code]) is not None:
+        params.append(f'error="{bearer_error}"')
+    if issuer := get_mcp_oauth_issuer_or_none():
+        if host is not None and re.fullmatch(r"[A-Za-z0-9.:[\]-]+", host) is None:
+            host = None
+        origin = mcp_resource_for_host(host).removesuffix("/mcp") if host else issuer
+        params.append(f'resource_metadata="{origin}/.well-known/oauth-protected-resource"')
+    return f"Bearer {', '.join(params)}".rstrip()
+
+
+def _challenge_for_code(code: str | None, host: str | None = None) -> str | None:
     """The ``WWW-Authenticate`` value for *code*, or None if it is not an auth refusal.
 
     PRIVATE, and that is the point. ``_flush`` is the only caller: asking this question has
@@ -69,7 +125,8 @@ def _challenge_for_code(code: str | None) -> str | None:
     Three transports each answered it once and disagreed, and the module-private name is
     what keeps a fourth from starting -- there is nothing importable to build one from.
 
-    TWO SCHEMES, one renderer. A bearer refusal answers ``Bearer`` per RFC 6750 §3; a request
+    TWO SCHEMES, one renderer. A bearer refusal answers ``Bearer`` per RFC 6750 §3, carrying
+    the RFC 9728 ``resource_metadata`` pointer (:func:`_bearer_challenge`); a request
     -signature refusal answers ``Signature error="<code>"`` per security.mdx @ v3.1.1
     § "``WWW-Authenticate`` format", which additionally requires no ``realm`` and no other
     parameters. They are different mechanisms with different codes, and the reason ONE
@@ -82,7 +139,7 @@ def _challenge_for_code(code: str | None) -> str | None:
         # ``code`` is the wire string off a finished body; the membership test against the
         # generated vocabulary is what keeps an arbitrary body from minting a challenge.
         return challenge_for(code or "")
-    return _CHALLENGE_BY_CODE.get(code or "")
+    return _bearer_challenge(code or "", host)
 
 
 def _envelope_in_body(body: dict) -> dict | None:
@@ -237,19 +294,25 @@ class AuthChallengeResponder:
             chunks.append(message.get("body", b"") or b"")
             if message.get("more_body", False):
                 return
-            await _flush(send, start, b"".join(chunks))
+            await _flush(send, start, b"".join(chunks), host=Headers(raw=scope.get("headers", [])).get("host"))
 
         await self.app(scope, receive, buffer)
 
 
-async def _flush(send: Send, start: Message | None, body: bytes) -> None:
+async def _flush(send: Send, start: Message | None, body: bytes, *, host: str | None = None) -> None:
     """Emit the held response, upgrading it to 401 when it carries an auth refusal.
 
-    The inbound ``WWW-Authenticate`` is stripped UNCONDITIONALLY, then re-derived from the
-    body. Not a tidy-up: it is what makes a second renderer pointless rather than merely
+    An AdCP response's ``WWW-Authenticate`` is stripped, then re-derived from the
+    body. OAuth token responses retain their own Basic challenge. This makes a second AdCP renderer pointless rather than merely
     discouraged. Anything further in that writes its own challenge has it overwritten here,
     so the only way to change what a buyer receives is to change this function -- which is
     the property an architecture guard would otherwise have to police by inspection.
+
+    The corollary is that every PARAMETER a buyer needs has to be derivable here, from the
+    code. ``resource_metadata`` was not, once: #2028's /mcp-mount middleware wrote it onto its
+    own 401 and this strip deleted it. It is derived in :func:`_bearer_challenge` now, so an
+    inner surface has nothing left to write -- and that middleware is gone, because with the
+    parameter derived from the code there was nothing left for it to add.
 
     Safe because this is reached only for ``application/json`` (see ``_is_json_response``):
     the admin UI's HTML and its ``text/event-stream`` feed never pass through here, so no
@@ -261,9 +324,9 @@ async def _flush(send: Send, start: Message | None, body: bytes) -> None:
         code = adcp_error_code_in(json.loads(body)) if body else None
     except (ValueError, TypeError):
         code = None
-    challenge = _challenge_for_code(code)
+    challenge = _challenge_for_code(code, host)
     start = dict(start)
-    headers = [h for h in start.get("headers", []) if h[0].lower() != b"www-authenticate"]
+    headers = [h for h in start.get("headers", []) if code is None or h[0].lower() != b"www-authenticate"]
     if challenge:
         start["status"] = 401
         headers.append((b"www-authenticate", challenge.encode("latin-1")))

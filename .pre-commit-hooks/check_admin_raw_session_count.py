@@ -56,6 +56,7 @@ NON_SESSION_RECEIVERS = frozenset(
         "indices",
         "next_ids",
         "processed_currencies",
+        "seen",
         "seen_tenant_ids",
         "selected_format_ids",
         "sizes",

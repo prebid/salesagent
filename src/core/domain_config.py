@@ -14,12 +14,17 @@ from src.core.config import get_settings
 
 
 def _is_localhost(domain: str | None) -> bool:
-    """Check if domain is localhost or 127.0.0.1."""
+    """Check if domain is localhost or a loopback IP."""
     if not domain:
         return False
-    # Strip port if present
-    host = domain.split(":")[0]
-    return host in ("localhost", "127.0.0.1")
+    value = domain.strip().lower()
+    if value.startswith("["):
+        host = value[1:].split("]", 1)[0]
+    elif value.count(":") == 1:
+        host = value.split(":", 1)[0]
+    else:
+        host = value
+    return host in ("localhost", "127.0.0.1", "::1")
 
 
 def _is_single_label_host(domain: str | None) -> bool:
@@ -46,6 +51,20 @@ def _get_protocol_for_domain(domain: str | None) -> str:
     ``proxy:8000``, is exactly that case.
     """
     return "http" if _is_localhost(domain) or _is_single_label_host(domain) else "https"
+
+
+def get_protocol_for_domain(domain: str | None) -> str:
+    """The scheme predicate under a name callers outside this module may use.
+
+    This decides nothing of its own — ``_get_protocol_for_domain`` above stays the
+    SINGLE place the http/https question is answered. It exists because the MCP
+    OAuth surface (``src/core/oauth_service.py``) needs the scheme for the issuer
+    URL, the registered redirect URIs and the ``WWW-Authenticate`` challenge, and
+    those three must advertise the SAME origin the agent identity publishes. A
+    second, laxer predicate for OAuth would let the issuer claim https for a host
+    that cannot serve it — the exact weakening #1291 A3 forbids.
+    """
+    return _get_protocol_for_domain(domain)
 
 
 def get_sales_agent_domain() -> str | None:
@@ -99,6 +118,20 @@ def get_admin_url(protocol: str = "https") -> str | None:
     """
     if domain := get_admin_domain():
         return f"{protocol}://{domain}"
+    return None
+
+
+def get_mcp_server_url(protocol: str = "https") -> str | None:
+    """Get this deployment's MCP endpoint (e.g., https://sales-agent.example.com/mcp).
+
+    This is the deployment-wide endpoint, used for configuration defaults.
+    Tenant OAuth resources use each tenant's registered virtual_host instead.
+
+    Returns:
+        The full URL, or None if SALES_AGENT_DOMAIN is not configured.
+    """
+    if url := get_sales_agent_url(protocol):
+        return f"{url}/mcp"
     return None
 
 
