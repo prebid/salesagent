@@ -34,7 +34,7 @@ from tests.unit._architecture_helpers import iter_call_expressions
 # Frozen at the current count; can only shrink. New behavioral files with mock
 # constructions fail immediately (force a deliberate cap entry or harness use).
 BEHAVIORAL_MOCK_CONSTRUCTION_CAP: dict[str, int] = {
-    "tests/integration/test_create_media_buy_behavioral.py": 27,
+    "tests/integration/test_create_media_buy_behavioral.py": 26,
     "tests/integration/test_delivery_poll_behavioral.py": 2,
     "tests/integration/test_delivery_webhook_behavioral.py": 0,
     # 44 -> 40: TestAdapterSupportAnnotation deleted (it graded a field no model declares).

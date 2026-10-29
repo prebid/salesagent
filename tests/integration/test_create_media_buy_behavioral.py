@@ -948,7 +948,9 @@ class TestMainFlowObligations:
         from src.core.format_resolver import format_display, format_identity
         from src.core.tools._wire import to_wire
 
-        requested = {"agent_url": "https://creative.adcontextprotocol.org", "id": "video_preroll"}
+        # Resolve a real catalog format first, so this grades product support
+        # rather than the earlier missing-reference refusal.
+        requested = {"agent_url": "https://creative.adcontextprotocol.org", "id": "video_standard"}
         carried = {"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"}
         req = _make_request(
             packages=[
@@ -1298,7 +1300,7 @@ class TestInlineCreativeObligations:
             # exactly how such a row would already exist in production.
             # NOT a U-label host: the merged canonicalizer IDNA-encodes "https://exämple.com"
             # to https://xn--exmple-cua.com/ and returns normally, which left the
-            # TargetUriMalformedError arm in _build_registered_agent_urls unexecuted and this
+            # TargetUriMalformedError arm in _registered_agents_by_url unexecuted and this
             # case grading nothing. An unparseable authority is refused for real.
             CreativeAgentFactory(tenant=tenant, agent_url="https://[::1", enabled=True)
 
@@ -1582,18 +1584,17 @@ class TestExtensionObligations:
             mock_registry._get_tenant_agents.return_value = []  # No agents registered
             mock_get_registry.return_value = mock_registry
 
-            from src.core.exceptions import AdCPAuthorizationError
-
             # No normalizer to neutralize: both sides of the registration check go through
             # `canonical_agent_url`, so the comparison is exact by construction.
-            with pytest.raises(AdCPAuthorizationError) as exc_info:
+            with pytest.raises(AdCPFormatNotFoundError) as exc_info:
                 await _validate_and_convert_format_ids(
                     format_ids=[{"agent_url": "https://unknown-agent.example.com", "id": "banner_300x250"}],
                     tenant_id="test_tenant",
                     package_idx=0,
                 )
 
-            assert exc_info.value.error_code == "PERMISSION_DENIED"
+            assert exc_info.value.error_code == "REFERENCE_NOT_FOUND"
+            assert exc_info.value.field == "packages[0].format_ids"
 
     @pytest.mark.asyncio
     async def test_format_not_found_on_agent(self):
@@ -1601,17 +1602,23 @@ class TestExtensionObligations:
 
         Covers: UC-002-EXT-H-03
         """
+        from src.core.creative_agent_registry import CreativeAgent
         from src.core.tools.media_buy_create import _validate_and_convert_format_ids
 
-        mock_agent = MagicMock()
-        mock_agent.agent_url = "https://creative.example.com"
+        mock_agent = CreativeAgent(
+            agent_url="https://creative.example.com",
+            name="Registered agent",
+            auth={"type": "bearer", "credentials": "test-token"},
+            auth_header="X-Creative-Token",
+            timeout=45,
+        )
 
         # Patched at the ACCESSOR, not the class -- see the note in
         # test_unregistered_creative_agent_rejected.
         with patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_get_registry:
             mock_registry = MagicMock()
             mock_registry._get_tenant_agents.return_value = [mock_agent]
-            mock_registry.get_format = AsyncMock(return_value=None)  # Format not found
+            mock_registry.get_formats_for_agent = AsyncMock(return_value=[])
             mock_get_registry.return_value = mock_registry
 
             with pytest.raises(AdCPFormatNotFoundError) as exc_info:
@@ -1622,6 +1629,8 @@ class TestExtensionObligations:
                 )
 
             assert exc_info.value.error_code == "REFERENCE_NOT_FOUND"
+            # Retain the registered endpoint's credentials and tenant signing context.
+            mock_registry.get_formats_for_agent.assert_awaited_once_with(mock_agent, tenant_id="test_tenant")
 
     # test_authentication_always_required is REMOVED. It built an identity with
     # principal_id=None and asserted _create_media_buy_impl raised

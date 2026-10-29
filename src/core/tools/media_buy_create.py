@@ -33,11 +33,11 @@ from adcp.types import PackageRequest as AdcpPackageRequest
 from pydantic import BaseModel, ValidationError
 from rich.console import Console
 
+from src.core.creative_agent_registry import CreativeAgent, CreativeAgentRegistry
 from src.core.database.integrity import is_constraint_violation
 from src.core.database.repositories.creative import CreativeRepository
 from src.core.exceptions import (
     AdCPAdapterError,
-    AdCPAuthorizationError,
     AdCPBudgetExceededError,
     AdCPBudgetTooLowError,
     AdCPCapabilityNotSupportedError,
@@ -1705,8 +1705,8 @@ def _validate_pricing_model_selection(
     return pricing_info_for(selected_option, bid_price=float(package.bid_price) if package.bid_price else None)
 
 
-def _build_registered_agent_urls(registered_agents: list[Any], tenant_id: str) -> set[str]:
-    """Normalize each registered agent's URL for registration-matching comparison.
+def _registered_agents_by_url(registered_agents: list[CreativeAgent], tenant_id: str) -> dict[str, CreativeAgent]:
+    """Index canonical URLs without discarding the registered connection settings.
 
     A malformed PRE-EXISTING registered agent_url (admin-ingested data the buyer
     never touched) is skipped with a warning rather than raised: it can never
@@ -1717,16 +1717,17 @@ def _build_registered_agent_urls(registered_agents: list[Any], tenant_id: str) -
     """
     from src.core.signing.canonical import TargetUriMalformedError
 
-    registered_agent_urls = set()
+    agents_by_url: dict[str, CreativeAgent] = {}
     for agent in registered_agents:
         try:
-            registered_agent_urls.add(canonical_agent_url(agent.agent_url))
+            # The registry returns agents in priority order; keep the first match.
+            agents_by_url.setdefault(canonical_agent_url(agent.agent_url), agent)
         except TargetUriMalformedError as e:
             logger.warning(
                 f"Tenant {tenant_id}: registered creative agent_url {agent.agent_url!r} is malformed "
                 f"per RFC 9421 canonicalization ({e.reason}); excluded from registration matching."
             )
-    return registered_agent_urls
+    return agents_by_url
 
 
 def _normalize_incoming_agent_url(agent_url: str, package_idx: int, idx: int) -> str:
@@ -1750,17 +1751,26 @@ def _normalize_incoming_agent_url(agent_url: str, package_idx: int, idx: int) ->
         ) from e
 
 
+async def _registered_format_exists(
+    registry: CreativeAgentRegistry, agent: CreativeAgent | None, format_id: str, tenant_id: str
+) -> bool:
+    """Resolve only registered agents, retaining their connection and signing context."""
+    if agent is None:
+        return False
+    formats = await registry.get_formats_for_agent(agent, tenant_id=tenant_id)
+    return any(fmt.format_id.id == format_id for fmt in formats)
+
+
 async def _validate_and_convert_format_ids(
     format_ids: list[Any], tenant_id: str, package_idx: int
 ) -> list[dict[str, str]]:
-    """Validate and convert format_ids to FormatId objects with strict enforcement.
+    """Validate format references against the tenant's registered creative agents.
 
     Per AdCP spec, format_ids must be FormatId objects with {agent_url, id}.
     This function enforces:
     1. Only FormatId objects are accepted (no plain strings)
     2. agent_url must be a registered creative agent (default or tenant-specific)
     3. format_id must exist on the specified agent
-    4. Format must pass validation (dimensions, asset requirements, etc.)
 
     Args:
         format_ids: List of format ID objects from request
@@ -1771,9 +1781,10 @@ async def _validate_and_convert_format_ids(
         List of validated FormatId dicts with {agent_url, id}
 
     Raises:
-        ToolError: If any format_id is invalid, unregistered, or doesn't exist
+        AdCPSalesAgentError: If a reference is invalid, unavailable, or cannot be fetched
     """
     from src.core.creative_agent_registry import get_creative_agent_registry
+    from src.core.format_resolver import is_dialled_agent_url
 
     if not format_ids:
         return []
@@ -1796,12 +1807,12 @@ async def _validate_and_convert_format_ids(
     # `https://x.com/mcp`, and one host serving MCP at /mcp and A2A at /a2a read as a
     # single agent.
     #
-    # The set is built through `_build_registered_agent_urls` rather than a bare
+    # The index is built through `_registered_agents_by_url` rather than a bare
     # comprehension so that ONE malformed pre-existing registration (admin-ingested data
     # the buyer never touched) is skipped with a warning instead of failing every
     # format_id in the request (#1291).
     registered_agents = registry._get_tenant_agents(tenant_id)
-    registered_agent_urls = _build_registered_agent_urls(registered_agents, tenant_id)
+    registered_agents_by_url = _registered_agents_by_url(registered_agents, tenant_id)
 
     for idx, fmt_id in enumerate(format_ids):
         # Every rejection here is per-package AND per-format, so the position and the
@@ -1834,28 +1845,27 @@ async def _validate_and_convert_format_ids(
                 field=field, details=ValidationDetails(**where, agent_url=agent_url, format_id=format_id)
             )
 
-        # VALIDATION: Check agent is registered. `agent_url` is already canonical (above),
-        # and so is every member of `registered_agent_urls` — one form, both sides.
-        if agent_url not in registered_agent_urls:
-            raise AdCPAuthorizationError(field=field, details=EntityRefDetails(**where, agent_url=agent_url))
-
-        # VALIDATION: Verify format exists on agent
-        try:
-            format_obj = await registry.get_format(agent_url, format_id)
-            if not format_obj:
-                raise AdCPFormatNotFoundError(
-                    field=field,
-                    details=EntityRefDetails(**where, agent_url=agent_url, format_id=format_id),
+        # Adapter-provided formats (e.g. broadstreet://) have no HTTP registry.
+        # Keep the same distinction as the existing creative validation paths.
+        if is_dialled_agent_url(agent_url):
+            try:
+                format_exists = await _registered_format_exists(
+                    registry, registered_agents_by_url.get(agent_url), format_id, tenant_id
                 )
-        except AdCPSalesAgentError:
-            raise
-        except Exception as e:
-            logger.exception(f"Error fetching format {format_id} from {agent_url}: {e}")
-            raise AdCPAdapterError(
-                field=field,
-                details=AdapterFailureDetails(**where, agent_url=agent_url, format_id=format_id),
-                internal_detail=e,
-            ) from e
+            except AdCPSalesAgentError:
+                raise
+            except Exception as e:
+                logger.exception(f"Error fetching format {format_id} from {agent_url}: {e}")
+                raise AdCPAdapterError(
+                    field=field,
+                    details=AdapterFailureDetails(**where, agent_url=agent_url, format_id=format_id),
+                    internal_detail=e,
+                ) from e
+
+            if not format_exists:
+                # AdCP 3.1.1 L3/error-handling.mdx: inaccessible references share
+                # one error shape, and an array reference names the array itself.
+                raise AdCPFormatNotFoundError(field=package_field_path("format_ids", package_idx))
 
         # Format validated - add to results
         validated_format_ids.append({"agent_url": str(agent_url), "id": format_id})
@@ -1868,7 +1878,6 @@ from src.core.errors.details import (
     CapabilityRefusalDetails,
     ConfigurationDetails,
     CreativeRefDetails,
-    EntityRefDetails,
     ErrorProblem,
     InvalidStateDetails,
     PricingValidationDetails,
@@ -2261,6 +2270,9 @@ async def _create_media_buy_impl(
                 # Check product_id field per AdCP spec
                 if not package.product_id:
                     raise AdCPValidationError(field=package_field_path("product_id", pkg_index))
+
+                if package.format_ids:
+                    await _validate_and_convert_format_ids(package.format_ids, tenant.tenant_id, pkg_index)
 
             # Check for duplicate product_ids across packages
             product_id_counts: dict[str, int] = {}

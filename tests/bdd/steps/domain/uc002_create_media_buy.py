@@ -610,14 +610,62 @@ def given_package_format_id_plain_string(ctx: dict, format_id: str) -> None:
 
 @given(parsers.parse("a package format_id references an unregistered agent_url"))
 def given_package_format_id_unregistered_agent(ctx: dict) -> None:
-    """Set a well-formed FormatId whose agent_url is not a registered creative agent.
-
-    Production gap: _validate_and_convert_format_ids (the unregistered-agent
-    check) is dead code — never called — so the unregistered agent_url is not
-    detected (ext-h-agent wants a 'not registered' error).
-    """
+    """Set a well-formed reference whose agent is not registered for the tenant."""
     pkg = _first_package(ctx)
     pkg["format_ids"] = [{"agent_url": "https://unregistered-agent.example.com", "id": "banner_300x250"}]
+
+
+def _set_default_agent_format_ids(ctx: dict, *format_ids: str) -> None:
+    from tests.factories import FormatIdFactory
+
+    pkg = _first_package(ctx)
+    pkg["format_ids"] = [
+        FormatIdFactory(agent_url="https://creative.adcontextprotocol.org", id=format_id).model_dump(mode="json")
+        for format_id in format_ids
+    ]
+
+
+@given("a package requests a valid format followed by an unknown format on the registered default agent")
+def given_package_unknown_format(ctx: dict) -> None:
+    _set_default_agent_format_ids(ctx, "display_300x250_image", "missing-format-1933")
+
+
+@given(parsers.parse('the package requests format "{format_id}" from "{agent_url}" supported by its product'))
+def given_package_known_format(ctx: dict, format_id: str, agent_url: str) -> None:
+    from tests.factories import FormatIdFactory
+
+    pkg = _first_package(ctx)
+    pkg["format_ids"] = [FormatIdFactory(agent_url=agent_url, id=format_id).model_dump(mode="json")]
+    ctx["env"].set_product_format_ids(ctx["default_product"].product_id, pkg["format_ids"])
+
+
+@when("the buyer retries with an unknown format on the registered default agent")
+def when_retry_unknown_format(ctx: dict) -> None:
+    from tests.bdd.steps.generic._dispatch import dispatch_request
+
+    ctx["unregistered_format_result"] = ctx["result"]
+    _set_default_agent_format_ids(ctx, "missing-format-1933")
+    ctx["request_kwargs"]["idempotency_key"] = mint(str(uuid.uuid4()))
+    dispatch_request(ctx, **ctx["request_kwargs"])
+
+
+@then("both format reference rejections have identical error objects")
+def then_uniform_format_reference_rejections(ctx: dict) -> None:
+    first = ctx["unregistered_format_result"]
+    second = ctx["result"]
+    for result in (first, second):
+        result.assert_wire_error("REFERENCE_NOT_FOUND", recovery="correctable", field="packages[0].format_ids")
+    # Compare the captured wire objects, including message and details, without
+    # copying CODE_TABLE's prose into the test (AdCP 3.1.1 uniform-response rule).
+    assert first.wire_error_object() == second.wire_error_object()
+
+
+@then("the format selection creates a completed media buy")
+def then_format_selection_creates_buy(ctx: dict) -> None:
+    assert wire_field(ctx, "status") == "completed"
+    assert isinstance(wire_field(ctx, "media_buy_id"), str)
+    assert wire_field(ctx, "media_buy_id") != ""
+    assert len(wire_field(ctx, "packages")) == 1
 
 
 @given(parsers.parse('a package has two catalogs both with type "{catalog_type}"'))

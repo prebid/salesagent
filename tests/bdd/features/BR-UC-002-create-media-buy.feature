@@ -375,6 +375,46 @@ Feature: BR-UC-002 Create Media Buy
     And the operation should fail
     And the error code should be "REFERENCE_NOT_FOUND"
     And the error should include "suggestion" field
+    And the response error field is packages[0].format_ids
+    And no media buy is persisted for the tenant
+
+  # AdCP 3.1.1 L3/error-handling.mdx, "Uniform response for inaccessible references".
+  # No pinned storyboard step directly grades package format reference failures.
+  @T-UC-002-ext-h-uniform @extension @ext-h @error
+  Scenario: Unregistered agents and missing formats have uniform create errors
+    Given a valid create_media_buy request
+    And the account exists and is active
+    But a package format_id references an unregistered agent_url
+    When the Buyer Agent sends the create_media_buy request
+    Then the error code should be "REFERENCE_NOT_FOUND"
+    And the response error field is packages[0].format_ids
+    When the buyer retries with an unknown format on the registered default agent
+    Then both format reference rejections have identical error objects
+    And no media buy is persisted for the tenant
+
+  @T-UC-002-ext-h-manual @extension @ext-h @error
+  Scenario: Missing formats are rejected before manual approval
+    Given a valid create_media_buy request
+    And the account exists and is active
+    And the tenant requires manual approval
+    But a package requests a valid format followed by an unknown format on the registered default agent
+    When the Buyer Agent sends the create_media_buy request
+    Then the error code should be "REFERENCE_NOT_FOUND"
+    And the response error field is packages[0].format_ids
+    And no media buy is persisted for the tenant
+
+  @T-UC-002-ext-h-valid @extension @ext-h
+  Scenario Outline: A supported format source can create a media buy
+    Given a valid create_media_buy request
+    And the account exists and is active
+    And the package requests format "<format_id>" from "<agent_url>" supported by its product
+    When the Buyer Agent sends the create_media_buy request
+    Then the format selection creates a completed media buy
+
+    Examples:
+      | agent_url                                | format_id               |
+      | https://creative.adcontextprotocol.org   | display_300x250_image    |
+      | broadstreet://format-source-tenant       | broadstreet_static      |
     # --- ext-i: Authentication Error ---
 
   @T-UC-002-ext-i @extension @ext-i @error @post-f1 @post-f2 @post-f3

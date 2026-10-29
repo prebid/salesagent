@@ -614,14 +614,15 @@ _XFAIL_TAGS: dict[str, str] = {
     # FIXME: creative/format_id validation errors lack suggestion field
     # ext-g: _validate_creatives_before_adapter_call raises INVALID_CREATIVES without suggestion
     # ext-h: plain string format_id caught by Pydantic, not structured AdCPSalesAgentError
-    # ext-h-agent: _validate_and_convert_format_ids is dead code — unregistered agent not detected
     # Graduated 2026-09-01: the reason named the defect exactly -- "produces Pydantic error,
     # not AdCPSalesAgentError with suggestion". d2d6609da maps a pydantic ValidationError to
     # AdCPInvalidRequestError, so the boundary now emits the typed error WITH a suggestion and
     # the scenario's three wire assertions (fails, code INVALID_REQUEST, suggestion present)
     # all hold. Inspected per .claude/rules/workflows/xpass-graduation.md: the assertions are
     # wire-level, not truthiness, so the pass is not vacuous.
-    "T-UC-002-ext-h-agent": "unregistered agent_url validation not wired — _validate_and_convert_format_ids is dead code",
+    # Graduated: early package validation resolves format references before approval.
+    # The wire scenario pins REFERENCE_NOT_FOUND and the array field on REST/A2A/MCP;
+    # its sibling compares the complete errors for unregistered agents and format misses.
     # Graduated: T-UC-002-ext-i, for the same reason as ext-f above -- the auth error was
     # never reached. With the raw dispatch the request crosses the transport, the auth
     # boundary answers, and its envelope does carry a suggestion (prkv.33).

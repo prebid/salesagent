@@ -19,6 +19,7 @@ from src.core.schemas import CreateMediaBuyRequest
 from src.core.schemas._base import CreateMediaBuyResult
 from tests.factories.mint import mint
 from tests.harness._base import IntegrationEnv, json_safe
+from tests.harness._realize import realize_e2e
 from tests.harness.egress import EgressHatchMixin
 from tests.harness.transport import DeliverResult
 
@@ -192,6 +193,20 @@ class MediaBuyCreateEnv(EgressHatchMixin, IntegrationEnv):
                 product=product, pricing_model="cpm", currency=currency, is_fixed=True
             )
         return product, pricing_option
+
+    def _persist_product_format_ids(self, product_id: str, format_ids: list[dict[str, str]]) -> None:
+        """Change the real catalog row read by every transport, including e2e."""
+        from src.core.database.models import Product
+
+        product = self._session.get(Product, (self._tenant_id, product_id))
+        assert product is not None, f"Product {product_id} was not seeded"
+        product.format_ids = format_ids
+        self._commit_factory_data()
+
+    @realize_e2e(_persist_product_format_ids)
+    def set_product_format_ids(self, product_id: str, format_ids: list[dict[str, str]]) -> None:
+        """Use the same committed catalog update in-process and on the live server."""
+        self._persist_product_format_ids(product_id, format_ids)
 
     def _build_mock_context_manager(self, tool_name: str) -> MagicMock:
         """Mock context manager that delegates create_context / create_workflow_step /
