@@ -15,7 +15,7 @@ from src.adapters.base import (
 from src.adapters.constants import require_supported_update_action
 from src.adapters.utils.pricing import resolve_package_rate
 from src.adapters.vendor_http import VendorHttpClient, require_vendor
-from src.core.errors.details import CapabilityRefusalDetails, EntityRefDetails
+from src.core.errors.details import CapabilityRefusalDetails, EntityRefDetails, ErrorProblem
 from src.core.exceptions import (
     AdCPCapabilityNotSupportedError,
     AdCPPackageNotFoundError,
@@ -69,9 +69,16 @@ class Kevel(AdServerAdapter):
     # Supported media types
     SUPPORTED_MEDIA_TYPES = {"display", "native"}
 
-    def _validate_targeting(self, targeting_overlay):
+    @classmethod
+    def _targeting_refusals(
+        cls,
+        targeting_overlay: Targeting | None,
+        *,
+        userdb_enabled: bool = False,
+        frequency_capping_enabled: bool = False,
+    ) -> list[str]:
         """Validate targeting and return unsupported features."""
-        unsupported = []
+        unsupported: list[str] = []
 
         if not targeting_overlay:
             return unsupported
@@ -79,26 +86,26 @@ class Kevel(AdServerAdapter):
         # Check device types
         if targeting_overlay.device_form_factors:
             for device in targeting_overlay.device_form_factors:
-                if device not in self.SUPPORTED_DEVICE_TYPES:
+                if device not in cls.SUPPORTED_DEVICE_TYPES:
                     unsupported.append(
-                        f"Device type '{device}' not supported (Kevel supports: {', '.join(self.SUPPORTED_DEVICE_TYPES)})"
+                        f"Device type '{device}' not supported (Kevel supports: {', '.join(cls.SUPPORTED_DEVICE_TYPES)})"
                     )
 
         # Check media types
         if targeting_overlay.media_type_any_of:
             for media in targeting_overlay.media_type_any_of:
-                if media not in self.SUPPORTED_MEDIA_TYPES:
+                if media not in cls.SUPPORTED_MEDIA_TYPES:
                     unsupported.append(
-                        f"Media type '{media}' not supported (Kevel supports: {', '.join(self.SUPPORTED_MEDIA_TYPES)})"
+                        f"Media type '{media}' not supported (Kevel supports: {', '.join(cls.SUPPORTED_MEDIA_TYPES)})"
                     )
 
         # Audience targeting requires UserDB
-        if targeting_overlay.audiences_any_of and not self.userdb_enabled:
+        if targeting_overlay.audiences_any_of and not userdb_enabled:
             unsupported.append("Audience targeting requires UserDB to be enabled (set userdb_enabled=true in config)")
 
         # Frequency capping validation
         if targeting_overlay.frequency_cap:
-            if not self.frequency_capping_enabled:
+            if not frequency_capping_enabled:
                 unsupported.append(
                     "Frequency capping requires this feature to be enabled (set frequency_capping_enabled=true in config)"
                 )
@@ -109,6 +116,58 @@ class Kevel(AdServerAdapter):
                 )
 
         return unsupported
+
+    def _validate_targeting(self, targeting_overlay):
+        return self._targeting_refusals(
+            targeting_overlay,
+            userdb_enabled=self.userdb_enabled,
+            frequency_capping_enabled=self.frequency_capping_enabled,
+        )
+
+    def validate_media_buy_request(
+        self,
+        request: AdapterCreateRequest,
+        packages: list[MediaPackage],
+        start_time: datetime,
+        end_time: datetime,
+        package_pricing_info: dict[str, dict] | None = None,
+    ) -> list[ErrorProblem]:
+        return self.validate_request(
+            request,
+            packages,
+            start_time,
+            end_time,
+            package_pricing_info,
+            userdb_enabled=self.userdb_enabled,
+            frequency_capping_enabled=self.frequency_capping_enabled,
+        )
+
+    @classmethod
+    def validate_request(
+        cls,
+        request: AdapterCreateRequest,
+        packages: list[MediaPackage],
+        start_time: datetime,
+        end_time: datetime,
+        package_pricing_info: dict[str, dict] | None = None,
+        *,
+        userdb_enabled: bool = False,
+        frequency_capping_enabled: bool = False,
+    ) -> list[ErrorProblem]:
+        """Share live targeting rules; the factory supplies no optional feature flags."""
+        problems = super().validate_request(request, packages, start_time, end_time, package_pricing_info)
+        unsupported = [
+            feature
+            for package in packages
+            for feature in cls._targeting_refusals(
+                package.targeting_overlay,
+                userdb_enabled=userdb_enabled,
+                frequency_capping_enabled=frequency_capping_enabled,
+            )
+        ]
+        if unsupported:
+            raise AdCPCapabilityNotSupportedError(details=CapabilityRefusalDetails(rejected_value=unsupported))
+        return problems
 
     def _build_targeting(self, targeting_overlay):
         """Build Kevel targeting criteria from AdCP targeting."""

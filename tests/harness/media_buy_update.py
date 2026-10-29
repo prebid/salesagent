@@ -37,6 +37,7 @@ from unittest.mock import MagicMock
 
 from src.core.errors.details import EntityRefDetails
 from tests.harness._base import BaseTestEnv
+from tests.helpers.unit_identity import fabricated_account_identity
 
 _MODULE = "src.core.tools.media_buy_update"
 _DB_MODULE = "src.core.database.database_session"
@@ -102,6 +103,12 @@ class MediaBuyUpdateEnv(BaseTestEnv):
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
+        self._identity = fabricated_account_identity(
+            principal_id=self._principal_id,
+            tenant_id=self._tenant_id,
+            account_id="acct_test",
+            **self._tenant_overrides,
+        )
         self._uow_instance: MagicMock | None = None
         self.clock = _SimpleClock()
 
@@ -116,6 +123,7 @@ class MediaBuyUpdateEnv(BaseTestEnv):
         # precondition guard in _update_media_buy_impl passes. Tests that
         # need a specific status call ``set_media_buy(status=...)``.
         _default_mb = MagicMock()
+        _default_mb.account_id = self._identity.account.account_id
         _default_mb.status = "active"
         self._uow_instance.media_buys.get_by_id.return_value = _default_mb
 
@@ -252,6 +260,7 @@ class MediaBuyUpdateEnv(BaseTestEnv):
         """
         mb = MagicMock()
         mb.media_buy_id = media_buy_id
+        mb.account_id = self._identity.account.account_id
         mb.currency = currency
         mb.status = status
         mb.start_time = start_time

@@ -20,7 +20,7 @@ from src.core.database.models import (
     Principal,
     Product,
 )
-from src.core.resolved_identity import ResolvedIdentity
+from src.core.resolved_identity import ResolvedIdentity, identity_of
 from src.core.schemas import (
     AdapterGetMediaBuyDeliveryResponse,
     AdapterPackageDelivery,
@@ -30,9 +30,14 @@ from src.core.schemas import (
 )
 from src.core.tools.media_buy_delivery import _get_media_buy_delivery_impl
 from tests.factories import PricingOptionFactory
+from tests.factories.account import seed_default_account
 from tests.factories.media_buy import request_package
-from tests.factories.principal import PrincipalFactory, plaintext_token_for
-from tests.utils.database_helpers import add_product_prerequisites, create_tenant_with_timestamps
+from tests.factories.principal import plaintext_token_for
+from tests.utils.database_helpers import (
+    add_product_prerequisites,
+    bind_factories_to_session,
+    create_tenant_with_timestamps,
+)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -45,11 +50,7 @@ def _make_identity(
     principal_id: str = "test_principal",
     tenant_id: str = "test_tenant",
 ) -> ResolvedIdentity:
-    return PrincipalFactory.make_identity(
-        principal_id=principal_id,
-        tenant_id=tenant_id,
-        tenant={"tenant_id": tenant_id, "name": "Test Tenant"},
-    )
+    return identity_of(tenant_id, principal_id)
 
 
 def _make_adapter_response(
@@ -188,10 +189,14 @@ def _create_media_buy(
     if raw_request is None:
         raw_request = {"packages": [request_package(package_id=f"pkg_{media_buy_id}", product_id="prod_display")]}
 
+    with bind_factories_to_session(session):
+        account_id = seed_default_account(tenant_id, principal_id)
+
     buy = MediaBuy(
         media_buy_id=media_buy_id,
         tenant_id=tenant_id,
         principal_id=principal_id,
+        account_id=account_id,
         order_name=f"Order {media_buy_id}",
         advertiser_name="Test Advertiser",
         budget=budget,

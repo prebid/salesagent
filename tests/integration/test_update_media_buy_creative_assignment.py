@@ -8,13 +8,16 @@ from sqlalchemy import select
 
 from src.core.database.models import Creative as DBCreative
 from src.core.database.models import CreativeAssignment as DBAssignment
+from src.core.resolved_identity import identity_of
 from src.core.schemas import UpdateMediaBuyRequest, UpdateMediaBuyResponse, UpdateMediaBuyResult
 from src.core.tools.media_buy_update import _update_media_buy_impl
-from tests.factories.principal import PrincipalFactory, plaintext_token_for
+from tests.factories.account import DEFAULT_TEST_ACCOUNT_ID, seed_default_account
+from tests.factories.principal import plaintext_token_for
 from tests.helpers.media_buy_write_seam import (
     assert_status_move_carried_bookkeeping,
     read_media_buy_state,
 )
+from tests.utils.database_helpers import bind_factories_to_session
 
 
 @pytest.mark.requires_db
@@ -23,7 +26,7 @@ def test_update_media_buy_assigns_creatives_to_package(integration_db):
     from src.core.database.database_session import get_db_session
     from src.core.database.models import MediaBuy, Principal, Product, PropertyTag, Tenant
 
-    with get_db_session() as session:
+    with get_db_session() as session, bind_factories_to_session(session):
         # Create tenant
         # Required (NOT NULL) and UNIQUE. Nothing routes to this host; it exists to satisfy the column.
         tenant = Tenant(
@@ -68,7 +71,9 @@ def test_update_media_buy_assigns_creatives_to_package(integration_db):
         session.add(product)
 
         # Create media buy
+        account_id = seed_default_account("test_tenant", "test_principal")
         media_buy = MediaBuy(
+            account_id=account_id,
             media_buy_id="test_buy_123",
             tenant_id="test_tenant",
             principal_id="test_principal",
@@ -108,12 +113,8 @@ def test_update_media_buy_assigns_creatives_to_package(integration_db):
         session.add_all([creative1, creative2])
         session.commit()
 
-    # Create identity for the new _update_media_buy_impl signature
-    identity = PrincipalFactory.make_identity(
-        principal_id="test_principal",
-        tenant_id="test_tenant",
-        tenant={"tenant_id": "test_tenant"},
-    )
+    # Resolve the account-required caller from the committed fixture rows
+    identity = identity_of("test_tenant", "test_principal", DEFAULT_TEST_ACCOUNT_ID)
 
     with (
         patch("src.core.helpers.adapter_helpers.get_adapter") as mock_get_adapter,
@@ -182,7 +183,7 @@ def test_update_media_buy_replaces_creatives(integration_db):
     from src.core.database.database_session import get_db_session
     from src.core.database.models import MediaBuy, Principal, Product, PropertyTag, Tenant
 
-    with get_db_session() as session:
+    with get_db_session() as session, bind_factories_to_session(session):
         # Create tenant
         tenant = Tenant(
             tenant_id="test_tenant",
@@ -226,7 +227,9 @@ def test_update_media_buy_replaces_creatives(integration_db):
         session.add(product)
 
         # Create media buy
+        account_id = seed_default_account("test_tenant", "test_principal")
         media_buy = MediaBuy(
+            account_id=account_id,
             media_buy_id="test_buy_456",
             tenant_id="test_tenant",
             principal_id="test_principal",
@@ -288,12 +291,8 @@ def test_update_media_buy_replaces_creatives(integration_db):
         session.add(assignment1)
         session.commit()
 
-    # Create identity for the new _update_media_buy_impl signature
-    identity = PrincipalFactory.make_identity(
-        principal_id="test_principal",
-        tenant_id="test_tenant",
-        tenant={"tenant_id": "test_tenant"},
-    )
+    # Resolve the account-required caller from the committed fixture rows
+    identity = identity_of("test_tenant", "test_principal", DEFAULT_TEST_ACCOUNT_ID)
 
     with (
         patch("src.core.helpers.adapter_helpers.get_adapter") as mock_get_adapter,
@@ -361,7 +360,7 @@ def test_creative_assignments_with_weights(integration_db):
     from src.core.database.database_session import get_db_session
     from src.core.database.models import MediaBuy, Principal, Product, PropertyTag, Tenant
 
-    with get_db_session() as session:
+    with get_db_session() as session, bind_factories_to_session(session):
         # Create tenant
         tenant = Tenant(
             tenant_id="test_tenant",
@@ -405,7 +404,9 @@ def test_creative_assignments_with_weights(integration_db):
         session.add(product)
 
         # Create media buy
+        account_id = seed_default_account("test_tenant", "test_principal")
         media_buy = MediaBuy(
+            account_id=account_id,
             media_buy_id="test_buy_weights",
             tenant_id="test_tenant",
             principal_id="test_principal",
@@ -445,12 +446,8 @@ def test_creative_assignments_with_weights(integration_db):
         session.add_all([creative1, creative2])
         session.commit()
 
-    # Create ResolvedIdentity for transport-agnostic _impl call
-    identity = PrincipalFactory.make_identity(
-        principal_id="test_principal",
-        tenant_id="test_tenant",
-        tenant={"tenant_id": "test_tenant"},
-    )
+    # Resolve the account-required caller from the committed fixture rows
+    identity = identity_of("test_tenant", "test_principal", DEFAULT_TEST_ACCOUNT_ID)
 
     with (
         patch("src.core.helpers.adapter_helpers.get_adapter") as mock_get_adapter,
@@ -522,7 +519,7 @@ def test_creative_assignments_replaces_all(integration_db):
     from src.core.database.database_session import get_db_session
     from src.core.database.models import MediaBuy, Principal, Product, PropertyTag, Tenant
 
-    with get_db_session() as session:
+    with get_db_session() as session, bind_factories_to_session(session):
         tenant = Tenant(
             tenant_id="test_tenant",
             name="Test Org",
@@ -561,7 +558,9 @@ def test_creative_assignments_replaces_all(integration_db):
         )
         session.add(product)
 
+        account_id = seed_default_account("test_tenant", "test_principal")
         media_buy = MediaBuy(
+            account_id=account_id,
             media_buy_id="test_buy_replace",
             tenant_id="test_tenant",
             principal_id="test_principal",
@@ -618,12 +617,8 @@ def test_creative_assignments_replaces_all(integration_db):
         )
         session.commit()
 
-    # Create ResolvedIdentity for transport-agnostic _impl call
-    identity = PrincipalFactory.make_identity(
-        principal_id="test_principal",
-        tenant_id="test_tenant",
-        tenant={"tenant_id": "test_tenant"},
-    )
+    # Resolve the account-required caller from the committed fixture rows
+    identity = identity_of("test_tenant", "test_principal", DEFAULT_TEST_ACCOUNT_ID)
 
     with (
         patch("src.core.helpers.adapter_helpers.get_adapter") as mock_get_adapter,
@@ -768,12 +763,13 @@ def test_approved_draft_transitions_to_pending_creatives(integration_db, creativ
         assert before.confirmed_at is None, "draft is not a seller-confirmed status, so it starts unstamped"
 
         result = env.call_impl(
+            identity=identity_of(env.identity.tenant_id, env.identity.principal_id, DEFAULT_TEST_ACCOUNT_ID),
             req=UpdateMediaBuyRequest(
                 account={"account_id": "acct_test"},
                 idempotency_key="test-idem-key-0001",
                 media_buy_id=media_buy_id,
                 packages=[{"package_id": package_id, **package_update}],
-            )
+            ),
         )
 
         assert isinstance(result, UpdateMediaBuyResult), f"update failed: {result!r}"

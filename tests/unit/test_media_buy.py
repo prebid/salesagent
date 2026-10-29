@@ -62,9 +62,8 @@ from tests.factories.media_buy import (
     pricing_options_named,
     request_package,
 )
-from tests.factories.principal import PrincipalFactory
 from tests.factories.product import PricingOptionFactory
-from tests.helpers.unit_identity import fabricated_account_identity
+from tests.helpers.unit_identity import UNIT_ACCOUNT_ID, fabricated_account_identity
 
 # ---------------------------------------------------------------------------
 # Shared helpers
@@ -165,7 +164,7 @@ def _make_identity(
     dropped too: it said exactly what the factory builds for ``tenant_id`` anyway, and
     the identity refuses a dict tenant at construction.
     """
-    return PrincipalFactory.make_identity(principal_id=principal_id, tenant_id=tenant_id)
+    return fabricated_account_identity(principal_id=principal_id, tenant_id=tenant_id)
 
 
 def _mock_product(product_id: str = "prod_1", currency: str = "USD") -> MagicMock:
@@ -197,6 +196,7 @@ def _mock_media_buy(
     """Create a mock MediaBuy ORM object."""
     buy = MagicMock()
     buy.media_buy_id = media_buy_id
+    buy.account_id = UNIT_ACCOUNT_ID
     buy.tenant_id = "test_tenant"
     buy.principal_id = "test_principal"
     buy.budget = budget

@@ -14,7 +14,7 @@ from src.adapters.base import (
 from src.adapters.constants import require_supported_update_action
 from src.adapters.utils.pricing import resolve_package_rate
 from src.adapters.vendor_http import VendorHttpClient, require_vendor
-from src.core.errors.details import CapabilityRefusalDetails, EntityRefDetails
+from src.core.errors.details import CapabilityRefusalDetails, EntityRefDetails, ErrorProblem
 from src.core.exceptions import (
     AdCPAdapterError,
     AdCPCapabilityNotSupportedError,
@@ -63,9 +63,10 @@ class TritonDigital(AdServerAdapter):
     # Only audio media type supported
     SUPPORTED_MEDIA_TYPES = {"audio"}
 
-    def _validate_targeting(self, targeting_overlay):
+    @classmethod
+    def _validate_targeting(cls, targeting_overlay: Targeting | None) -> list[str]:
         """Validate targeting and return unsupported features."""
-        unsupported = []
+        unsupported: list[str] = []
 
         if not targeting_overlay:
             return unsupported
@@ -73,7 +74,7 @@ class TritonDigital(AdServerAdapter):
         # Check device types - only audio-capable devices
         if targeting_overlay.device_form_factors:
             for device in targeting_overlay.device_form_factors:
-                if device not in self.SUPPORTED_DEVICE_TYPES:
+                if device not in cls.SUPPORTED_DEVICE_TYPES:
                     unsupported.append(
                         f"Device type '{device}' not supported (Triton supports audio-capable devices only)"
                     )
@@ -93,6 +94,24 @@ class TritonDigital(AdServerAdapter):
             unsupported.append("Browser targeting not supported for audio platform")
 
         return unsupported
+
+    @classmethod
+    def validate_request(
+        cls,
+        request: AdapterCreateRequest,
+        packages: list[MediaPackage],
+        start_time: datetime,
+        end_time: datetime,
+        package_pricing_info: dict[str, dict] | None = None,
+    ) -> list[ErrorProblem]:
+        """Apply the same audio-platform constraints before live or sandbox execution."""
+        problems = super().validate_request(request, packages, start_time, end_time, package_pricing_info)
+        unsupported = [
+            feature for package in packages for feature in cls._validate_targeting(package.targeting_overlay)
+        ]
+        if unsupported:
+            raise AdCPCapabilityNotSupportedError(details=CapabilityRefusalDetails(rejected_value=unsupported))
+        return problems
 
     def _build_targeting(self, targeting_overlay):
         """Build Triton targeting criteria from AdCP targeting."""

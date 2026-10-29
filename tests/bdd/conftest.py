@@ -55,6 +55,7 @@ if TYPE_CHECKING:
 # fixture lookup. Simple ``import`` is not enough — pytest only discovers
 # fixtures from conftest files and registered plugins.
 pytest_plugins = [
+    "tests.bdd.steps.domain.local_sandbox_lifecycle",
     "tests.bdd.payload_capture",
     "tests.bdd.scenario_liveness",
     "tests.bdd.steps.generic.given_auth",
@@ -5927,6 +5928,11 @@ _UC006_WIRED_SCENARIOS = frozenset(
 )
 
 ENV_ROUTES: list[EnvRoute] = [
+    EnvRoute(
+        tag="sandbox-lifecycle",
+        when=lambda m: "sandbox-lifecycle" in m,
+        env_builder=_env("tests.harness.sandbox_lifecycle.SandboxLifecycleEnv"),
+    ),
     # ── @ctxecho (local context-echo-on-every-outcome feature) ──────────────
     # Same reason the @egress rows below are UNSCOPED `when` rows: these
     # scenarios carry T-CTXECHO-* identity tags, not T-UC-<n>, so

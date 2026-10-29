@@ -67,6 +67,7 @@ def test_rederivation_is_inexpressible_not_merely_unused() -> None:
 
     carrier = _MediaBuyData(
         media_buy_id="mb_1",
+        account_id="acct_test",
         currency="USD",
         budget=None,
         raw_request={},

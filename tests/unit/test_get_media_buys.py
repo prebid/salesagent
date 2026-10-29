@@ -50,11 +50,11 @@ def make_identity(
     tenant=None,
 ):
     """Create a ResolvedIdentity for testing."""
-    from tests.factories import PrincipalFactory
+    from tests.helpers.unit_identity import fabricated_account_identity
 
     if tenant is None:
         tenant = {"tenant_id": tenant_id, "adapter_type": "mock"}
-    return PrincipalFactory.make_identity(
+    return fabricated_account_identity(
         principal_id=principal_id,
         tenant_id=tenant_id,
         tenant=tenant,
@@ -78,7 +78,10 @@ def make_media_buy(
     confirmed_at=datetime(2025, 1, 1, tzinfo=UTC),
 ):
     buy = MagicMock()
+    from tests.helpers.unit_identity import UNIT_ACCOUNT_ID
+
     buy.media_buy_id = media_buy_id
+    buy.account_id = UNIT_ACCOUNT_ID
     buy.principal_id = principal_id
     buy.tenant_id = tenant_id
     buy.buyer_ref = None
