@@ -9,6 +9,7 @@ def test_metrics_are_registered():
         ai_review_duration,
         ai_review_errors,
         ai_review_total,
+        scheduler_isolation_errors,
         webhook_delivery_attempts,
         webhook_delivery_duration,
         webhook_delivery_total,
@@ -26,6 +27,8 @@ def test_metrics_are_registered():
     assert webhook_delivery_duration._name == "webhook_delivery_duration_seconds"
     assert webhook_delivery_attempts._name == "webhook_delivery_attempts"
     assert webhook_queue_size._name == "webhook_queue_size"
+
+    assert scheduler_isolation_errors._name == "scheduler_isolation_errors"
 
 
 def test_ai_review_counter_increments():
@@ -87,6 +90,24 @@ def test_ai_review_errors_increments():
 
     new_value = ai_review_errors.labels(tenant_id="test_tenant", error_type="validation")._value.get()
     assert new_value == initial_value + 1
+
+
+def test_scheduler_isolation_errors_increments():
+    """Scheduler isolation counter increments via the bounded recording helper.
+
+    ``error_type`` is passed pre-bounded by the caller (the services layer
+    classifies its own exception population — see
+    ``media_buy_status_scheduler._classify_scheduler_error``); the recorder
+    only sanitizes against :data:`SCHEDULER_ERROR_TYPE_VALUES`.
+    """
+    from src.core.metrics import record_scheduler_isolation_error
+    from tests.helpers.scheduler_isolation import counter_value
+
+    initial_value = counter_value("media_buy_status", "test_tenant", "db_error")
+
+    record_scheduler_isolation_error(scheduler="media_buy_status", tenant_id="test_tenant", error_type="db_error")
+
+    assert counter_value("media_buy_status", "test_tenant", "db_error") == initial_value + 1
 
 
 def test_active_ai_reviews_gauge():
