@@ -471,6 +471,10 @@ def test_exclusion_point_detector_ignores_an_unrelated_conditional() -> None:
 # three transports, which is exactly the kind of narrowing that must not be
 # silent. Update IN THE SAME CHANGE and say why in the commit.
 EXPECTED_SINGLE_TRANSPORT_TAGS: dict[str, str] = {
+    # Native GetTask/CancelTask operate on A2A task handles. MCP and the AdCP REST
+    # surface have no corresponding operation; these new scenarios grade the A2A
+    # HTTP wire and do not remove any existing cross-transport coverage.
+    "a2a-task-ownership": "A2A",
     "a2a_untyped_ingest": "A2A",
     # local-pre-dispatch-refusals.feature grades refusals made BEFORE any tool runs: a body
     # that is not a JSON object, a name the registry lacks, an A2A message naming no skill

@@ -10,16 +10,15 @@ This test validates the actual HTTP endpoints that our A2A server exposes.
 
 import os
 import sys
-from unittest.mock import MagicMock
 
 import pytest
 import requests
-from a2a.types import CancelTaskRequest, GetTaskRequest, TaskNotFoundError
 from adcp import get_adcp_spec_version
 
 # Add parent directories to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
+from scripts.setup.init_database_ci import CI_TEST_TENANT_ID  # noqa: E402
 from src.app import _AGENT_CARD_PATHS  # noqa: E402  (after the sys.path bootstrap above)
 from src.core.tools.registry import TOOLS  # noqa: E402  (after the sys.path bootstrap above)
 from tests.e2e.conftest import e2e_ca_bundle  # noqa: E402  (after the sys.path bootstrap)
@@ -333,35 +332,9 @@ class TestA2ARequestHandler:
             method = getattr(self.handler, method_name)
             assert callable(method), f"Method {method_name} is not callable"
 
-    @pytest.mark.asyncio
-    @pytest.mark.parametrize(
-        "request_cls, method_name",
-        [(GetTaskRequest, "on_get_task"), (CancelTaskRequest, "on_cancel_task")],
-    )
-    async def test_unknown_task_id_raises_task_not_found(self, request_cls, method_name):
-        """An unknown task id raises TaskNotFoundError, not the generic internal
-        error a bare None return produces — cancel is the same not-found condition
-        as get, and both route through the shared ``_get_task_or_raise``.
-
-        Fast smoke check on the raise only. It does NOT prove the wire code: the
-        exception carries no code, and the client actually sees -32603 — see
-        ``_get_task_or_raise`` (src/a2a_server/adcp_a2a_server.py) and #1670 for
-        why, plus the xfail'd live-server test in TestA2AServerIntegration that
-        grades the code on the wire. Assert on str(exc), not exc.code — there is
-        none.
-
-        Parametrized over both entry points so the shared assertion cannot drift
-        between two byte-identical copies.
-
-        Both halves of the raise are pinned: the human-readable message AND the
-        structured ``data`` payload clients actually parse. Asserting the message
-        alone would let ``data={"task_id": ...}`` be deleted with the suite still
-        green, since the id appears in the message either way.
-        """
-        with pytest.raises(TaskNotFoundError) as exc:
-            await getattr(self.handler, method_name)(request_cls(id="task_does_not_exist"), MagicMock())
-        assert "task_does_not_exist" in str(exc.value)  # the requested id is surfaced
-        assert exc.value.data == {"task_id": "task_does_not_exist"}  # ...and machine-readable
+    # Native task access is graded over HTTP in local-a2a-task-ownership.feature:
+    # authentication precedes lookup, and missing/foreign IDs share the same code
+    # and data. A direct handler call with MagicMock context bypassed that contract.
 
     def test_core_skills_are_dispatchable_over_a2a(self):
         """The core skills are dispatchable over A2A, per the registry.
@@ -393,11 +366,10 @@ class TestA2AServerIntegration:
 
     @pytest.mark.integration
     @pytest.mark.parametrize("method", ["GetTask", "CancelTask"])
-    def test_unknown_task_id_returns_task_not_found_code_on_the_wire(self, method, live_server):
+    def test_unknown_task_id_returns_task_not_found_code_on_the_wire(self, method, live_server, test_auth_token):
         """The deliverable of the TaskNotFoundError change is what an A2A client
         SEES: JSON-RPC error code -32001. That code is not carried by the
-        exception — it is synthesized downstream — so the direct-call test in
-        TestA2ARequestHandler cannot prove it. This POSTs the real request to the
+        exception — it is synthesized downstream. This POSTs an authenticated request to the
         running /a2a endpoint and grades the code on the wire.
 
         Uses the ``live_server`` fixture so the transport is guaranteed up: the
@@ -420,7 +392,7 @@ class TestA2AServerIntegration:
         response = requests.post(
             f"{live_server['a2a']}/a2a",
             json={"jsonrpc": "2.0", "id": 1, "method": method, "params": {"id": "task_does_not_exist"}},
-            headers={"A2A-Version": "1.0"},
+            headers={**credential_headers(token=test_auth_token, tenant=CI_TEST_TENANT_ID), "A2A-Version": "1.0"},
             timeout=5,
         )
 

@@ -7,7 +7,8 @@ Supports both standard A2A message format and JSON-RPC 2.0.
 import json
 import logging
 import uuid
-from collections.abc import AsyncGenerator, Mapping
+from collections.abc import AsyncGenerator, Callable, Mapping
+from dataclasses import dataclass
 
 # Import core functions for direct calls (raw functions without FastMCP decorators)
 from typing import Any
@@ -54,9 +55,9 @@ from google.protobuf import json_format, struct_pb2
 from src.a2a_server.context_builder import EXCHANGE_STATE_KEY
 from src.core.exceptions import AdcpFailure
 from src.core.helpers import enum_value
-from src.core.resolved_identity import TransportProtocol
+from src.core.resolved_identity import PublicIdentity, TransportProtocol
 from src.core.signing.capture import HttpExchange
-from src.core.tools._boundary import failure_response, serve
+from src.core.tools._boundary import failure_response, serve, task_owner
 from src.core.tools._wire import to_wire
 from src.core.tools.registry import TOOLS
 from src.core.version import get_version
@@ -197,14 +198,24 @@ def restore_a2a_integer_types(data: Any, integer_field_names: frozenset[str] = A
     return data
 
 
+@dataclass
+class _OwnedTask:
+    """A task and its server-only owner, retained together. Unbound tasks fail closed."""
+
+    task: Task
+    owner: tuple[str, str] | None = None
+
+    def bind(self, identity: PublicIdentity) -> None:
+        if identity.principal_id is not None:
+            self.owner = (identity.tenant_id, identity.principal_id)
+
+
 class AdCPRequestHandler(RequestHandler):
     """Request handler for AdCP A2A operations supporting JSON-RPC 2.0."""
 
     def __init__(self):
         """Initialize the AdCP A2A request handler."""
-        self.tasks: dict[str, Task] = {}  # In-memory task storage
-        # The VALUE, not the raw protobuf: what is stashed here is handed straight
-        # to the sender, so it must carry the gate's receipt.
+        self.tasks: dict[str, _OwnedTask] = {}  # In-memory task storage
         logger.info("AdCP Request Handler initialized for direct function calls")
 
     def _headers_of(self, context: ServerCallContext) -> Mapping[str, str]:
@@ -280,6 +291,7 @@ class AdCPRequestHandler(RequestHandler):
             )
 
         task_id = f"task_{uuid.uuid4().hex[:12]}"
+        # Register only at return sites: protocol errors expose no Task to track.
         # In protobuf, message_id is always a string (empty string default).
         msg_id = params.message.message_id or None
         task = Task(
@@ -289,7 +301,7 @@ class AdCPRequestHandler(RequestHandler):
             # Recorded so a refused request is diagnosable; nothing routes on it.
             metadata=_dict_to_struct({"request_text": " ".join(text_parts).strip(), "skill": skill}),
         )
-        self.tasks[task_id] = task
+        owned_task = _OwnedTask(task)
 
         try:
             # The request HEADERS, not an identity: the boundary resolves the caller once and
@@ -304,7 +316,7 @@ class AdCPRequestHandler(RequestHandler):
             # JSON-RPC layer. AuthChallengeResponder reads a refused credential off the artifact
             # (``adcp_error_code_in``, shape 4), so the 401 handshake needs no branch here keyed
             # on an error class.
-            result = await self._dispatch_skill(skill, parameters, headers, exchange)
+            result = await self._dispatch_skill(skill, parameters, headers, exchange, on_resolved=owned_task.bind)
 
             # An async operation returns a Task with status=submitted and NO artifacts. The
             # SAME read the final state uses, so the two cannot disagree.
@@ -332,6 +344,7 @@ class AdCPRequestHandler(RequestHandler):
                     )
                 )
                 logger.info("Task %s requires manual approval, returning status=submitted with no artifacts", task_id)
+                self.tasks[task_id] = owned_task
                 return task
 
             task.artifacts.append(
@@ -363,11 +376,11 @@ class AdCPRequestHandler(RequestHandler):
             # SDK's dispatcher serializes structurally, with the failure response in ``data``:
             # a non-``A2AError`` would be flattened to a bare InternalError with no body.
             response = failure_response(TransportProtocol.A2A, "message_processing", e)
-            task.status.CopyFrom(TaskStatus(state=TaskState.TASK_STATE_FAILED))
             raise InternalError(
                 message=f"message processing failed: {response.errors[0].message}", data=to_wire(response)
             ) from e
 
+        self.tasks[task_id] = owned_task
         return task
 
     async def on_message_send_stream(
@@ -392,7 +405,7 @@ class AdCPRequestHandler(RequestHandler):
         # result is already Task | Message — yield it directly
         yield result
 
-    def _get_task_or_raise(self, task_id: str) -> Task:
+    async def _get_task_or_raise(self, task_id: str, context: ServerCallContext, operation: str) -> Task:
         """Return the in-memory task, or raise ``TaskNotFoundError``.
 
         A bare ``None`` return makes the SDK synthesize a generic internal error;
@@ -414,10 +427,14 @@ class AdCPRequestHandler(RequestHandler):
         Shared by ``on_get_task`` and ``on_cancel_task`` so both surface the
         same error.
         """
-        task = self.tasks.get(task_id)
-        if task is None:
+        try:
+            owner = await task_owner(operation, self._headers_of(context), self._exchange_of(context))
+        except AdcpFailure as failure:
+            raise InternalError(message=failure.response.errors[0].message, data=to_wire(failure.response)) from failure
+        owned_task = self.tasks.get(task_id)
+        if owned_task is None or owned_task.owner != owner:
             raise TaskNotFoundError(message=f"Task not found: {task_id}", data={"task_id": task_id})
-        return task
+        return owned_task.task
 
     async def on_get_task(
         self,
@@ -427,9 +444,9 @@ class AdCPRequestHandler(RequestHandler):
         """Handle 'tasks/get' method to retrieve task status.
 
         Raises ``TaskNotFoundError`` for an unknown task id — see
-        ``_get_task_or_raise`` (and #1670 for why the wire code is still -32603).
+        ``_get_task_or_raise``. Inaccessible tasks have the same -32001 response.
         """
-        return self._get_task_or_raise(params.id)
+        return await self._get_task_or_raise(params.id, context, "GetTask")
 
     async def on_cancel_task(
         self,
@@ -440,12 +457,10 @@ class AdCPRequestHandler(RequestHandler):
 
         Raises ``TaskNotFoundError`` for an unknown task id — cancelling a task
         that does not exist is the same not-found condition as get, not a silent
-        no-op. See ``_get_task_or_raise`` (and #1670 for why the wire code is
-        still -32603).
+        no-op. Inaccessible tasks have the same -32001 response.
         """
-        task = self._get_task_or_raise(params.id)
-        # CopyFrom mutates the stored Task in place — self.tasks already holds
-        # this exact reference, so re-storing it would rebind the same object.
+        task = await self._get_task_or_raise(params.id, context, "CancelTask")
+        # CopyFrom mutates the Task held by its ownership record in place.
         task.status.CopyFrom(TaskStatus(state=TaskState.TASK_STATE_CANCELED))
         return task
 
@@ -540,6 +555,8 @@ class AdCPRequestHandler(RequestHandler):
         parameters: Any,
         headers: Mapping[str, str],
         exchange: HttpExchange | None = None,
+        *,
+        on_resolved: Callable[[PublicIdentity], None] | None = None,
     ) -> dict[str, Any]:
         """Run one skill through ``serve`` and return the body the artifact DataPart carries.
 
@@ -557,7 +574,9 @@ class AdCPRequestHandler(RequestHandler):
             available_skills = [name for name, spec in TOOLS.items() if spec.a2a]
             raise MethodNotFoundError(message=f"Unknown skill '{skill_name}'. Available skills: {available_skills}")
         try:
-            response = await serve(skill_name, parameters, headers, TransportProtocol.A2A, exchange)
+            response = await serve(
+                skill_name, parameters, headers, TransportProtocol.A2A, exchange, on_resolved=on_resolved
+            )
         except AdcpFailure as failure:
             # A2A's wire failure marker is the Task STATE, set by the caller from the
             # response's own ``status``. This transport adds nothing to the BODY.

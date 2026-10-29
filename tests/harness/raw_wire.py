@@ -25,6 +25,7 @@ does, rather than becoming a result a scenario could mistake for the seller's an
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 from dataclasses import dataclass
 from typing import Any
@@ -123,6 +124,28 @@ def _e2e_rest(env: Any, document: RawDocument, credential: dict[str, str]) -> Tr
 
 
 # ── A2A ──────────────────────────────────────────────────────────────
+
+
+def unwrap_a2a_native_response(response: Any) -> TransportResult:
+    """Read a native task operation's real HTTP response, rather than an AdCP artifact."""
+    from pydantic import RootModel
+
+    from tests.harness._base import WireError, _wire_envelope
+
+    body = response.json()
+    if "error" in body:
+        error = body["error"]
+        return TransportResult(
+            error=WireError(error, response),
+            envelope={"jsonrpc_error": error, "status_code": response.status_code},
+            wire_error_envelope=_wire_envelope(error.get("data", {})),
+            raw_response=response,
+            has_wire=True,
+        )
+    wire = body["result"]
+    return TransportResult(
+        payload=RootModel(copy.deepcopy(wire)), wire_response=wire, raw_response=response, has_wire=True
+    )
 
 
 def _a2a_message(document: RawDocument) -> Any:
