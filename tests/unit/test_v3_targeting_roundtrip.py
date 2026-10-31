@@ -3,12 +3,13 @@
 Proves data survives:
 - construct -> model_dump -> reconstruct -> model_dump (identity)
 - construct -> json.dumps -> json.loads -> reconstruct (DB storage simulation)
-- FrequencyCap with scope through dump -> reconstruct cycle
+- FrequencyCap through dump -> reconstruct cycle, and that undeclared keys do not survive it
 """
 
 import json
 
 from src.core.schemas import FrequencyCap, Targeting
+from tests.factories import FrequencyCapFactory
 
 
 def _roundtrip(t: Targeting) -> Targeting:
@@ -43,7 +44,7 @@ class TestV3ConstructRoundtrip:
             geo_metros_exclude=[{"system": "nielsen_dma", "values": ["602"]}],
             geo_postal_areas_exclude=[{"system": "us_zip", "values": ["90210"]}],
             device_type_any_of=["mobile", "desktop"],
-            frequency_cap={"max_impressions": 5, "suppress_minutes": 60, "scope": "package"},
+            frequency_cap=FrequencyCapFactory.build(max_impressions=5, suppress_minutes=60),
         )
         d1 = t.model_dump(exclude_none=True)
         t2 = _roundtrip(t)
@@ -80,7 +81,7 @@ class TestV3ConstructRoundtrip:
             device_type_any_of=["mobile"],
             browser_any_of=["chrome"],
             audiences_any_of=["seg_123"],
-            frequency_cap={"max_impressions": 3, "suppress_minutes": 30},
+            frequency_cap=FrequencyCapFactory.build(max_impressions=3, suppress_minutes=30),
         )
         t2 = _roundtrip(t)
         d1 = t.model_dump(exclude_none=True)
@@ -170,26 +171,37 @@ class TestDBStorageSimulation:
 # FrequencyCap Roundtrip
 # ---------------------------------------------------------------------------
 class TestFrequencyCapRoundtrip:
-    def test_freq_cap_scope_roundtrip(self):
-        """scope='package' survives dump -> reconstruct."""
-        t = Targeting(frequency_cap={"max_impressions": 5, "suppress_minutes": 60, "scope": "package"})
+    # The caps here go through FrequencyCapFactory because they carry
+    # ``max_impressions``, which ``core/frequency-cap.json`` admits only alongside
+    # ``per`` and ``window`` (salesagent-8qela.120). That means these roundtrips now
+    # also carry those two fields through the cycle, which is the point: they are
+    # part of the document the pin defines.
+    def test_freq_cap_scope_does_not_survive_the_cycle(self):
+        """``scope`` is not a declared field, so it leaves at the first construction.
+
+        INVERTED from a test that asserted it survived. ``core/frequency-cap.json`` declares
+        five properties and no ``scope``, and the pin decides a cap's level by WHERE it hangs
+        (the ``max_impressions`` description: "the package flight for a targeting overlay, or
+        the MediaBuy flight for a root cap"). This is also the roundtrip a STORED overlay
+        takes: every one persisted while the field existed holds its ``"media_buy"`` default,
+        and dropping it on read is what keeps it off the readback wire.
+        """
+        t = Targeting(frequency_cap=FrequencyCapFactory.build(max_impressions=5, suppress_minutes=60, scope="package"))
         d1 = t.model_dump(exclude_none=True)
-        t2 = _roundtrip(t)
-        d2 = t2.model_dump(exclude_none=True)
-        assert d1["frequency_cap"]["scope"] == "package"
+        assert "scope" not in d1["frequency_cap"]
+        d2 = _roundtrip(t).model_dump(exclude_none=True)
         assert d1 == d2
 
     def test_freq_cap_suppress_float_roundtrip(self):
         """Float suppress_minutes value survives roundtrip."""
-        t = Targeting(frequency_cap={"max_impressions": 3, "suppress_minutes": 45.5, "scope": "media_buy"})
+        t = Targeting(frequency_cap=FrequencyCapFactory.build(max_impressions=3, suppress_minutes=45.5))
         t2 = _json_roundtrip(t)
         assert t2.frequency_cap.suppress_minutes == 45.5
 
     def test_freq_cap_json_roundtrip(self):
         """FrequencyCap through JSON storage roundtrip."""
-        t = Targeting(frequency_cap={"max_impressions": 10, "suppress_minutes": 120, "scope": "package"})
+        t = Targeting(frequency_cap=FrequencyCapFactory.build(max_impressions=10, suppress_minutes=120))
         t2 = _json_roundtrip(t)
         assert t2.frequency_cap.max_impressions == 10
         assert t2.frequency_cap.suppress_minutes == 120.0
-        assert t2.frequency_cap.scope == "package"
         assert isinstance(t2.frequency_cap, FrequencyCap)

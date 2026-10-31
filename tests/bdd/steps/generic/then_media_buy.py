@@ -6,7 +6,10 @@ is neither a registered plugin nor imported by a test module contributes none. R
 it was measured and rejected -- it steals 127 already-bound step instances across 5 modules
 (salesagent-uokuq). Its remaining steps are candidates for PROMOTION into a registered
 module when a scenario needs them, one at a time, which is how the two UC-002 package Thens
-left here (see salesagent-9p7oe.4).
+left here (see salesagent-9p7oe.4). The ``"errors" array`` pair moved to ``then_error.py``
+and ``the package budget should be persisted as`` to ``uc003_update_media_buy.py`` the
+same way, when UC-003 scenarios needed them; the UC-002 persistence and success-shape
+Thens moved to ``uc002_invariants.py`` when the UC-002 scenarios were wired.
 
 Eleven patterns across seven functions have been removed rather than left: five functions
 whose six patterns were SHADOWED by a registered module (so they were dead twice over --
@@ -47,27 +50,16 @@ def then_no_media_buy_persisted(ctx: dict) -> None:
         assert count == existing_count, f"Expected {existing_count} media buy(s) in DB, found {count}"
 
 
+# PROMOTED to tests/bdd/steps/domain/uc002_invariants.py (registered), each graded on the wire, the
+# seller's record through the repositories, or the ad server's receipt: the pricing/date
+# validation passes, the approval-path and adapter-execution steps, the media-buy/package/
+# creative-assignment persistence steps, the ASAP start_time steps, and the BR-RULE-018
+# success/error shape steps. The 'the response should have / contain an "errors" array' pair
+# is defined once, in tests/bdd/steps/generic/then_error.py.
+
 # ═══════════════════════════════════════════════════════════════════════
 # Response success assertions
 # ═══════════════════════════════════════════════════════════════════════
-
-
-@then("the pricing validation should pass")
-def then_pricing_validation_passes(ctx: dict) -> None:
-    """Assert pricing validation passed — no error, response has media_buy_id."""
-    assert "error" not in ctx, f"Expected pricing validation to pass but got error: {ctx.get('error')}"
-    resp = require_payload(ctx)
-    media_buy_id = _get_response_field(resp, "media_buy_id")
-    assert media_buy_id, "Expected media_buy_id in response — pricing validation passed but no media buy created"
-
-
-@then("the date validation should pass")
-def then_date_validation_passes(ctx: dict) -> None:
-    """Assert date validation passed — no error, response has media_buy_id."""
-    assert "error" not in ctx, f"Expected date validation to pass but got error: {ctx.get('error')}"
-    resp = require_payload(ctx)
-    media_buy_id = _get_response_field(resp, "media_buy_id")
-    assert media_buy_id, "Expected media_buy_id in response — date validation passed but no media buy created"
 
 
 @then(parsers.parse('the response should include "{field}" matching "{value}"'))
@@ -89,109 +81,6 @@ def then_response_field_matches(ctx: dict, field: str, value: str) -> None:
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# Approval workflow assertions (BR-RULE-017)
-# ═══════════════════════════════════════════════════════════════════════
-
-
-@then("the approval path should be auto-approved")
-def then_approval_auto(ctx: dict) -> None:
-    """Assert the media buy was auto-approved — no manual approval step required.
-
-    Auto-approval means:
-    1. status='completed' (full pipeline ran synchronously)
-    2. No workflow_step_id on response packages (no pending approval task created)
-
-    This distinguishes auto-approved from manually-approved-then-completed,
-    where a workflow step would have been created even if it was later resolved.
-    """
-    resp = require_payload(ctx)
-    status = _get_response_field(resp, "status")
-    assert status == "completed", (
-        f"Expected auto-approval (status='completed' per BR-RULE-017), got '{status}'. "
-        "Auto-approved media buys complete the full pipeline synchronously."
-    )
-    # Auto-approved means no manual approval workflow step was created.
-    # Check that no package carries a workflow_step_id (which would indicate
-    # a pending approval task was created, even if it was later completed).
-    inner = getattr(resp, "response", resp)
-    pkgs = getattr(inner, "packages", None) or []
-    for pkg in pkgs:
-        wf_step_id = getattr(pkg, "workflow_step_id", None)
-        assert wf_step_id is None, (
-            f"Package {getattr(pkg, 'package_id', '?')} has workflow_step_id={wf_step_id} — "
-            "auto-approved media buys should not create approval workflow steps"
-        )
-
-
-@then("the media buy should proceed to adapter execution")
-def then_adapter_executed(ctx: dict) -> None:
-    """Assert the adapter executed -- outcome check (DB state) + mock bonus for in-process."""
-    from tests.bdd.steps._outcome_helpers import assert_adapter_executed, is_e2e
-
-    # Primary: outcome assertion works in ALL transports including E2E
-    assert_adapter_executed(ctx)
-
-    # Bonus: mock call count for in-process transports (fast, precise)
-    if not is_e2e(ctx):
-        env = ctx["env"]
-        adapter_mock = env.mock["adapter"].return_value
-        assert adapter_mock.create_media_buy.call_count == 1, (
-            f"Expected adapter.create_media_buy to be called exactly once (auto-approval path), "
-            f"but it was called {adapter_mock.create_media_buy.call_count} time(s)"
-        )
-        call_args = adapter_mock.create_media_buy.call_args
-        assert call_args is not None, "adapter.create_media_buy was called but call_args is None"
-        assert len(call_args.args) > 0 or len(call_args.kwargs) > 0, (
-            "adapter.create_media_buy was called with no arguments"
-        )
-
-
-@then("the approval path should be manual")
-def then_approval_manual(ctx: dict) -> None:
-    """Assert the response indicates manual approval (task status 'submitted').
-
-    Production: manual approval -> DB status=pending_approval, task status=submitted.
-    E2E: Docker mock adapter auto-approves, so status may be 'completed' or 'active'.
-    """
-    from tests.bdd.steps._outcome_helpers import is_e2e
-
-    resp = require_payload(ctx)
-    status = _get_response_field(resp, "status")
-    if is_e2e(ctx):
-        # E2E Docker mock adapter auto-approves -- allow terminal statuses
-        e2e_valid = ("submitted", "completed", "active", "pending_approval")
-        assert status in e2e_valid, f"Expected manual approval status (one of {e2e_valid} in E2E), got '{status}'"
-    else:
-        assert status == "submitted", f"Expected manual approval (status='submitted'), got '{status}'"
-
-
-@then("the media buy should enter pending state")
-def then_pending_state(ctx: dict) -> None:
-    """Assert the media buy was persisted with status 'pending_approval' in DB.
-
-    E2E: Docker mock adapter auto-approves, so status may advance past pending.
-    """
-    from sqlalchemy import select
-
-    from src.core.database.models import MediaBuy
-    from tests.bdd.steps._outcome_helpers import is_e2e
-
-    resp = require_payload(ctx)
-    media_buy_id = _get_response_field(resp, "media_buy_id")
-    assert media_buy_id, "No media_buy_id in response"
-
-    with _db_session(ctx) as session:
-        mb = session.scalars(select(MediaBuy).filter_by(media_buy_id=media_buy_id)).first()
-        assert mb is not None, f"Media buy {media_buy_id} not found in DB"
-        if is_e2e(ctx):
-            # E2E Docker mock adapter auto-approves -- status may have advanced
-            valid = ("pending_approval", "active", "completed", "submitted")
-            assert mb.status in valid, f"Expected DB status in {valid} (E2E), got '{mb.status}'"
-        else:
-            assert mb.status == "pending_approval", f"Expected DB status 'pending_approval', got '{mb.status}'"
-
-
-# ═══════════════════════════════════════════════════════════════════════
 # Status and workflow assertions
 # ═══════════════════════════════════════════════════════════════════════
 
@@ -204,164 +93,6 @@ def then_pending_state(ctx: dict) -> None:
 # ═══════════════════════════════════════════════════════════════════════
 # Persistence assertions
 # ═══════════════════════════════════════════════════════════════════════
-
-
-@then("the media buy record should be persisted in the database")
-@then("the media buy record should be persisted")
-def then_media_buy_persisted(ctx: dict) -> None:
-    """Assert a media buy was persisted in the database with correct field values."""
-    resp = require_payload(ctx)
-    media_buy_id = _get_response_field(resp, "media_buy_id")
-    assert media_buy_id, "No media_buy_id in response to verify persistence"
-
-    from sqlalchemy import select
-
-    from src.core.database.models import MediaBuy
-
-    with _db_session(ctx) as session:
-        mb = session.scalars(select(MediaBuy).filter_by(media_buy_id=media_buy_id)).first()
-        assert mb is not None, f"Media buy {media_buy_id} not found in database"
-        # Verify key field values are populated (not just existence)
-        tenant = ctx.get("tenant")
-        assert tenant is not None, "No tenant in ctx — cannot verify tenant_id on persisted media buy"
-        assert mb.tenant_id == tenant.tenant_id, f"Expected tenant_id '{tenant.tenant_id}', got '{mb.tenant_id}'"
-        assert mb.status is not None, f"Media buy {media_buy_id} persisted with no status"
-        # Verify principal linkage
-        principal = ctx.get("principal")
-        if principal is not None:
-            assert mb.principal_id is not None, (
-                f"Media buy {media_buy_id} persisted without principal_id — "
-                "step claims record is 'persisted' but identity linkage is missing"
-            )
-
-
-@then(parsers.parse('the media buy record should be persisted with status "{status}"'))
-def then_media_buy_persisted_with_status(ctx: dict, status: str) -> None:
-    """Assert media buy is persisted with expected status."""
-    resp = require_payload(ctx)
-    media_buy_id = _get_response_field(resp, "media_buy_id")
-    assert media_buy_id, "No media_buy_id in response"
-
-    from sqlalchemy import select
-
-    from src.core.database.models import MediaBuy
-
-    with _db_session(ctx) as session:
-        mb = session.scalars(select(MediaBuy).filter_by(media_buy_id=media_buy_id)).first()
-        assert mb is not None, f"Media buy {media_buy_id} not found"
-        assert mb.status == status, f"Expected status '{status}', got '{mb.status}'"
-
-
-@then("the package records should be persisted")
-def then_package_records_persisted(ctx: dict) -> None:
-    """Assert media buy packages were persisted in the database with correct count."""
-    resp = require_payload(ctx)
-    media_buy_id = _get_response_field(resp, "media_buy_id")
-    assert media_buy_id, "No media_buy_id in response to verify package persistence"
-
-    from sqlalchemy import func, select
-
-    from src.core.database.models import MediaPackage
-
-    with _db_session(ctx) as session:
-        count = session.scalar(select(func.count()).select_from(MediaPackage).filter_by(media_buy_id=media_buy_id))
-        assert count and count > 0, f"No package records found for media buy {media_buy_id}"
-        # Verify count matches the number of packages in the request
-        request_kwargs = ctx.get("request_kwargs", {})
-        expected_count = len(request_kwargs.get("packages", []))
-        if expected_count > 0:
-            assert count == expected_count, (
-                f"Expected {expected_count} package record(s) for media buy {media_buy_id}, found {count}"
-            )
-
-
-@then("no package records should be persisted")
-def then_no_package_records_persisted(ctx: dict) -> None:
-    """Assert no package records were created for the tenant."""
-    from sqlalchemy import func, select
-
-    from src.core.database.models import MediaBuy, MediaPackage
-
-    tenant = ctx.get("tenant")
-    assert tenant is not None, "No tenant in ctx"
-    with _db_session(ctx) as session:
-        count = session.scalar(
-            select(func.count())
-            .select_from(MediaPackage)
-            .join(MediaBuy, MediaPackage.media_buy_id == MediaBuy.media_buy_id)
-            .filter(MediaBuy.tenant_id == tenant.tenant_id)
-        )
-        # Allow existing packages created by Given steps
-        existing_count = 0
-        if ctx.get("existing_media_buy"):
-            existing_mb = ctx["existing_media_buy"]
-            existing_count = len(getattr(existing_mb, "packages", []) or [])
-        assert count == existing_count, f"Expected {existing_count} package record(s) in DB, found {count}"
-
-
-@then(parsers.parse("the package budget should be persisted as {budget:d}"))
-def then_package_budget_persisted(ctx: dict, budget: int) -> None:
-    """Assert the package budget was persisted in the database with the expected value.
-
-    Queries the real DB for the package referenced in the update request and
-    verifies its budget matches the expected value. This checks actual persistence,
-    not just the response payload.
-    """
-    from sqlalchemy import select
-
-    from src.core.database.models import MediaPackage
-
-    # Determine package_id from the update request or existing package
-    update_kwargs = ctx.get("update_kwargs", {})
-    packages = update_kwargs.get("packages", [])
-    if packages:
-        package_id = packages[0].get("package_id")
-    else:
-        pkg = ctx.get("existing_package")
-        assert pkg is not None, "No package in update request or ctx — cannot verify budget"
-        package_id = pkg.package_id
-
-    assert package_id, "No package_id found to verify budget persistence"
-
-    with _db_session(ctx) as session:
-        db_pkg = session.scalars(select(MediaPackage).filter_by(package_id=package_id)).first()
-        assert db_pkg is not None, f"Package {package_id} not found in DB"
-        assert db_pkg.budget == budget, (
-            f"Expected package budget {budget}, got {db_pkg.budget} — "
-            "BR-RULE-020 INV-1: adapter success should persist changes"
-        )
-
-
-@then("the creative assignment records should be persisted")
-def then_creative_assignment_records_persisted(ctx: dict) -> None:
-    """Assert creative assignment records were persisted in the database.
-
-    Verifies: (1) records exist, and (2) count matches the total number of
-    creative_ids across all packages in the request.
-    If no creative_ids were requested, this step passes (no assignments expected).
-    """
-    resp = require_payload(ctx)
-    media_buy_id = _get_response_field(resp, "media_buy_id")
-    assert media_buy_id, "No media_buy_id in response"
-
-    expected_ids = ctx.get("expected_creative_ids")
-    assert expected_ids, (
-        "No expected_creative_ids in ctx — Given step must register "
-        "ctx['expected_creative_ids'] for Then steps to verify assignment"
-    )
-
-    from src.core.database.repositories.creative import CreativeAssignmentRepository
-
-    with _db_session(ctx) as session:
-        repo = CreativeAssignmentRepository(session, ctx["tenant"].tenant_id)
-        assignments = repo.get_by_media_buy(str(media_buy_id))
-        actual_ids = {a.creative_id for a in assignments}
-        missing = expected_ids - actual_ids
-        assert not missing, (
-            f"Expected creatives {sorted(expected_ids)} persisted as assignments "
-            f"for media buy {media_buy_id}, but missing {sorted(missing)}. "
-            f"Actual: {sorted(actual_ids)}"
-        )
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -381,231 +112,8 @@ def then_rejection_reason_contains(ctx: dict, text: str) -> None:
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# ASAP start_time resolution assertions
-# ═══════════════════════════════════════════════════════════════════════
-
-
-@then("the system should resolve start_time to current UTC")
-def then_start_time_resolved_to_utc(ctx: dict) -> None:
-    """Assert the persisted media buy has start_time close to now (ASAP resolved)."""
-    from datetime import UTC, datetime
-
-    from sqlalchemy import select
-
-    from src.core.database.models import MediaBuy
-
-    resp = require_payload(ctx)
-    media_buy_id = _get_response_field(resp, "media_buy_id")
-    assert media_buy_id, "No media_buy_id in response"
-
-    with _db_session(ctx) as session:
-        mb = session.scalars(select(MediaBuy).filter_by(media_buy_id=media_buy_id)).first()
-        assert mb is not None, f"Media buy {media_buy_id} not found in DB"
-        assert mb.start_time is not None, "start_time not set on persisted media buy"
-        now = datetime.now(UTC)
-        delta = abs((mb.start_time - now).total_seconds())
-        assert delta < 30, f"start_time {mb.start_time} is {delta}s from now — expected within 30s for ASAP"
-
-
-@then("the campaign should be immediately activating")
-def then_campaign_immediately_activating(ctx: dict) -> None:
-    """Assert the campaign is immediately activating: auto-approved AND start_time near now.
-
-    "Immediately activating" means:
-    1. Task status is "completed" (workflow succeeded, not stuck in manual approval)
-    2. DB media buy status is NOT "pending_approval" (bypassed manual approval)
-    3. start_time is near-now (ASAP was resolved to current UTC)
-    """
-    from datetime import UTC, datetime
-
-    from sqlalchemy import select
-
-    from src.core.database.models import MediaBuy
-
-    resp = require_payload(ctx)
-    # Task status "completed" means the create_media_buy workflow step finished
-    # successfully — the adapter was called (not held for manual approval).
-    # "submitted" would indicate manual approval pending.
-    status = _get_response_field(resp, "status")
-    assert status == "completed", (
-        f"Expected task status 'completed' for immediate activation (got '{status}'). "
-        f"'submitted' would mean manual approval is pending; 'failed' means adapter error."
-    )
-    media_buy_id = _get_response_field(resp, "media_buy_id")
-    assert media_buy_id, "No media_buy_id in response"
-    with _db_session(ctx) as session:
-        mb = session.scalars(select(MediaBuy).filter_by(media_buy_id=media_buy_id)).first()
-        assert mb is not None, f"Media buy {media_buy_id} not found in DB"
-        # DB status must NOT be "pending_approval" — that means manual approval was required,
-        # contradicting "immediately activating"
-        assert mb.status != "pending_approval", (
-            f"Media buy {media_buy_id} has DB status 'pending_approval' — "
-            f"campaign is waiting for manual approval, not 'immediately activating'"
-        )
-        # start_time must be near-now (ASAP resolved to current UTC)
-        assert mb.start_time is not None, "start_time not set — campaign cannot be 'immediately activating'"
-        now = datetime.now(UTC)
-        delta = abs((mb.start_time - now).total_seconds())
-        assert delta < 60, (
-            f"start_time {mb.start_time} is {delta}s from now — expected within 60s for 'immediately activating'"
-        )
-
-
-@then('the response should include resolved start_time (not literal "asap")')
-def then_response_includes_resolved_start_time(ctx: dict) -> None:
-    """Assert the response contains a resolved start_time, not the literal 'asap'.
-
-    Checks the response at two levels:
-      1. Top-level start_time on the response object.
-      2. Package-level start_time on each package in the response.
-
-    If found, verifies the value is a real datetime within 60s of now (proving
-    'asap' was resolved to current UTC). No DB fallback — this step tests the
-    response content only. If neither level has start_time, the assertion fails.
-    """
-    from datetime import UTC, datetime
-
-    resp = require_payload(ctx)
-    media_buy_id = _get_response_field(resp, "media_buy_id")
-    assert media_buy_id, "No media_buy_id in response"
-
-    # Check top-level start_time on the response.
-    resp_start_time = _get_response_field(resp, "start_time")
-    if resp_start_time is not None:
-        resp_str = str(resp_start_time)
-        assert resp_str != "asap", "Response start_time is literal 'asap', not resolved"
-        if isinstance(resp_start_time, str):
-            parsed = datetime.fromisoformat(resp_start_time.replace("Z", "+00:00"))
-            delta = abs((parsed - datetime.now(UTC)).total_seconds())
-            assert delta < 60, (
-                f"Response start_time {resp_start_time} is {delta:.1f}s from now — "
-                "expected within 60s of current UTC for 'asap' resolution"
-            )
-        return
-
-    # Check package-level start_time.
-    inner = getattr(resp, "response", resp)
-    pkgs = getattr(inner, "packages", None) or getattr(resp, "packages", None) or []
-    for pkg in pkgs:
-        pkg_start = getattr(pkg, "start_time", None)
-        if pkg_start is not None and str(pkg_start) != "asap":
-            if isinstance(pkg_start, str):
-                parsed = datetime.fromisoformat(pkg_start.replace("Z", "+00:00"))
-                delta = abs((parsed - datetime.now(UTC)).total_seconds())
-                assert delta < 60, (
-                    f"Package start_time {pkg_start} is {delta:.1f}s from now — "
-                    "expected within 60s for 'asap' resolution"
-                )
-            return
-
-    raise AssertionError(
-        f"Response has no resolved start_time — checked top-level and {len(pkgs)} package(s). "
-        "Step text claims 'response should include resolved start_time (not literal asap)'."
-    )
-
-
-# ═══════════════════════════════════════════════════════════════════════
 # Atomic response shape assertions (BR-RULE-018)
 # ═══════════════════════════════════════════════════════════════════════
-
-
-@then("the response should have success fields")
-def then_response_has_success_fields(ctx: dict) -> None:
-    """Assert response contains success-only fields with valid values.
-
-    Success fields for BR-RULE-018: media_buy_id (non-empty string),
-    packages (non-empty list), and status (valid completion status).
-    """
-    resp = require_payload(ctx)
-    media_buy_id = _get_response_field(resp, "media_buy_id")
-    assert isinstance(media_buy_id, str) and media_buy_id, (
-        f"Expected non-empty string media_buy_id in success response, got: {media_buy_id!r}"
-    )
-    packages = _get_response_field(resp, "packages")
-    assert isinstance(packages, list), f"Expected packages to be a list, got: {type(packages).__name__}"
-    assert packages, "Expected at least one package in success response"
-    # Verify each package has a product_id proving allocation
-    for i, pkg in enumerate(packages):
-        pkg_dict = pkg if isinstance(pkg, dict) else pkg.model_dump()
-        assert pkg_dict.get("product_id"), f"Package {i} missing product_id in success response"
-    status = _get_response_field(resp, "status")
-    assert status is not None, "Expected status field in success response"
-    valid_statuses = ("completed", "submitted", "pending_approval", "activating", "pending_start")
-    assert status in valid_statuses, f"Expected valid success status (one of {valid_statuses}), got: {status!r}"
-
-
-@then('the response should NOT have an "errors" field')
-def then_response_no_errors_field(ctx: dict) -> None:
-    """Assert the success response has no errors field on the wire.
-
-    Step says 'NOT have an "errors" field' — the key must be absent, not merely an empty
-    list. Asserted on the WIRE rather than by unwrapping the typed result: the old form
-    hand-rolled a CreateMediaBuyResult unwrap plus a dict/object branch, both of which are
-    shape-guessing that wire_absent does not need.
-    """
-    wire_absent(ctx, "errors")
-
-
-@then('the response should have an "errors" array')
-@then('the response should contain an "errors" array')
-def then_response_has_errors_array(ctx: dict) -> None:
-    """Assert the wire rejection carries a non-empty, conformant errors array.
-
-    The helper asserts the array is non-empty and validates every entry against pinned
-    ``core/error.json``, which subsumes the per-entry code-and-message checks the two
-    hand-rolled versions of this step used to spell out.
-    """
-    ctx["result"].assert_wire_error_is_schema_conformant()
-
-
-@then("the response should NOT have success fields (media_buy_id, packages)")
-def then_response_no_success_fields(ctx: dict) -> None:
-    """Assert the error response shape excludes ALL success-only fields.
-
-    BR-RULE-018 INV-2: a validation failure must produce an error response with
-    an errors array AND NO success-only domain fields. CreateMediaBuyError
-    legitimately has {errors, context, ext}; everything else from
-    CreateMediaBuySuccess (media_buy_id, buyer_campaign_ref, account,
-    creative_deadline, packages, planned_delivery, sandbox, workflow_step_id)
-    must be absent from the envelope the buyer received.
-
-    Graded on that envelope. The previous version read success fields off a typed model
-    the harness had rebuilt and then re-serialized it, so it proved the model and its
-    serializer agreed with each other — which is true however wrong the wire is.
-    """
-    envelope = ctx["result"].error_envelope()
-
-    # Success-only fields (CreateMediaBuySuccess minus CreateMediaBuyError's own).
-    disallowed_fields = (
-        "media_buy_id",
-        "buyer_campaign_ref",
-        "account",
-        "creative_deadline",
-        "packages",
-        "planned_delivery",
-        "sandbox",
-        "workflow_step_id",
-    )
-    leaked = {field: envelope[field] for field in disallowed_fields if field in envelope}
-    assert not leaked, (
-        f"Error envelope leaked success-only fields: {leaked}. "
-        f"Per BR-RULE-018 INV-2, an error response must carry errors only — "
-        f"no media_buy_id, packages, or other success payload."
-    )
-
-
-@then('each error should include "suggestion" field')
-def then_each_error_has_suggestion(ctx: dict) -> None:
-    """Assert every error on the wire carries a non-empty suggestion.
-
-    ``each`` is what separates this from the singular
-    ``the error should include a "suggestion" field`` in then_error.py: that one grades
-    ``errors[0]``, this one grades the whole array.
-    """
-    errors = ctx["result"].wire_error_objects()
-    assert errors, "Expected a non-empty errors array on the wire"
-    for index, err in enumerate(errors):
-        assert err.get("suggestion"), f"errors[{index}] carries no 'suggestion': {err}"
 
 
 def _retry_after_from_error_object(error_object: dict) -> tuple[object, str] | None:
@@ -761,4 +269,4 @@ def then_error_has_retry_after(ctx: dict) -> None:
 
 # Single source of truth lives in _outcome_helpers; re-exported for backward compat.
 from tests.bdd.steps._outcome_helpers import _get_response_field as _get_response_field  # noqa: F811, PLC0414
-from tests.bdd.steps._outcome_helpers import payload_or_none, require_payload, wire_absent
+from tests.bdd.steps._outcome_helpers import payload_or_none, require_payload

@@ -179,9 +179,12 @@ file's to edit:
 - The `T-UC-004-boundary-account` row and the `T-UC-004-boundary-status-filter`
   row both key on `impl-` / `pending_activation` substrings that no nodeid can
   match (`tests/bdd/conftest.py:2485-2503`, `:2613-2628`).
-- Three reasons still cite C4 as the cause (`:2368`, `:2461`, `:2467`) although
-  the translation landed; the rows that remain stayed for a different, unnamed
-  reason.
+- One reason still cites C4 as the cause (the `T-UC-004-partition-reporting-dims`
+  `geo_metro_missing_system` row) although the translation landed; that row stays
+  for a different, unnamed reason. It was three until the adcp 9.0.0 pin: the two
+  `include_package_daily_breakdown` rows citing C4 were never translation cases —
+  they were lax **coercion** of a non-boolean string, and they graduated when the
+  SDK typed the field strict, so their entries are gone from `tests/bdd/conftest.py`.
 - `is_impl` (`:1452`) and the `impl-` ledger substrings are dead with the
   transport.
 
@@ -226,23 +229,56 @@ outline that fails two rows out of twelve converts the other ten from passing to
 xpassed, which removes grading instead of adding it. That mistake was made and
 measured here: routing the keyword, replacement and format-id outlines by tag
 cut the passing count by more than half. Those are keyed by ROW in
-`_UC026_PARTITION_SELECTIVE` instead. Only four tags fail wholesale on a2a, mcp
-and rest alike, and only those four are in the set.
+`_UC026_PARTITION_SELECTIVE` instead. Only the tags that fail wholesale on a2a,
+mcp and rest alike belong in the set.
 
 Every reason is the assertion the scenario reports. The misclassification
 tripwire in `conftest.py` refuses a dormancy or a Given-side error dressed as a
 production gap, and each entry below cleared it.
 
+### An xpass is not automatically a graduation
+
+Measured in `innet_091026_1343`, 127 of the repo's 134 xpasses were in this one
+module, and they split two ways:
+
+* **36 graduated** — eight routing entries covering nine rows, each xpassing on
+  all four transports with a Then that reads the wire. Seven tags came out of
+  `_UC026_XFAIL_TAGS` (`main-explicit-formats`, the three `ext-g` immutable-field
+  refusals, `inv-195-1`, `inv-089-2`, `inv-197-4`), and `ext-b` was narrowed from
+  the whole tag to its one failing row — `budget`, which 3.2.1 no longer requires.
+* **87 were vacuous** — the `[rest-...-success` rows in
+  `_UC026_PARTITION_SELECTIVE`. Their stated reason ("REST update dispatch not
+  wired") is closed, so they xpass; but every one ends in `the outcome should be
+  <outcome>`, whose success branch grades no effect. The effect assertion was
+  written and run: `partition-keyword-add`'s `new_keyword` and
+  `existing_keyword_update_bid` rows went xpass → FAIL, 6 of 6 in-process nodes,
+  on "update response carries no package". A strengthened Then that fails for a
+  production reason is why the routing stays.
+* **4 were grading the wrong tool** — `ext-i`. Adding its own ungraded POST-F2
+  (`the error field should contain "package_id"`) turned the xpass into FAIL with
+  `got 'packages[0].product_id'`: the scenario has no Given that creates a media
+  buy, so `update_kwargs` carries no `media_buy_id`, `_is_update_request`
+  (`tests/harness/media_buy_dual.py:37`) discriminates on exactly that key, and
+  the flat body is dispatched to **create_media_buy**. Create and update share one
+  error-envelope schema, which is why `INVALID_REQUEST` / suggestion /
+  `correctable` all held on the wrong tool.
+
+The discriminator is the Then, not the green mark. Two of the three outcomes above
+were invisible until an assertion was added, and the `field` pointer is the one
+part of an error envelope that says which request was actually validated.
+
 ### Production is not ready — graded, not assumed
 
 | Gap | Tag or rows |
 |---|---|
-| `format_ids` is neither defaulted to the product's formats when omitted nor echoed when supplied, though pinned 3.1 `core/package.json` declares the field on the returned package | `main-required-fields`, `main-explicit-formats` |
+| `format_ids` is not defaulted to the product's formats when the package omits them. 3.2.1 `core/package.json` marks the field deprecated-until-4.0 and still says "Sellers SHOULD echo this field whenever the request included it", so the obligation holds under the pin. The ECHO half is fixed — `main-explicit-formats` graduated | `main-required-fields` |
 | a `format_id` the product does not carry is accepted instead of refused | `boundary-format-ids`, `partition-format-ids` (unsupported rows only) |
-| `catalogs` is accepted but not echoed on the created package | `inv-089-2` |
 | `price_breakdown` is absent from the create response, so the default `list_price == option rate` claim has nothing to read | `inv-196-3` |
-| keyword and negative-keyword conflict validation, and empty-value validation, are missing on the REST update path (a2a and mcp pass the same rows) | the eight `kw` and `neg-kw` row entries |
-| `targeting_overlay` is not replaced wholesale on update | `boundary-replacement`, `partition-replacement` (overlay rows only) |
+| keyword and negative-keyword conflict validation, and empty-value validation, are missing on EVERY transport — the earlier "missing on the REST update path (a2a and mcp pass the same rows)" reading was wrong: a2a and mcp pass those rows through the same effect-free Then, not through a validation they implement | the eight `kw` and `neg-kw` row entries |
+| `update_media_buy` returns `affected_packages=[]`, so no update scenario can grade its effect. `src/core/tools/media_buy_update.py` appends an `AffectedPackage` at five sites only (841 budget, 926 creative_ids, 1008 creatives, 1158 creative_assignments, 1191 targeting_overlay); `paused` (761) applies through the adapter and appends nothing, and the four keyword-op field names appear NOWHERE under `src/` — accepted by the inherited DTO and silently discarded. Same on all three in-process transports, so one seller gap, not a divergence. 3.2.1 `update-media-buy-response.json` requires "full Package objects showing complete post-update state ... sellers MUST NOT return package_id-only stubs", and permits `[]` only for "campaign-level updates that do not modify packages". The five populated sites also return stubs: `AffectedPackage` sets `package_id` + `paused` and marks its other two fields `exclude=True` | `alt-update`, `alt-pause`, `alt-resume`, the `alt-keyword*` and `alt-negative-keyword*` tags, `alt-cancel`, and every `[rest-...-success` row entry |
+| `@T-UC-026-ext-i` dispatches **create_media_buy**, not update: no Given creates a media buy, so there is no `media_buy_id` for `_is_update_request` to discriminate on. A harness gap, same family as `ext-j` — production is answering a different question than the scenario asks | `ext-i` |
+| `targeting_overlay` is not replaced wholesale on update. NOTE for regrounding: 3.2.1 `media-buy/package-update.json` retypes `targeting_overlay` as a per-dimension PATCH ("A non-null dimension replaces its current value; null clears it"), so the wholesale-replacement obligation these two scenarios assert may itself be over-specified against the current pin | `boundary-replacement`, `partition-replacement` (overlay rows only) |
+| a package with no `budget` is refused through the request-level accepted-shape `oneOf`, whose pydantic error has `loc ()` — so the envelope names no field and the buyer is not told what is missing. 3.2.1 `media-buy/package-request.json` requires only `product_id` and `pricing_option_id`, and names `UNSUPPORTED_FEATURE` for the seller-optimized case | `ext-b` (`budget` row only) |
 
 ### The harness is not ready — one scenario, stated as such
 

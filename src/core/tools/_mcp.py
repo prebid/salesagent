@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from adcp.types import ProtocolEnvelope
-from fastmcp.tools.tool import ToolResult
+from fastmcp.tools.base import ToolResult
 
 from src.core.tools._wire import to_wire
 

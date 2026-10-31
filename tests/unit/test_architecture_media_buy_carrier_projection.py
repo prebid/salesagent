@@ -75,6 +75,7 @@ def test_rederivation_is_inexpressible_not_merely_unused() -> None:
         wire_status="active",
         confirmed_at=None,
         revision=1,
+        creative_deadline=None,
     )
 
     with pytest.raises(AttributeError):

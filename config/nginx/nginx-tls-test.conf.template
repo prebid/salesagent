@@ -96,6 +96,20 @@ map $ssl_server_name $tls_upstream_named {
     webhooks.adcp-e2e.dev      webhook-capture:8080;
     counterparty.adcp-e2e.dev  counterparty-origin:8080;
 
+    # The SELLER, under the same wildcard and for the same eTLD+1 reason as the
+    # counterparty above — a SECOND name for the `proxy.adcp.test` upstream, not a
+    # replacement for it. It exists because the RUNNER walks the seller's own trust
+    # root through the SDK resolver (tests/e2e/test_trust_root_e2e.py), and
+    # security.mdx step 3 (Origin binding) makes that walk REFUSE a `.test` name:
+    # "The agent URL A's host eTLD+1 MUST equal the brand_json_url's host eTLD+1.
+    # eTLD+1 computation MUST use a pinned, dated Public Suffix List snapshot" —
+    # `.test` is not in the PSL, so `registrable_domain` is None on both sides, the
+    # fallback needs an `authorized_operators[]` entry no seller document carries,
+    # and the walk ends in `request_signature_brand_origin_mismatch`. The name a
+    # buyer resolves us by therefore has to have a registrable domain, so every
+    # other seller-side front stays on `*.adcp.test` and this one does not.
+    seller.adcp-e2e.dev        adcp-server:8080;
+
     # Retained alongside webhooks.adcp-e2e.dev, same upstream: the READBACK leg
     # (the test process draining its own captures) and the tls-proxy healthcheck
     # are not the graded delivery path, so the reserved-TLD gate above never

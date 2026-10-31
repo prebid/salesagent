@@ -50,7 +50,7 @@ async def resolve_property_list(ref: PropertyListReference) -> list[str]:
             so the buyer is the only party who can fix it. The refusal carries
             ``error.field = "property_list.agent_url"`` on both envelope layers,
             which is the only channel that can name the offending input — the
-            message says nothing about the cause on purpose (AdCP 3.1.1 L1
+            message says nothing about the cause on purpose (L1
             security, point 6).
         OutboundDeliveryFailed: The agent service was reachable but did not
             answer — SERVICE_UNAVAILABLE / transient.
@@ -73,8 +73,8 @@ async def resolve_property_list(ref: PropertyListReference) -> list[str]:
     #
     # This is a bespoke REST GET against {agent_url}/lists/{list_id}. It is NOT a
     # conformant AdCP get_property_list tool call (the spec defines that over
-    # MCP/A2A — v3.1.1:docs/governance/property/tasks/property_lists.mdx), so
-    # there is no AdCP operation name to attribute a signature to. AdCP 3.1.1
+    # MCP/A2A — <pin>:docs/governance/property/tasks/property_lists.mdx), so
+    # there is no AdCP operation name to attribute a signature to. AdCP.1
     # building/by-layer/L1/security.mdx:1043 is explicit that operation names must
     # be protocol-defined and that "Verifiers MUST NOT accept operation names that
     # are not defined by the AdCP protocol spec" — so signing this would put a

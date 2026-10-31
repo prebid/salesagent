@@ -25,11 +25,18 @@ from collections.abc import Collection, Iterable
 from enum import Enum
 from typing import Any, NamedTuple
 
-from adcp.types.generated_poc.enums.specialism import AdcpSpecialism
-from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import (
-    ExperimentalFeature,
-    ReportingDeliveryMethod,
-    SupportedProtocol,
+# the pinned SDK renamed two of these. ``ExperimentalFeature`` became the named $ref type
+# ``ExperimentalFeatureId`` and moved to ``domains.core``; the capabilities response's
+# two-value ``ReportingDeliveryMethod`` enum (``webhook`` / ``offline``) became
+# ``CapabilityReportingDeliveryMethod``, because the public ``adcp.types`` name now belongs
+# to a DIFFERENT type — the union of durable reporting-delivery objects. Aliasing both back
+# to the names this module uses, so the rename stays at the import.
+from adcp.types.domains.core.experimental_feature_id import (
+    ExperimentalFeatureId as ExperimentalFeature,
+)
+from adcp.types.domains.enums.specialism import AdcpSpecialism
+from adcp.types.domains.protocol.get_adcp_capabilities_response import (
+    CapabilityReportingDeliveryMethod as ReportingDeliveryMethod,
 )
 
 # `Measurement` is aliased `LibraryMeasurementDeclaration`, NOT the conventional
@@ -41,13 +48,19 @@ from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import (
 # the product-level `Measurement` inherit the capabilities-response type. Aliasing to
 # match THIS module's subclass keeps the guard checking the right pair. Do not
 # "simplify" it back to `LibraryMeasurement`.
-from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import (
+from adcp.types.domains.protocol.get_adcp_capabilities_response import (
+    CoversContentDigest,
+    SupportedProtocol,
+)
+from adcp.types.domains.protocol.get_adcp_capabilities_response import (
     Measurement as LibraryMeasurementDeclaration,
 )
-from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import TrustedMatch as LibraryTrustedMatch
+from adcp.types.domains.protocol.get_adcp_capabilities_response import TrustedMatch as LibraryTrustedMatch
 from pydantic import BaseModel, ConfigDict, ValidationError
 
+from src.core.enum_helpers import enum_value
 from src.core.errors.details import ConfigurationDetails
+from src.core.schemas._base import canonical_agent_url
 from src.core.signing.posture import (
     IdentityDeclaration,
     RequestSigningPosture,
@@ -203,7 +216,7 @@ _DERIVED_BLOCKS: dict[str, str] = {
 
 # The protocols a tenant may CLAIM. Derivation rule, applied uniformly: a protocol
 # is backed iff every tool in its conformance bundle
-# (`dist/compliance/3.1.1/protocols/<p>/index.yaml#required_tools`) is implemented
+# (`dist/compliance/<pin>/protocols/<p>/index.yaml#required_tools`) is implemented
 # in src/. Verified at v3.1.1:
 #   media_buy   -> [get_products, create_media_buy]  : both implemented.
 #   measurement -> NO protocol bundle exists (only brand, creative, governance,
@@ -314,6 +327,36 @@ def _reject_unbacked[Declared: (SupportedProtocol, AdcpSpecialism)](
 _EXPERIMENTAL_FEATURE_BY_BLOCK: dict[str, str] = {
     "measurement": "measurement.core",
     "trusted_match": "trusted_match.core",
+}
+
+# The SAME obligation's other half, and it is one conditional in the pin rather than two
+# rules: ``allOf`` on ``get-adcp-capabilities-response.json`` reads
+# ``if {"required": ["measurement"]} then supported_protocols contains "measurement" AND
+# experimental_features contains "measurement.core"``. Deriving only the feature id above
+# satisfied one branch of one ``then`` and left the other to the operator, so a tenant that
+# declared a metric catalog and nothing else emitted that block beside
+# ``supported_protocols: ["media_buy"]`` -- a document the pin refuses, from a conditional
+# this module already half-derives.
+#
+# DERIVED for the same reason the feature id is: the obligation is on the EMITTED document,
+# so a bare echo lets a declaration produce a wire the schema rejects. Splitting one
+# conditional into two operator obligations is also what made the gap invisible -- the
+# ``measurement`` protocol claim and the ``measurement`` block are the same fact.
+#
+# Honest because the claim is backed, re-verified AT THIS PIN rather than inherited: there
+# is still no ``protocols/measurement/`` bundle at 3.2.1, so no ``required_tools`` ride on
+# it, and ``#/properties/supported_protocols`` scopes it to "provider catalog/output
+# declaration (``measurement.core``)" -- which is precisely what the declared block is.
+# ``measurement`` is correspondingly in :data:`_BACKED_PROTOCOLS`.
+#
+# Only ``measurement`` appears here, and that is measured rather than minimal. Of the three
+# ``allOf`` conditionals in the pin that oblige a ``supported_protocols`` entry,
+# ``measurement_gateway``'s is unreachable (no such field on this model, so no tenant can
+# declare the block) and the third fires only on
+# ``media_buy.relationship_notifications.projection_tasks`` containing ``list_creatives``.
+# ``trusted_match`` is declarable but carries no protocol obligation at all.
+_PROTOCOL_BY_BLOCK: dict[str, SupportedProtocol] = {
+    "measurement": SupportedProtocol.measurement,
 }
 
 
@@ -592,6 +635,8 @@ class CapabilityDeclarations(BaseModel):
     #   (a) undeclarable fields      -- _reject_undeclarable_posture_fields, on the RAW
     #                                   declaration, before pydantic types anything
     #   (b) required_for  subset of supported_for
+    #   (c) covers_content_digest    -- 'required' is the only 3.2 signing posture, see
+    #                                   _validate_digest_coverage
     #   (d) must_equal_when          -- needs platform state, see
     #                                   validate_signing_platform_backing
     #   (e) required_when            -- identity.brand_json_url obliged
@@ -642,8 +687,60 @@ class CapabilityDeclarations(BaseModel):
         """Rules (b), (c), (e), (f-pattern) and (g) — everything with no DB read."""
         posture = self.request_signing
         if posture is not None:
+            self._validate_digest_coverage(posture)
             self._validate_bucket_monotonicity(posture)
         self._validate_identity_relations(posture)
+
+    def _validate_digest_coverage(self, posture: RequestSigningPosture) -> None:
+        """``required`` is the ONLY ``covers_content_digest`` a 3.2 verifier may advertise.
+
+        ``get-adcp-capabilities-response.json`` carries this as an if/then rather than in the
+        property's own ``enum``: IF ``request_signing.supported === true`` and the document
+        speaks 3.2 or later, THEN ``covers_content_digest`` is required with
+        ``{"const": "required"}``. security.mdx: "verifiers that advertise
+        request-signing support MUST advertise ``covers_content_digest: "required"``", and
+        ``either`` / ``forbidden`` are 3.0/3.1 compatibility values that "MUST NOT be
+        advertised as a 3.2 signing posture". This seller serves 3.2, so the condition fires
+        on every response it emits.
+
+        An ABSENT value passes: with ``supported`` true, ``RequestSigningPosture`` derives
+        ``required``, which is what makes a declaration of the field optional rather than
+        obligatory for the operator; with ``supported`` false nothing is verified and there is
+        no policy to state. So the only values this rejects are the two the pin names, and the
+        refusal is the one the operator needs -- the alternative is emitting a document the
+        buyer's own schema check refuses, naming nothing.
+
+        The refusal does not depend on ``supported``. The if/then only fires on
+        ``supported: true``, but the field's description forbids advertising ``either`` /
+        ``forbidden`` as a 3.2 posture with no exception for an unsupported one, and a 3.2
+        response that omits the field does not carry the legacy ``either`` default either
+        ("Omission retains the legacy effective default of 'either' only for a 3.0/3.1
+        response").
+
+        Why a refusal rather than a quiet rewrite to ``required``: this posture is also what
+        the verifier enforces. Accepting ``either`` and enforcing ``required`` would tighten
+        what the operator asked for without telling them, which is the advertise/enforce
+        divergence ``posture.py`` exists to remove. A deployment that genuinely cannot
+        require body binding declares ``supported: false`` -- security.mdx's own answer:
+        "Infrastructure that rewrites bodies MUST use a separately configured legacy
+        endpoint/origin or disable request signing under 3.2."
+        """
+        declared = enum_value(posture.covers_content_digest)
+        if declared in (None, CoversContentDigest.required.value):
+            return
+        self._reject(
+            "request_signing.covers_content_digest",
+            "A verifier that advertises request signing must advertise "
+            "covers_content_digest 'required': every accepted signature on a request with a "
+            "body covers content-digest. 'either' and 'forbidden' are 3.0/3.1 compatibility "
+            "postures that must not be advertised as a 3.2 signing posture, with or without "
+            "request signing supported; a deployment that "
+            "cannot require body binding declares request_signing.supported false instead "
+            "(get-adcp-capabilities-response.json, the allOf if/then on "
+            "request_signing.supported; security.mdx, Signed Requests (Transport Layer)).",
+            rejected_value=declared,
+            accepted_values=[CoversContentDigest.required.value],
+        )
 
     def _validate_bucket_monotonicity(self, posture: RequestSigningPosture) -> None:
         """``required_for`` may only name what a DECLARED ``supported_for`` does.
@@ -823,8 +920,18 @@ class CapabilityDeclarations(BaseModel):
         # the one we published, so a declared pointer that differs from the derived one is
         # a request_signature_key_origin_mismatch by construction -- and the emitted value
         # is always the derived one, which would make the declaration silently inert.
+        #
+        # "Differs" is decided by ``canonical_agent_url``, the one implementation of the
+        # spec's canonicalization, and by nothing else. The ``rstrip("/")`` this replaced
+        # was the "additional transformation before comparison" the algorithm's closing
+        # sentence forbids: it equated ``.../brand.json`` with ``.../brand.json/``, two
+        # distinct URLs, while still calling ``https://h:443/...`` a mismatch for
+        # ``https://h/...`` when step 4 makes them the same. Canonicalizing is strictly
+        # more correct on both axes, and it is the same answer the verifier reaches.
         declared_url = str(self.identity.brand_json_url) if self.identity and self.identity.brand_json_url else None
-        if declared_url is not None and declared_url.rstrip("/") != platform.brand_json_url.rstrip("/"):
+        if declared_url is not None and canonical_agent_url(declared_url) != canonical_agent_url(
+            platform.brand_json_url
+        ):
             self._reject(
                 "identity.brand_json_url",
                 "Must equal the URL this agent actually serves its brand.json at, which is the one "
@@ -848,8 +955,15 @@ class CapabilityDeclarations(BaseModel):
         claim whose parent protocol is missing"
         (``specialisms/sales-non-guaranteed/index.yaml#protocol`` -> ``media-buy``).
         A replacing semantics would therefore emit a self-inconsistent wire.
+
+        The union also carries the protocols DERIVED from declared experimental blocks
+        (:data:`_PROTOCOL_BY_BLOCK`), because the pin obliges them in the same ``allOf``
+        conditional that obliges the feature id :meth:`emitted_experimental_features`
+        already derives. Deriving one and not the other is what let a measurement-only
+        tenant emit a block the pin refuses to see without its protocol.
         """
-        return _union_sorted(defaults, self.supported_protocols)
+        derived = [protocol for block, protocol in _PROTOCOL_BY_BLOCK.items() if getattr(self, block) is not None]
+        return _union_sorted(defaults, _union_sorted(derived, self.supported_protocols))
 
     def emitted_experimental_features(self) -> list[ExperimentalFeature] | None:
         """Feature ids DERIVED from the declared experimental blocks.
@@ -874,15 +988,22 @@ class CapabilityDeclarations(BaseModel):
         return [ExperimentalFeature(root=i) for i in ids] or None
 
 
-# Every key in the table must name a real declarable block. With the previous
+# Every key in BOTH derivation tables must name a real declarable block. With the previous
 # `getattr(self, block, None)` a key that no longer matched a field simply read as
 # "not declared", so renaming a block would silently stop emitting its experimental
 # feature id -- a wire regression with nothing to fail. Checked at import so the
 # mismatch is a startup error, not a quietly shorter list on a buyer's response.
-_UNKNOWN_BLOCKS = sorted(set(_EXPERIMENTAL_FEATURE_BY_BLOCK) - set(CapabilityDeclarations.model_fields))
-if _UNKNOWN_BLOCKS:
-    raise RuntimeError(
-        f"_EXPERIMENTAL_FEATURE_BY_BLOCK names blocks that are not fields of "
-        f"CapabilityDeclarations: {_UNKNOWN_BLOCKS}. Their experimental feature ids would "
-        f"never be emitted."
-    )
+#
+# ``_PROTOCOL_BY_BLOCK`` is checked by the same loop rather than beside it: both tables
+# key on a field name and both fail the same silent way, so one check that reads the
+# tables cannot be the one someone forgets to extend.
+for _table_name, _table in (
+    ("_EXPERIMENTAL_FEATURE_BY_BLOCK", _EXPERIMENTAL_FEATURE_BY_BLOCK),
+    ("_PROTOCOL_BY_BLOCK", _PROTOCOL_BY_BLOCK),
+):
+    _UNKNOWN_BLOCKS = sorted(set(_table) - set(CapabilityDeclarations.model_fields))
+    if _UNKNOWN_BLOCKS:
+        raise RuntimeError(
+            f"{_table_name} names blocks that are not fields of CapabilityDeclarations: "
+            f"{_UNKNOWN_BLOCKS}. What they derive would never be emitted."
+        )

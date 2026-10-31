@@ -33,13 +33,23 @@ import json
 from pathlib import Path
 from typing import Any
 
-# The SDK's bundled/ subtree pre-inlines a partial (8-of-16-category) mirror
-# of the plain tree under the same filenames — searching it too would make
-# every mirrored bare filename ambiguous (e.g. "list-creatives-response.json"
-# exists at both creative/list-creatives-response.json and
-# bundled/creative/list-creatives-response.json). Bare-filename lookups are
-# scoped to the plain tree only; bundled/ is never read by this module.
-_EXCLUDED_TOP_LEVEL_DIR = "bundled"
+# Subtrees that RE-PUBLISH the plain tree's schemas under the same filenames.
+# Searching them would make every mirrored bare filename ambiguous, so
+# bare-filename lookups are scoped to the plain tree only; a file that lives
+# only in one of these is still reachable by passing its explicit path (the
+# ``"/" in filename`` branch of :func:`_resolve_filename`).
+#
+#   bundled/  — pre-inlines a partial (8-of-16-category) mirror, e.g.
+#               "list-creatives-response.json" exists at both
+#               creative/list-creatives-response.json and
+#               bundled/creative/list-creatives-response.json.
+#   mcp/      — NEW AT AdCP 3.2: a date-stamped MCP-transport tree
+#               (mcp/2026-07-28/...). Measured on the installed 3.2 bundle: 452
+#               files, of which 158 repeat a plain-tree filename -- enough to
+#               make "get-products-response.json" ambiguous -- and 294 are
+#               transport-only (profiles/<role>/...). Excluded for the mirrored
+#               158; the 294 are unaffected because nothing looks them up bare.
+_EXCLUDED_TOP_LEVEL_DIRS = frozenset({"bundled", "mcp"})
 
 
 class PinnedSchemaError(Exception):
@@ -52,6 +62,19 @@ class PinnedSchemaError(Exception):
     """
 
 
+def installed_spec_version() -> str:
+    """The FULL spec version the installed SDK pins (e.g. ``3.2.1``).
+
+    The one reader of it, so a caller comparing a version against the pin cannot
+    accidentally compare against the ``<major>.<minor>`` SCHEMA DIRECTORY instead —
+    ``_schemas/3.2/`` holds spec ``3.2.1``, and a check against the directory name
+    would pass today and go quiet at the next patch release.
+    """
+    import adcp
+
+    return str(adcp.get_adcp_spec_version())
+
+
 def schema_root() -> Path:
     """The installed adcp SDK's schema tree for the pinned spec version.
 
@@ -61,7 +84,7 @@ def schema_root() -> Path:
     """
     import adcp
 
-    spec_version = adcp.get_adcp_spec_version()
+    spec_version = installed_spec_version()
     major_minor = ".".join(spec_version.split(".")[:2])
     root = Path(adcp.__file__).parent / "_schemas" / major_minor
     if not root.is_dir():
@@ -164,7 +187,9 @@ def _resolve_filename(filename: str) -> Path:
                 hits.append(candidate)
             continue
 
-        matches = sorted(p for p in root.rglob(filename) if _EXCLUDED_TOP_LEVEL_DIR not in p.relative_to(root).parts)
+        matches = sorted(
+            p for p in root.rglob(filename) if not (_EXCLUDED_TOP_LEVEL_DIRS & set(p.relative_to(root).parts))
+        )
         if len(matches) > 1:
             rels = [str(m.relative_to(root)) for m in matches]
             raise PinnedSchemaError(

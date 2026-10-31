@@ -60,7 +60,7 @@ Feature: BR-UC-003 Update Media Buy
     And a valid update_media_buy request with:
     | field        | value                    |
     | media_buy_id | mb_existing              |
-    | end_time     | 2026-06-30T23:59:59.000Z |
+    | end_time     | 2099-06-30T23:59:59.000Z |
     And the new end_time is after the existing start_time
     When the Buyer Agent sends the update_media_buy request
     Then the response is compliant with the update_media_buy success spec
@@ -78,12 +78,21 @@ Feature: BR-UC-003 Update Media Buy
     | field        | value       |
     | media_buy_id | mb_existing |
     | start_time   | asap        |
+    And the existing media buy has start_time "2099-01-01T00:00:00Z" and end_time "2099-02-01T00:00:00Z"
     And the existing end_time is in the future
     When the Buyer Agent sends the update_media_buy request
     Then the response is compliant with the update_media_buy success spec
     And the response status should be "completed"
+    And the media buy's stored start_time should be the instant the update took effect
     # POST-S1: Buyer knows start_time updated to current UTC time
     # POST-S4: Unambiguous success
+    # LOCAL CORRECTION: POST-S1 was never checked, so a seller that dropped "asap" or stored
+    # the literal passed. The buy now starts far in the future, and the stored start must be
+    # the instant the update took effect: core/start-timing.json "asap" is "Start campaign as
+    # soon as possible", and update-media-buy-response.json implementation_date is the
+    # "ISO 8601 timestamp when changes take effect". Both instants are the seller's own clock.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/start-timing.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/update-media-buy-response.json
 
   @T-UC-003-alt-budget @alt-flow @budget @post-s1 @post-s4 @post-s5
   Scenario: Update campaign-level budget
@@ -125,10 +134,17 @@ Feature: BR-UC-003 Update Media Buy
     Then the response is compliant with the update_media_buy success spec
     And the response status should be "completed"
     And the response should contain affected_packages including "pkg_001"
+    And the package "pkg_001" should have creative assignments [cr_001, cr_002]
     # POST-S1: Buyer knows creatives updated
     # POST-S2: Buyer sees affected packages
     # POST-S4: Unambiguous success
     # POST-S5: Request completed
+    # "all placement_ids are valid for the product" now makes the product declare plc_a and
+    # plc_b: placement_ids are "routing IDs within already-purchased inventory", and a
+    # product declaring no placements has none to route to. The last Then reads the stored
+    # assignment set, which is what "replacement semantics" names.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/creative-assignment.json pointer=/properties/placement_ids
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-update.json pointer=/properties/creative_assignments
 
   @T-UC-003-alt-creatives-inline @alt-flow @creatives-inline @post-s1 @post-s2 @post-s4
   Scenario: Upload inline creatives and assign to package
@@ -145,9 +161,17 @@ Feature: BR-UC-003 Update Media Buy
     Then the response is compliant with the update_media_buy success spec
     And the response status should be "completed"
     And the response should contain affected_packages including "pkg_001"
+    When the Buyer Agent reads media buy "mb_existing" back with get_media_buys
+    Then the package "pkg_001" should report creative approvals for exactly ["inline-cr-001"]
     # POST-S1: Buyer knows inline creatives uploaded
     # POST-S2: Buyer sees affected packages
     # POST-S4: Unambiguous success
+    # LOCAL CORRECTION: the generated Thens read only the status and affected_packages, which a
+    # seller that never uploaded or assigned the inline creative answers too. The readback is
+    # the pin storyboard's: an inline creative on a package update is read back from
+    # get_media_buys media_buys[].packages[].creative_approvals[].creative_id.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-update.json pointer=/properties/creatives
+    # @source repo=adcp ref=v3.2.7 path=dist/compliance/3.2.7/protocols/media-buy/scenarios/inline_creatives_without_sync.yaml
 
   @T-UC-003-alt-targeting @alt-flow @targeting @post-s1 @post-s2 @post-s4 @post-s5
   Scenario: Update targeting overlay -- replacement semantics
@@ -160,14 +184,22 @@ Feature: BR-UC-003 Update Media Buy
     | package_id        | pkg_001                              |
     | targeting_overlay | {"geo_countries": ["US", "CA"]}      |
     And the package "pkg_001" exists in the media buy
+    And the package "pkg_001" has stored targeting_overlay {"geo_countries": ["GB"]}
     When the Buyer Agent sends the update_media_buy request
     Then the response is compliant with the update_media_buy success spec
     And the response status should be "completed"
     And the response should contain affected_packages including "pkg_001"
+    And the package "pkg_001" should have stored targeting_overlay geo_countries ["US", "CA"]
     # POST-S1: Buyer knows targeting updated
     # POST-S2: Buyer sees affected packages
     # POST-S4: Unambiguous success
     # POST-S5: Request completed
+    # LOCAL CORRECTION: nothing read the overlay back, so a seller that ignored it passed.
+    # The package now starts with geo_countries ["GB"], and the stored overlay must carry
+    # the requested value in its place: core/targeting-input.json, on update "a non-null
+    # value replaces that dimension". The response cannot show it (affected_packages does
+    # not carry targeting_overlay), so the record is read.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/targeting-input.json
 
   @T-UC-003-alt-optimization-goals @alt-flow @optimization-goals @post-s1 @post-s2 @post-s4 @post-s5
   Scenario: Update optimization goals -- replacement semantics
@@ -202,13 +234,23 @@ Feature: BR-UC-003 Update Media Buy
     And the package "pkg_001" exists in the media buy
     And no targeting_overlay.keyword_targets is present in the same package update
     When the Buyer Agent sends the update_media_buy request
-    Then the response is compliant with the update_media_buy success spec
-    And the response status should be "completed"
-    And the response should contain affected_packages including "pkg_001"
-    # POST-S1: Buyer knows keywords added
-    # POST-S2: Buyer sees affected packages
-    # POST-S4: Unambiguous success
-    # POST-S5: Request completed
+    Then the response is compliant with the update_media_buy error spec
+    And the operation should fail
+    And the error code should be "UNSUPPORTED_FEATURE"
+    And the error should include "suggestion" field
+    # REGROUNDED: this seller does not support keyword targeting and never claimed to.
+    # core/targeting-overlay-support.json makes Product.overlay_support the binding
+    # selectable-targeting contract -- "presence means the seller can apply protocol-valid
+    # values" -- and this seller declares none, so non-support is already discoverable.
+    # core/targeting.json then requires a fresh create/update to be "applied exactly or
+    # rejected", and core/targeting-input.json requires all supplied dimensions to be
+    # applied atomically, so the obligation for a seller that cannot apply is a REFUSAL.
+    # The previous Then steps asserted success and affected_packages, which is the
+    # obligation of a seller that SUPPORTS keyword targeting.
+    # POST-F1: System state unchanged -- the refusal precedes the UoW
+    # POST-F2: Error code explains failure
+    # POST-F3: Suggestion for recovery ("check get_adcp_capabilities and remove
+    #          unsupported fields"), which points the buyer at the capability surface
 
   @T-UC-003-alt-keyword-remove @alt-flow @keyword-ops @post-s1 @post-s2
   Scenario: Remove keyword targets incrementally
@@ -222,10 +264,16 @@ Feature: BR-UC-003 Update Media Buy
     And the package update includes keyword_targets_remove:
     And the package "pkg_001" exists in the media buy
     When the Buyer Agent sends the update_media_buy request
-    Then the response is compliant with the update_media_buy success spec
-    And the response status should be "completed"
-    # POST-S1: Buyer knows keywords removed
-    # POST-S2: Buyer sees affected packages
+    Then the response is compliant with the update_media_buy error spec
+    And the operation should fail
+    And the error code should be "UNSUPPORTED_FEATURE"
+    And the error should include "suggestion" field
+    # REGROUNDED for the same reason as T-UC-003-alt-keyword-ops above: removal is as
+    # unsupported as addition, and core/targeting.json's apply-exactly-or-reject MUST does
+    # not distinguish them. This scenario PASSED before, asserting a success this seller
+    # answered without applying anything.
+    # POST-F1: System state unchanged
+    # POST-F2: Error code explains failure
 
   @T-UC-003-alt-negative-keywords @alt-flow @keyword-ops @post-s1
   Scenario: Add and remove negative keywords incrementally
@@ -241,9 +289,17 @@ Feature: BR-UC-003 Update Media Buy
     And no targeting_overlay.negative_keywords is present in the same package update
     And the package "pkg_001" exists in the media buy
     When the Buyer Agent sends the update_media_buy request
-    Then the response is compliant with the update_media_buy success spec
-    And the response status should be "completed"
-    # POST-S1: Buyer knows negative keywords updated
+    Then the response is compliant with the update_media_buy error spec
+    And the operation should fail
+    And the error code should be "UNSUPPORTED_FEATURE"
+    And the error should include "suggestion" field
+    # REGROUNDED for the same reason as the two keyword_targets scenarios above.
+    # core/targeting-overlay-support.json declares negative_keywords alongside
+    # keyword_targets, both $ref keywordSupport, and this seller declares neither.
+    # This scenario PASSED before, on a success the seller answered without applying
+    # either operation.
+    # POST-F1: System state unchanged
+    # POST-F2: Error code explains failure
 
   @T-UC-003-alt-manual @alt-flow @manual-approval @post-s7 @post-s8
   Scenario: Update requires manual approval -- pending state
@@ -285,21 +341,30 @@ Feature: BR-UC-003 Update Media Buy
     # BR-RULE-022 INV-1: Field present → updated
     # BR-RULE-022 INV-2: Field omitted → unchanged
 
-  @T-UC-003-empty-update @invariant @BR-RULE-022 @error
+  @T-UC-003-empty-update @invariant @BR-RULE-022
   Scenario: Empty update -- no updatable fields specified
-    Given a valid update_media_buy request with:
+    Given the tenant is configured for auto-approval
+    And the existing media buy has start_time "2026-04-01T00:00:00Z" and end_time "2026-06-30T23:59:59Z"
+    And a valid update_media_buy request with:
     | field        | value       |
     | media_buy_id | mb_existing |
     And the request does not include any updatable fields
     When the Buyer Agent sends the update_media_buy request
-    Then the response is compliant with the update_media_buy error spec
-    And the operation should fail
-    And the error code should be "INVALID_REQUEST"
-    And the error should include "suggestion" field
-    # BR-RULE-022 INV-3: No updatable fields → rejected
-    # POST-F1: System state unchanged
-    # POST-F2: Error code explains failure
-    # POST-F3: Suggestion for recovery
+    Then the response is compliant with the update_media_buy success spec
+    And the response should contain media_buy_id "mb_existing"
+    And the response should list no affected packages
+    And the existing start_time and end_time should remain unchanged
+    # BR-RULE-022 INV-2: Field omitted → unchanged
+    # LOCAL CORRECTION: the generated scenario refused this request with INVALID_REQUEST
+    # (BR-RULE-022 INV-3, "No updatable fields → rejected"). The pin requires no updatable
+    # field: update-media-buy-request.json lists only idempotency_key, account and
+    # media_buy_id in /required and has no anyOf/minProperties over the rest, so a request
+    # carrying just those three is valid and nothing in the pin refuses it. What the pin
+    # does say about such an update is graded instead: an omitted field leaves the buy as
+    # it was, and affected_packages names "each modified package" ("Campaign-level updates
+    # that do not modify packages may return an empty array"), so it names none here.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/update-media-buy-request.json pointer=/required
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/update-media-buy-response.json pointer=/oneOf/0/properties/affected_packages
 
   @T-UC-003-idempotency-valid @invariant @BR-RULE-081
   Scenario: Idempotency key -- valid key accepted
@@ -384,9 +449,10 @@ Feature: BR-UC-003 Update Media Buy
   @T-UC-003-atomic-error @invariant @BR-RULE-018
   Scenario: Atomic response -- error has no success fields
     Given a valid update_media_buy request with:
-    | field        | value       |
-    | media_buy_id | mb_existing |
-    | paused       | true        |
+    | field        | value          |
+    | media_buy_id | mb_nonexistent |
+    | paused       | true           |
+    And no media buy exists with media_buy_id "mb_nonexistent"
     When the Buyer Agent sends the update_media_buy request
     Then the response is compliant with the update_media_buy error spec
     And the response should contain an "errors" array
@@ -394,6 +460,13 @@ Feature: BR-UC-003 Update Media Buy
     And the response should NOT contain "buyer_ref" field
     And the response should NOT contain "affected_packages" field
     # BR-RULE-018 INV-2: Error → no success fields
+    # LOCAL CORRECTION: the generated request paused the Background's ACTIVE buy, which the
+    # pinned state machine permits ("pause" is a valid action for active), so nothing in the
+    # scenario produced the error its Thens grade. The request now names a buy the seller
+    # does not hold, which the pinned enums/error-code.json answers with MEDIA_BUY_NOT_FOUND
+    # ("Referenced media buy does not exist or is not accessible to the requesting agent"),
+    # the same trigger @T-UC-003-ext-b uses.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/update-media-buy-response.json
 
   @T-UC-003-approval-auto @invariant @BR-RULE-017
   Scenario: Approval workflow -- both flags false, auto-approved
@@ -461,13 +534,16 @@ Feature: BR-UC-003 Update Media Buy
     And the request includes 1 package update with:
     | field      | value   |
     | package_id | pkg_001 |
-    | budget     | 5000    |
+    | budget     | 7500    |
     And the package "pkg_001" exists in the media buy
     When the Buyer Agent sends the update_media_buy request
     Then the response is compliant with the update_media_buy success spec
     And the response status should be "completed"
-    And the package budget should be persisted as 5000
+    And the package budget should be persisted as 7500
     # BR-RULE-020 INV-1: Adapter success → changes persisted
+    # LOCAL CORRECTION: the generated budget was 5000, which is the budget the Background's
+    # package is seeded with, so "persisted as 5000" held whether or not the update wrote
+    # anything. 7500 differs from the seed, so only a persisted write satisfies the Then.
 
   @T-UC-003-creative-replace @invariant @BR-RULE-024
   Scenario: Creative replacement -- new set replaces existing
@@ -531,8 +607,8 @@ Feature: BR-UC-003 Update Media Buy
     # resolve_identity() nulls it on a failed token->principal lookup, and the
     # BDD harness's identity_for() now mirrors that — salesagent-z9e0). So
     # require_principal_id fires FIRST with AUTH_MISSING, before
-    # update_media_buy's ownership check (AdCPAuthorizationError /
-    # PERMISSION_DENIED, salesagent-otc5) is ever reached — that check only
+    # update_media_buy's ownership check (MEDIA_BUY_NOT_FOUND, see
+    # @T-UC-003-ext-c) is ever reached — that check only
     # fires for a principal_id that resolved but doesn't own the media buy, a
     # genuinely different case from "principal_id never resolved". This now
     # matches the scenario's own title on every transport.
@@ -558,19 +634,32 @@ Feature: BR-UC-003 Update Media Buy
 
   @T-UC-003-ext-c @extension @ext-c @error @post-f1 @post-f2 @post-f3
   Scenario: Ownership mismatch -- principal does not own media buy
-    Given the Buyer is authenticated as principal "principal_other"
-    And the media buy "mb_existing" is owned by principal "principal_owner"
-    And a valid update_media_buy request with:
+    Given a valid update_media_buy request with:
     | field        | value       |
     | media_buy_id | mb_existing |
+    And the media buy "mb_existing" exists with owner principal_owner
+    And the authenticated principal is principal_other
     When the Buyer Agent sends the update_media_buy request
     Then the response is compliant with the update_media_buy error spec
     And the operation should fail
-    And the error code should be "ACCOUNT_NOT_FOUND"
+    And the error code should be "MEDIA_BUY_NOT_FOUND"
     And the error should include "suggestion" field
     # POST-F1: System state unchanged
     # POST-F2: Error explains ownership mismatch
     # POST-F3: Suggestion for recovery
+    # LOCAL CORRECTION (mirror upstream in adcp-req), two parts:
+    # 1. The generated line asserted ACCOUNT_NOT_FOUND. The pin answers a buy owned by
+    #    another principal exactly as an absent buy (@T-UC-003-ext-b): "the body MUST NOT
+    #    distinguish 'unauthorized' from 'not found'", and MEDIA_BUY_NOT_FOUND is the code
+    #    for a buy that "does not exist or is not accessible to the requesting agent".
+    #    The caller's account resolves, so ACCOUNT_NOT_FOUND would name the wrong object.
+    # 2. The generated Givens authenticated as a principal with no row, which the resolver
+    #    refuses with AUTH_MISSING before ownership is ever checked (the same mechanism
+    #    @T-UC-003-ext-a-unknown grades). They now use the ownership outlines' Givens: the
+    #    caller exists and can reach the request's account, so ownership is the only
+    #    difference from the Background's buyer.
+    # @source repo=adcp ref=v3.2.7 path=docs/building/by-layer/L1/security.mdx section="Agent and Account Isolation"
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json pointer=/enumDescriptions/MEDIA_BUY_NOT_FOUND
 
   @T-UC-003-ext-d @extension @ext-d @error @post-f1 @post-f2 @post-f3
   Scenario: Budget validation -- campaign budget zero
@@ -619,31 +708,43 @@ Feature: BR-UC-003 Update Media Buy
 
   @T-UC-003-ext-e @extension @ext-e @error @post-f1 @post-f2 @post-f3
   Scenario: Date range invalid -- end_time before start_time
-    Given the existing media buy has start_time "2026-04-01T00:00:00Z"
+    Given the existing media buy has start_time "2099-04-01T00:00:00Z"
     And a valid update_media_buy request with:
     | field        | value                    |
     | media_buy_id | mb_existing              |
-    | end_time     | 2026-03-15T00:00:00Z     |
+    | end_time     | 2099-03-15T00:00:00Z     |
     When the Buyer Agent sends the update_media_buy request
     Then the response is compliant with the update_media_buy error spec
     And the operation should fail
     And the error code should be "INVALID_REQUEST"
+    And the response error field is end_time
     And the error should include "suggestion" field
     # POST-F1: System state unchanged
     # POST-F2: Error explains date range invalid
     # POST-F3: Suggestion for recovery
+    # LOCAL CORRECTION (with -ext-e-equal): POST-F2 was ungraded, so a refusal naming any
+    # other field passed; the error field now names end_time, the member the inverted window
+    # is refused at. The dates moved from 2026 to 2099, as in @T-UC-003-partition-end-time:
+    # a window in the past let a refusal of a past end_time stand in for the inversion.
+    # INVALID_REQUEST is the code production answers (refuse_inverted_flight) and the code
+    # create_media_buy.mdx "Flight date validation" names: "Out-of-range or inverted dates
+    # SHOULD return an INVALID_REQUEST error". The error-compliance storyboard's
+    # reversed_dates_error step accepts it ("INVALID_REQUEST is accepted").
+    # @source repo=adcp ref=v3.2.7 path=docs/media-buy/task-reference/create_media_buy.mdx
+    # @source repo=adcp ref=v3.2.7 path=dist/compliance/3.2.7/universal/error-compliance.yaml pointer=/phases/1/steps/3/narrative
 
   @T-UC-003-ext-e-equal @extension @ext-e @error @post-f1 @post-f2 @post-f3
   Scenario: Date range invalid -- end_time equals start_time
-    Given the existing media buy has start_time "2026-04-01T00:00:00Z"
+    Given the existing media buy has start_time "2099-04-01T00:00:00Z"
     And a valid update_media_buy request with:
     | field        | value                    |
     | media_buy_id | mb_existing              |
-    | end_time     | 2026-04-01T00:00:00Z     |
+    | end_time     | 2099-04-01T00:00:00Z     |
     When the Buyer Agent sends the update_media_buy request
     Then the response is compliant with the update_media_buy error spec
     And the operation should fail
     And the error code should be "INVALID_REQUEST"
+    And the response error field is end_time
     And the error should include "suggestion" field
     # BR-RULE-013 INV-3: end_time <= start_time rejected
     # POST-F3: Suggestion for recovery
@@ -662,11 +763,16 @@ Feature: BR-UC-003 Update Media Buy
     When the Buyer Agent sends the update_media_buy request
     Then the response is compliant with the update_media_buy error spec
     And the operation should fail
-    And the error code should be "INVALID_REQUEST"
+    And the error code should be "UNSUPPORTED_FEATURE"
     And the error should include "suggestion" field
     # POST-F1: System state unchanged
     # POST-F2: Error explains unsupported currency
     # POST-F3: Suggestion for recovery
+    # LOCAL CORRECTION: the generated line asserted INVALID_REQUEST. JPY is a schema-valid
+    # ISO 4217 code, so nothing about the request is malformed; the pinned enum's code for
+    # "a requested feature or field is not supported by this seller" is UNSUPPORTED_FEATURE,
+    # which is what create answers for the same currency gate (@T-UC-002-ext-d).
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json pointer=/enumDescriptions/UNSUPPORTED_FEATURE
 
   @T-UC-003-ext-g @extension @ext-g @error @post-f1 @post-f2 @post-f3
   Scenario: Daily spend cap exceeded -- updated budget exceeds daily max
@@ -683,9 +789,14 @@ Feature: BR-UC-003 Update Media Buy
     When the Buyer Agent sends the update_media_buy request
     Then the response is compliant with the update_media_buy error spec
     And the operation should fail
-    And the error code should be "BUDGET_TOO_LOW"
+    And the error code should be "BUDGET_EXCEEDED"
     And the error should include "recovery" field with value "correctable"
     And the error should include "suggestion" field
+    # LOCAL CORRECTION: the generated line asserted BUDGET_TOO_LOW, which the pinned enum
+    # defines as "Budget is below the seller's minimum" -- the opposite condition. A budget
+    # whose daily spend exceeds the cap is BUDGET_EXCEEDED ("Operation would exceed the
+    # allocated budget"), recovery correctable.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json pointer=/enumDescriptions/BUDGET_EXCEEDED
     # BR-RULE-012 INV-2: daily budget > cap → rejected
     # POST-F1: System state unchanged
     # POST-F2: Error explains daily cap exceeded
@@ -1039,9 +1150,22 @@ Feature: BR-UC-003 Update Media Buy
     And the package update includes keyword_targets_add AND targeting_overlay.negative_keywords
     And the package "pkg_001" exists in the media buy
     When the Buyer Agent sends the update_media_buy request
-    Then the response is compliant with the update_media_buy success spec
-    And the response status should be "completed"
-    # BR-RULE-083 INV-3: cross-dimension mixing (keyword_targets_add + overlay.negative_keywords) → accepted
+    Then the response is compliant with the update_media_buy error spec
+    And the operation should fail
+    And the error code should be "UNSUPPORTED_FEATURE"
+    And the error should include "suggestion" field
+    # BR-RULE-083 INV-3 says cross-dimension mixing is WELL-FORMED -- that rule is about the
+    # REQUEST's shape, and it still holds. But the request carries keyword_targets_add, which
+    # this seller cannot apply and does not declare support for, so it is refused on
+    # CAPABILITY before its shape is ever in question. docs/media-buy/specification.mdx
+    # orders the checks: "available_actions authorization first, then product capability,
+    # then accepted commercial terms, so a request that fails more than one returns the
+    # earliest code". A well-formed request for an unsupported capability is still refused.
+    #
+    # So INV-3's "accepted" outcome is not observable on this seller, and this scenario
+    # cannot grade it. It grades the refusal instead, honestly. If keyword targeting is ever
+    # implemented (salesagent-8qela.8 chose refusal over implementation), this reverts to
+    # asserting acceptance and INV-3 becomes gradable again.
 
   @T-UC-003-ext-r-cross-ok-2 @invariant @BR-RULE-083
   Scenario: Keyword operations -- negative_keywords_add with targeting_overlay.keyword_targets is valid
@@ -1055,9 +1179,15 @@ Feature: BR-UC-003 Update Media Buy
     And the package update includes negative_keywords_add AND targeting_overlay.keyword_targets
     And the package "pkg_001" exists in the media buy
     When the Buyer Agent sends the update_media_buy request
-    Then the response is compliant with the update_media_buy success spec
-    And the response status should be "completed"
-    # BR-RULE-083 INV-4: cross-dimension mixing (negative_keywords_add + overlay.keyword_targets) → accepted
+    Then the response is compliant with the update_media_buy error spec
+    And the operation should fail
+    And the error code should be "UNSUPPORTED_FEATURE"
+    And the error should include "suggestion" field
+    # BR-RULE-083 INV-4, the mirror of INV-3 above, and regrounded for the same reason: the
+    # request is well-formed and carries negative_keywords_add, which this seller cannot
+    # apply. core/targeting-overlay-support.json declares negative_keywords alongside
+    # keyword_targets and this seller declares neither, so the refusal is the obligation it
+    # holds. INV-4's "accepted" outcome is not observable here either.
 
   @T-UC-003-partition-idempotency-key @partition @idempotency_key
   Scenario Outline: Idempotency key partition validation - <partition>
@@ -1085,12 +1215,17 @@ Feature: BR-UC-003 Update Media Buy
     Examples: Invalid partitions
       | partition      | value          | outcome                                              |
       | absent         | <not provided> | error "INVALID_REQUEST" with suggestion              |
-      | empty_string   |                | error "VALIDATION_ERROR" with suggestion              |
+      | empty_string   |                | error "INVALID_REQUEST" with suggestion              |
       | too_short      | abc1234        | error "INVALID_REQUEST" with suggestion              |
       | too_long       | <256 character string> | error "INVALID_REQUEST" with suggestion      |
     # The `absent` row moved from Valid to Invalid: v3.1 lists idempotency_key in the root
     # /required set of adcp/_schemas/3.1/media-buy/update-media-buy-request.json, at the
     # pinned spec version 3.1.1 (adcp==6.6.0), so omitting it is a schema rejection.
+    # LOCAL CORRECTION: the empty_string row asserted VALIDATION_ERROR. An empty key fails the
+    # pinned idempotency_key minLength 16 and pattern, a schema violation, so the code is
+    # INVALID_REQUEST -- the same answer the boundary outline's "empty string (length 0)" row
+    # already grades.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/update-media-buy-request.json pointer=/properties/idempotency_key
 
   @T-UC-003-boundary-idempotency-key @boundary @idempotency_key
   Scenario Outline: Idempotency key boundary validation - <boundary_point>
@@ -1137,18 +1272,29 @@ Feature: BR-UC-003 Update Media Buy
     When the Buyer Agent sends the update_media_buy request
     Then the response is compliant with the update_media_buy spec
     And the result should be <outcome>
+    # LOCAL CORRECTION: the first valid row was status "pending_activation", which is not a
+    # value of the pinned enums/media-buy-status.json. The state gate finds no actions for
+    # it in the SDK state machine and then allows every action, so that row could not fail
+    # whatever the rule for a buy awaiting its start. It is now "pending_start", the pinned
+    # status for that state, which the gate checks: a budget update maps to update_budget
+    # and update_packages, and pending_start must allow both for the row to succeed.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/media-buy-status.json
 
     Examples: Valid partitions
       | partition                  | status               | outcome |
-      | status_pending_activation  | pending_activation   | success |
+      | status_pending_start       | pending_start        | success |
       | status_active              | active               | success |
+      | paused_budget_change       | paused               | accepted |
 
     Examples: Invalid partitions
       | partition              | status     | outcome                                      |
-      | paused_packages_locked | paused     | error "INVALID_STATE" with suggestion        |
       | terminal_rejected      | rejected   | error "INVALID_STATE" with suggestion        |
       | terminal_canceled    | canceled   | error "INVALID_STATE" with suggestion        |
       | terminal_completed   | completed  | error "INVALID_STATE" with suggestion        |
+    # LOCAL CORRECTION (mirror upstream in adcp-req): paused_packages_locked asserted
+    # INVALID_STATE for a package update that changes only the budget. It is now the valid
+    # paused_budget_change row, for the reason given on @T-UC-003-boundary-media-buy-status.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/media-buy-valid-action.json pointer=/enumMetadata/update_budget
 
   @T-UC-003-boundary-media-buy-status @boundary @media_buy_status
   Scenario Outline: Media buy status boundary validation - <boundary_point>
@@ -1170,10 +1316,18 @@ Feature: BR-UC-003 Update Media Buy
       | boundary_point                            | status               | outcome                                  |
       | pending_activation (non-terminal, updatable) | pending_activation | success                                  |
       | active (non-terminal, updatable)          | active               | success                                  |
-      | paused (packages locked, budget/dates ok) | paused               | error "INVALID_STATE" with suggestion    |
+      | paused (packages locked, budget/dates ok) | paused               | accepted                                 |
       | rejected (terminal, update blocked)       | rejected             | error "INVALID_STATE" with suggestion   |
       | canceled (terminal, update blocked)       | canceled             | error "INVALID_STATE" with suggestion   |
       | completed (terminal, update blocked)      | completed            | error "INVALID_STATE" with suggestion   |
+    # LOCAL CORRECTION (mirror upstream in adcp-req): the paused row asserted INVALID_STATE
+    # for a request whose only change is packages[].budget, against its own label ("budget/
+    # dates ok"). The pin maps packages[].budget to the budget actions (the normative action
+    # table; media-buy-valid-action.json lists it in update_budget's update_fields), a paused
+    # buy here advertises update_budget, and a seller rejects only an action it does not
+    # advertise, with ACTION_NOT_ALLOWED. INVALID_STATE is the code for a terminal buy.
+    # @source repo=adcp ref=v3.2.7 path=docs/media-buy/task-reference/update_media_buy.mdx section="Action vocabulary and field mapping"
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/media-buy-valid-action.json pointer=/enumMetadata/update_budget
 
   @T-UC-003-partition-budget-amount @partition @budget_amount
   Scenario Outline: Budget amount partition validation - <partition>
@@ -1192,13 +1346,21 @@ Feature: BR-UC-003 Update Media Buy
     And the result should be <outcome>
 
     Examples: Valid partitions
-      | partition       | amount | outcome |
-      | positive_amount | 100.00 | success |
+      | partition       | amount | outcome                        |
+      | positive_amount | 100.00 | success with persisted records |
+    # LOCAL CORRECTION: positive_amount asserted a bare "success", which a seller that ignored
+    # the budget answers too. package-update.json budget: "Updated hard spend cap for this
+    # package"; the row now reads the stored package budget back.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-update.json pointer=/properties/budget
 
     Examples: Invalid partitions
       | partition       | amount | outcome                                      |
       | zero_amount     | 0      | error "BUDGET_TOO_LOW" with suggestion        |
-      | negative_amount | -50    | error "BUDGET_TOO_LOW" with suggestion        |
+      | negative_amount | -50    | error "INVALID_REQUEST" with suggestion       |
+    # LOCAL CORRECTION: negative_amount asserted BUDGET_TOO_LOW. The pinned package-update.json
+    # gives budget "minimum": 0, so -50 is a schema violation (INVALID_REQUEST); only a
+    # schema-valid amount below the seller's minimum, like 0, is BUDGET_TOO_LOW.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-update.json pointer=/properties/budget
 
   @T-UC-003-boundary-budget-amount @boundary @budget_amount
   Scenario Outline: Budget amount boundary validation - <boundary_point>
@@ -1211,6 +1373,7 @@ Feature: BR-UC-003 Update Media Buy
     | budget     | <amount> |
     And the package "pkg_001" exists in the media buy
     And the tenant is configured for auto-approval
+    And the tenant sets no min_package_budget
     When the Buyer Agent sends the update_media_buy request
     Then the response is compliant with the update_media_buy spec
     And the result should be <outcome>
@@ -1219,7 +1382,14 @@ Feature: BR-UC-003 Update Media Buy
       | boundary_point                  | amount | outcome                                      |
       | amount = 0 (rejected by rule)   | 0      | error "BUDGET_TOO_LOW" with suggestion        |
       | amount = 0.01 (minimum positive) | 0.01  | success                                      |
-      | amount negative                 | -1     | error "BUDGET_TOO_LOW" with suggestion        |
+      | amount negative                 | -1     | error "INVALID_REQUEST" with suggestion       |
+    # LOCAL CORRECTION: "amount negative" asserted BUDGET_TOO_LOW. The pinned package-update.json
+    # gives budget "minimum": 0, so -1 is a schema violation, answered INVALID_REQUEST.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-update.json pointer=/properties/budget
+    # LOCAL CORRECTION: the outline grades the request's budget boundaries, which the pin sets
+    # at "minimum": 0; a seller's own package minimum is policy layered on top. The seeded
+    # tenant's min_package_budget of 100 refused 0.01 BUDGET_TOO_LOW and made the 0 row pass
+    # with or without the positivity rule, so the outline clears it.
 
   @T-UC-003-partition-daily-spend-cap @partition @daily_spend_cap
   Scenario Outline: Daily spend cap partition validation - <partition>
@@ -1246,7 +1416,10 @@ Feature: BR-UC-003 Update Media Buy
 
     Examples: Invalid partitions
       | partition    | budget | cap_config | flight_days | outcome                                      |
-      | exceeds_cap  | 50000  | 1000       | 10          | error "BUDGET_TOO_LOW" with suggestion        |
+      | exceeds_cap  | 50000  | 1000       | 10          | error "BUDGET_EXCEEDED" with suggestion       |
+    # LOCAL CORRECTION: exceeds_cap asserted BUDGET_TOO_LOW ("Budget is below the seller's
+    # minimum"). A daily spend above the cap is BUDGET_EXCEEDED in the pinned enum.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json pointer=/enumDescriptions/BUDGET_EXCEEDED
 
   @T-UC-003-boundary-daily-spend-cap @boundary @daily_spend_cap
   Scenario Outline: Daily spend cap boundary validation - <boundary_point>
@@ -1268,9 +1441,12 @@ Feature: BR-UC-003 Update Media Buy
     Examples: Boundary values
       | boundary_point                       | budget | cap_config | flight_days | outcome                                      |
       | daily budget = cap (at limit)        | 10000  | 1000       | 10          | success                                      |
-      | daily budget > cap (exceeds)         | 10001  | 1000       | 10          | error "BUDGET_TOO_LOW" with suggestion        |
+      | daily budget > cap (exceeds)         | 10001  | 1000       | 10          | error "BUDGET_EXCEEDED" with suggestion       |
       | cap not configured (skipped)         | 99999  | not set    | 10          | success                                      |
       | flight duration 0 days (floor to 1)  | 500    | 1000       | 0           | success                                      |
+    # LOCAL CORRECTION: the exceeds row asserted BUDGET_TOO_LOW ("Budget is below the seller's
+    # minimum"). A daily spend above the cap is BUDGET_EXCEEDED in the pinned enum.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json pointer=/enumDescriptions/BUDGET_EXCEEDED
 
   @T-UC-003-partition-media-buy-identification @partition @media_buy_identification
   Scenario Outline: Media buy identification partition validation - <partition>
@@ -1286,12 +1462,12 @@ Feature: BR-UC-003 Update Media Buy
     And the result should be <outcome>
 
     Examples: Valid partitions
-      | partition          | id_config                        | outcome |
-      | media_buy_id_only  | media_buy_id=mb_existing         | success |
+      | partition          | id_config                        | outcome  |
+      | media_buy_id_only  | media_buy_id=mb_existing         | accepted |
 
     Examples: Invalid partitions
       | partition       | id_config                                   | outcome                                      |
-      | neither_provided | <none>                                      | error "INVALID_REQUEST" with suggestion       |
+      | neither_provided | <none>                                      | error "INVALID_REQUEST" on media_buy_id with suggestion |
 
   @T-UC-003-boundary-media-buy-identification @boundary @media_buy_identification
   Scenario Outline: Media buy identification boundary validation - <boundary_point>
@@ -1308,8 +1484,14 @@ Feature: BR-UC-003 Update Media Buy
 
     Examples: Boundary values
       | boundary_point                       | id_config                                   | outcome                                  |
-      | media_buy_id only (primary path)     | media_buy_id=mb_existing                    | success                                  |
-      | neither identifier (missing)         | <none>                                       | error "INVALID_REQUEST" with suggestion  |
+      | media_buy_id only (primary path)     | media_buy_id=mb_existing                    | accepted                                 |
+      | neither identifier (missing)         | <none>                                       | error "INVALID_REQUEST" on media_buy_id with suggestion  |
+    # LOCAL CORRECTION (both identification outlines): the success rows ended in bare
+    # "success", which any non-error answer satisfies, so a seller that updated some other
+    # buy passed; "accepted" requires the success response's media_buy_id to be the buy the
+    # request named. The missing-identifier rows pin the field the refusal names: media_buy_id
+    # is in the request's required list.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/update-media-buy-request.json pointer=/required
 
   @T-UC-003-partition-frequency-cap-suppress @partition @frequency_cap_suppress
   Scenario Outline: Frequency cap suppress partition validation - <partition>
@@ -1319,7 +1501,7 @@ Feature: BR-UC-003 Update Media Buy
     And the request includes 1 package update with:
     | field             | value   |
     | package_id        | pkg_001 |
-    And the package targeting_overlay includes frequency_cap with suppress: <suppress_value>
+    And the package targeting_overlay includes frequency_cap: <frequency_cap>
     And the package "pkg_001" exists in the media buy
     And the tenant is configured for auto-approval
     When the Buyer Agent sends the update_media_buy request
@@ -1327,28 +1509,43 @@ Feature: BR-UC-003 Update Media Buy
     And the result should be <outcome>
 
     Examples: Valid partitions
-      | partition                     | suppress_value                                                                                                                | outcome |
-      | typical_minutes               | {"interval": 60, "unit": "minutes"}                                                                                          | success |
-      | typical_hours                 | {"interval": 24, "unit": "hours"}                                                                                            | success |
-      | typical_days                  | {"interval": 7, "unit": "days"}                                                                                              | success |
-      | campaign_full_flight          | {"interval": 1, "unit": "campaign"}                                                                                          | success |
-      | boundary_min_interval         | {"interval": 1, "unit": "minutes"}                                                                                           | success |
-      | suppress_with_max_impressions | {"suppress": {"interval": 60, "unit": "minutes"}, "max_impressions": 3, "per": "devices", "window": {"interval": 1, "unit": "days"}} | success |
-      | deprecated_suppress_minutes   | {"suppress_minutes": 60}                                                                                                     | success |
-      | suppress_only                 | {"suppress": {"interval": 30, "unit": "minutes"}}                                                                            | success |
-      | suppress_minutes_zero         | {"suppress_minutes": 0}                                                                                                      | success |
+      | partition                     | frequency_cap                                                                                                                 | outcome                                |
+      | typical_minutes               | {"suppress": {"interval": 60, "unit": "minutes"}}                                                                            | accepted with the frequency cap stored |
+      | typical_hours                 | {"suppress": {"interval": 24, "unit": "hours"}}                                                                              | accepted with the frequency cap stored |
+      | typical_days                  | {"suppress": {"interval": 7, "unit": "days"}}                                                                                | accepted with the frequency cap stored |
+      | campaign_full_flight          | {"suppress": {"interval": 1, "unit": "campaign"}}                                                                            | accepted with the frequency cap stored |
+      | boundary_min_interval         | {"suppress": {"interval": 1, "unit": "minutes"}}                                                                             | accepted with the frequency cap stored |
+      | suppress_with_max_impressions | {"suppress": {"interval": 60, "unit": "minutes"}, "max_impressions": 3, "per": "devices", "window": {"interval": 1, "unit": "days"}} | accepted with the frequency cap stored |
+      | deprecated_suppress_minutes   | {"suppress_minutes": 60}                                                                                                     | accepted with the frequency cap stored |
+      | suppress_only                 | {"suppress": {"interval": 30, "unit": "minutes"}}                                                                            | accepted with the frequency cap stored |
+      | suppress_minutes_zero         | {"suppress_minutes": 0}                                                                                                      | accepted with the frequency cap stored |
 
     Examples: Invalid partitions
-      | partition                    | suppress_value                         | outcome                                      |
-      | interval_zero                | {"interval": 0, "unit": "minutes"}     | error with suggestion                        |
-      | interval_negative            | {"interval": -1, "unit": "minutes"}    | error with suggestion                        |
-      | campaign_interval_not_one    | {"interval": 5, "unit": "campaign"}    | error with suggestion                        |
-      | unknown_unit                 | {"interval": 7, "unit": "weeks"}       | error with suggestion                        |
-      | missing_interval             | {"unit": "minutes"}                    | error with suggestion                        |
-      | missing_unit                 | {"interval": 5}                        | error with suggestion                        |
-      | no_frequency_control         | {}                                     | error with suggestion                        |
-      | wrong_type_suppress          | "60"                                   | error with suggestion                        |
-      | suppress_minutes_negative    | {"suppress_minutes": -1}               | error with suggestion                        |
+      | partition                    | frequency_cap                                       | outcome                                                                                              |
+      | interval_zero                | {"suppress": {"interval": 0, "unit": "minutes"}}    | error "INVALID_REQUEST" on packages[0].targeting_overlay.frequency_cap.suppress.interval with suggestion  |
+      | interval_negative            | {"suppress": {"interval": -1, "unit": "minutes"}}   | error "INVALID_REQUEST" on packages[0].targeting_overlay.frequency_cap.suppress.interval with suggestion  |
+      | campaign_interval_not_one    | {"suppress": {"interval": 5, "unit": "campaign"}}   | error "VALIDATION_ERROR" on packages[0].targeting_overlay.frequency_cap.suppress.interval with suggestion |
+      | unknown_unit                 | {"suppress": {"interval": 7, "unit": "weeks"}}      | error "INVALID_REQUEST" on packages[0].targeting_overlay.frequency_cap.suppress.unit with suggestion      |
+      | missing_interval             | {"suppress": {"unit": "minutes"}}                   | error "INVALID_REQUEST" on packages[0].targeting_overlay.frequency_cap.suppress.interval with suggestion  |
+      | missing_unit                 | {"suppress": {"interval": 5}}                       | error "INVALID_REQUEST" on packages[0].targeting_overlay.frequency_cap.suppress.unit with suggestion      |
+      | no_frequency_control         | {}                                                  | error "INVALID_REQUEST" on packages[0].targeting_overlay.frequency_cap with suggestion                    |
+      | wrong_type_suppress          | {"suppress": "60"}                                  | error "INVALID_REQUEST" on packages[0].targeting_overlay.frequency_cap.suppress with suggestion           |
+      | suppress_minutes_negative    | {"suppress_minutes": -1}                            | error "INVALID_REQUEST" on packages[0].targeting_overlay.frequency_cap.suppress_minutes with suggestion   |
+    # LOCAL CORRECTION (both frequency-cap outlines): the generated rows put a bare Duration
+    # ({"interval": 60, "unit": "minutes"}) in place of the WHOLE frequency_cap, which
+    # core/frequency-cap.json refuses whatever the Duration holds (its anyOf needs suppress,
+    # suppress_minutes or max_impressions, and interval/unit are not its members). The valid
+    # Duration rows therefore failed and the invalid ones passed on that unrelated refusal.
+    # Each row now sends the whole cap with the Duration under suppress, as the column name
+    # always meant. Success rows read the stored cap back; error rows name the code and the
+    # field the pin's own constraint sits on (duration.json interval minimum 1 and unit enum,
+    # frequency-cap.json anyOf and suppress_minutes minimum 0). A campaign Duration whose
+    # interval is not 1 is schema-valid and refused by the rule in duration.json's interval
+    # description, so it is VALIDATION_ERROR, the code get_media_buy_delivery already gives
+    # the same Duration rule (BR-UC-004 campaign_interval_not_one).
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/frequency-cap.json pointer=/anyOf
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/duration.json pointer=/properties/interval
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json pointer=/enumDescriptions/VALIDATION_ERROR
 
   @T-UC-003-boundary-frequency-cap-suppress @boundary @frequency_cap_suppress
   Scenario Outline: Frequency cap suppress boundary validation - <boundary_point>
@@ -1358,7 +1555,7 @@ Feature: BR-UC-003 Update Media Buy
     And the request includes 1 package update with:
     | field             | value   |
     | package_id        | pkg_001 |
-    And the package targeting_overlay includes frequency_cap with suppress: <suppress_value>
+    And the package targeting_overlay includes frequency_cap: <frequency_cap>
     And the package "pkg_001" exists in the media buy
     And the tenant is configured for auto-approval
     When the Buyer Agent sends the update_media_buy request
@@ -1366,25 +1563,25 @@ Feature: BR-UC-003 Update Media Buy
     And the result should be <outcome>
 
     Examples: Boundary values
-      | boundary_point                                                    | suppress_value                                                                                                                | outcome                  |
-      | interval = 0 (below minimum)                                     | {"interval": 0, "unit": "minutes"}                                                                                           | error with suggestion    |
-      | interval = 1 (boundary minimum)                                  | {"interval": 1, "unit": "minutes"}                                                                                           | success                  |
-      | interval = -1 (negative)                                         | {"interval": -1, "unit": "minutes"}                                                                                          | error with suggestion    |
-      | unit=campaign, interval=1                                        | {"interval": 1, "unit": "campaign"}                                                                                          | success                  |
-      | unit=campaign, interval=2                                        | {"interval": 2, "unit": "campaign"}                                                                                          | error with suggestion    |
-      | unit = 'minutes'                                                 | {"interval": 60, "unit": "minutes"}                                                                                          | success                  |
-      | unit = 'hours'                                                   | {"interval": 24, "unit": "hours"}                                                                                            | success                  |
-      | unit = 'days'                                                    | {"interval": 7, "unit": "days"}                                                                                              | success                  |
-      | unit = 'campaign'                                                | {"interval": 1, "unit": "campaign"}                                                                                          | success                  |
-      | unit = 'weeks' (unknown)                                         | {"interval": 7, "unit": "weeks"}                                                                                             | error with suggestion    |
-      | suppress present, suppress_minutes absent, max_impressions absent | {"suppress": {"interval": 30, "unit": "minutes"}}                                                                           | success                  |
-      | suppress absent, suppress_minutes=60                             | {"suppress_minutes": 60}                                                                                                     | success                  |
-      | all three absent (empty frequency_cap)                           | {}                                                                                                                            | error with suggestion    |
-      | suppress + max_impressions both present (AND semantics)          | {"suppress": {"interval": 60, "unit": "minutes"}, "max_impressions": 3, "per": "devices", "window": {"interval": 1, "unit": "days"}} | success        |
-      | suppress_minutes = -1 (below minimum 0)                          | {"suppress_minutes": -1}                                                                                                     | error with suggestion    |
-      | suppress_minutes = 0 (boundary minimum)                          | {"suppress_minutes": 0}                                                                                                      | success                  |
-      | suppress is string '60' (wrong type)                             | "60"                                                                                                                          | error with suggestion    |
-      | suppress = {} (missing both fields)                              | {"suppress": {}}                                                                                                              | error with suggestion    |
+      | boundary_point                                                    | frequency_cap                                                                                                                 | outcome                                                                                              |
+      | interval = 0 (below minimum)                                     | {"suppress": {"interval": 0, "unit": "minutes"}}                                                                             | error "INVALID_REQUEST" on packages[0].targeting_overlay.frequency_cap.suppress.interval with suggestion  |
+      | interval = 1 (boundary minimum)                                  | {"suppress": {"interval": 1, "unit": "minutes"}}                                                                             | accepted with the frequency cap stored                                                               |
+      | interval = -1 (negative)                                         | {"suppress": {"interval": -1, "unit": "minutes"}}                                                                            | error "INVALID_REQUEST" on packages[0].targeting_overlay.frequency_cap.suppress.interval with suggestion  |
+      | unit=campaign, interval=1                                        | {"suppress": {"interval": 1, "unit": "campaign"}}                                                                            | accepted with the frequency cap stored                                                               |
+      | unit=campaign, interval=2                                        | {"suppress": {"interval": 2, "unit": "campaign"}}                                                                            | error "VALIDATION_ERROR" on packages[0].targeting_overlay.frequency_cap.suppress.interval with suggestion |
+      | unit = 'minutes'                                                 | {"suppress": {"interval": 60, "unit": "minutes"}}                                                                            | accepted with the frequency cap stored                                                               |
+      | unit = 'hours'                                                   | {"suppress": {"interval": 24, "unit": "hours"}}                                                                              | accepted with the frequency cap stored                                                               |
+      | unit = 'days'                                                    | {"suppress": {"interval": 7, "unit": "days"}}                                                                                | accepted with the frequency cap stored                                                               |
+      | unit = 'campaign'                                                | {"suppress": {"interval": 1, "unit": "campaign"}}                                                                            | accepted with the frequency cap stored                                                               |
+      | unit = 'weeks' (unknown)                                         | {"suppress": {"interval": 7, "unit": "weeks"}}                                                                               | error "INVALID_REQUEST" on packages[0].targeting_overlay.frequency_cap.suppress.unit with suggestion      |
+      | suppress present, suppress_minutes absent, max_impressions absent | {"suppress": {"interval": 30, "unit": "minutes"}}                                                                           | accepted with the frequency cap stored                                                               |
+      | suppress absent, suppress_minutes=60                             | {"suppress_minutes": 60}                                                                                                     | accepted with the frequency cap stored                                                               |
+      | all three absent (empty frequency_cap)                           | {}                                                                                                                            | error "INVALID_REQUEST" on packages[0].targeting_overlay.frequency_cap with suggestion                    |
+      | suppress + max_impressions both present (AND semantics)          | {"suppress": {"interval": 60, "unit": "minutes"}, "max_impressions": 3, "per": "devices", "window": {"interval": 1, "unit": "days"}} | accepted with the frequency cap stored                                                        |
+      | suppress_minutes = -1 (below minimum 0)                          | {"suppress_minutes": -1}                                                                                                     | error "INVALID_REQUEST" on packages[0].targeting_overlay.frequency_cap.suppress_minutes with suggestion   |
+      | suppress_minutes = 0 (boundary minimum)                          | {"suppress_minutes": 0}                                                                                                      | accepted with the frequency cap stored                                                               |
+      | suppress is string '60' (wrong type)                             | {"suppress": "60"}                                                                                                            | error "INVALID_REQUEST" on packages[0].targeting_overlay.frequency_cap.suppress with suggestion           |
+      | suppress = {} (missing both fields)                              | {"suppress": {}}                                                                                                              | error "INVALID_REQUEST" on packages[0].targeting_overlay.frequency_cap.suppress.interval with suggestion  |
 
   @T-UC-003-partition-optimization-goals @partition @optimization_goals
   Scenario Outline: Optimization goals partition validation - <partition>
@@ -1403,35 +1600,52 @@ Feature: BR-UC-003 Update Media Buy
 
     Examples: Valid partitions
       | partition                        | goals_value                                                                                                                                                             | outcome |
-      | single_metric_goal               | [{"kind": "metric", "metric": "clicks"}]                                                                                                                                | success |
-      | single_event_goal                | [{"kind": "event", "event_sources": [{"event_source_id": "pixel-1", "event_type": "purchase"}]}]                                                                        | success |
-      | multiple_mixed_goals             | [{"kind": "metric", "metric": "clicks", "priority": 1}, {"kind": "event", "event_sources": [{"event_source_id": "px", "event_type": "purchase"}], "priority": 2}]      | success |
-      | metric_with_cost_per_target      | [{"kind": "metric", "metric": "clicks", "target": {"kind": "cost_per", "value": 0.50}}]                                                                                 | success |
-      | metric_with_threshold_rate       | [{"kind": "metric", "metric": "views", "target": {"kind": "threshold_rate", "value": 0.70}}]                                                                            | success |
-      | event_with_roas_target           | [{"kind": "event", "event_sources": [{"event_source_id": "px", "event_type": "purchase", "value_field": "value"}], "target": {"kind": "per_ad_spend", "value": 4.0}}]   | success |
-      | event_with_maximize_value        | [{"kind": "event", "event_sources": [{"event_source_id": "px", "event_type": "purchase", "value_field": "value"}], "target": {"kind": "maximize_value"}}]                | success |
-      | reach_with_frequency             | [{"kind": "metric", "metric": "reach", "reach_unit": "individuals", "target_frequency": {"min": 1, "max": 3, "window": {"interval": 7, "unit": "days"}}}]              | success |
-      | completed_views_with_duration    | [{"kind": "metric", "metric": "completed_views", "view_duration_seconds": 15}]                                                                                          | success |
-      | event_with_attribution_window    | [{"kind": "event", "event_sources": [{"event_source_id": "px", "event_type": "purchase"}], "attribution_window": {"post_click": {"interval": 7, "unit": "days"}, "post_view": {"interval": 1, "unit": "days"}}}] | success |
-      | event_multi_source_dedup         | [{"kind": "event", "event_sources": [{"event_source_id": "pixel", "event_type": "purchase", "value_field": "value"}, {"event_source_id": "api", "event_type": "purchase", "value_field": "order_total", "value_factor": 0.01}]}] | success |
-      | goals_with_explicit_priorities   | [{"kind": "metric", "metric": "clicks", "priority": 1}, {"kind": "metric", "metric": "views", "priority": 2}]                                                          | success |
-      | refund_event_with_negative_factor | [{"kind": "event", "event_sources": [{"event_source_id": "px", "event_type": "refund", "value_field": "value", "value_factor": -1}]}]                                   | success |
+      | single_metric_goal               | [{"kind": "metric", "metric": "clicks"}]                                                                                                                                | error UNSUPPORTED_FEATURE with suggestion |
+      | single_event_goal                | [{"kind": "event", "event_sources": [{"event_source_id": "pixel-1", "event_type": "purchase"}]}]                                                                        | error UNSUPPORTED_FEATURE with suggestion |
+      | multiple_mixed_goals             | [{"kind": "metric", "metric": "clicks", "priority": 1}, {"kind": "event", "event_sources": [{"event_source_id": "px", "event_type": "purchase"}], "priority": 2}]      | error UNSUPPORTED_FEATURE with suggestion |
+      | metric_with_cost_per_target      | [{"kind": "metric", "metric": "clicks", "target": {"kind": "cost_per", "value": 0.50}}]                                                                                 | error UNSUPPORTED_FEATURE with suggestion |
+      | metric_with_threshold_rate       | [{"kind": "metric", "metric": "views", "target": {"kind": "threshold_rate", "value": 0.70}}]                                                                            | error UNSUPPORTED_FEATURE with suggestion |
+      | event_with_roas_target           | [{"kind": "event", "event_sources": [{"event_source_id": "px", "event_type": "purchase", "value_field": "value"}], "target": {"kind": "per_ad_spend", "value": 4.0}}]   | error UNSUPPORTED_FEATURE with suggestion |
+      | event_with_maximize_value        | [{"kind": "event", "event_sources": [{"event_source_id": "px", "event_type": "purchase", "value_field": "value"}], "target": {"kind": "maximize_value"}}]                | error UNSUPPORTED_FEATURE with suggestion |
+      | reach_with_frequency             | [{"kind": "metric", "metric": "reach", "reach_unit": "individuals", "target_frequency": {"min": 1, "max": 3, "window": {"interval": 7, "unit": "days"}}}]              | error UNSUPPORTED_FEATURE with suggestion |
+      | completed_views_with_duration    | [{"kind": "metric", "metric": "completed_views", "view_duration_seconds": 15}]                                                                                          | error UNSUPPORTED_FEATURE with suggestion |
+      | event_with_attribution_window    | [{"kind": "event", "event_sources": [{"event_source_id": "px", "event_type": "purchase"}], "attribution_window": {"post_click": {"interval": 7, "unit": "days"}, "post_view": {"interval": 1, "unit": "days"}}}] | error UNSUPPORTED_FEATURE with suggestion |
+      | event_multi_source_dedup         | [{"kind": "event", "event_sources": [{"event_source_id": "pixel", "event_type": "purchase", "value_field": "value"}, {"event_source_id": "api", "event_type": "purchase", "value_field": "order_total", "value_factor": 0.01}]}] | error UNSUPPORTED_FEATURE with suggestion |
+      | goals_with_explicit_priorities   | [{"kind": "metric", "metric": "clicks", "priority": 1}, {"kind": "metric", "metric": "views", "priority": 2}]                                                          | error UNSUPPORTED_FEATURE with suggestion |
+      | refund_event_with_negative_factor | [{"kind": "event", "event_sources": [{"event_source_id": "px", "event_type": "refund", "value_field": "value", "value_factor": -1}]}]                                   | error UNSUPPORTED_FEATURE with suggestion |
 
     Examples: Invalid partitions
       | partition              | goals_value                                                                                                        | outcome                                      |
-      | empty_array            | []                                                                                                                  | error with suggestion                        |
-      | missing_kind           | [{"metric": "clicks"}]                                                                                              | error with suggestion                        |
-      | invalid_kind           | [{"kind": "custom"}]                                                                                                | error with suggestion                        |
-      | metric_missing_metric  | [{"kind": "metric"}]                                                                                                | error with suggestion                        |
-      | invalid_metric_enum    | [{"kind": "metric", "metric": "conversions"}]                                                                       | error with suggestion                        |
-      | event_missing_sources  | [{"kind": "event"}]                                                                                                 | error with suggestion                        |
-      | event_sources_empty    | [{"kind": "event", "event_sources": []}]                                                                            | error with suggestion                        |
-      | target_value_zero      | [{"kind": "metric", "metric": "clicks", "target": {"kind": "cost_per", "value": 0}}]                                | error with suggestion                        |
-      | target_value_negative  | [{"kind": "metric", "metric": "clicks", "target": {"kind": "cost_per", "value": -1.0}}]                             | error with suggestion                        |
-      | priority_zero          | [{"kind": "metric", "metric": "clicks", "priority": 0}]                                                             | error with suggestion                        |
-      | priority_negative      | [{"kind": "metric", "metric": "clicks", "priority": -1}]                                                            | error with suggestion                        |
-      | view_duration_zero     | [{"kind": "metric", "metric": "completed_views", "view_duration_seconds": 0}]                                       | error with suggestion                        |
-      | event_source_id_empty  | [{"kind": "event", "event_sources": [{"event_source_id": "", "event_type": "purchase"}]}]                            | error with suggestion                        |
+      | empty_array            | []                                                                                                                  | error INVALID_REQUEST on packages[0].optimization_goals with suggestion |
+      | missing_kind           | [{"metric": "clicks"}]                                                                                              | error INVALID_REQUEST on packages[0].optimization_goals[0] with suggestion |
+      | invalid_kind           | [{"kind": "custom"}]                                                                                                | error INVALID_REQUEST on packages[0].optimization_goals[0] with suggestion |
+      | metric_missing_metric  | [{"kind": "metric"}]                                                                                                | error INVALID_REQUEST on packages[0].optimization_goals[0].metric with suggestion |
+      | invalid_metric_enum    | [{"kind": "metric", "metric": "conversions"}]                                                                       | error INVALID_REQUEST on packages[0].optimization_goals[0].metric with suggestion |
+      | event_missing_sources  | [{"kind": "event"}]                                                                                                 | error INVALID_REQUEST on packages[0].optimization_goals[0].event_sources with suggestion |
+      | event_sources_empty    | [{"kind": "event", "event_sources": []}]                                                                            | error INVALID_REQUEST on packages[0].optimization_goals[0].event_sources with suggestion |
+      | target_value_zero      | [{"kind": "metric", "metric": "clicks", "target": {"kind": "cost_per", "value": 0}}]                                | error INVALID_REQUEST on packages[0].optimization_goals[0].target.value with suggestion |
+      | target_value_negative  | [{"kind": "metric", "metric": "clicks", "target": {"kind": "cost_per", "value": -1.0}}]                             | error INVALID_REQUEST on packages[0].optimization_goals[0].target.value with suggestion |
+      | priority_zero          | [{"kind": "metric", "metric": "clicks", "priority": 0}]                                                             | error INVALID_REQUEST on packages[0].optimization_goals[0].priority with suggestion |
+      | priority_negative      | [{"kind": "metric", "metric": "clicks", "priority": -1}]                                                            | error INVALID_REQUEST on packages[0].optimization_goals[0].priority with suggestion |
+      | view_duration_zero     | [{"kind": "metric", "metric": "completed_views", "view_duration_seconds": 0}]                                       | error INVALID_REQUEST on packages[0].optimization_goals[0].view_duration_seconds with suggestion |
+      | event_source_id_empty  | [{"kind": "event", "event_sources": [{"event_source_id": "", "event_type": "purchase"}]}]                            | error INVALID_REQUEST on packages[0].optimization_goals[0].event_sources[0].event_source_id with suggestion |
+    # REGROUNDED to the pin. The product this outline seeds declares neither
+    # metric_optimization nor conversion_tracking, and core/product.json makes those the
+    # capability: metric_optimization "Presence indicates the product supports
+    # optimization_goals with kind: 'metric'", and "event optimization goals are only
+    # accepted on products with conversion_tracking". So the schema-valid goals (the
+    # "Valid partitions", which expected success) are refused with UNSUPPORTED_FEATURE.
+    # The schema-invalid goals are refused before that, by the request schema, as
+    # INVALID_REQUEST on the member that broke it (package-update.json minItems 1;
+    # optimization-goal.json kind discriminator, metric enum, event_sources minItems 1,
+    # target.value exclusiveMinimum 0, priority minimum 1, view_duration_seconds
+    # exclusiveMinimum 0, event_source_id minLength 1). The bare "error with suggestion"
+    # these rows carried was also satisfied by the UNSUPPORTED_FEATURE refusal, so it
+    # could not tell a schema rejection from the capability one.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/product.json pointer=/properties/metric_optimization
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/product.json pointer=/properties/conversion_tracking
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/optimization-goal.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-update.json pointer=/properties/optimization_goals
 
   @T-UC-003-boundary-optimization-goals @boundary @optimization_goals
   Scenario Outline: Optimization goals boundary validation - <boundary_point>
@@ -1448,30 +1662,74 @@ Feature: BR-UC-003 Update Media Buy
     Then the response is compliant with the update_media_buy spec
     And the result should be <outcome>
 
+    # LOCAL CORRECTION. Each row now names where the request stops, so the boundary it
+    # names is what is graded. Below a schema boundary the request schema refuses the goal:
+    # INVALID_REQUEST ("violates schema constraints") on the member the constraint sits on
+    # (optimization_goals minItems 1; kind the discriminator; priority minimum 1;
+    # target.value and view_duration_seconds exclusiveMinimum 0; event_sources minItems 1).
+    # At or above it the goal is well-formed and reaches the seller, which refuses it:
+    # core/product.json makes optimization support a product declaration ("Presence
+    # indicates the product supports optimization_goals with kind: 'metric'", and the same
+    # for conversion_tracking and kind: 'event'), the seeded product declares neither, and
+    # this seller applies no goals, so an update replacing them is answered
+    # UNSUPPORTED_FEATURE, as @T-UC-003-alt-keyword-ops answers keyword targeting. These
+    # rows asserted "success" for a seller that supports goals and "error with suggestion"
+    # for any refusal, so the capability refusal satisfied every error row whatever the goal.
+    # The omitted row sends a package update without goals, which nothing refuses and which
+    # modifies no package.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/optimization-goal.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-update.json pointer=/properties/optimization_goals
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/product.json pointer=/properties/metric_optimization
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/product.json pointer=/properties/conversion_tracking
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json pointer=/enumDescriptions/UNSUPPORTED_FEATURE
+
     Examples: Boundary values
       | boundary_point                                          | goals_value                                                                                                                                                                         | outcome                  |
-      | empty array (0 items)                                   | []                                                                                                                                                                                   | error with suggestion    |
-      | single goal (1 item — boundary min)                     | [{"kind": "metric", "metric": "clicks"}]                                                                                                                                            | success                  |
-      | many goals (no maxItems)                                | [{"kind": "metric", "metric": "clicks", "priority": 1}, {"kind": "event", "event_sources": [{"event_source_id": "px", "event_type": "purchase"}], "priority": 2}]                   | success                  |
-      | kind = 'metric'                                         | [{"kind": "metric", "metric": "clicks"}]                                                                                                                                            | success                  |
-      | kind = 'event'                                          | [{"kind": "event", "event_sources": [{"event_source_id": "pixel-1", "event_type": "purchase"}]}]                                                                                    | success                  |
-      | kind omitted                                            | [{"metric": "clicks"}]                                                                                                                                                               | error with suggestion    |
-      | kind = unknown string                                   | [{"kind": "custom"}]                                                                                                                                                                 | error with suggestion    |
-      | priority = 0                                            | [{"kind": "metric", "metric": "clicks", "priority": 0}]                                                                                                                             | error with suggestion    |
-      | priority = 1 (boundary min)                             | [{"kind": "metric", "metric": "clicks", "priority": 1}, {"kind": "metric", "metric": "views", "priority": 2}]                                                                      | success                  |
-      | priority omitted                                        | [{"kind": "metric", "metric": "clicks"}]                                                                                                                                            | success                  |
-      | duplicate priorities (same value on two goals)          | [{"kind": "metric", "metric": "clicks", "priority": 1}, {"kind": "metric", "metric": "views", "priority": 1}]                                                                      | success                  |
-      | target.value = 0 (exclusive minimum)                    | [{"kind": "metric", "metric": "clicks", "target": {"kind": "cost_per", "value": 0}}]                                                                                                | error with suggestion    |
-      | target.value = 0.001 (just above zero)                  | [{"kind": "metric", "metric": "clicks", "target": {"kind": "cost_per", "value": 0.001}}]                                                                                            | success                  |
-      | target omitted                                          | [{"kind": "metric", "metric": "clicks"}]                                                                                                                                            | success                  |
-      | event_sources empty array                               | [{"kind": "event", "event_sources": []}]                                                                                                                                             | error with suggestion    |
-      | event_sources single entry (boundary min)               | [{"kind": "event", "event_sources": [{"event_source_id": "pixel-1", "event_type": "purchase"}]}]                                                                                    | success                  |
-      | event_sources multiple entries                          | [{"kind": "event", "event_sources": [{"event_source_id": "pixel", "event_type": "purchase", "value_field": "value"}, {"event_source_id": "api", "event_type": "purchase", "value_field": "order_total", "value_factor": 0.01}]}] | success |
-      | view_duration_seconds = 0                               | [{"kind": "metric", "metric": "completed_views", "view_duration_seconds": 0}]                                                                                                       | error with suggestion    |
-      | view_duration_seconds = 0.001 (just above zero)         | [{"kind": "metric", "metric": "completed_views", "view_duration_seconds": 0.001}]                                                                                                   | success                  |
-      | optimization_goals present — replaces all               | [{"kind": "metric", "metric": "clicks"}]                                                                                                                                            | success                  |
-      | optimization_goals omitted — preserves existing         | <not provided>                                                                                                                                                                       | success                  |
+      | empty array (0 items)                                   | []                                                                                                                                                                                   | error "INVALID_REQUEST" on packages[0].optimization_goals with suggestion |
+      | single goal (1 item — boundary min)                     | [{"kind": "metric", "metric": "clicks"}]                                                                                                                                            | error "UNSUPPORTED_FEATURE" with suggestion |
+      | many goals (no maxItems)                                | [{"kind": "metric", "metric": "clicks", "priority": 1}, {"kind": "event", "event_sources": [{"event_source_id": "px", "event_type": "purchase"}], "priority": 2}]                   | error "UNSUPPORTED_FEATURE" with suggestion |
+      | kind = 'metric'                                         | [{"kind": "metric", "metric": "clicks"}]                                                                                                                                            | error "UNSUPPORTED_FEATURE" with suggestion |
+      | kind = 'event'                                          | [{"kind": "event", "event_sources": [{"event_source_id": "pixel-1", "event_type": "purchase"}]}]                                                                                    | error "UNSUPPORTED_FEATURE" with suggestion |
+      | kind omitted                                            | [{"metric": "clicks"}]                                                                                                                                                               | error "INVALID_REQUEST" on packages[0].optimization_goals[0] with suggestion |
+      | kind = unknown string                                   | [{"kind": "custom"}]                                                                                                                                                                 | error "INVALID_REQUEST" on packages[0].optimization_goals[0] with suggestion |
+      | priority = 0                                            | [{"kind": "metric", "metric": "clicks", "priority": 0}]                                                                                                                             | error "INVALID_REQUEST" on packages[0].optimization_goals[0].priority with suggestion |
+      | priority = 1 (boundary min)                             | [{"kind": "metric", "metric": "clicks", "priority": 1}, {"kind": "metric", "metric": "views", "priority": 2}]                                                                      | error "UNSUPPORTED_FEATURE" with suggestion |
+      | priority omitted                                        | [{"kind": "metric", "metric": "clicks"}]                                                                                                                                            | error "UNSUPPORTED_FEATURE" with suggestion |
+      | duplicate priorities (same value on two goals)          | [{"kind": "metric", "metric": "clicks", "priority": 1}, {"kind": "metric", "metric": "views", "priority": 1}]                                                                      | error "UNSUPPORTED_FEATURE" with suggestion |
+      | target.value = 0 (exclusive minimum)                    | [{"kind": "metric", "metric": "clicks", "target": {"kind": "cost_per", "value": 0}}]                                                                                                | error "INVALID_REQUEST" on packages[0].optimization_goals[0].target.value with suggestion |
+      | target.value = 0.001 (just above zero)                  | [{"kind": "metric", "metric": "clicks", "target": {"kind": "cost_per", "value": 0.001}}]                                                                                            | error "UNSUPPORTED_FEATURE" with suggestion |
+      | target omitted                                          | [{"kind": "metric", "metric": "clicks"}]                                                                                                                                            | error "UNSUPPORTED_FEATURE" with suggestion |
+      | event_sources empty array                               | [{"kind": "event", "event_sources": []}]                                                                                                                                             | error "INVALID_REQUEST" on packages[0].optimization_goals[0].event_sources with suggestion |
+      | event_sources single entry (boundary min)               | [{"kind": "event", "event_sources": [{"event_source_id": "pixel-1", "event_type": "purchase"}]}]                                                                                    | error "UNSUPPORTED_FEATURE" with suggestion |
+      | event_sources multiple entries                          | [{"kind": "event", "event_sources": [{"event_source_id": "pixel", "event_type": "purchase", "value_field": "value"}, {"event_source_id": "api", "event_type": "purchase", "value_field": "order_total", "value_factor": 0.01}]}] | error "UNSUPPORTED_FEATURE" with suggestion |
+      | view_duration_seconds = 0                               | [{"kind": "metric", "metric": "completed_views", "view_duration_seconds": 0}]                                                                                                       | error "INVALID_REQUEST" on packages[0].optimization_goals[0].view_duration_seconds with suggestion |
+      | view_duration_seconds = 0.001 (just above zero)         | [{"kind": "metric", "metric": "completed_views", "view_duration_seconds": 0.001}]                                                                                                   | error "UNSUPPORTED_FEATURE" with suggestion |
+      | optimization_goals present — replaces all               | [{"kind": "metric", "metric": "clicks"}]                                                                                                                                            | error "UNSUPPORTED_FEATURE" with suggestion |
+      | optimization_goals omitted — preserves existing         | <not provided>                                                                                                                                                                       | accepted with no package modified |
 
+  # REGROUNDED: the four keyword partition outlines in this section (keyword_targets_add,
+  # keyword_targets_remove, negative_keywords_add, negative_keywords_remove).
+  # Valid rows: core/targeting.json says of keyword_targets and of negative_keywords
+  # "Seller must declare support in get_adcp_capabilities", and of every fresh request "A
+  # fresh create/update request MUST be applied exactly or rejected". This seller declares
+  # neither dimension (the reason @T-UC-003-alt-keyword-ops records), so a protocol-valid
+  # keyword operation is refused with UNSUPPORTED_FEATURE. These rows used to expect bare
+  # success, which is the obligation of a seller that supports keyword targeting.
+  # Invalid rows: each breaks one package-update.json constraint (minItems 1, keyword
+  # minLength 1, required keyword and match_type, the match-type enum, bid_price minimum 0).
+  # The request DTO refuses them at the boundary, before the capability refusal, so each row
+  # names INVALID_REQUEST and the field the wire carries. Their former "error with
+  # suggestion" accepted any refusal, so the UNSUPPORTED_FEATURE every keyword operation
+  # receives satisfied it whether or not the constraint was enforced.
+  # conflict_with_overlay is REMOVED from each outline. Its sentinel put the overlay
+  # dimension on the package, and the outline's own Given "no targeting_overlay.<dimension>
+  # is present in the same package update" then removed it, so the row never sent the
+  # conflict. targeting.mdx "Managing keywords after launch" states the conflict, and
+  # @T-UC-003-ext-r-keyword, @T-UC-003-ext-r-negative and the boundary outlines' WITH-overlay
+  # rows send it, with no such Given.
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/targeting.json
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-update.json
+  # @source repo=adcp ref=v3.2.7 path=docs/media-buy/advanced-topics/targeting.mdx
   @T-UC-003-partition-keyword-targets-add @partition @keyword_targets_add
   Scenario Outline: Keyword targets add partition validation - <partition>
     Given a valid update_media_buy request with:
@@ -1489,26 +1747,25 @@ Feature: BR-UC-003 Update Media Buy
     And the result should be <outcome>
 
     Examples: Valid partitions
-      | partition              | kw_value                                                                                                                                | outcome |
-      | typical_add            | [{"keyword": "running shoes", "match_type": "broad"}, {"keyword": "nike sneakers", "match_type": "exact"}]                              | success |
-      | boundary_min_array     | [{"keyword": "laptop", "match_type": "phrase"}]                                                                                         | success |
-      | boundary_min_keyword   | [{"keyword": "a", "match_type": "broad"}]                                                                                               | success |
-      | add_with_bid_price     | [{"keyword": "shoes", "match_type": "exact", "bid_price": 2.50}]                                                                        | success |
-      | add_without_bid_price  | [{"keyword": "shoes", "match_type": "broad"}]                                                                                           | success |
-      | upsert_existing        | [{"keyword": "shoes", "match_type": "exact", "bid_price": 3.00}]                                                                        | success |
-      | zero_bid_price         | [{"keyword": "shoes", "match_type": "broad", "bid_price": 0}]                                                                           | success |
-      | all_match_types        | [{"keyword": "shoes", "match_type": "broad"}, {"keyword": "shoes", "match_type": "phrase"}, {"keyword": "shoes", "match_type": "exact"}] | success |
-      | cross_dimension_valid  | [{"keyword": "shoes", "match_type": "broad"}]                                                                                           | success |
+      | partition              | kw_value                                                                                                                                | outcome                                     |
+      | typical_add            | [{"keyword": "running shoes", "match_type": "broad"}, {"keyword": "nike sneakers", "match_type": "exact"}]                              | error "UNSUPPORTED_FEATURE" with suggestion |
+      | boundary_min_array     | [{"keyword": "laptop", "match_type": "phrase"}]                                                                                         | error "UNSUPPORTED_FEATURE" with suggestion |
+      | boundary_min_keyword   | [{"keyword": "a", "match_type": "broad"}]                                                                                               | error "UNSUPPORTED_FEATURE" with suggestion |
+      | add_with_bid_price     | [{"keyword": "shoes", "match_type": "exact", "bid_price": 2.50}]                                                                        | error "UNSUPPORTED_FEATURE" with suggestion |
+      | add_without_bid_price  | [{"keyword": "shoes", "match_type": "broad"}]                                                                                           | error "UNSUPPORTED_FEATURE" with suggestion |
+      | upsert_existing        | [{"keyword": "shoes", "match_type": "exact", "bid_price": 3.00}]                                                                        | error "UNSUPPORTED_FEATURE" with suggestion |
+      | zero_bid_price         | [{"keyword": "shoes", "match_type": "broad", "bid_price": 0}]                                                                           | error "UNSUPPORTED_FEATURE" with suggestion |
+      | all_match_types        | [{"keyword": "shoes", "match_type": "broad"}, {"keyword": "shoes", "match_type": "phrase"}, {"keyword": "shoes", "match_type": "exact"}] | error "UNSUPPORTED_FEATURE" with suggestion |
+      | cross_dimension_valid  | [{"keyword": "shoes", "match_type": "broad"}]                                                                                           | error "UNSUPPORTED_FEATURE" with suggestion |
 
     Examples: Invalid partitions
-      | partition              | kw_value                                                        | outcome                  |
-      | empty_array            | []                                                               | error with suggestion    |
-      | empty_keyword          | [{"keyword": "", "match_type": "broad"}]                         | error with suggestion    |
-      | missing_keyword        | [{"match_type": "broad"}]                                        | error with suggestion    |
-      | missing_match_type     | [{"keyword": "shoes"}]                                           | error with suggestion    |
-      | invalid_match_type     | [{"keyword": "shoes", "match_type": "fuzzy"}]                    | error with suggestion    |
-      | negative_bid_price     | [{"keyword": "shoes", "match_type": "exact", "bid_price": -1.00}] | error with suggestion   |
-      | conflict_with_overlay  | <with targeting_overlay.keyword_targets present>                  | error with suggestion    |
+      | partition              | kw_value                                                          | outcome                                                                         |
+      | empty_array            | []                                                                | error "INVALID_REQUEST" on packages[0].keyword_targets_add with suggestion              |
+      | empty_keyword          | [{"keyword": "", "match_type": "broad"}]                          | error "INVALID_REQUEST" on packages[0].keyword_targets_add[0].keyword with suggestion   |
+      | missing_keyword        | [{"match_type": "broad"}]                                         | error "INVALID_REQUEST" on packages[0].keyword_targets_add[0].keyword with suggestion   |
+      | missing_match_type     | [{"keyword": "shoes"}]                                            | error "INVALID_REQUEST" on packages[0].keyword_targets_add[0].match_type with suggestion |
+      | invalid_match_type     | [{"keyword": "shoes", "match_type": "fuzzy"}]                     | error "INVALID_REQUEST" on packages[0].keyword_targets_add[0].match_type with suggestion |
+      | negative_bid_price     | [{"keyword": "shoes", "match_type": "exact", "bid_price": -1.00}] | error "INVALID_REQUEST" on packages[0].keyword_targets_add[0].bid_price with suggestion  |
 
   @T-UC-003-boundary-keyword-targets-add @boundary @keyword_targets_add
   Scenario Outline: Keyword targets add boundary validation - <boundary_point>
@@ -1527,20 +1784,36 @@ Feature: BR-UC-003 Update Media Buy
 
     Examples: Boundary values
       | boundary_point                                                            | kw_value                                                                     | outcome                  |
-      | array length 0 (empty)                                                    | []                                                                            | error with suggestion    |
-      | array length 1 (minimum valid)                                            | [{"keyword": "laptop", "match_type": "phrase"}]                               | success                  |
-      | keyword length 0 (empty string)                                           | [{"keyword": "", "match_type": "broad"}]                                      | error with suggestion    |
-      | keyword length 1 (single char)                                            | [{"keyword": "a", "match_type": "broad"}]                                     | success                  |
-      | match_type = 'broad'                                                      | [{"keyword": "shoes", "match_type": "broad"}]                                 | success                  |
-      | match_type = 'phrase'                                                     | [{"keyword": "shoes", "match_type": "phrase"}]                                | success                  |
-      | match_type = 'exact'                                                      | [{"keyword": "shoes", "match_type": "exact"}]                                 | success                  |
-      | match_type = 'unknown'                                                    | [{"keyword": "shoes", "match_type": "unknown"}]                               | error with suggestion    |
-      | bid_price = -0.01                                                         | [{"keyword": "shoes", "match_type": "exact", "bid_price": -0.01}]             | error with suggestion    |
-      | bid_price = 0                                                             | [{"keyword": "shoes", "match_type": "broad", "bid_price": 0}]                 | success                  |
-      | bid_price = 0.01                                                          | [{"keyword": "shoes", "match_type": "exact", "bid_price": 0.01}]              | success                  |
-      | keyword_targets_add WITH targeting_overlay.keyword_targets                | <with overlay present>                                                        | error with suggestion    |
-      | keyword_targets_add WITHOUT targeting_overlay.keyword_targets             | [{"keyword": "shoes", "match_type": "broad"}]                                 | success                  |
-      | keyword_targets_add WITH targeting_overlay.negative_keywords (cross-dimension) | [{"keyword": "shoes", "match_type": "broad"}]                           | success                  |
+      | array length 0 (empty)                                                    | []                                                                            | error INVALID_REQUEST on packages[0].keyword_targets_add with suggestion |
+      | array length 1 (minimum valid)                                            | [{"keyword": "laptop", "match_type": "phrase"}]                               | error UNSUPPORTED_FEATURE with suggestion |
+      | keyword length 0 (empty string)                                           | [{"keyword": "", "match_type": "broad"}]                                      | error INVALID_REQUEST on packages[0].keyword_targets_add[0].keyword with suggestion |
+      | keyword length 1 (single char)                                            | [{"keyword": "a", "match_type": "broad"}]                                     | error UNSUPPORTED_FEATURE with suggestion |
+      | match_type = 'broad'                                                      | [{"keyword": "shoes", "match_type": "broad"}]                                 | error UNSUPPORTED_FEATURE with suggestion |
+      | match_type = 'phrase'                                                     | [{"keyword": "shoes", "match_type": "phrase"}]                                | error UNSUPPORTED_FEATURE with suggestion |
+      | match_type = 'exact'                                                      | [{"keyword": "shoes", "match_type": "exact"}]                                 | error UNSUPPORTED_FEATURE with suggestion |
+      | match_type = 'unknown'                                                    | [{"keyword": "shoes", "match_type": "unknown"}]                               | error INVALID_REQUEST on packages[0].keyword_targets_add[0].match_type with suggestion |
+      | bid_price = -0.01                                                         | [{"keyword": "shoes", "match_type": "exact", "bid_price": -0.01}]             | error INVALID_REQUEST on packages[0].keyword_targets_add[0].bid_price with suggestion |
+      | bid_price = 0                                                             | [{"keyword": "shoes", "match_type": "broad", "bid_price": 0}]                 | error UNSUPPORTED_FEATURE with suggestion |
+      | bid_price = 0.01                                                          | [{"keyword": "shoes", "match_type": "exact", "bid_price": 0.01}]              | error UNSUPPORTED_FEATURE with suggestion |
+      | keyword_targets_add WITH targeting_overlay.keyword_targets                | <with overlay present>                                                        | error UNSUPPORTED_FEATURE with suggestion |
+      | keyword_targets_add WITHOUT targeting_overlay.keyword_targets             | [{"keyword": "shoes", "match_type": "broad"}]                                 | error UNSUPPORTED_FEATURE with suggestion |
+      | keyword_targets_add WITH targeting_overlay.negative_keywords (cross-dimension) | <with targeting_overlay.negative_keywords present>                     | error UNSUPPORTED_FEATURE with suggestion |
+    # REGROUNDED to the pin for this seller, which declares no keyword targeting.
+    # targeting.mdx: "Seller must declare execution.targeting.keyword_targets in
+    # get_adcp_capabilities"; core/targeting.json: a fresh create/update "MUST be applied
+    # exactly or rejected". So every schema-valid keyword_targets_add is refused with
+    # UNSUPPORTED_FEATURE (the rows that said success), the same answer
+    # @T-UC-003-alt-keyword-ops gives. Each schema-invalid row is refused earlier, by the
+    # request schema, as INVALID_REQUEST on the member that broke it (minItems 1, keyword
+    # minLength 1, match-type enum, bid_price minimum 0); the bare "error with suggestion"
+    # these rows carried was satisfied by the UNSUPPORTED_FEATURE refusal too, so it could
+    # not tell the two apart. Both overlay rows now send their overlay (the cross-dimension
+    # row used to send none). targeting.mdx's SHOULD-level conflict check for
+    # targeting_overlay.keyword_targets beside keyword_targets_add is not reachable on a
+    # seller that applies neither, so the WITH row is refused as unsupported too.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-update.json pointer=/properties/keyword_targets_add
+    # @source repo=adcp ref=v3.2.7 path=docs/media-buy/advanced-topics/targeting.mdx section="keyword_targets"
+    # @source repo=adcp ref=v3.2.7 path=docs/media-buy/advanced-topics/targeting.mdx section="Managing keywords after launch"
 
   @T-UC-003-partition-keyword-targets-remove @partition @keyword_targets_remove
   Scenario Outline: Keyword targets remove partition validation - <partition>
@@ -1559,22 +1832,21 @@ Feature: BR-UC-003 Update Media Buy
     And the result should be <outcome>
 
     Examples: Valid partitions
-      | partition            | kw_value                                                                                                                                | outcome |
-      | typical_remove       | [{"keyword": "running shoes", "match_type": "broad"}, {"keyword": "nike sneakers", "match_type": "exact"}]                              | success |
-      | boundary_min_array   | [{"keyword": "laptop", "match_type": "phrase"}]                                                                                         | success |
-      | boundary_min_keyword | [{"keyword": "a", "match_type": "broad"}]                                                                                               | success |
-      | remove_nonexistent   | [{"keyword": "nonexistent", "match_type": "exact"}]                                                                                     | success |
-      | all_match_types      | [{"keyword": "shoes", "match_type": "broad"}, {"keyword": "shoes", "match_type": "phrase"}, {"keyword": "shoes", "match_type": "exact"}] | success |
-      | cross_dimension_valid | [{"keyword": "shoes", "match_type": "broad"}]                                                                                          | success |
+      | partition            | kw_value                                                                                                                                | outcome                                     |
+      | typical_remove       | [{"keyword": "running shoes", "match_type": "broad"}, {"keyword": "nike sneakers", "match_type": "exact"}]                              | error "UNSUPPORTED_FEATURE" with suggestion |
+      | boundary_min_array   | [{"keyword": "laptop", "match_type": "phrase"}]                                                                                         | error "UNSUPPORTED_FEATURE" with suggestion |
+      | boundary_min_keyword | [{"keyword": "a", "match_type": "broad"}]                                                                                               | error "UNSUPPORTED_FEATURE" with suggestion |
+      | remove_nonexistent   | [{"keyword": "nonexistent", "match_type": "exact"}]                                                                                     | error "UNSUPPORTED_FEATURE" with suggestion |
+      | all_match_types      | [{"keyword": "shoes", "match_type": "broad"}, {"keyword": "shoes", "match_type": "phrase"}, {"keyword": "shoes", "match_type": "exact"}] | error "UNSUPPORTED_FEATURE" with suggestion |
+      | cross_dimension_valid | [{"keyword": "shoes", "match_type": "broad"}]                                                                                          | error "UNSUPPORTED_FEATURE" with suggestion |
 
     Examples: Invalid partitions
-      | partition              | kw_value                                                        | outcome                  |
-      | empty_array            | []                                                               | error with suggestion    |
-      | empty_keyword          | [{"keyword": "", "match_type": "broad"}]                         | error with suggestion    |
-      | missing_keyword        | [{"match_type": "broad"}]                                        | error with suggestion    |
-      | missing_match_type     | [{"keyword": "shoes"}]                                           | error with suggestion    |
-      | invalid_match_type     | [{"keyword": "shoes", "match_type": "fuzzy"}]                    | error with suggestion    |
-      | conflict_with_overlay  | <with targeting_overlay.keyword_targets present>                  | error with suggestion    |
+      | partition              | kw_value                                      | outcome                                                                                     |
+      | empty_array            | []                                            | error "INVALID_REQUEST" on packages[0].keyword_targets_remove with suggestion               |
+      | empty_keyword          | [{"keyword": "", "match_type": "broad"}]      | error "INVALID_REQUEST" on packages[0].keyword_targets_remove[0].keyword with suggestion    |
+      | missing_keyword        | [{"match_type": "broad"}]                     | error "INVALID_REQUEST" on packages[0].keyword_targets_remove[0].keyword with suggestion    |
+      | missing_match_type     | [{"keyword": "shoes"}]                        | error "INVALID_REQUEST" on packages[0].keyword_targets_remove[0].match_type with suggestion |
+      | invalid_match_type     | [{"keyword": "shoes", "match_type": "fuzzy"}] | error "INVALID_REQUEST" on packages[0].keyword_targets_remove[0].match_type with suggestion |
 
   @T-UC-003-boundary-keyword-targets-remove @boundary @keyword_targets_remove
   Scenario Outline: Keyword targets remove boundary validation - <boundary_point>
@@ -1593,18 +1865,24 @@ Feature: BR-UC-003 Update Media Buy
 
     Examples: Boundary values
       | boundary_point                                                                | kw_value                                           | outcome                  |
-      | array length 0 (empty)                                                        | []                                                  | error with suggestion    |
-      | array length 1 (minimum valid)                                                | [{"keyword": "laptop", "match_type": "phrase"}]     | success                  |
-      | keyword length 0 (empty string)                                               | [{"keyword": "", "match_type": "broad"}]             | error with suggestion    |
-      | keyword length 1 (single char)                                                | [{"keyword": "a", "match_type": "broad"}]            | success                  |
-      | match_type = 'broad'                                                          | [{"keyword": "shoes", "match_type": "broad"}]        | success                  |
-      | match_type = 'phrase'                                                         | [{"keyword": "shoes", "match_type": "phrase"}]       | success                  |
-      | match_type = 'exact'                                                          | [{"keyword": "shoes", "match_type": "exact"}]        | success                  |
-      | match_type = 'unknown'                                                        | [{"keyword": "shoes", "match_type": "unknown"}]      | error with suggestion    |
-      | keyword_targets_remove WITH targeting_overlay.keyword_targets                 | <with overlay present>                               | error with suggestion    |
-      | keyword_targets_remove WITHOUT targeting_overlay.keyword_targets              | [{"keyword": "shoes", "match_type": "broad"}]        | success                  |
-      | remove pair that exists in current list                                       | [{"keyword": "shoes", "match_type": "broad"}]        | success                  |
-      | remove pair that does NOT exist in current list (no-op)                       | [{"keyword": "nonexistent", "match_type": "exact"}]  | success                  |
+      | array length 0 (empty)                                                        | []                                                  | error INVALID_REQUEST on packages[0].keyword_targets_remove with suggestion |
+      | array length 1 (minimum valid)                                                | [{"keyword": "laptop", "match_type": "phrase"}]     | error UNSUPPORTED_FEATURE with suggestion |
+      | keyword length 0 (empty string)                                               | [{"keyword": "", "match_type": "broad"}]             | error INVALID_REQUEST on packages[0].keyword_targets_remove[0].keyword with suggestion |
+      | keyword length 1 (single char)                                                | [{"keyword": "a", "match_type": "broad"}]            | error UNSUPPORTED_FEATURE with suggestion |
+      | match_type = 'broad'                                                          | [{"keyword": "shoes", "match_type": "broad"}]        | error UNSUPPORTED_FEATURE with suggestion |
+      | match_type = 'phrase'                                                         | [{"keyword": "shoes", "match_type": "phrase"}]       | error UNSUPPORTED_FEATURE with suggestion |
+      | match_type = 'exact'                                                          | [{"keyword": "shoes", "match_type": "exact"}]        | error UNSUPPORTED_FEATURE with suggestion |
+      | match_type = 'unknown'                                                        | [{"keyword": "shoes", "match_type": "unknown"}]      | error INVALID_REQUEST on packages[0].keyword_targets_remove[0].match_type with suggestion |
+      | keyword_targets_remove WITH targeting_overlay.keyword_targets                 | <with overlay present>                               | error UNSUPPORTED_FEATURE with suggestion |
+      | keyword_targets_remove WITHOUT targeting_overlay.keyword_targets              | [{"keyword": "shoes", "match_type": "broad"}]        | error UNSUPPORTED_FEATURE with suggestion |
+      | remove pair that exists in current list                                       | [{"keyword": "shoes", "match_type": "broad"}]        | error UNSUPPORTED_FEATURE with suggestion |
+      | remove pair that does NOT exist in current list (no-op)                       | [{"keyword": "nonexistent", "match_type": "exact"}]  | error UNSUPPORTED_FEATURE with suggestion |
+    # REGROUNDED on the grounds given under @T-UC-003-boundary-keyword-targets-add: removal
+    # is as unsupported as addition on this seller (@T-UC-003-alt-keyword-remove), so a
+    # schema-valid keyword_targets_remove is UNSUPPORTED_FEATURE and a schema-invalid one is
+    # INVALID_REQUEST on the broken member. The exists / no-op pair is the SHOULD of a seller
+    # that holds a keyword list, which this one does not; both rows are refused alike.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-update.json pointer=/properties/keyword_targets_remove
 
   @T-UC-003-partition-negative-keywords-add @partition @negative_keywords_add
   Scenario Outline: Negative keywords add partition validation - <partition>
@@ -1623,22 +1901,21 @@ Feature: BR-UC-003 Update Media Buy
     And the result should be <outcome>
 
     Examples: Valid partitions
-      | partition              | nk_value                                                                                                                                | outcome |
-      | typical_add            | [{"keyword": "cheap", "match_type": "broad"}, {"keyword": "free shipping", "match_type": "phrase"}]                                     | success |
-      | boundary_min_array     | [{"keyword": "discount", "match_type": "exact"}]                                                                                        | success |
-      | boundary_min_keyword   | [{"keyword": "x", "match_type": "broad"}]                                                                                               | success |
-      | add_duplicate          | [{"keyword": "cheap", "match_type": "broad"}]                                                                                           | success |
-      | all_match_types        | [{"keyword": "free", "match_type": "broad"}, {"keyword": "free", "match_type": "phrase"}, {"keyword": "free", "match_type": "exact"}]   | success |
-      | cross_dimension_valid  | [{"keyword": "cheap", "match_type": "broad"}]                                                                                           | success |
+      | partition              | nk_value                                                                                                                                | outcome                                     |
+      | typical_add            | [{"keyword": "cheap", "match_type": "broad"}, {"keyword": "free shipping", "match_type": "phrase"}]                                     | error "UNSUPPORTED_FEATURE" with suggestion |
+      | boundary_min_array     | [{"keyword": "discount", "match_type": "exact"}]                                                                                        | error "UNSUPPORTED_FEATURE" with suggestion |
+      | boundary_min_keyword   | [{"keyword": "x", "match_type": "broad"}]                                                                                               | error "UNSUPPORTED_FEATURE" with suggestion |
+      | add_duplicate          | [{"keyword": "cheap", "match_type": "broad"}]                                                                                           | error "UNSUPPORTED_FEATURE" with suggestion |
+      | all_match_types        | [{"keyword": "free", "match_type": "broad"}, {"keyword": "free", "match_type": "phrase"}, {"keyword": "free", "match_type": "exact"}]   | error "UNSUPPORTED_FEATURE" with suggestion |
+      | cross_dimension_valid  | [{"keyword": "cheap", "match_type": "broad"}]                                                                                           | error "UNSUPPORTED_FEATURE" with suggestion |
 
     Examples: Invalid partitions
-      | partition              | nk_value                                                        | outcome                  |
-      | empty_array            | []                                                               | error with suggestion    |
-      | empty_keyword          | [{"keyword": "", "match_type": "broad"}]                         | error with suggestion    |
-      | missing_keyword        | [{"match_type": "broad"}]                                        | error with suggestion    |
-      | missing_match_type     | [{"keyword": "cheap"}]                                           | error with suggestion    |
-      | invalid_match_type     | [{"keyword": "cheap", "match_type": "fuzzy"}]                    | error with suggestion    |
-      | conflict_with_overlay  | <with targeting_overlay.negative_keywords present>                | error with suggestion    |
+      | partition              | nk_value                                      | outcome                                                                                    |
+      | empty_array            | []                                            | error "INVALID_REQUEST" on packages[0].negative_keywords_add with suggestion               |
+      | empty_keyword          | [{"keyword": "", "match_type": "broad"}]      | error "INVALID_REQUEST" on packages[0].negative_keywords_add[0].keyword with suggestion    |
+      | missing_keyword        | [{"match_type": "broad"}]                     | error "INVALID_REQUEST" on packages[0].negative_keywords_add[0].keyword with suggestion    |
+      | missing_match_type     | [{"keyword": "cheap"}]                        | error "INVALID_REQUEST" on packages[0].negative_keywords_add[0].match_type with suggestion |
+      | invalid_match_type     | [{"keyword": "cheap", "match_type": "fuzzy"}] | error "INVALID_REQUEST" on packages[0].negative_keywords_add[0].match_type with suggestion |
 
   @T-UC-003-boundary-negative-keywords-add @boundary @negative_keywords_add
   Scenario Outline: Negative keywords add boundary validation - <boundary_point>
@@ -1657,18 +1934,27 @@ Feature: BR-UC-003 Update Media Buy
 
     Examples: Boundary values
       | boundary_point                                                                  | nk_value                                             | outcome                  |
-      | array length 0 (empty)                                                          | []                                                    | error with suggestion    |
-      | array length 1 (minimum valid)                                                  | [{"keyword": "discount", "match_type": "exact"}]      | success                  |
-      | keyword length 0 (empty string)                                                 | [{"keyword": "", "match_type": "broad"}]               | error with suggestion    |
-      | keyword length 1 (single char)                                                  | [{"keyword": "x", "match_type": "broad"}]              | success                  |
-      | match_type = 'broad'                                                            | [{"keyword": "cheap", "match_type": "broad"}]          | success                  |
-      | match_type = 'phrase'                                                           | [{"keyword": "cheap", "match_type": "phrase"}]         | success                  |
-      | match_type = 'exact'                                                            | [{"keyword": "cheap", "match_type": "exact"}]          | success                  |
-      | match_type = 'unknown'                                                          | [{"keyword": "cheap", "match_type": "unknown"}]        | error with suggestion    |
-      | negative_keywords_add WITH targeting_overlay.negative_keywords                  | <with overlay present>                                 | error with suggestion    |
-      | negative_keywords_add WITHOUT targeting_overlay.negative_keywords               | [{"keyword": "cheap", "match_type": "broad"}]          | success                  |
-      | add pair that already exists in list (duplicate no-op)                          | [{"keyword": "cheap", "match_type": "broad"}]          | success                  |
-      | negative_keywords_add WITH targeting_overlay.keyword_targets (cross-dimension)  | [{"keyword": "cheap", "match_type": "broad"}]          | success                  |
+      | array length 0 (empty)                                                          | []                                                    | error INVALID_REQUEST on packages[0].negative_keywords_add with suggestion |
+      | array length 1 (minimum valid)                                                  | [{"keyword": "discount", "match_type": "exact"}]      | error UNSUPPORTED_FEATURE with suggestion |
+      | keyword length 0 (empty string)                                                 | [{"keyword": "", "match_type": "broad"}]               | error INVALID_REQUEST on packages[0].negative_keywords_add[0].keyword with suggestion |
+      | keyword length 1 (single char)                                                  | [{"keyword": "x", "match_type": "broad"}]              | error UNSUPPORTED_FEATURE with suggestion |
+      | match_type = 'broad'                                                            | [{"keyword": "cheap", "match_type": "broad"}]          | error UNSUPPORTED_FEATURE with suggestion |
+      | match_type = 'phrase'                                                           | [{"keyword": "cheap", "match_type": "phrase"}]         | error UNSUPPORTED_FEATURE with suggestion |
+      | match_type = 'exact'                                                            | [{"keyword": "cheap", "match_type": "exact"}]          | error UNSUPPORTED_FEATURE with suggestion |
+      | match_type = 'unknown'                                                          | [{"keyword": "cheap", "match_type": "unknown"}]        | error INVALID_REQUEST on packages[0].negative_keywords_add[0].match_type with suggestion |
+      | negative_keywords_add WITH targeting_overlay.negative_keywords                  | <with overlay present>                                 | error UNSUPPORTED_FEATURE with suggestion |
+      | negative_keywords_add WITHOUT targeting_overlay.negative_keywords               | [{"keyword": "cheap", "match_type": "broad"}]          | error UNSUPPORTED_FEATURE with suggestion |
+      | add pair that already exists in list (duplicate no-op)                          | [{"keyword": "cheap", "match_type": "broad"}]          | error UNSUPPORTED_FEATURE with suggestion |
+      | negative_keywords_add WITH targeting_overlay.keyword_targets (cross-dimension)  | <with targeting_overlay.keyword_targets present>       | error UNSUPPORTED_FEATURE with suggestion |
+    # REGROUNDED to the pin for this seller, which declares no negative-keyword support
+    # (targeting.mdx: "Seller must declare execution.targeting.negative_keywords"), on the
+    # grounds given under @T-UC-003-boundary-keyword-targets-add: schema-valid adds are
+    # refused UNSUPPORTED_FEATURE, as @T-UC-003-alt-negative-keywords is; schema-invalid
+    # ones are INVALID_REQUEST on the broken member (minItems 1, keyword minLength 1,
+    # match-type enum). The duplicate no-op is the SHOULD of a seller that applies the
+    # list, which this one does not. The cross-dimension row now sends its overlay.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-update.json pointer=/properties/negative_keywords_add
+    # @source repo=adcp ref=v3.2.7 path=docs/media-buy/advanced-topics/targeting.mdx section="negative_keywords"
 
   @T-UC-003-partition-negative-keywords-remove @partition @negative_keywords_remove
   Scenario Outline: Negative keywords remove partition validation - <partition>
@@ -1687,22 +1973,21 @@ Feature: BR-UC-003 Update Media Buy
     And the result should be <outcome>
 
     Examples: Valid partitions
-      | partition              | nk_value                                                                                                                                | outcome |
-      | typical_remove         | [{"keyword": "cheap", "match_type": "broad"}, {"keyword": "free shipping", "match_type": "phrase"}]                                     | success |
-      | boundary_min_array     | [{"keyword": "discount", "match_type": "exact"}]                                                                                        | success |
-      | boundary_min_keyword   | [{"keyword": "x", "match_type": "broad"}]                                                                                               | success |
-      | remove_nonexistent     | [{"keyword": "nonexistent", "match_type": "exact"}]                                                                                     | success |
-      | all_match_types        | [{"keyword": "free", "match_type": "broad"}, {"keyword": "free", "match_type": "phrase"}, {"keyword": "free", "match_type": "exact"}]   | success |
-      | cross_dimension_valid  | [{"keyword": "cheap", "match_type": "broad"}]                                                                                           | success |
+      | partition              | nk_value                                                                                                                                | outcome                                     |
+      | typical_remove         | [{"keyword": "cheap", "match_type": "broad"}, {"keyword": "free shipping", "match_type": "phrase"}]                                     | error "UNSUPPORTED_FEATURE" with suggestion |
+      | boundary_min_array     | [{"keyword": "discount", "match_type": "exact"}]                                                                                        | error "UNSUPPORTED_FEATURE" with suggestion |
+      | boundary_min_keyword   | [{"keyword": "x", "match_type": "broad"}]                                                                                               | error "UNSUPPORTED_FEATURE" with suggestion |
+      | remove_nonexistent     | [{"keyword": "nonexistent", "match_type": "exact"}]                                                                                     | error "UNSUPPORTED_FEATURE" with suggestion |
+      | all_match_types        | [{"keyword": "free", "match_type": "broad"}, {"keyword": "free", "match_type": "phrase"}, {"keyword": "free", "match_type": "exact"}]   | error "UNSUPPORTED_FEATURE" with suggestion |
+      | cross_dimension_valid  | [{"keyword": "cheap", "match_type": "broad"}]                                                                                           | error "UNSUPPORTED_FEATURE" with suggestion |
 
     Examples: Invalid partitions
-      | partition              | nk_value                                                          | outcome                  |
-      | empty_array            | []                                                                 | error with suggestion    |
-      | empty_keyword          | [{"keyword": "", "match_type": "broad"}]                           | error with suggestion    |
-      | missing_keyword        | [{"match_type": "broad"}]                                          | error with suggestion    |
-      | missing_match_type     | [{"keyword": "cheap"}]                                             | error with suggestion    |
-      | invalid_match_type     | [{"keyword": "cheap", "match_type": "fuzzy"}]                      | error with suggestion    |
-      | conflict_with_overlay  | <with targeting_overlay.negative_keywords present>                  | error with suggestion    |
+      | partition              | nk_value                                      | outcome                                                                                       |
+      | empty_array            | []                                            | error "INVALID_REQUEST" on packages[0].negative_keywords_remove with suggestion               |
+      | empty_keyword          | [{"keyword": "", "match_type": "broad"}]      | error "INVALID_REQUEST" on packages[0].negative_keywords_remove[0].keyword with suggestion    |
+      | missing_keyword        | [{"match_type": "broad"}]                     | error "INVALID_REQUEST" on packages[0].negative_keywords_remove[0].keyword with suggestion    |
+      | missing_match_type     | [{"keyword": "cheap"}]                        | error "INVALID_REQUEST" on packages[0].negative_keywords_remove[0].match_type with suggestion |
+      | invalid_match_type     | [{"keyword": "cheap", "match_type": "fuzzy"}] | error "INVALID_REQUEST" on packages[0].negative_keywords_remove[0].match_type with suggestion |
 
   @T-UC-003-boundary-negative-keywords-remove @boundary @negative_keywords_remove
   Scenario Outline: Negative keywords remove boundary validation - <boundary_point>
@@ -1721,18 +2006,23 @@ Feature: BR-UC-003 Update Media Buy
 
     Examples: Boundary values
       | boundary_point                                                                      | nk_value                                              | outcome                  |
-      | array length 0 (empty)                                                              | []                                                     | error with suggestion    |
-      | array length 1 (minimum valid)                                                      | [{"keyword": "discount", "match_type": "exact"}]       | success                  |
-      | keyword length 0 (empty string)                                                     | [{"keyword": "", "match_type": "broad"}]                | error with suggestion    |
-      | keyword length 1 (single char)                                                      | [{"keyword": "x", "match_type": "broad"}]               | success                  |
-      | match_type = 'broad'                                                                | [{"keyword": "cheap", "match_type": "broad"}]           | success                  |
-      | match_type = 'phrase'                                                               | [{"keyword": "cheap", "match_type": "phrase"}]          | success                  |
-      | match_type = 'exact'                                                                | [{"keyword": "cheap", "match_type": "exact"}]           | success                  |
-      | match_type = 'unknown'                                                              | [{"keyword": "cheap", "match_type": "unknown"}]         | error with suggestion    |
-      | negative_keywords_remove WITH targeting_overlay.negative_keywords                   | <with overlay present>                                  | error with suggestion    |
-      | negative_keywords_remove WITHOUT targeting_overlay.negative_keywords                | [{"keyword": "cheap", "match_type": "broad"}]           | success                  |
-      | remove pair that exists in current list                                             | [{"keyword": "cheap", "match_type": "broad"}]           | success                  |
-      | remove pair that does NOT exist in current list (no-op)                             | [{"keyword": "nonexistent", "match_type": "exact"}]     | success                  |
+      | array length 0 (empty)                                                              | []                                                     | error INVALID_REQUEST on packages[0].negative_keywords_remove with suggestion |
+      | array length 1 (minimum valid)                                                      | [{"keyword": "discount", "match_type": "exact"}]       | error UNSUPPORTED_FEATURE with suggestion |
+      | keyword length 0 (empty string)                                                     | [{"keyword": "", "match_type": "broad"}]                | error INVALID_REQUEST on packages[0].negative_keywords_remove[0].keyword with suggestion |
+      | keyword length 1 (single char)                                                      | [{"keyword": "x", "match_type": "broad"}]               | error UNSUPPORTED_FEATURE with suggestion |
+      | match_type = 'broad'                                                                | [{"keyword": "cheap", "match_type": "broad"}]           | error UNSUPPORTED_FEATURE with suggestion |
+      | match_type = 'phrase'                                                               | [{"keyword": "cheap", "match_type": "phrase"}]          | error UNSUPPORTED_FEATURE with suggestion |
+      | match_type = 'exact'                                                                | [{"keyword": "cheap", "match_type": "exact"}]           | error UNSUPPORTED_FEATURE with suggestion |
+      | match_type = 'unknown'                                                              | [{"keyword": "cheap", "match_type": "unknown"}]         | error INVALID_REQUEST on packages[0].negative_keywords_remove[0].match_type with suggestion |
+      | negative_keywords_remove WITH targeting_overlay.negative_keywords                   | <with overlay present>                                  | error UNSUPPORTED_FEATURE with suggestion |
+      | negative_keywords_remove WITHOUT targeting_overlay.negative_keywords                | [{"keyword": "cheap", "match_type": "broad"}]           | error UNSUPPORTED_FEATURE with suggestion |
+      | remove pair that exists in current list                                             | [{"keyword": "cheap", "match_type": "broad"}]           | error UNSUPPORTED_FEATURE with suggestion |
+      | remove pair that does NOT exist in current list (no-op)                             | [{"keyword": "nonexistent", "match_type": "exact"}]     | error UNSUPPORTED_FEATURE with suggestion |
+    # REGROUNDED on the grounds given under @T-UC-003-boundary-negative-keywords-add:
+    # a schema-valid negative_keywords_remove is UNSUPPORTED_FEATURE on this seller
+    # (@T-UC-003-alt-negative-keywords) and a schema-invalid one is INVALID_REQUEST on the
+    # broken member; the exists / no-op pair is refused alike.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-update.json pointer=/properties/negative_keywords_remove
 
   @T-UC-003-partition-targeting-overlay @partition @targeting_overlay
   Scenario Outline: Targeting overlay partition validation - <partition>
@@ -1745,21 +2035,21 @@ Feature: BR-UC-003 Update Media Buy
     And the package targeting_overlay is set to: <overlay_value>
     And the package "pkg_001" exists in the media buy
     And the tenant is configured for auto-approval
+    And an earlier update gave package "pkg_001" the targeting_overlay {"geo_regions": ["US-NY"]}
     When the Buyer Agent sends the update_media_buy request
     Then the response is compliant with the update_media_buy spec
     And the result should be <outcome>
 
     Examples: Valid partitions
       | partition                        | overlay_value                                                                     | outcome |
-      | absent_overlay                   | <not provided>                                                                    | success |
-      | valid_overlay                    | {"geo_countries": ["US", "CA"]}                                                   | success |
-      | empty_overlay                    | {}                                                                                | success |
-      | single_geo_dimension             | {"geo_countries": ["US"]}                                                         | success |
+      | absent_overlay                   | <not provided>                                                                    | success with the stored overlay patched per dimension |
+      | valid_overlay                    | {"geo_countries": ["US", "CA"]}                                                   | success with the stored overlay patched per dimension |
+      | empty_overlay                    | {}                                                                                | success with the stored overlay patched per dimension |
+      | single_geo_dimension             | {"geo_countries": ["US"]}                                                         | success with the stored overlay patched per dimension |
       | multiple_dimensions              | {"geo_countries": ["US"], "device_platform": ["iOS"]}                              | success |
-      | frequency_cap_suppress_only      | {"frequency_cap": {"suppress": {"interval": 30, "unit": "minutes"}}}              | success |
-      | frequency_cap_max_impressions_only | {"frequency_cap": {"max_impressions": 3, "per": "devices", "window": {"interval": 1, "unit": "days"}}} | success |
-      | frequency_cap_combined           | {"frequency_cap": {"suppress": {"interval": 60, "unit": "minutes"}, "max_impressions": 3, "per": "devices", "window": {"interval": 1, "unit": "days"}}} | success |
-      | keyword_targeting                | {"keyword_targets": [{"keyword": "shoes", "match_type": "broad"}]}                | success |
+      | frequency_cap_suppress_only      | {"frequency_cap": {"suppress": {"interval": 30, "unit": "minutes"}}}              | success with the stored overlay patched per dimension |
+      | frequency_cap_max_impressions_only | {"frequency_cap": {"max_impressions": 3, "per": "devices", "window": {"interval": 1, "unit": "days"}}} | success with the stored overlay patched per dimension |
+      | frequency_cap_combined           | {"frequency_cap": {"suppress": {"interval": 60, "unit": "minutes"}, "max_impressions": 3, "per": "devices", "window": {"interval": 1, "unit": "days"}}} | success with the stored overlay patched per dimension |
       | proximity_travel_time            | {"geo_proximity": [{"travel_time": 30, "transport_mode": "driving"}]}             | success |
       | proximity_radius                 | {"geo_proximity": [{"radius": 10}]}                                               | success |
       | proximity_geometry               | {"geo_proximity": [{"geometry": "precomputed-poly-id"}]}                          | success |
@@ -1770,9 +2060,38 @@ Feature: BR-UC-003 Update Media Buy
       | undeclared_dimension         | {"publisher_managed_dim": ["value"]}                                                   | error "INVALID_REQUEST" with suggestion       |
       | geo_overlap                  | {"geo_countries": ["US"], "geo_countries_exclude": ["US"]}                              | error "INVALID_REQUEST" with suggestion       |
       | device_type_overlap          | {"device_type": ["mobile"], "device_type_exclude": ["mobile"]}                         | error "INVALID_REQUEST" with suggestion       |
-      | proximity_method_conflict    | {"geo_proximity": [{"travel_time": 30, "transport_mode": "driving", "radius": 10}]}    | error "INVALID_REQUEST" with suggestion       |
+      | proximity_method_conflict    | {"geo_proximity": [{"lat": 40.7128, "lng": -74.006, "travel_time": {"value": 30, "unit": "min"}, "transport_mode": "driving", "radius": {"value": 10, "unit": "km"}}]} | error "INVALID_REQUEST" with suggestion |
       | frequency_cap_missing_fields | {"frequency_cap": {"max_impressions": 3}}                                              | error "INVALID_REQUEST" with suggestion       |
       | keyword_duplicate            | {"keyword_targets": [{"keyword": "shoes", "match_type": "broad"}, {"keyword": "shoes", "match_type": "broad"}]} | error "INVALID_REQUEST" with suggestion |
+      | keyword_targeting            | {"keyword_targets": [{"keyword": "shoes", "match_type": "broad"}]}                     | error "UNSUPPORTED_FEATURE" on packages[0].targeting_overlay.keyword_targets with suggestion |
+      | stored_geo_overlap           | {"geo_regions_exclude": ["US-NY"]}                                                     | error "INVALID_REQUEST" with suggestion       |
+    # stored_geo_overlap: the sent overlay alone has no overlap, but it patches the package's
+    # effective targeting, which already holds geo_regions ["US-NY"] from the earlier update.
+    # core/targeting.json geo_regions_exclude: "values also present in geo_regions are
+    # invalid", so the patched result is refused rather than stored.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/targeting.json pointer=/properties/geo_regions_exclude
+    # LOCAL CORRECTION, three parts.
+    # (1) The valid rows asserted a bare "success", which a seller that dropped the overlay
+    # answers too. An update's overlay is a per-dimension patch (update_media_buy.mdx, Package
+    # Update Object: "Omit the overlay or a dimension inside it to leave that dimension
+    # unchanged; provide a non-null value to replace it"), so the package first holds a
+    # geo_regions value from an earlier update and each row reads back the stored overlay: the
+    # sent dimensions as sent, geo_regions kept. That is what makes absent_overlay and
+    # empty_overlay observable at all.
+    # (2) keyword_targeting expected acceptance. core/targeting.json keyword_targets: "Seller
+    # must declare support in get_adcp_capabilities", and get-adcp-capabilities-response.json
+    # keyword_targets: "Presence indicates support for targeting_overlay.keyword_targets";
+    # this seller declares none, so the pinned answer is UNSUPPORTED_FEATURE on the dimension
+    # ("A fresh create/update request MUST be applied exactly or rejected").
+    # (3) proximity_method_conflict sent travel_time and radius as bare numbers, a shape
+    # targeting.json refuses whatever the conflict rule, so the row passed without it. It now
+    # sends a pin-shaped entry ({value, unit} objects from lat/lng) that breaks only the
+    # geo_proximity item oneOf (one method per entry).
+    # @source repo=adcp ref=v3.2.7 path=docs/media-buy/task-reference/update_media_buy.mdx section="Package Update Object"
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-update.json pointer=/properties/targeting_overlay
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/targeting.json pointer=/properties/keyword_targets
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/targeting.json pointer=/properties/geo_proximity/items/oneOf
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/protocol/get-adcp-capabilities-response.json
 
   @T-UC-003-boundary-targeting-overlay @boundary @targeting_overlay
   Scenario Outline: Targeting overlay boundary validation - <boundary_point>
@@ -1785,15 +2104,16 @@ Feature: BR-UC-003 Update Media Buy
     And the package targeting_overlay is set to: <overlay_value>
     And the package "pkg_001" exists in the media buy
     And the tenant is configured for auto-approval
+    And an earlier update gave package "pkg_001" the targeting_overlay {"geo_regions": ["US-NY"]}
     When the Buyer Agent sends the update_media_buy request
     Then the response is compliant with the update_media_buy spec
     And the result should be <outcome>
 
     Examples: Boundary values
       | boundary_point                               | overlay_value                                                                          | outcome                                  |
-      | absent overlay                               | <not provided>                                                                         | success                                  |
-      | empty {} overlay                             | {}                                                                                     | success                                  |
-      | valid known fields                           | {"geo_countries": ["US"]}                                                              | success                                  |
+      | absent overlay                               | <not provided>                                                                         | success with the stored overlay patched per dimension |
+      | empty {} overlay                             | {}                                                                                     | success with the stored overlay patched per dimension |
+      | valid known fields                           | {"geo_countries": ["US"]}                                                              | success with the stored overlay patched per dimension |
       | unknown field name                           | {"nonexistent_field": ["value"]}                                                       | error "INVALID_REQUEST" with suggestion  |
       | undeclared dimension                         | {"publisher_managed_dim": ["value"]}                                                   | error "INVALID_REQUEST" with suggestion  |
       | geo include/exclude overlap                  | {"geo_countries": ["US"], "geo_countries_exclude": ["US"]}                              | error "INVALID_REQUEST" with suggestion  |
@@ -1801,16 +2121,25 @@ Feature: BR-UC-003 Update Media Buy
       | geo_proximity with travel_time only          | {"geo_proximity": [{"travel_time": 30, "transport_mode": "driving"}]}                  | success                                  |
       | geo_proximity with radius only               | {"geo_proximity": [{"radius": 10}]}                                                   | success                                  |
       | geo_proximity with geometry only             | {"geo_proximity": [{"geometry": "precomputed-poly-id"}]}                               | success                                  |
-      | geo_proximity with travel_time AND radius    | {"geo_proximity": [{"travel_time": 30, "transport_mode": "driving", "radius": 10}]}   | error "INVALID_REQUEST" with suggestion  |
-      | frequency_cap suppress only                  | {"frequency_cap": {"suppress": {"interval": 30, "unit": "minutes"}}}                  | success                                  |
-      | frequency_cap max_impressions with per+window | {"frequency_cap": {"max_impressions": 3, "per": "devices", "window": {"interval": 1, "unit": "days"}}} | success               |
+      | geo_proximity with travel_time AND radius    | {"geo_proximity": [{"lat": 40.7128, "lng": -74.006, "travel_time": {"value": 30, "unit": "min"}, "transport_mode": "driving", "radius": {"value": 10, "unit": "km"}}]} | error "INVALID_REQUEST" with suggestion |
+      | frequency_cap suppress only                  | {"frequency_cap": {"suppress": {"interval": 30, "unit": "minutes"}}}                  | success with the stored overlay patched per dimension |
+      | frequency_cap max_impressions with per+window | {"frequency_cap": {"max_impressions": 3, "per": "devices", "window": {"interval": 1, "unit": "days"}}} | success with the stored overlay patched per dimension |
       | frequency_cap max_impressions without per    | {"frequency_cap": {"max_impressions": 3}}                                              | error "INVALID_REQUEST" with suggestion  |
-      | keyword_targets with unique tuples           | {"keyword_targets": [{"keyword": "shoes", "match_type": "broad"}]}                     | success                                  |
+      | keyword_targets with unique tuples           | {"keyword_targets": [{"keyword": "shoes", "match_type": "broad"}]}                     | error "UNSUPPORTED_FEATURE" on packages[0].targeting_overlay.keyword_targets with suggestion |
       | keyword_targets with duplicate (keyword, match_type) | {"keyword_targets": [{"keyword": "shoes", "match_type": "broad"}, {"keyword": "shoes", "match_type": "broad"}]} | error "INVALID_REQUEST" with suggestion |
+    # LOCAL CORRECTION, for the reasons the partition outline above records: the success rows
+    # read back the stored overlay patched per dimension over an earlier geo_regions value;
+    # "keyword_targets with unique tuples" is refused UNSUPPORTED_FEATURE by a seller that
+    # declares no keyword targeting; and "geo_proximity with travel_time AND radius" sends a
+    # pin-shaped entry, so only the item oneOf refuses it.
+    # @source repo=adcp ref=v3.2.7 path=docs/media-buy/task-reference/update_media_buy.mdx section="Package Update Object"
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/targeting.json pointer=/properties/keyword_targets
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/targeting.json pointer=/properties/geo_proximity/items/oneOf
 
   @T-UC-003-partition-start-time @partition @start_time
   Scenario Outline: Start time partition validation - <partition>
-    Given a valid update_media_buy request with:
+    Given the existing media buy has start_time "2026-01-01T00:00:00Z"
+    And a valid update_media_buy request with:
     | field        | value        |
     | media_buy_id | mb_existing  |
     | start_time   | <start_value> |
@@ -1820,19 +2149,41 @@ Feature: BR-UC-003 Update Media Buy
     And the result should be <outcome>
 
     Examples: Valid partitions
-      | partition              | start_value              | outcome |
-      | asap_literal           | asap                     | success |
-      | future_iso_datetime    | 2026-05-01T00:00:00Z     | success |
-      | future_naive_datetime  | 2026-05-01T00:00:00      | success |
+      | partition              | start_value              | outcome                   |
+      | asap_literal           | asap                     | start_time stored as now  |
+      | future_iso_datetime    | {7 days from now}        | start_time stored as sent |
+      | past_datetime          | 2020-01-01T00:00:00Z     | start_time stored as sent |
 
     Examples: Invalid partitions
-      | partition          | start_value          | outcome                  |
-      | past_datetime      | 2020-01-01T00:00:00Z | error with suggestion    |
-      | wrong_case_asap    | ASAP                 | error with suggestion    |
+      | partition             | start_value          | outcome                                               |
+      | wrong_case_asap       | ASAP                 | error "INVALID_REQUEST" on start_time with suggestion |
+      | future_naive_datetime | 2026-05-01T00:00:00  | error "INVALID_REQUEST" with suggestion               |
+    # LOCAL CORRECTION: future_naive_datetime sat with the valid partitions and expected
+    # success. The pinned core/start-timing.json admits the const "asap" or a string of
+    # format date-time, which is RFC 3339 and requires a UTC offset, so a naive timestamp
+    # is a schema violation: INVALID_REQUEST.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/start-timing.json
+    # LOCAL CORRECTION (start time on UPDATE), shared with @T-UC-003-boundary-start-time:
+    # - past_datetime expected a refusal. The pin's past-start refusal is scoped to new buys
+    #   (create_media_buy.mdx "Flight date validation": "For new media buys, the top-level
+    #   start_time MUST be either "asap" or a date-time that is not in the past"), and
+    #   update_media_buy.mdx lists no such refusal: start_time is "Updated campaign start
+    #   time" and a start shift is the update_flight_dates action. A schema-valid start_time
+    #   the pin does not refuse is applied, so the row grades that it was.
+    # - the valid rows said only "success", which a seller that dropped start_time passes.
+    #   They now read the stored buy: "asap" is resolved to the instant the update was
+    #   applied, and a concrete date-time is stored as sent. The Given seeds a start far
+    #   from either, so an ignored start_time cannot match. The future value is relative,
+    #   because a fixed date expires (2026-05-01 had).
+    # - wrong_case_asap names its code and field: "ASAP" is neither the const "asap" nor a
+    #   date-time, which is a schema violation on start_time.
+    # @source repo=adcp ref=v3.2.7 path=docs/media-buy/task-reference/create_media_buy.mdx
+    # @source repo=adcp ref=v3.2.7 path=docs/media-buy/task-reference/update_media_buy.mdx
 
   @T-UC-003-boundary-start-time @boundary @start_time
   Scenario Outline: Start time boundary validation - <boundary_point>
-    Given a valid update_media_buy request with:
+    Given the existing media buy has start_time "2026-01-01T00:00:00Z"
+    And a valid update_media_buy request with:
     | field        | value        |
     | media_buy_id | mb_existing  |
     | start_time   | <start_value> |
@@ -1840,18 +2191,22 @@ Feature: BR-UC-003 Update Media Buy
     When the Buyer Agent sends the update_media_buy request
     Then the response is compliant with the update_media_buy spec
     And the result should be <outcome>
+    # LOCAL CORRECTION: see @T-UC-003-partition-start-time for the success rows and the past
+    # row. The row that read "absent (null)" sent an empty string (the table cell is empty),
+    # so it is named for what it sends; "" is neither "asap" nor a date-time.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/start-timing.json
 
     Examples: Boundary values
-      | boundary_point          | start_value              | outcome                  |
-      | literal 'asap'          | asap                     | success                  |
-      | future ISO datetime     | 2026-05-01T00:00:00Z     | success                  |
-      | past datetime           | 2020-01-01T00:00:00Z     | error with suggestion    |
-      | 'ASAP' wrong case       | ASAP                     | error with suggestion    |
-      | absent (null)           |                          | error with suggestion    |
+      | boundary_point          | start_value              | outcome                                               |
+      | literal 'asap'          | asap                     | start_time stored as now                              |
+      | future ISO datetime     | {7 days from now}        | start_time stored as sent                             |
+      | past datetime           | 2020-01-01T00:00:00Z     | start_time stored as sent                             |
+      | 'ASAP' wrong case       | ASAP                     | error "INVALID_REQUEST" on start_time with suggestion |
+      | empty string            |                          | error "INVALID_REQUEST" on start_time with suggestion |
 
   @T-UC-003-partition-end-time @partition @end_time
   Scenario Outline: End time partition validation - <partition>
-    Given the existing media buy has start_time "2026-04-01T00:00:00Z"
+    Given the existing media buy has start_time "2099-04-01T00:00:00Z"
     And a valid update_media_buy request with:
     | field        | value       |
     | media_buy_id | mb_existing |
@@ -1859,19 +2214,29 @@ Feature: BR-UC-003 Update Media Buy
     When the Buyer Agent sends the update_media_buy request
     Then the response is compliant with the update_media_buy spec
     And the result should be <outcome>
+    # LOCAL CORRECTION: the invalid rows said `error with suggestion`, which names no code
+    # and accepted any refusal, so a seller refusing for a reason other than the inverted
+    # window passed them. They now name the code and the field. The pinned
+    # create_media_buy.mdx "Flight date validation" says "Out-of-range or inverted dates
+    # SHOULD return an INVALID_REQUEST error"; the pinned update page states no other code
+    # for the same rule, and @T-UC-003-ext-e / -ext-e-equal grade INVALID_REQUEST already.
+    # The dates moved from 2026 to 2099: a window in the past let a refusal of a past
+    # end_time stand in for the inversion this outline grades.
+    # @source repo=adcp ref=v3.2.7 path=docs/media-buy/task-reference/create_media_buy.mdx
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json
 
     Examples: Valid partitions
       | partition          | end_value                | outcome |
-      | after_start_time   | 2026-06-30T23:59:59Z     | success |
+      | after_start_time   | 2099-06-30T23:59:59Z     | success |
 
     Examples: Invalid partitions
-      | partition          | end_value                | outcome                  |
-      | equal_to_start     | 2026-04-01T00:00:00Z     | error with suggestion    |
-      | before_start       | 2026-03-15T00:00:00Z     | error with suggestion    |
+      | partition          | end_value                | outcome                                         |
+      | equal_to_start     | 2099-04-01T00:00:00Z     | error "INVALID_REQUEST" on end_time with suggestion |
+      | before_start       | 2099-03-15T00:00:00Z     | error "INVALID_REQUEST" on end_time with suggestion |
 
   @T-UC-003-boundary-end-time @boundary @end_time
   Scenario Outline: End time boundary validation - <boundary_point>
-    Given the existing media buy has start_time "2026-04-01T00:00:00Z"
+    Given the existing media buy has start_time "2099-04-01T00:00:00Z" and end_time "2099-05-31T23:59:59Z"
     And a valid update_media_buy request with:
     | field        | value       |
     | media_buy_id | mb_existing |
@@ -1879,13 +2244,32 @@ Feature: BR-UC-003 Update Media Buy
     When the Buyer Agent sends the update_media_buy request
     Then the response is compliant with the update_media_buy spec
     And the result should be <outcome>
+    # LOCAL CORRECTION: the rows were graded by "error with suggestion", which accepts any
+    # refusal, and by a bare "success", which reads nothing back. The refusal rows now pin
+    # the code and the field: INVALID_REQUEST on end_time, the one code for this rule that
+    # create and update share (refuse_inverted_flight) and that @T-UC-003-partition-end-time
+    # and @T-UC-003-ext-e / -ext-e-equal grade for the same inputs. create_media_buy.mdx
+    # "Flight date validation": inverted dates "SHOULD return an INVALID_REQUEST error". The
+    # error-compliance storyboard's reversed_dates_error step (a create_media_buy step) calls
+    # VALIDATION_ERROR canonical but states "INVALID_REQUEST is accepted", so INVALID_REQUEST
+    # is the code every pinned text accepts. The accepted rows read the stored flight. The
+    # dates moved to 2099 so the only defect in a refused row is the order of the two
+    # times, and the seeded end_time differs from every requested one.
+    # LOCAL CORRECTION: the "absent (null)" row sent end_time "", which is neither absent nor
+    # null, and expected a refusal. end_time is optional on update ("No" in the request
+    # table, and absent from the request schema's required list), so an update that omits
+    # it is accepted and leaves the stored end_time as it was.
+    # @source repo=adcp ref=v3.2.7 path=dist/compliance/3.2.7/universal/error-compliance.yaml pointer=/phases/1/steps/3/narrative
+    # @source repo=adcp ref=v3.2.7 path=docs/media-buy/task-reference/create_media_buy.mdx section="Flight date validation"
+    # @source repo=adcp ref=v3.2.7 path=docs/media-buy/task-reference/update_media_buy.mdx (request table: end_time optional)
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/update-media-buy-request.json pointer=/required
 
     Examples: Boundary values
-      | boundary_point                   | end_value                | outcome                  |
-      | end_time after start_time        | 2026-06-30T23:59:59Z     | success                  |
-      | end_time = start_time (rejected) | 2026-04-01T00:00:00Z     | error with suggestion    |
-      | end_time before start_time       | 2026-03-15T00:00:00Z     | error with suggestion    |
-      | absent (null)                    |                          | error with suggestion    |
+      | boundary_point                   | end_value                | outcome                                             |
+      | end_time after start_time        | 2099-06-30T23:59:59Z     | accepted with the requested end_time stored         |
+      | end_time = start_time (rejected) | 2099-04-01T00:00:00Z     | error "INVALID_REQUEST" on end_time with suggestion |
+      | end_time before start_time       | 2099-03-15T00:00:00Z     | error "INVALID_REQUEST" on end_time with suggestion |
+      | absent (omitted)                 | (omitted)                | accepted with the stored flight unchanged           |
 
   @T-UC-003-partition-approval-workflow @partition @approval_workflow
   Scenario Outline: Approval workflow partition validation - <partition>
@@ -1946,13 +2330,23 @@ Feature: BR-UC-003 Update Media Buy
     When the Buyer Agent sends the update_media_buy request
     Then the response is compliant with the update_media_buy spec
     And the result should be <outcome>
+    And the package "pkg_001" should have creative assignments [<stored>]
 
     Examples: Valid partitions
-      | partition                    | mode                                              | outcome |
-      | creative_ids_replace         | creative_ids=[cr_new_1, cr_new_2]                 | success |
-      | creative_assignments_replace | creative_assignments=[{cr_new_1, weight:70}]      | success |
-      | add_new_creative             | creative_ids=[cr_old_1, cr_old_2, cr_new_3]       | success |
-      | remove_existing_creative     | creative_ids=[cr_old_1]                           | success |
+      | partition                    | mode                                                      | stored                       | outcome |
+      | replace_all_existing         | creative_assignments=[{cr_new_1}, {cr_new_2}]             | cr_new_1, cr_new_2           | success |
+      | creative_assignments_replace | creative_assignments=[{cr_new_1, weight:70}]              | cr_new_1:70                  | success |
+      | add_new_creative             | creative_assignments=[{cr_old_1}, {cr_old_2}, {cr_new_3}] | cr_old_1, cr_old_2, cr_new_3 | success |
+      | remove_existing_creative     | creative_assignments=[{cr_old_1}]                         | cr_old_1                     | success |
+    # LOCAL CORRECTION (mirror upstream in adcp-req), two parts:
+    # 1. Three rows sent packages[].creative_ids, which the pinned package-update.json does
+    #    not declare. Replacement goes through creative_assignments ("Replace creative
+    #    assignments for this package ... Uses replacement semantics"), so every row now uses
+    #    it; creative_ids_replace is renamed replace_all_existing for that reason.
+    # 2. Every row ended in a bare success, which a seller that appended, or ignored the
+    #    array, also produced. Each row now names the assignment set the seller must store,
+    #    and the weighted row the stored weight.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-update.json pointer=/properties/creative_assignments
 
   @T-UC-003-boundary-creative-replacement @boundary @creative_replacement
   Scenario Outline: Creative replacement boundary validation - <boundary_point>
@@ -1969,13 +2363,23 @@ Feature: BR-UC-003 Update Media Buy
     When the Buyer Agent sends the update_media_buy request
     Then the response is compliant with the update_media_buy spec
     And the result should be <outcome>
+    And the package "pkg_001" should have creative assignments [<stored>]
 
     Examples: Boundary values
-      | boundary_point                            | mode                                              | outcome |
-      | creative_ids replaces all existing         | creative_ids=[cr_new_1, cr_new_2]                 | success |
-      | creative_assignments replaces all          | creative_assignments=[{cr_new_1, weight:70}]      | success |
-      | new creative added (not in existing)       | creative_ids=[cr_old_1, cr_old_2, cr_new_3]       | success |
-      | existing creative removed (not in new)     | creative_ids=[cr_old_1]                           | success |
+      | boundary_point                            | mode                                                       | stored                       | outcome |
+      | new set replaces all existing              | creative_assignments=[{cr_new_1}, {cr_new_2}]              | cr_new_1, cr_new_2           | success |
+      | creative_assignments replaces all          | creative_assignments=[{cr_new_1, weight:70}]               | cr_new_1:70                  | success |
+      | new creative added (not in existing)       | creative_assignments=[{cr_old_1}, {cr_old_2}, {cr_new_3}]  | cr_old_1, cr_old_2, cr_new_3 | success |
+      | existing creative removed (not in new)     | creative_assignments=[{cr_old_1}]                          | cr_old_1                     | success |
+    # LOCAL CORRECTION (mirror upstream in adcp-req), two parts:
+    # 1. Three rows sent packages[].creative_ids, which the pinned package-update.json does
+    #    not declare. Replacement goes through creative_assignments ("Replace creative
+    #    assignments for this package ... Uses replacement semantics"), so every row now uses
+    #    it; "creative_ids replaces all existing" is renamed "new set replaces all existing".
+    # 2. Every row ended in a bare success, which a seller that appended, or ignored the
+    #    array, also produced. Each row now names the assignment set the seller must store,
+    #    and the weighted row the stored weight.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-update.json pointer=/properties/creative_assignments
 
   @T-UC-003-partition-creative-state @partition @creative_state_validation
   Scenario Outline: Creative state validation partition - <partition>
@@ -2038,14 +2442,22 @@ Feature: BR-UC-003 Update Media Buy
     And the result should be <outcome>
 
     Examples: Valid partitions
-      | partition               | placement_config                       | outcome |
-      | all_valid_for_product   | placement_ids=[plc_a, plc_b] (valid)   | success |
-      | no_placement_ids        | no placement_ids specified             | success |
+      | partition               | placement_config                       | outcome                                                           |
+      | all_valid_for_product   | placement_ids=[plc_a, plc_b] (valid)   | success with each assignment's placement_ids stored as requested |
+      | no_placement_ids        | no placement_ids specified             | success with each assignment's placement_ids stored as requested |
 
     Examples: Invalid partitions
       | partition                    | placement_config                              | outcome                                          |
       | invalid_placement_id         | placement_ids=[plc_invalid] (not in product)  | error "VALIDATION_ERROR" with suggestion     |
       | product_no_placement_support | placement_ids=[plc_a] (product unsupported)   | error "UNSUPPORTED_FEATURE" with suggestion     |
+    # LOCAL CORRECTION: the two valid rows read "success", which checked only that some
+    # response came back. A placement_id routes a creative "within already-purchased
+    # inventory", so the success the rows claim is the routing the seller recorded: the
+    # outcome now reads the package's stored assignments back. The product declares
+    # plc_a and plc_b (mode included, which every package buys) on every row but the
+    # unsupported one, so the rows differ in the product as well as in the request.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/creative-assignment.json pointer=/properties/placement_ids
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/placement.json pointer=/properties/mode
 
   @T-UC-003-boundary-placement-id @boundary @placement_id_validation
   Scenario Outline: Placement ID validation boundary - <boundary_point>
@@ -2080,14 +2492,24 @@ Feature: BR-UC-003 Update Media Buy
     Then the response is compliant with the update_media_buy spec
     And the result should be <outcome>
 
-    Examples: Valid partitions
-      | partition            | update_fields                          | outcome |
-      | single_field_update  | 1 package with budget update only      | success |
-      | multi_field_update   | 1 package with budget and targeting    | success |
+    # LOCAL CORRECTION, two kinds. (1) The valid rows asserted bare "success", which a seller
+    # that dropped the update also earns; they now read the stored package back ("success
+    # with persisted records": the requested budget, and every targeting dimension sent).
+    # (2) empty_update expected INVALID_REQUEST, which the pin does not require: the request
+    # schema's required list is idempotency_key, account and media_buy_id, with no anyOf or
+    # minProperties over the updatable fields. A request carrying none is accepted, and
+    # modifies no package ("affected_packages ... for each modified package").
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/update-media-buy-request.json pointer=/required
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/update-media-buy-response.json pointer=/oneOf/0/properties/affected_packages
 
-    Examples: Invalid partitions
-      | partition     | update_fields                    | outcome                                 |
-      | empty_update  | no updatable fields in request   | error "INVALID_REQUEST" with suggestion    |
+    Examples: Valid partitions
+      | partition            | update_fields                          | outcome                        |
+      | single_field_update  | 1 package with budget update only      | success with persisted records |
+      | multi_field_update   | 1 package with budget and targeting    | success with persisted records |
+
+    Examples: A request carrying no updatable field
+      | partition     | update_fields                    | outcome                           |
+      | empty_update  | no updatable fields in request   | accepted with no package modified |
 
   @T-UC-003-boundary-adapter-dispatch @boundary @adapter_dispatch
   Scenario Outline: Adapter dispatch boundary validation - <boundary_point>
@@ -2101,11 +2523,21 @@ Feature: BR-UC-003 Update Media Buy
     Then the response is compliant with the update_media_buy spec
     And the result should be <outcome>
 
+    # LOCAL CORRECTION, for the reasons @T-UC-003-partition-adapter-dispatch states: the
+    # success rows read the stored package back, and the zero-field row is accepted
+    # without a package modified. The all-fields request pauses the active buy rather than
+    # resuming it: the action table maps paused false to resume, which an active buy does
+    # not offer, and maps paused true to pause, which it does. One request carrying the
+    # pause with the package and flight changes is one atomic mutation, so every change in
+    # it is applied.
+    # @source repo=adcp ref=v3.2.7 path=docs/media-buy/task-reference/update_media_buy.mdx (Action vocabulary and field mapping; Compatibility transaction boundary)
+    # @source repo=adcp ref=v3.2.7 path=docs/media-buy/media-buys/lifecycle.mdx (Discovering valid actions at runtime)
+
     Examples: Boundary values
-      | boundary_point                              | update_config                          | outcome                                 |
-      | request with exactly one updatable field    | 1 package with budget update only      | success                                 |
-      | request with all updatable fields           | packages with all updatable fields     | success                                 |
-      | request with zero updatable fields          | no updatable fields in request         | error "INVALID_REQUEST" with suggestion    |
+      | boundary_point                              | update_config                          | outcome                           |
+      | request with exactly one updatable field    | 1 package with budget update only      | success with persisted records    |
+      | request with all updatable fields           | packages with all updatable fields     | success with persisted records    |
+      | request with zero updatable fields          | no updatable fields in request         | accepted with no package modified |
 
   @T-UC-003-partition-persistence-timing @partition @persistence_timing
   Scenario Outline: Persistence timing partition validation - <partition>
@@ -2165,7 +2597,12 @@ Feature: BR-UC-003 Update Media Buy
 
     Examples: Invalid partitions
       | partition       | owner       | principal   | outcome                                        |
-      | owner_mismatch  | buyer_001   | buyer_999   | error "PERMISSION_DENIED" with suggestion      |
+      | owner_mismatch  | buyer_001   | buyer_999   | error "MEDIA_BUY_NOT_FOUND" with suggestion    |
+    # LOCAL CORRECTION (mirror upstream in adcp-req): the generated row asserted
+    # PERMISSION_DENIED, which tells the caller the buy exists. The pin forbids that
+    # answer: a buy the caller cannot access is answered as an absent one (@T-UC-003-ext-b).
+    # @source repo=adcp ref=v3.2.7 path=docs/building/by-layer/L1/security.mdx section="Agent and Account Isolation"
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json pointer=/enumDescriptions/MEDIA_BUY_NOT_FOUND
 
   @T-UC-003-boundary-principal-ownership @boundary @principal_ownership
   Scenario Outline: Principal ownership boundary validation - <boundary_point>
@@ -2181,7 +2618,10 @@ Feature: BR-UC-003 Update Media Buy
     Examples: Boundary values
       | boundary_point                    | owner       | principal   | outcome                                        |
       | principal matches owner           | buyer_001   | buyer_001   | success                                        |
-      | principal differs from owner      | buyer_001   | buyer_999   | error "PERMISSION_DENIED" with suggestion      |
+      | principal differs from owner      | buyer_001   | buyer_999   | error "MEDIA_BUY_NOT_FOUND" with suggestion    |
+    # LOCAL CORRECTION (mirror upstream in adcp-req): PERMISSION_DENIED -> MEDIA_BUY_NOT_FOUND,
+    # for the reason given on @T-UC-003-partition-principal-ownership.
+    # @source repo=adcp ref=v3.2.7 path=docs/building/by-layer/L1/security.mdx section="Agent and Account Isolation"
 
   @T-UC-003-v31-error-budget-too-low @extension @ext-d @error @v3.1 @error-details @post-f1 @post-f2 @post-f3
   Scenario: BUDGET_TOO_LOW error carries v3.1 details shape (minimum_budget + currency)
@@ -2204,33 +2644,42 @@ Feature: BR-UC-003 Update Media Buy
     # POST-F1: System state unchanged
     # POST-F2: Error code BUDGET_TOO_LOW with structured details
     # POST-F3: Buyer Agent can adjust budget without re-querying products (suggestion guides the fix)
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/update-media-buy-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/update-media-buy-request.json
 
   @T-UC-003-v31-error-conflict-version @error @v3.1 @error-details @concurrency @ext-s @post-f1 @post-f2 @post-f3
   Scenario: CONFLICT error carries v3.1 details shape (resource_id + expected/current version)
-    Given the media buy "mb_existing" is at version 7
-    And the Buyer Agent's last-read version of "mb_existing" is 5
+    Given the media buy "mb_existing" is at revision 7
     And a valid update_media_buy request with:
     | field        | value       |
     | media_buy_id | mb_existing |
     | paused       | true        |
+    And the request revision is set to 5
     When the Buyer Agent sends the update_media_buy request
     Then the response is compliant with the update_media_buy error spec
     And the operation should fail
     And the error code should be "CONFLICT"
-    And the error "details" object should include "resource_id" with value "mb_existing"
-    And the error "details" object should include "expected_version" with value 5
-    And the error "details" object should include "current_version" with value 7
+    And the wire error details should include resource_id "mb_existing"
+    And the wire error details should include expected_version "5"
+    And the wire error details should include current_version "7"
     And the error should include a "suggestion" field
     # POST-F1: System state unchanged (no partial write)
     # POST-F2: CONFLICT details enable optimistic-concurrency retry
     # POST-F3: Buyer Agent re-reads at current_version and retries (suggestion guides the fix)
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/update-media-buy-request.json
+    # LOCAL CORRECTION: the generated Givens named a "version" and a buyer-side "last-read
+    # version", neither of which the pinned update request can carry. The pin's only
+    # optimistic-concurrency token on update_media_buy is `revision`: "Expected current
+    # revision for optimistic concurrency ... sellers MUST reject the update with CONFLICT if
+    # the media buy's current revision does not match". The Givens now seed the buy's
+    # revision and send the stale one, through the steps @T-UC-003-partition-revision uses.
+    # The details keys are error-details/conflict.json's: resource_id, expected_version
+    # ("Version or ETag the client was operating against") and current_version, read off the
+    # wire rather than off a reconstructed exception.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/update-media-buy-request.json pointer=/properties/revision
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/error-details/conflict.json
 
   @T-UC-003-v31-error-idempotency-conflict @error @v3.1 @error-details @idempotency @post-f1 @post-f2 @post-f3
   Scenario: IDEMPOTENCY_CONFLICT error carries v3.1 details shape with ETag versions
     Given idempotency_key "upd-20260521-001" was previously used with a different request body
-    And the recorded ETag for that key is "W/\"etag-abc\""
     And a valid update_media_buy request with:
     | field           | value             |
     | media_buy_id    | mb_existing       |
@@ -2240,12 +2689,22 @@ Feature: BR-UC-003 Update Media Buy
     Then the response is compliant with the update_media_buy error spec
     And the operation should fail
     And the error code should be "IDEMPOTENCY_CONFLICT"
-    And the error "details" object should include "resource_id" with value "mb_existing"
-    And the error "details" object should include "current_version" with value "W/\"etag-abc\""
+    And the wire error object carries no "field" key
     And the error should include a "suggestion" field
     # POST-F1: System state unchanged
-    # POST-F2: IDEMPOTENCY_CONFLICT details accept string ETag (not only numeric versions)
     # POST-F3: Buyer Agent retries with a fresh idempotency_key (suggestion guides the fix)
+    # LOCAL CORRECTION: the generated scenario seeded an ETag for the key and asserted it
+    # came back as details.current_version, plus a details.resource_id. The pinned
+    # L1/security.mdx "IDEMPOTENCY_CONFLICT response shape" says the error body "MUST include
+    # code: IDEMPOTENCY_CONFLICT and a human-readable message" and "MUST NOT include the
+    # cached response, the original payload, a canonical-form diff, or any fingerprint
+    # derived from them. A field json-pointer hint ... Sellers MUST NOT emit one." An ETag of
+    # the cached response is such a fingerprint, and error-details/conflict.json (the shape
+    # with resource_id/current_version) is the CONFLICT shape, not this one. Both details
+    # Thens and the ETag Given are gone; the field-pointer prohibition replaces them. The
+    # first request is spent on the wire, so the hash the conflict is detected against is
+    # the one production computed.
+    # @source repo=adcp ref=v3.2.7 path=docs/building/by-layer/L1/security.mdx
 
   @T-UC-003-storyboard-media-buy-not-found @storyboard-v3.1 @v3-1 @structured-errors @media-buy-not-found
   Scenario: update_media_buy with unknown media_buy_id returns structured MEDIA_BUY_NOT_FOUND, not a 500
@@ -2261,7 +2720,7 @@ Feature: BR-UC-003 Update Media Buy
     # media_buy_id. The seller MUST return MEDIA_BUY_NOT_FOUND with recovery=correctable
     # and context echoed unchanged. Sellers returning 500s or silent successes fail.
     # invalid_transitions: unknown media_buy_id surfaces as structured MEDIA_BUY_NOT_FOUND
-    # @source repo=adcp ref=v3.1.1 path=static/compliance/source/protocols/media-buy/scenarios/invalid_transitions.yaml phase=unknown_media_buy step=update_unknown_media_buy
+    # @source repo=adcp ref=v3.2.7 path=static/compliance/source/protocols/media-buy/scenarios/invalid_transitions.yaml phase=unknown_media_buy step=update_unknown_media_buy
 
   @T-UC-003-storyboard-package-not-found @storyboard-v3.1 @v3-1 @structured-errors @package-not-found
   Scenario: update_media_buy with known media_buy_id but unknown package_id returns PACKAGE_NOT_FOUND
@@ -2277,7 +2736,7 @@ Feature: BR-UC-003 Update Media Buy
     # PACKAGE_NOT_FOUND, distinguishing from MEDIA_BUY_NOT_FOUND so the buyer knows
     # whether to retry against the buy or fix the package reference.
     # invalid_transitions: distinct PACKAGE_NOT_FOUND error code separates buy-level from package-level lookup failure
-    # @source repo=adcp ref=v3.1.1 path=static/compliance/source/protocols/media-buy/scenarios/invalid_transitions.yaml phase=unknown_package step=update_unknown_package
+    # @source repo=adcp ref=v3.2.7 path=static/compliance/source/protocols/media-buy/scenarios/invalid_transitions.yaml phase=unknown_package step=update_unknown_package
 
   @T-UC-003-storyboard-not-cancellable-on-recancel @storyboard-v3.1 @v3-1 @structured-errors @not-cancellable @terminal-state
   Scenario: Re-cancel of a canceled media buy returns NOT_CANCELLABLE, not silent success
@@ -2302,27 +2761,44 @@ Feature: BR-UC-003 Update Media Buy
     # the existing terminal_canceled INVALID_STATE scenario which targets non-cancel
     # updates; NOT_CANCELLABLE is reserved for re-cancel attempts specifically.
     # invalid_transitions: re-cancel of terminal canceled buy is NOT_CANCELLABLE, not silent success
-    # @source repo=adcp ref=v3.1.1 path=static/compliance/source/protocols/media-buy/scenarios/invalid_transitions.yaml phase=double_cancel step=second_cancel
+    # @source repo=adcp ref=v3.2.7 path=static/compliance/source/protocols/media-buy/scenarios/invalid_transitions.yaml phase=double_cancel step=second_cancel
 
-  @T-UC-003-storyboard-creative-fate-after-cancellation @storyboard-v3.1 @v3-1 @cancellation @creative-library @lifecycle-decoupling
-  Scenario: Canceling a media buy releases package-creative assignments but leaves creatives in the library with review state intact
-    Given a media buy has been canceled
-    And the canceled buy had a package with creative assignments
-    When the buyer subsequently calls list_creatives for the same account
-    Then the response is compliant with the list_creatives spec
-    And the creatives that were assigned to the canceled buy's package should still appear in the library
-    And the creatives' review status should be unchanged from before the cancellation
-    And the creatives should NOT be auto-flipped to status "rejected" as a side effect of the cancellation
-    And the creatives should remain reusable by creative_id in a subsequent create_media_buy or sync_creatives
-    # creative_fate_after_cancellation storyboard: per the creative library model,
-    # creative state and assignment state are SEPARATE. Canceling a buy releases
-    # the package-creative assignments but the underlying creatives remain in the
-    # library, reusable by creative_id in a subsequent create_media_buy or
-    # sync_creatives. A seller MUST NOT implicitly reject a creative because its
-    # containing buy was canceled -- a rejection MUST be a deliberate review
-    # decision with its own rejection_reason.
-    # creative_fate_after_cancellation: creative lifecycle decoupled from media buy lifecycle
-    # @source repo=adcp ref=v3.1.1 path=static/compliance/source/protocols/media-buy/scenarios/creative_fate_after_cancellation.yaml phase=verify_creative_persists_post_cancel step=list_creatives_after_cancel
+  @T-UC-003-storyboard-creative-fate-after-cancellation @v3-1 @cancellation @creatives
+  Scenario: Canceling a media buy releases its package-creative assignments from the get_media_buys readback
+    Given the tenant is configured for auto-approval
+    And the package "pkg_001" has existing creative assignments [cr_001, cr_002]
+    And a valid update_media_buy request with:
+    | field        | value       |
+    | media_buy_id | mb_existing |
+    | canceled     | true        |
+    When the Buyer Agent reads media buy "mb_existing" back with get_media_buys
+    Then the package "pkg_001" should report creative approvals for exactly ["cr_001", "cr_002"]
+    When the Buyer Agent sends the update_media_buy request
+    Then the response is compliant with the update_media_buy success spec
+    And the wire media_buy_status should be "canceled"
+    When the Buyer Agent reads media buy "mb_existing" back with get_media_buys
+    Then the package "pkg_001" should report creative approvals for exactly []
+    # LOCAL CORRECTION, to the pin's answer for a seller that declares no creative library.
+    # The release of assignments on cancel binds every seller: specification.mdx, media buy
+    # state transitions, "When a media buy transitions to `rejected` or `canceled`, all
+    # package-creative assignments on that media buy are released", and the buyer observes
+    # it through get_media_buys: "Released assignments no longer appear in `get_media_buys`
+    # responses for that buy." The has_creative_library flag scopes only what happens to the
+    # creatives afterwards, so the generated list_creatives and library-reuse Thens are
+    # dropped: creative-libraries.mdx, "The decoupled library lifecycle applies when the
+    # seller also advertises `creative.has_creative_library: true`", which this seller does
+    # not. The storyboard this came from is gated on that flag, so no storyboard grades the
+    # non-declaring case and the scenario carries no storyboard tag.
+    # The first readback proves the assignments are on the wire before the cancel, so the
+    # empty set after it cannot pass on a seller that never reports them. The cancel goes
+    # through update_media_buy rather than a seeded canceled row: the release is a property
+    # of the transition, and a seeded canceled buy that still holds assignments is a state
+    # a conforming seller never reaches.
+    # Production applies no buyer cancellation yet: update_media_buy reads `canceled` only to
+    # refuse a re-cancel of a terminal buy, so no path moves a buy to `canceled` or releases
+    # its assignments. Tracked by prebid/salesagent#1261, which names this release.
+    # @source repo=adcp ref=v3.2.7 path=docs/media-buy/specification.mdx section="Media Buy State Transitions"
+    # @source repo=adcp ref=v3.2.7 path=docs/creative/creative-libraries.mdx section="Path 2: Inline creatives on the package"
 
   @T-UC-003-partition-revision @partition @revision @schema-v3.1
   Scenario Outline: Revision optimistic-concurrency partition validation - <partition>
@@ -2336,12 +2812,19 @@ Feature: BR-UC-003 Update Media Buy
     Then the response is compliant with the update_media_buy spec
     And the result should be <outcome>
     # v3.1 (revision_optimistic_concurrency.yaml): revision optional; minimum 1; mismatch -> CONFLICT
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/update-media-buy-request.json
+    # LOCAL CORRECTION: the valid rows read a bare "success", which a seller ignoring revision
+    # passes identically. update_media_buy.mdx: "Every mutating update increments revision and
+    # returns the new value in the success response", and update-media-buy-response.json
+    # requires revision, "Revision number after this update". paused: true is a mutation, so
+    # a buy at 7 must report and store 8, whether or not the request carried the token.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/update-media-buy-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/update-media-buy-response.json
+    # @source repo=adcp ref=v3.2.7 path=docs/media-buy/task-reference/update_media_buy.mdx
 
     Examples: Valid partitions
-      | partition       | value          | outcome |
-      | absent          | <not provided> | success |
-      | matches_current | 7              | success |
+      | partition       | value          | outcome               |
+      | absent          | <not provided> | success at revision 8 |
+      | matches_current | 7              | success at revision 8 |
 
     Examples: Invalid partitions
       | partition      | value | outcome                            |
@@ -2361,7 +2844,7 @@ Feature: BR-UC-003 Update Media Buy
     When the Buyer Agent sends the update_media_buy request
     Then the response is compliant with the update_media_buy spec
     And the result should be <outcome>
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/update-media-buy-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/update-media-buy-request.json
 
     Examples: Boundary values
       | boundary_point                  | current | value          | outcome                            |
@@ -2388,7 +2871,7 @@ Feature: BR-UC-003 Update Media Buy
     # BR-RULE-215 INV-4: a mutating update increments the stored revision and returns the new value
     # INT-002: success response carries valid_actions so the buyer can plan the next call without a get_media_buys round-trip
     # POST-S1: Buyer knows the media buy was updated (new revision)
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/update-media-buy-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/update-media-buy-request.json
 
   @T-UC-003-revision-and-idempotency-independent @invariant @BR-RULE-215 @concurrency @idempotency @schema-v3.1
   Scenario: revision and idempotency_key are evaluated independently (INV-6)
@@ -2405,7 +2888,7 @@ Feature: BR-UC-003 Update Media Buy
     And the response status should be "completed"
     # BR-RULE-215 INV-6: idempotency-replay check (BR-RULE-211) and revision check are independent; neither subsumes the other
     # ---------- BR-RULE-214: Billing Arrangement Eligibility ----------
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/update-media-buy-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/update-media-buy-request.json
 
   @T-UC-003-ext-t @extension @ext-t @error @schema-v3.1 @post-f1 @post-f2 @post-f3
   Scenario: Invoice recipient not authorized for the account is rejected (ext-t)
@@ -2434,70 +2917,23 @@ Feature: BR-UC-003 Update Media Buy
     # which a schema-shape rejection cannot say.
     # BR-RULE-214 INV-8: invoice_recipient override must be authorized for the account before the operation proceeds
     # POST-F1: System state unchanged (no billing redirected); POST-F3: omit override or supply an authorized recipient
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/update-media-buy-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/update-media-buy-request.json
 
-  @T-UC-003-billing-not-supported @invariant @BR-RULE-214 @billing @error @schema-v3.1 @post-f2 @post-f3
-  Scenario Outline: Billing party not supported is rejected with scope - <partition>
-    Given the Buyer is authenticated
-    And the resolved billing party is "<billing_party>"
-    And the seller's supported_billing is <supported>
-    And the seller's account billing relationship is "<acct_relationship>"
-    And a valid update_media_buy request with:
-    | field        | value       |
-    | media_buy_id | mb_existing |
-    | paused       | true        |
-    When the Buyer Agent sends the update_media_buy request
-    Then the response is compliant with the update_media_buy error spec
-    And the operation should fail
-    And the error code should be "BILLING_NOT_SUPPORTED"
-    And the error "details" object should include "scope" with value "<scope>"
-    And the error should include "suggestion" field
-    # BR-RULE-214 INV-2/INV-3 (billing_eligibility.yaml)
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/update-media-buy-request.json
-
-    Examples:
-      | partition            | billing_party | supported              | acct_relationship | scope      |
-      | capability_unsupported | advertiser  | ["operator","agent"]   | present           | capability |
-      | account_unsupported    | operator    | ["operator"]           | absent            | account    |
-
-  @T-UC-003-billing-not-permitted-agent @invariant @BR-RULE-214 @billing @error @schema-v3.1 @post-f2 @post-f3
-  Scenario: Billing party not permitted for the calling agent (INV-4/6/7)
-    Given the Buyer is authenticated with an established agent identity
-    And the resolved billing party "agent" is in the seller's supported_billing
-    And the calling agent's commercial relationship is "passthrough_only"
-    And a valid update_media_buy request with:
-    | field        | value       |
-    | media_buy_id | mb_existing |
-    | paused       | true        |
-    When the Buyer Agent sends the update_media_buy request
-    Then the response is compliant with the update_media_buy error spec
-    And the operation should fail
-    And the error code should be "BILLING_NOT_PERMITTED_FOR_AGENT"
-    And the error "details" object should include "rejected_billing"
-    And the error "details" object should NOT include "rate_cards" or "payment_terms" or "credit_limit"
-    And the error should include "suggestion" field
-    # BR-RULE-214 INV-4: per-agent rejection; details carry rejected_billing and MAY carry one suggested_billing only
-    # INV-6/INV-7: present suggested_billing -> autonomous retry; absent -> terminal-pending-onboarding (surface to human)
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/update-media-buy-request.json
-
-  @T-UC-003-billing-unauth-identity @invariant @BR-RULE-214 @billing @error @schema-v3.1 @post-f2
-  Scenario: Unestablished agent identity falls back to BILLING_NOT_SUPPORTED with no scope (INV-5)
-    Given the caller has no established agent identity
-    And the underlying reason is a per-agent billing restriction
-    And a valid update_media_buy request with:
-    | field        | value       |
-    | media_buy_id | mb_existing |
-    | paused       | true        |
-    When the Buyer Agent sends the update_media_buy request
-    Then the response is compliant with the update_media_buy error spec
-    And the operation should fail
-    And the error code should be "BILLING_NOT_SUPPORTED"
-    And the error "details" object should NOT include "scope"
-    And the error code should NOT be "BILLING_NOT_PERMITTED_FOR_AGENT"
-    And the error should include "suggestion" field
-    # BR-RULE-214 INV-5: per-agent gate MUST NOT fire without established identity; return BILLING_NOT_SUPPORTED (scope omitted)
-    # ---------- BR-RULE-217: Mid-Flight Package Addition ----------
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/update-media-buy-request.json
+  # REMOVED at the pin: @T-UC-003-billing-not-supported, @T-UC-003-billing-not-permitted-agent
+  # and @T-UC-003-billing-unauth-identity graded BILLING_NOT_SUPPORTED /
+  # BILLING_NOT_PERMITTED_FOR_AGENT as outcomes of update_media_buy. The pinned
+  # update-media-buy-request.json declares no `billing` property, so an update requests no
+  # billing value, and the pinned enums/error-code.json defines both codes against "the
+  # requested `billing` value" ("The seller declines the requested `billing` value ...").
+  # The pinned conformance catalog places the two-gate dispatch on sync_accounts
+  # ("billing_gate_dispatch: Two-gate dispatch on `sync_accounts.billing` rejection"), and
+  # docs/accounts/tasks/sync_accounts.mdx lists both codes for that task. That behaviour is
+  # graded in BR-UC-011-manage-accounts.feature. The invoice_recipient authorization in
+  # BR-RULE-214 IS an update_media_buy obligation and stays in @T-UC-003-ext-t.
+  # ---------- BR-RULE-217: Mid-Flight Package Addition ----------
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/update-media-buy-request.json
+  # @source repo=adcp ref=v3.2.7 path=docs/building/verification/conformance.mdx
+  # @source repo=adcp ref=v3.2.7 path=docs/accounts/tasks/sync_accounts.mdx
 
   @T-UC-003-ext-u @extension @ext-u @error @schema-v3.1 @post-f1 @post-f2 @post-f3
   Scenario: New packages on a seller that does not support mid-flight additions (ext-u)
@@ -2513,7 +2949,34 @@ Feature: BR-UC-003 Update Media Buy
     And the error should include "suggestion" field
     # BR-RULE-217 INV-1: new_packages on a non-supporting seller -> UNSUPPORTED_FEATURE
     # POST-F3: create the additional packages via a separate create_media_buy
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/update-media-buy-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/update-media-buy-request.json
+
+  @T-UC-003-ext-u-valid-actions @extension @ext-u @BR-RULE-217 @schema-v3.1 @post-s1
+  Scenario: A seller without mid-flight package additions does not advertise add_packages (ext-u)
+    Given the tenant is configured for auto-approval
+    And the existing media buy has start_time "2020-01-01T00:00:00Z" and end_time "2099-02-01T00:00:00Z"
+    And a valid update_media_buy request with:
+    | field        | value       |
+    | media_buy_id | mb_existing |
+    And the request includes 1 package update with:
+    | field      | value   |
+    | package_id | pkg_001 |
+    | budget     | 5000    |
+    And the package "pkg_001" exists in the media buy
+    And the updated daily spend does not exceed max_daily_package_spend
+    When the Buyer Agent sends the update_media_buy request
+    Then the response is compliant with the update_media_buy success spec
+    And the response should succeed
+    And the wire valid_actions should include "update_packages"
+    And the wire valid_actions should not include "add_packages"
+    # LOCAL ADDITION, the advertisement half of BR-RULE-217 INV-1 graded on the wire.
+    # update-media-buy-request.json /properties/new_packages: "Sellers that support mid-flight
+    # package additions advertise add_packages in both valid_actions[] (deprecated) and as an
+    # entry in available_actions[] (authoritative)." This seller does not, so a live buy's
+    # valid_actions carries update_packages (its active status allows it) and not add_packages.
+    # The flight window spans today so the buy date-refines to active, not completed (whose
+    # valid_actions is empty and would satisfy "not include" vacuously).
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/update-media-buy-request.json pointer=/properties/new_packages
 
   @T-UC-003-new-packages-add @invariant @BR-RULE-217 @schema-v3.1 @post-s1 @post-s2
   Scenario: Supporting seller adds new packages atomically (INV-2/INV-4)
@@ -2529,22 +2992,34 @@ Feature: BR-UC-003 Update Media Buy
     And both new packages should appear in the affected_packages
     # BR-RULE-217 INV-2/INV-4: supporting seller advertises add_packages and adds all entries atomically (all-or-none)
     # POST-S1/S2: Buyer knows the media buy was updated and which packages were affected
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/update-media-buy-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/update-media-buy-request.json
 
   @T-UC-003-new-packages-incomplete @invariant @BR-RULE-217 @error @schema-v3.1 @post-f2 @post-f3
   Scenario: New package entry missing a required package-request field is rejected (INV-3)
-    Given the media buy's valid_actions advertises "add_packages"
-    And a valid update_media_buy request with:
+    Given a valid update_media_buy request with:
     | field        | value       |
     | media_buy_id | mb_existing |
     And the request includes new_packages with an entry missing product_id
     When the Buyer Agent sends the update_media_buy request
     Then the response is compliant with the update_media_buy error spec
     And the operation should fail
-    And the error code should be "VALIDATION_ERROR"
+    And the error code should be "INVALID_REQUEST"
+    And the error field should contain "new_packages[0].product_id"
     And the error should include "suggestion" field
     # BR-RULE-217 INV-3: each new_packages entry must be a complete package-request (product_id, budget, pricing_option_id)
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/update-media-buy-request.json
+    # CORRECTED against the pin. new_packages items are package-request.json, which lists
+    # product_id in /required, so an entry without it fails the request schema. A missing
+    # required field is INVALID_REQUEST ("missing required fields, or violates schema
+    # constraints", enums/error-code.json), not VALIDATION_ERROR ("beyond schema
+    # validation"), and L1/security.mdx "Schema validation runs first" puts that refusal
+    # ahead of everything the seller decides. So the refusal does not depend on whether the
+    # seller supports mid-flight additions, and the "valid_actions advertises add_packages"
+    # precondition is dropped (this seller does not advertise it, which made the scenario
+    # stop at its own Given). The field Then pins which entry and member were refused.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/update-media-buy-request.json pointer=/properties/new_packages
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-request.json pointer=/required
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json
+    # @source repo=adcp ref=v3.2.7 path=docs/building/by-layer/L1/security.mdx
 
   @T-UC-003-new-packages-duplicate @invariant @BR-RULE-010 @error @schema-v3.1 @post-f1 @post-f2
   Scenario: New package duplicating an existing product on the media buy is rejected (BR-RULE-010 INV-4)
@@ -2561,7 +3036,7 @@ Feature: BR-UC-003 Update Media Buy
     And the error should include "suggestion" field
     # BR-RULE-010 INV-4: on update, a new_packages product_id duplicating another entry or an existing package is rejected
     # ---------- BR-RULE-216: Campaign & Package Cancellation Semantics ----------
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/update-media-buy-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/update-media-buy-request.json
 
   @T-UC-003-ext-v @extension @ext-v @error @schema-v3.1 @post-f1 @post-f2 @post-f3
   Scenario: Cancellation refused when the buy cannot be canceled in its current state (ext-v)
@@ -2592,7 +3067,7 @@ Feature: BR-UC-003 Update Media Buy
     Then the response is compliant with the update_media_buy spec
     And the result should be <outcome>
     # BR-RULE-216 INV-2: cancellation_reason MUST be at most 500 characters
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/update-media-buy-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/update-media-buy-request.json
 
     Examples: Boundary values
       | boundary_point         | value             | outcome                                 |
@@ -2616,7 +3091,7 @@ Feature: BR-UC-003 Update Media Buy
     And package "pkg_001" should be canceled
     And the media buy status should NOT be "canceled"
     # BR-RULE-216 INV-6: per-package canceled:true cancels only that package; the media buy is not canceled
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/update-media-buy-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/update-media-buy-request.json
 
   @T-UC-003-cancel-irreversible @invariant @BR-RULE-216 @cancellation @error @schema-v3.1 @post-f2 @post-f3
   Scenario: canceled:false is rejected -- cancellation is irreversible (INV-1/3)
@@ -2632,7 +3107,7 @@ Feature: BR-UC-003 Update Media Buy
     And the error should include "suggestion" field
     # BR-RULE-216 INV-1: canceled only valid value is const true; INV-3: cancellation is irreversible (no "uncancel")
     # ---------- BR-RULE-198: Package Immutable Fields After Creation (immutable field guard on package update) ----------
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/update-media-buy-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/update-media-buy-request.json
 
   @T-UC-003-ext-w @extension @ext-w @error @schema-v3.1 @post-f1 @post-f2 @post-f3
   Scenario: Package update including an immutable field is rejected (ext-w)
@@ -2650,7 +3125,95 @@ Feature: BR-UC-003 Update Media Buy
     And the error should include "suggestion" field
     # BR-RULE-198 INV-1: product_id is immutable post-create; package-update root `not` constraint rejects it
     # POST-F3: remove the immutable field, or create a new media buy to change product/formats/pricing
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/update-media-buy-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/update-media-buy-request.json
+
+  @T-UC-003-package-update-immutable-keyword @immutable_field_guard @error @schema-v3.1 @post-f2
+  Scenario Outline: every fully-immutable field in a package update is refused by the root not - <immutable_field>
+    Given a valid update_media_buy request for "mb_existing"
+    And the request includes a package update where the payload carries <immutable_field>
+    When the Buyer Agent sends the update_media_buy request
+    Then the update is refused INVALID_REQUEST naming the package update's "<immutable_field>" under keyword not
+    # LOCAL ADDITION. package-update.json at the pin lists six "Fully-immutable fields
+    # (product_id, format_ids, format_option_refs, format_kind, params, pricing_option_id)"
+    # and its root `not` anyOf requires each one. The generated outlines above name three of
+    # them and grade only the code, which an undeclared field also earns in dev (extra
+    # forbidden -> INVALID_REQUEST) and which production (extra ignore) never reaches: there
+    # the field is dropped and the update succeeds. So this outline also grades issues[0]:
+    # the field's own pointer and keyword not, which only the named immutable-field refusal
+    # carries (the generic refusal says additionalProperties). core/error.json defines
+    # issues[].keyword as the "Schema keyword that rejected the payload", the validator's
+    # native name, and in package-update.json that keyword is the root not; the schema
+    # carries no readOnly. A selector reaches update_media_buy only on
+    # new_packages[] (update-media-buy-request.json /properties/new_packages, whose items are
+    # package-request.json).
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-update.json pointer=/not
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/error.json pointer=/properties/issues
+
+    Examples: the six fields the package-update root `not` forbids
+      | immutable_field    |
+      | product_id         |
+      | format_ids         |
+      | format_option_refs |
+      | format_kind        |
+      | params             |
+      | pricing_option_id  |
+
+    # The same root `not` names two more single members, which are not fully-immutable fields
+    # but are refused through the same branch shape (`required: [name]`): the pre-GA
+    # capability_ids ("Pre-GA capability_ids is also rejected rather than accepted as an
+    # extension", package-update.json's description) and budget_cap_timezone. Both were
+    # accepted: neither is a declared property, so the accepted-shape strip dropped them.
+    Examples: the other single members the package-update root `not` forbids
+      | immutable_field     |
+      | capability_ids      |
+      | budget_cap_timezone |
+
+  @T-UC-003-package-update-bidding-with-bid-price @immutable_field_guard @error @schema-v3.1 @post-f2
+  Scenario: a package update carrying a bidding object beside bid_price is refused AMBIGUOUS_BIDDING_POLICY
+    Given a valid update_media_buy request for "mb_existing"
+    And the request includes a package update where the payload carries bidding with bid_price
+    When the Buyer Agent sends the update_media_buy request
+    Then the update is refused AMBIGUOUS_BIDDING_POLICY naming the package update itself
+    # LOCAL ADDITION. package-update.json's root `not` has one branch of two members:
+    # required [bidding, bid_price] with bidding typed object. bid_price's own description:
+    # "A package update MUST NOT supply both a non-null bidding object and bid_price. During
+    # migration, bidding:null MAY accompany bid_price". The pinned enum has a code for exactly
+    # this condition, AMBIGUOUS_BIDDING_POLICY: "The same effective package combines the
+    # canonical bidding block with legacy bid_price ... Sellers MUST reject rather than
+    # choosing a winner. Recovery: correctable". Both members are declared, so nothing strips
+    # them; the refusal must come ahead of the UNSUPPORTED_FEATURE either member earns alone.
+    # No single member is at fault, so the field is the package object.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-update.json pointer=/not
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-update.json pointer=/properties/bid_price
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json pointer=/enumDescriptions/AMBIGUOUS_BIDDING_POLICY
+
+  @T-UC-003-package-update-catalogs-duplicate-type @invariant @error @post-f1 @post-f2
+  Scenario: a catalogs replacement repeating a catalog type is refused and the stored catalogs are kept
+    Given the tenant is configured for auto-approval
+    And a valid update_media_buy request with:
+    | field        | value       |
+    | media_buy_id | mb_existing |
+    And the request includes 1 package update with:
+    | field      | value                                                                                  |
+    | package_id | pkg_001                                                                                |
+    | catalogs   | [{"type": "product", "catalog_id": "cat-p1"}, {"type": "product", "catalog_id": "cat-p2"}] |
+    And the package "pkg_001" exists in the media buy
+    And an earlier update gave package "pkg_001" the catalogs [{"type": "store", "catalog_id": "cat-store"}]
+    When the Buyer Agent sends the update_media_buy request
+    Then the response contains error code VALIDATION_ERROR
+    And the response error field is packages[0].catalogs
+    And the stored catalogs of package "pkg_001" should be [{"type": "store", "catalog_id": "cat-store"}]
+    # LOCAL ADDITION. package-update.json catalogs: "the provided array replaces the current
+    # list", so the replacement becomes the package's catalogs, and core/package.json catalogs:
+    # "Each catalog MUST have a distinct type ... sellers MUST reject requests containing
+    # multiple catalogs of the same type with a validation_error". The package's array is at
+    # fault, not one entry, so the field names it. The stored catalogs are the earlier
+    # update's store catalog: the error arm of update-media-buy-response.json is "operation
+    # failed, no changes applied", and the row is the only proof the refusal came before the
+    # write.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/package.json pointer=/properties/catalogs
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-update.json pointer=/properties/catalogs
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/update-media-buy-response.json pointer=/oneOf/1
 
   @T-UC-003-partition-immutable-package-field @partition @immutable_field_guard @schema-v3.1
   Scenario Outline: Immutable package-field guard partition validation - <partition>
@@ -2662,67 +3225,45 @@ Feature: BR-UC-003 Update Media Buy
     Then the response is compliant with the update_media_buy spec
     And the result should be <outcome>
     # BR-RULE-198 (immutable_field_guard.yaml): product_id / format_ids / pricing_option_id forbidden in package-update
+    # LOCAL CORRECTION: the outcomes could not see the guard they name. The invalid rows read
+    # a bare INVALID_REQUEST, which dev's accepted-shape strip also answers for any undeclared
+    # member (issues keyword additionalProperties), so deleting the immutable-field refusal
+    # left them green. They now require each sent member refused under keyword "not", the
+    # keyword media-buy/package-update.json rejects them with (its root not: anyOf of
+    # required), as core/error.json asks ("the validator's native keyword name"). The valid
+    # row read a bare success; it now requires the budget change to be stored.
     # ---------- BR-RULE-219: Committed Metrics Append-Only ----------
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/update-media-buy-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/update-media-buy-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-update.json pointer=/not
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/error.json
 
     Examples: Valid partitions
-      | partition         | forbidden_field          | outcome |
-      | no_immutable_keys | only budget (updatable)  | success |
+      | partition         | forbidden_field          | outcome                        |
+      | no_immutable_keys | only budget (updatable)  | success with persisted records |
 
     Examples: Invalid partitions
-      | partition                       | forbidden_field                          | outcome                                  |
-      | product_id_present              | product_id                               | error "INVALID_REQUEST" with suggestion |
-      | format_ids_present              | format_ids                               | error "INVALID_REQUEST" with suggestion |
-      | pricing_option_id_present       | pricing_option_id                        | error "INVALID_REQUEST" with suggestion |
-      | multiple_immutable_keys_present | product_id and pricing_option_id         | error "INVALID_REQUEST" with suggestion |
+      | partition                       | forbidden_field                          | outcome                                                  |
+      | product_id_present              | product_id                               | refused INVALID_REQUEST by the package update's root not |
+      | format_ids_present              | format_ids                               | refused INVALID_REQUEST by the package update's root not |
+      | pricing_option_id_present       | pricing_option_id                        | refused INVALID_REQUEST by the package update's root not |
+      | multiple_immutable_keys_present | product_id and pricing_option_id         | refused INVALID_REQUEST by the package update's root not |
 
-  @T-UC-003-committed-metrics-append @invariant @BR-RULE-219 @schema-v3.1 @post-s1
-  Scenario: Appending a new committed metric is accepted and the set grows monotonically (INV-1/4)
-    Given the tenant is configured for auto-approval
-    And the media buy "mb_existing" has a committed metric "impressions" with committed_at "2026-04-29T10:53:00Z"
-    And a valid update_media_buy request that appends a new committed metric "viewable_rate"
-    When the Buyer Agent sends the update_media_buy request
-    Then the response is compliant with the update_media_buy success spec
-    And the response status should be "completed"
-    And the committed metric "impressions" should remain present with committed_at "2026-04-29T10:53:00Z"
-    And the committed metric "viewable_rate" should be present with its own committed_at
-    # BR-RULE-219 INV-1: append new (scope, metric_id, qualifier) accepted; INV-4: prior entries preserved (monotonic)
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/update-media-buy-request.json
-
-  @T-UC-003-committed-metrics-immutable @invariant @BR-RULE-219 @error @schema-v3.1 @post-f1 @post-f2
-  Scenario Outline: Modifying or removing a committed metric is rejected - <partition>
-    Given the media buy "mb_existing" has a committed metric "impressions" with committed_at "2026-04-29T10:53:00Z"
-    And a valid update_media_buy request that <mutation>
-    When the Buyer Agent sends the update_media_buy request
-    Then the response is compliant with the update_media_buy error spec
-    And the operation should fail
-    And the error code should be "VALIDATION_ERROR"
-    And the error should include "suggestion" field
-    # BR-RULE-219 INV-2/INV-3: existing committed entries cannot be modified or removed (suggested code IMMUTABLE_FIELD)
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/update-media-buy-request.json
-
-    Examples:
-      | partition                | mutation                                                  |
-      | modify_existing_committed_at | rewrites the committed_at of the existing impressions entry |
-      | remove_existing_entry    | drops the existing impressions entry                       |
-      | shrink_contract          | submits a strict subset that retracts a committed entry    |
-
-  @T-UC-003-committed-metrics-noop @invariant @BR-RULE-219 @schema-v3.1 @post-s5
-  Scenario Outline: Byte-identical resubmit and omission are non-mutating no-ops (INV-5/6) - <partition>
-    Given the tenant is configured for auto-approval
-    And the media buy "mb_existing" has a committed metric "impressions" with committed_at "2026-04-29T10:53:00Z"
-    And a valid update_media_buy request that <case>
-    When the Buyer Agent sends the update_media_buy request
-    Then the response is compliant with the update_media_buy success spec
-    And the response status should be "completed"
-    And the committed metric "impressions" should remain unchanged
-    # ---------- BR-RULE-209 INV-10: Sandbox on update non-success shapes ----------
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/update-media-buy-request.json
-
-    Examples:
-      | partition                 | case                                                       |
-      | resubmit_existing_unchanged | re-submits the existing committed_metrics byte-for-byte unchanged |
-      | omit_field_entirely       | omits committed_metrics entirely                            |
+  # REMOVED at the pin: @T-UC-003-committed-metrics-append, -immutable and -noop each sent
+  # "an update_media_buy request that" appends, rewrites, drops or re-submits the package's
+  # committed_metrics. The pinned update request has no such member:
+  # update-media-buy-request.json carries packages[] of package-update.json, and neither
+  # schema declares committed_metrics (it is declared on core/package.json, the seller's
+  # package, and on package-request.json for a NEW package). Under this seller's accepted
+  # shape (root CLAUDE.md pattern 7) an undeclared member is refused in dev and dropped in
+  # production, so no row of these outlines can reach the append-only rule it names. The
+  # obligation is also capability-gated: core/media-buy-features.json says a seller
+  # declaring committed_metrics_supported "MUST honor append-only mid-flight metric
+  # additions via update_media_buy", and this seller declares committed_metrics_supported
+  # false (src/services/seller_capabilities.py). Restore these once the pin defines the
+  # update-side carrier and the seller declares the capability.
+  # ---------- BR-RULE-209 INV-10: Sandbox on update non-success shapes ----------
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-update.json
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/media-buy-features.json pointer=/properties/committed_metrics_supported
 
   @T-UC-003-sandbox-update-nonsuccess @invariant @BR-RULE-209 @sandbox @schema-v3.1 @post-f2
   Scenario Outline: sandbox is forbidden on update non-success response shapes (INV-10) - <shape>
@@ -2732,16 +3273,30 @@ Feature: BR-UC-003 Update Media Buy
     | media_buy_id | mb_existing |
     And the update resolves to the <shape> response shape because <trigger>
     When the Buyer Agent sends the update_media_buy request
-    Then the response is compliant with the update_media_buy spec
+    Then the response is compliant with the update_media_buy error spec
+    And the error code should be "<error_code>"
     And the response payload should NOT contain a "sandbox" field
     # BR-RULE-209 INV-10: update_media_buy three-way oneOf -- sandbox appears only on synchronous success
+    # LOCAL CORRECTION: the "submitted task" row is removed. The pinned
+    # update-media-buy-response.json forbids sandbox on the terminal-failure arm
+    # (UpdateMediaBuyError: not anyOf [... {required: [sandbox]} ...]) but not on the
+    # submitted arm, whose `not` lists only media_buy_id and warnings and whose
+    # additionalProperties is true. Asserting "forbidden" there grades a prohibition the
+    # pin does not make.
+    # LOCAL CORRECTION: the terminal-failure row was triggered by a negative package budget,
+    # which the request schema refuses before the boundary resolves the account, so the
+    # sandbox account never reached the refusal and a failure builder that stamped sandbox
+    # from it could not show. The row now names a package the buy does not hold: that
+    # refusal happens inside the update, after the sandbox account is resolved, and its code
+    # is pinned so a refusal from any earlier stage fails the row. The compliance check
+    # names the error arm, the one that carries the prohibition.
     # ---------- BR-RULE-013 INV-6: package-level start_time 'asap' forbidden ----------
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/update-media-buy-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/update-media-buy-response.json pointer=/oneOf/1/not
+    # @source repo=adcp ref=v3.2.7 path=docs/media-buy/task-reference/update_media_buy.mdx (error table: PACKAGE_NOT_FOUND)
 
     Examples:
-      | shape            | trigger                                            |
-      | terminal failure | a validation error rejects the update              |
-      | submitted task   | manual approval queues the update (UpdateMediaBuySubmitted) |
+      | shape            | trigger                                                        | error_code        |
+      | terminal failure | the package update names a package the media buy does not hold | PACKAGE_NOT_FOUND |
 
   @T-UC-003-package-start-time-asap @invariant @BR-RULE-013 @error @schema-v3.1 @post-f2 @post-f3
   Scenario: Package-level start_time 'asap' is schema-forbidden (INV-6)
@@ -2767,18 +3322,31 @@ Feature: BR-UC-003 Update Media Buy
     When the Buyer Agent sends the update_media_buy request
     Then the response is compliant with the update_media_buy spec
     And the sandbox response-field outcome should be <outcome>
+    # LOCAL CORRECTION, two rows. (1) "sandbox: false in response (explicit production)"
+    # asserted "present and false" for the SAME input as the next row, which asserts
+    # "omitted", so one of the two failed whatever the seller sent. The pinned success arm
+    # says only "When true, this response contains simulated data from sandbox mode", so a
+    # production account may carry false or nothing; the row now asserts "not true", the
+    # reading UC-005's sandbox outline gives the same row. (2) "sandbox present on
+    # update_media_buy submitted task envelope" is removed: the submitted arm does not forbid
+    # sandbox (its `not` lists only media_buy_id and warnings; additionalProperties true).
+    # The two terminal-failure rows grade the seller's own budget refusal (BUDGET_TOO_LOW on
+    # packages[0].budget, for a budget of 0 the schema admits), made after the sandbox
+    # account was resolved: "Sandbox errors are real validation errors. If a buyer sends an
+    # invalid budget using a sandbox account, return a real error". A refusal the request
+    # schema makes is answered before the account is resolved, so it cannot show either.
     # ---------- start_time package-scope boundary (start_time.yaml) ----------
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/update-media-buy-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/update-media-buy-response.json
+    # @source repo=adcp ref=v3.2.7 path=docs/media-buy/advanced-topics/sandbox.mdx
 
     Examples: sandbox response semantics (BR-UC-003)
       | boundary                                                            | account_context    | response_shape      | outcome                              |
       | sandbox: true in response (sandbox account)                         | a sandbox account  | synchronous success | sandbox flag present and true        |
-      | sandbox: false in response (explicit production)                    | a production account | synchronous success | sandbox flag present and false     |
+      | sandbox: false in response (explicit production)                    | a production account | synchronous success | sandbox flag not true              |
       | sandbox absent in response (production account)                     | a production account | synchronous success | sandbox flag omitted                |
       | sandbox: true on update_media_buy synchronous success shape         | a sandbox account  | synchronous success | sandbox flag present and true        |
       | sandbox account with invalid budget (real validation error)         | a sandbox account  | terminal failure    | rejected with a real validation error (not a silent ok) |
       | sandbox present on update_media_buy terminal-failure (errors) shape  | a sandbox account  | terminal failure    | sandbox field forbidden on this shape |
-      | sandbox present on update_media_buy submitted task envelope         | a sandbox account  | submitted task      | sandbox field forbidden on this shape |
 
   @T-UC-003-bva-start-time-package-scope @boundary @start_time @schema-v3.1 @post-f2
   Scenario Outline: start_time boundary at package scope - <boundary>
@@ -2788,7 +3356,7 @@ Feature: BR-UC-003 Update Media Buy
     Then the response is compliant with the update_media_buy spec
     And the result should be <outcome>
     # ---------- billing eligibility boundaries (billing_eligibility.yaml, BR-RULE-214) ----------
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/update-media-buy-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/update-media-buy-request.json
 
     Examples: start_time package-scope boundary (BR-UC-003)
       | boundary                | value | outcome                            |
@@ -2800,17 +3368,18 @@ Feature: BR-UC-003 Update Media Buy
     When the Buyer Agent sends the update_media_buy request
     Then the response is compliant with the update_media_buy spec
     And the result should be <outcome>
+    # LOCAL CORRECTION: the five "billing resolved = ..." rows are removed, for the reason
+    # recorded where @T-UC-003-billing-not-supported stood: the pinned update request carries
+    # no `billing`, and the billing gates are sync_accounts behaviour (BR-UC-011). The
+    # invoice_recipient row is an update_media_buy obligation ("The seller MUST validate the
+    # invoice recipient is authorized for this account") and stays; its outcome now names
+    # the code @T-UC-003-ext-t grades for the same refusal, so the two cannot disagree.
     # ---------- targeting_overlay collection_list boundaries (targeting_overlay.yaml, BR-RULE-014) ----------
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/update-media-buy-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/update-media-buy-request.json pointer=/properties/invoice_recipient
 
     Examples: billing eligibility (BR-UC-002/003)
       | boundary                                                                                                            | outcome                                       |
-      | billing resolved = operator; operator in supported_billing; agent permitted                                         | accepted                                      |
-      | billing resolved = advertiser; seller's supported_billing = [operator, agent]                                       | error "BILLING_NOT_SUPPORTED" — rejected      |
-      | billing resolved = operator; seller supports operator generally; no operator billing relationship on this account   | error "BILLING_NOT_SUPPORTED" — rejected      |
-      | billing resolved = agent; agent in supported_billing; calling agent is passthrough-only                             | error "BILLING_NOT_PERMITTED_FOR_AGENT" — rejected |
-      | billing resolved = agent; caller unauthenticated                                                                    | error "BILLING_NOT_SUPPORTED" — rejected (identity-fallback) |
-      | invoice_recipient supplied = business entity not authorized for this account                                        | rejected (invoice_recipient unauthorized)     |
+      | invoice_recipient supplied = business entity not authorized for this account                                        | error "VALIDATION_ERROR" — rejected (invoice_recipient unauthorized) |
 
   @T-UC-003-bva-targeting-overlay-collection-list @boundary @targeting_overlay @schema-v3.1 @post-f2
   Scenario Outline: targeting_overlay collection_list boundary - <boundary>
@@ -2819,14 +3388,25 @@ Feature: BR-UC-003 Update Media Buy
     When the Buyer Agent sends the update_media_buy request
     Then the response is compliant with the update_media_buy spec
     And the result should be <outcome>
+    # LOCAL CORRECTION: the rows expected "accepted". core/targeting.json describes both
+    # collection_list and collection_list_exclude as "Seller must declare support in
+    # get_adcp_capabilities", and get-adcp-capabilities-response.json's
+    # execution.targeting.collection_list reads "False or absence makes no product-level
+    # promise. Product.overlay_support is authoritative". This seller declares neither, at
+    # either level, and the same targeting.json says "A fresh create/update request MUST be
+    # applied exactly or rejected". An accepted reference was stored and never applied, so the
+    # pinned answer is UNSUPPORTED_FEATURE naming the dimension, before any mutation: the base
+    # request's budget change must not land either. With both set, collection_list is named.
     # ---------- immutable_field_guard boundaries (immutable_field_guard.yaml, BR-RULE-198) ----------
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/update-media-buy-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/update-media-buy-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/targeting.json pointer=/properties/collection_list
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/protocol/get-adcp-capabilities-response.json
 
     Examples: collection_list overlay (BR-UC-002/003)
       | boundary                                              | outcome  |
-      | collection_list with valid agent_url and list_id      | accepted |
-      | collection_list_exclude with valid agent_url and list_id | accepted |
-      | both collection_list and collection_list_exclude set  | accepted |
+      | collection_list with valid agent_url and list_id      | error "UNSUPPORTED_FEATURE" on packages[0].targeting_overlay.collection_list with suggestion — no records persisted |
+      | collection_list_exclude with valid agent_url and list_id | error "UNSUPPORTED_FEATURE" on packages[0].targeting_overlay.collection_list_exclude with suggestion — no records persisted |
+      | both collection_list and collection_list_exclude set  | error "UNSUPPORTED_FEATURE" on packages[0].targeting_overlay.collection_list with suggestion — no records persisted |
 
   @T-UC-003-bva-immutable-field-guard @boundary @immutable_field_guard @schema-v3.1 @post-f2
   Scenario Outline: immutable field guard boundary - <boundary>
@@ -2836,7 +3416,7 @@ Feature: BR-UC-003 Update Media Buy
     Then the response is compliant with the update_media_buy spec
     And the result should be <outcome>
     # ---------- package_immutable_fields boundaries (uc026_immutable_fields.yaml, BR-RULE-198) ----------
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/update-media-buy-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/update-media-buy-request.json
 
     Examples: package-update root guard (BR-UC-003)
       | boundary                                                            | outcome                              |
@@ -2854,7 +3434,7 @@ Feature: BR-UC-003 Update Media Buy
     Then the response is compliant with the update_media_buy spec
     And the result should be <outcome>
     # ---------- committed_metrics append-only boundaries (committed_metrics_append_only.yaml, BR-RULE-219) ----------
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/update-media-buy-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/update-media-buy-request.json
 
     Examples: PackageUpdate immutable-field guard (BR-UC-003)
       | boundary                              | outcome                                 |
@@ -2864,27 +3444,11 @@ Feature: BR-UC-003 Update Media Buy
       | update includes pricing_option_id     | error "INVALID_REQUEST" with suggestion |
       | update includes all three immutable fields | error "INVALID_REQUEST" with suggestion |
 
-  @T-UC-003-bva-committed-metrics @boundary @committed_metrics @schema-v3.1 @post-f2
-  Scenario Outline: committed_metrics append-only boundary - <boundary>
-    Given a media buy "mb_existing" whose committed_metrics already contains a committed contract
-    And an update_media_buy request that <boundary>
-    When the Buyer Agent sends the update_media_buy request
-    Then the response is compliant with the update_media_buy spec
-    And the result should be <outcome>
-    # v3.1 core/package.json committed_metrics: sellers MUST reject modify/remove of existing
-    # entries with validation_error, suggested code IMMUTABLE_FIELD (BR-RULE-219 INV-2/INV-3).
-    # ---------- idempotency_key boundaries (idempotency_key.yaml, BR-RULE-081) ----------
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/update-media-buy-request.json
-
-    Examples: committed_metrics append-only (BR-UC-003)
-      | boundary                                          | outcome                                       |
-      | add a new vendor-scoped entry                     | accepted                                      |
-      | re-submit existing entries unchanged (idempotent) | accepted                                      |
-      | omit field entirely (partial-update, no change)   | accepted                                      |
-      | modify committed_at of an existing entry          | error "VALIDATION_ERROR" (suggested_code IMMUTABLE_FIELD) — rejected |
-      | modify qualifier of an existing entry             | error "VALIDATION_ERROR" (suggested_code IMMUTABLE_FIELD) — rejected |
-      | remove an existing entry                          | error "VALIDATION_ERROR" (suggested_code IMMUTABLE_FIELD) — rejected |
-      | shrink contract to a strict subset                | error "VALIDATION_ERROR" (suggested_code IMMUTABLE_FIELD) — rejected |
+  # REMOVED at the pin: @T-UC-003-bva-committed-metrics, for the reason recorded where
+  # @T-UC-003-committed-metrics-append stood -- the pinned update request declares no
+  # committed_metrics member, so none of its rows can be sent.
+  # ---------- idempotency_key boundaries (idempotency_key.yaml, BR-RULE-081) ----------
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/update-media-buy-request.json
 
   @T-UC-003-bva-idempotency-key @boundary @idempotency_key @schema-v3.1 @post-f2
   Scenario Outline: idempotency_key boundary - <boundary>
@@ -2894,7 +3458,7 @@ Feature: BR-UC-003 Update Media Buy
     Then the response is compliant with the update_media_buy spec
     And the result should be <outcome>
     # ---------- product_uniqueness boundaries (product_uniqueness.yaml, BR-RULE-010) ----------
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/update-media-buy-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/update-media-buy-request.json
 
     Examples: idempotency_key boundaries (BR-UC-003)
       | boundary                                       | outcome                                            |
@@ -2907,18 +3471,32 @@ Feature: BR-UC-003 Update Media Buy
     When the Buyer Agent sends the update_media_buy request
     Then the response is compliant with the update_media_buy spec
     And the result should be <outcome>
+    # LOCAL CORRECTION: four create_media_buy rows are removed. "single package", "two
+    # packages, different products", "two packages, same product_id" and "proposal_id
+    # supplied" describe a create request's package set. On update, packages[] items are
+    # package-update.json, whose root `not` rejects product_id (so no update can name a
+    # product there), and update-media-buy-request.json declares no proposal_id. The
+    # new_packages rows are the update's own product-uniqueness surface and stay.
+    # REGROUNDED: all three rows are refused with UNSUPPORTED_FEATURE on new_packages.
+    # update-media-buy-request.json /properties/new_packages: "Sellers that do not support
+    # this MUST reject with ACTION_NOT_ALLOWED (preferred) or UNSUPPORTED_FEATURE (legacy)".
+    # This seller does not add packages to a live buy and does not advertise add_packages
+    # (@T-UC-003-ext-u-valid-actions grades that on the wire). The MUST covers every
+    # new_packages request, so the refusal comes before the product set is examined: a
+    # duplicate set is refused for the same reason as a distinct one. The rows used to expect
+    # "accepted" and VALIDATION_ERROR, which is the obligation of a seller that supports
+    # mid-flight additions. They grade that no package set, distinct or duplicate, gets past
+    # the refusal. Each row's request carries only new_packages, so no other field can earn
+    # the refusal.
     # ---------- approval_workflow submitted-envelope boundaries (approval_workflow.yaml) ----------
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/update-media-buy-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-update.json pointer=/not
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/update-media-buy-request.json pointer=/properties/new_packages
 
     Examples: product uniqueness across packages (BR-UC-002/003)
-      | boundary                                                                | outcome              |
-      | single package (trivially unique)                                       | accepted             |
-      | two packages, different products                                        | accepted             |
-      | two packages, same product_id                                           | rejected (duplicate) |
-      | proposal_id supplied, packages omitted (no buyer packages array)        | accepted             |
-      | update new_packages[] adds a product_id not present elsewhere           | accepted             |
-      | update new_packages[] product_id duplicates an existing media buy package | rejected (duplicate) |
-      | update new_packages[] contains two entries with the same product_id     | rejected (duplicate) |
+      | boundary                                                                  | outcome                                                    |
+      | update new_packages[] adds a product_id not present elsewhere             | error "UNSUPPORTED_FEATURE" on new_packages with suggestion |
+      | update new_packages[] product_id duplicates an existing media buy package | error "UNSUPPORTED_FEATURE" on new_packages with suggestion |
+      | update new_packages[] contains two entries with the same product_id       | error "UNSUPPORTED_FEATURE" on new_packages with suggestion |
 
   @T-UC-003-bva-approval-workflow @boundary @approval_workflow @schema-v3.1 @post-s7 @post-s8
   Scenario Outline: approval workflow submitted-envelope boundary - <boundary>

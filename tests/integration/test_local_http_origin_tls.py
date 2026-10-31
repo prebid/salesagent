@@ -67,7 +67,7 @@ from adcp.signing import build_ip_pinned_transport
 
 from src.core.security.outbound_http import OutboundDeliveryFailed, send
 from tests.helpers.local_http_origin import run_local_origin
-from tests.helpers.test_tls_material import load_gen_test_tls, server_ssl_context
+from tests.helpers.tls_material import load_gen_test_tls, server_ssl_context
 from tests.integration.test_outbound_http import set_flags
 
 pytestmark = [pytest.mark.integration]

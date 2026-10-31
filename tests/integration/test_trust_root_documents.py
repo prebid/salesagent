@@ -13,16 +13,19 @@ actually resolve.
 
 What each group grades, and why it is written the way it is:
 
-* **Per-endpoint entries (R-H1).** security.mdx:1104 step 5 byte-equals the URL
-  whose ``get_adcp_capabilities`` the counterparty invoked — and that is an
-  ENDPOINT (``/mcp``, ``/a2a``), never a bare origin. The brand.json schema's own
-  ``#/definitions/agents`` description blesses several same-type entries with
-  distinct urls. The expected literals are therefore discovered by ASKING THE
-  RUNNING APP which path it actually serves, never by rebuilding the string with
-  the same helper production uses: a trailing-slash mismatch is the spec's own
-  worked failure example (``https://x.com/mcp`` vs ``https://x.com/mcp/``), and
-  Starlette's ``/mcp`` mount redirects while ``/a2a`` does not. A test that
-  constructs its expectation the way the code does proves nothing.
+* **Per-endpoint entries (R-H1).** security.mdx's key-discovery step 5 matches a
+  canonicalized ``agents[].url`` against the canonicalized agent URL the
+  counterparty HOLDS — and that is an ENDPOINT (``/mcp``, ``/a2a``), never a bare
+  origin. The brand.json schema's own ``#/definitions/agents`` description blesses
+  several same-type entries with distinct urls. The expected literals are the paths
+  a counterparty DIALS, confirmed against the running app rather than rebuilt with
+  the same helper production uses: a test that constructs its expectation the way
+  the code does proves nothing. A trailing-slash mismatch is the spec's own worked
+  failure example (``https://x.com/mcp`` vs ``https://x.com/mcp/``) and step 5 says
+  "a trailing slash remains significant", so WHICH side the published value anchors
+  on is the whole question — Starlette's ``/mcp`` mount 307s to ``/mcp/`` while
+  ``/a2a`` answers in place, and a redirect moves the client without changing the URL
+  the client was given. The dialed path is what it was given.
 
 * **``revoked_at`` on the JWKS, not only on adagents (R-H3).** Per F1 the JWKS is
   authoritative for REQUEST signing; the adagents pin governs sell-side webhooks
@@ -67,7 +70,6 @@ from __future__ import annotations
 import re
 from datetime import UTC, datetime, timedelta
 from typing import Any
-from urllib.parse import urlsplit
 
 import pytest
 from adcp import get_adcp_spec_version
@@ -130,36 +132,44 @@ def _seed(env, slug: str, **key_kwargs):
 
 
 def _served_endpoint_paths(client) -> dict[str, str]:
-    """Ask the RUNNING APP which path a counterparty actually ends up calling.
+    """Ask the RUNNING APP which path a counterparty DIALS for each transport.
 
-    Returns ``{"mcp": ..., "a2a": ...}`` — the path AFTER any redirect the app
-    itself issues. ``/mcp`` is a Starlette ``Mount`` and answers ``GET /mcp`` with
-    a 307 to ``/mcp/``; ``/a2a`` is a JSON-RPC POST route and answers ``GET /a2a``
-    with 405, i.e. it is served at exactly that path. That asymmetry is the whole
-    point: the byte-equal match in security.mdx step 5 is against the URL the
-    counterparty invoked, and the redirect decides what that string is.
+    Returns ``{"mcp": "/mcp", "a2a": "/a2a"}`` — the path as dialed, confirmed against
+    the running app, and NOT the path any redirect lands on. The two differ for MCP:
+    ``/mcp`` is a Starlette ``Mount`` and answers ``GET /mcp`` with a 307 to ``/mcp/``,
+    while ``/a2a`` is a JSON-RPC POST route and answers ``GET /a2a`` with 405. Both are
+    answered by this app; only one is answered by moving the client.
 
-    The ``404`` guard is what makes the fallback branch legitimate. "Not a redirect"
-    only means "served at *candidate*" while SOMETHING answers *candidate*; a ``404``
-    means nothing does, and recording it as the served path would publish a URL that
-    resolves to nothing. It has a concrete trigger: a sibling test file that starts the
-    app lifespan and does not restore leaves the Flask catch-all ``Mount("")`` on the
+    The dialed path is the one that belongs in ``agents[].url``, and that is a spec
+    reading rather than a preference. security.mdx's key-discovery step 5 canonicalizes
+    the agent URL a counterparty HOLDS and every candidate ``agents[].url``, then
+    requires one equal pair — and "a trailing slash remains significant under the shared
+    algorithm". The URL a counterparty holds is the one it was given (``seller-setup.mdx``
+    publishes ``https://ads.streamhaus.example/mcp``), not the one our mount bounces it
+    to, so publishing the post-redirect ``/mcp/`` makes a conformant buyer match no entry.
+    This function recorded the redirect TARGET until the one-spelling change, which is why
+    ``AGENT_ENDPOINT_PATHS`` published ``/mcp/``.
+
+    The candidates are literals here on purpose: rebuilding them from
+    ``AGENT_ENDPOINT_PATHS`` would assert that production agrees with itself. What is
+    measured against the app is that the published path is answered AT ALL.
+
+    The ``404`` guard carries that measurement. A ``404`` means nothing on this app
+    answers the candidate, and publishing a URL that resolves to nothing is the failure
+    worth catching. It has a concrete trigger: a sibling test file that starts the app
+    lifespan and does not restore leaves the Flask catch-all ``Mount("")`` on the
     singleton's route table, which swallows both bare paths and turns the ``307``/``405``
-    above into ``404`` (``salesagent-66a1``, :mod:`tests.helpers.app_state`). Failing
-    here names that cause; falling through produced a byte-equality mismatch that did
-    not.
+    above into ``404`` (``salesagent-66a1``, :mod:`tests.helpers.app_state`). Failing here
+    names that cause; falling through produced a byte-equality mismatch that did not.
     """
     paths: dict[str, str] = {}
     for name, candidate in (("mcp", "/mcp"), ("a2a", "/a2a")):
         response = client.get(candidate, follow_redirects=False)
-        if response.status_code in (301, 302, 303, 307, 308):
-            paths[name] = urlsplit(response.headers["location"]).path
-            continue
         assert response.status_code != 404, (
-            f"discovery is meaningless: nothing on this app answers {candidate!r} and it "
-            "issues no redirect either, so no served path can be read off it. Most likely "
-            "another test file started the app lifespan without restoring "
-            "src.app.app.router.routes (see tests.helpers.app_state)"
+            f"discovery is meaningless: nothing on this app answers {candidate!r}, so a "
+            "published URL naming it would resolve to nothing. Most likely another test "
+            "file started the app lifespan without restoring src.app.app.router.routes "
+            "(see tests.helpers.app_state)"
         )
         paths[name] = candidate
     return paths

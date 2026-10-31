@@ -15,6 +15,7 @@ from sqlalchemy import delete, select
 from src.admin.app import create_app
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Creative, Principal, Tenant
+from tests.factories import stamp_format_identity
 from tests.factories.principal import plaintext_token_for
 from tests.helpers.media_buy_approval import (
     ADAPTER_BOUNDARY,
@@ -95,24 +96,30 @@ def _auth_session(client, tenant_id):
 
 
 def _create_creative(tenant_id: str, status: str = "pending") -> str:
-    """Create a test creative in the database. Returns creative_id."""
+    """Create a test creative in the database. Returns creative_id.
+
+    The format identity is stamped by ``stamp_format_identity`` rather than spelled as
+    columns: the creative-identity collapse dropped ``agent_url`` and ``format`` from the
+    table in favour of the four columns ``_identity_columns`` derives, and the shared helper
+    derives them through the same mapping ``CreativeRepository.create`` uses. Its default
+    reference is a format the reference agent serves; a legacy id stamped at any other
+    agent has no canonical projection and production refuses it.
+    """
     creative_id = f"cre_{uuid.uuid4().hex[:12]}"
     now = datetime.now(UTC)
+    creative = Creative(
+        creative_id=creative_id,
+        tenant_id=tenant_id,
+        principal_id=_PRINCIPAL_ID,
+        name="Test Creative",
+        status=status,
+        data={},
+        created_at=now,
+        updated_at=now,
+    )
+    stamp_format_identity(creative)
     with get_db_session() as session:
-        session.add(
-            Creative(
-                creative_id=creative_id,
-                tenant_id=tenant_id,
-                principal_id=_PRINCIPAL_ID,
-                name="Test Creative",
-                agent_url="https://creatives.example.com",
-                format="display_300x250_image",
-                status=status,
-                data={},
-                created_at=now,
-                updated_at=now,
-            )
-        )
+        session.add(creative)
         session.commit()
     return creative_id
 
@@ -228,8 +235,6 @@ def _create_creative_for_retro_push(session, tenant_id: str, status: str = "pend
         status=status,
         creative_id=f"cre_{uuid.uuid4().hex[:12]}",
         name="Test Creative",
-        agent_url="https://creatives.example.com",
-        format="display_300x250_image",
     )
     return creative.creative_id
 

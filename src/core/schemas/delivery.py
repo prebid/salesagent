@@ -16,27 +16,29 @@ from adcp.types import DeliveryMetrics as LibraryDeliveryMetrics
 from adcp.types import (
     DeliveryStatus,  # noqa: F401 — re-exported for backward compat
 )
-from adcp.types import GetCreativeDeliveryResponse as LibraryGetCreativeDeliveryResponse
 from adcp.types import GetMediaBuyDeliveryRequest as LibraryGetMediaBuyDeliveryRequest
-from adcp.types import GetMediaBuyDeliveryResponse as LibraryGetMediaBuyDeliveryResponse
 from adcp.types import MediaBuyDeliveryStatus as LibraryMediaBuyDeliveryStatus
 from adcp.types import ReportingPeriod as LibraryReportingPeriod
-from adcp.types.generated_poc.core.geo_delivery_metrics import (
+from adcp.types.domains.core.geo_delivery_metrics import (
     GeoDeliveryMetrics as LibraryByGeoItem,
-)  # adcp 6.6: inline ByGeoItem promoted to named $ref type GeoDeliveryMetrics (spec 3.1.1 geo-delivery-metrics.json)
-from adcp.types.generated_poc.media_buy.get_media_buy_delivery_response import (
+)  # the pinned SDK: inline ByGeoItem promoted to named $ref type GeoDeliveryMetrics (geo-delivery-metrics.json)
+from adcp.types.domains.core.placement_delivery_metrics import (
+    PlacementDeliveryMetrics as LibraryByPlacementItem,
+)  # the pinned SDK: inline ByPlacementItem promoted to named $ref type PlacementDeliveryMetrics, same move ByGeoItem made above
+from adcp.types.domains.media_buy.get_media_buy_delivery_response import (
     ByDeviceTypeItem as LibraryByDeviceTypeItem,
 )  # TODO: no stable alias in adcp.types
-from adcp.types.generated_poc.media_buy.get_media_buy_delivery_response import (
-    ByPlacementItem as LibraryByPlacementItem,
-)  # TODO: no stable alias in adcp.types
-from adcp.types.generated_poc.media_buy.get_media_buy_delivery_response import (
+from adcp.types.domains.media_buy.get_media_buy_delivery_response import (
     MediaBuyDelivery as LibraryMediaBuyDelivery,
 )  # TODO: no stable alias in adcp.types
+
+# The legacy arm from the module that contains only it — see the note in ``_base.py``.
+from adcp.types.legacy import LegacyGetCreativeDeliveryResponse as LibraryGetCreativeDeliveryResponse
+from adcp.types.legacy import LegacyGetMediaBuyDeliveryResponse as LibraryGetMediaBuyDeliveryResponse
 from pydantic import ConfigDict, Field
 
 from src.core.config import get_pydantic_extra_mode
-from src.core.schemas._base import AdcpResponse, BuyerRequest, NestedModelSerializerMixin, SalesAgentBaseModel
+from src.core.schemas._base import BuyerRequest, NestedModelSerializerMixin, SalesAgentAdcpResponse, SalesAgentBaseModel
 
 # ---------------------------------------------------------------------------
 # Simple enum / leaf types
@@ -97,7 +99,7 @@ class GetMediaBuyDeliveryRequest(BuyerRequest, LibraryGetMediaBuyDeliveryRequest
 
     # account, reporting_dimensions, attribution_window, time_granularity,
     # include_window_breakdown, include_package_daily_breakdown: all now provided
-    # by adcp SDK 5.7 (spec 3.1.0-beta.3). No local redeclarations needed.
+    # by an earlier SDK. No local redeclarations needed.
 
 
 # ---------------------------------------------------------------------------
@@ -176,9 +178,9 @@ class PackageDelivery(LibraryByPackageItem):
     library's 67 fields and adding none, with those three widened to ``| None = None``.
     The SDK base serializes with a blanket ``exclude_none=True``, so an unset one was
     dropped and every delivery response was schema-invalid; the compliance Then step
-    graded it on 470 UC-004 scenarios at once. A subclass could not have widened them:
-    ``test_architecture_schema_inheritance`` grades a redeclaration against its library
-    parent, and required -> optional needs an allowlist row naming the weakened axis.
+    graded it on 470 UC-004 scenarios at once. A subclass must not widen them:
+    required -> optional on a pinned field is a retype, and the pin is what makes these
+    required.
     """
 
     by_placement: list[PlacementBreakdown] | None = Field(  # type: ignore[assignment]  # covariant narrowing; see _NARROWED_LIST_NOTE
@@ -263,7 +265,9 @@ class AggregatedTotals(LibraryAggregatedTotals):
 # ---------------------------------------------------------------------------
 
 
-class GetMediaBuyDeliveryResponse(NestedModelSerializerMixin, LibraryGetMediaBuyDeliveryResponse, AdcpResponse):
+class GetMediaBuyDeliveryResponse(
+    NestedModelSerializerMixin, LibraryGetMediaBuyDeliveryResponse, SalesAgentAdcpResponse
+):
     """Extends library GetMediaBuyDeliveryResponse with local overrides.
 
     Library provides: reporting_period, currency, errors, context, ext,

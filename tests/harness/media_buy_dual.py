@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Any
 from unittest.mock import MagicMock
 
 from src.core.schemas import UpdateMediaBuyRequest
+from tests.factories.request import OMIT
 from tests.harness._mixins import make_adapter_update_side_effect
 from tests.harness.media_buy_create import OMIT_ACCOUNT, OMIT_IDEMPOTENCY_KEY, MediaBuyCreateEnv
 from tests.harness.transport import DeliverResult
@@ -47,7 +48,9 @@ def _is_update_request(kwargs: dict[str, Any]) -> bool:
 
     ``media_buy_id`` is the discriminator: it identifies the buy being updated and
     is absent from every create request (the seller assigns it), so a flat body
-    carrying it is unambiguously an update.
+    carrying it is unambiguously an update. An update that means to send NO id carries
+    the key with :data:`~tests.factories.request.OMIT`, which routes it here and which
+    :meth:`MediaBuyDualEnv._flatten_update_request` strips at the wire.
     """
     req = kwargs.get("req")
     if isinstance(req, UpdateMediaBuyRequest):
@@ -75,6 +78,10 @@ class MediaBuyDualEnv(MediaBuyCreateEnv):
     def _configure_mocks(self) -> None:
         super()._configure_mocks()
         self._configure_update_mocks()
+
+    def adapter_mocks(self) -> list[MagicMock]:
+        """The create module's adapter, then the update module's (``_UPDATE_PATCHES``)."""
+        return [*super().adapter_mocks(), self.mock["update_adapter"].return_value]
 
     def _configure_update_mocks(self) -> None:
         mock_adapter = MagicMock()
@@ -152,15 +159,7 @@ class MediaBuyDualEnv(MediaBuyCreateEnv):
         # the E2E error path calls parse_rest_error, which would leave a stale flag).
         if _is_update_request(kwargs):
             self._active_update = True
-            # The id in the URL must be the one the SCENARIO asked for, from wherever it
-            # supplied it: a typed ``req`` or a plain ``media_buy_id`` kwarg. Reading only
-            # ``req`` meant a kwarg-style call silently fell back to the seeded buy -- so
-            # "Media buy not found -- by media_buy_id" PUT to the EXISTING media buy and
-            # got a success, while the same scenario failed correctly on every other
-            # transport because they carry the id in the body rather than the path.
-            req = kwargs.get("req")
-            target = getattr(req, "media_buy_id", None) or kwargs.get("media_buy_id") or self._seeded_media_buy_id
-            self._update_target_id = target
+            self._update_target_id = self._requested_update_target(kwargs)
             return self._build_update_rest_body(**kwargs)
         self._active_update = False
         return super().build_rest_body(**kwargs)
@@ -234,10 +233,30 @@ class MediaBuyDualEnv(MediaBuyCreateEnv):
         else:
             flat = req.model_dump(mode="json", exclude_none=True)
             flat.update(kwargs)
-        for field, sentinel in (("idempotency_key", OMIT_IDEMPOTENCY_KEY), ("account", OMIT_ACCOUNT)):
+        for field, sentinel in (
+            ("idempotency_key", OMIT_IDEMPOTENCY_KEY),
+            ("account", OMIT_ACCOUNT),
+            ("media_buy_id", OMIT),
+        ):
             if flat.get(field) is sentinel:
                 del flat[field]
         return flat
+
+    def _requested_update_target(self, kwargs: dict[str, Any]) -> str:
+        """The media_buy_id the REST update PUTs to: the one the SCENARIO named.
+
+        From wherever it was supplied, a typed ``req`` or a plain ``media_buy_id`` kwarg.
+        Reading only ``req`` sent a kwarg-style call to the SEEDED buy, so "Media buy not
+        found -- by media_buy_id" PUT to an existing media buy and got a success. It passed
+        on a2a/mcp because they carry the id in the body; only REST puts it in the path.
+
+        An update sent with NO id has no REST request at all: the id is the resource path
+        (``PUT /media-buys/{media_buy_id}``, src/core/tools/registry.py). The rows that send
+        none are declared not applicable on rest and e2e_rest in
+        ``tests/bdd/conftest.py::_TRANSPORT_INEXPRESSIBLE_ROWS`` and never reach this method.
+        """
+        req = kwargs.get("req")
+        return getattr(req, "media_buy_id", None) or kwargs.get("media_buy_id") or self._seeded_media_buy_id
 
     def _call_update_a2a(self, **kwargs: Any) -> DeliverResult:
         # Drive the REAL on_message_send → _dispatch_skill → to_wire → Task/Artifact
@@ -306,17 +325,8 @@ class MediaBuyDualEnv(MediaBuyCreateEnv):
         self._commit_factory_data()
         client = self.get_rest_client()
 
+        endpoint = f"/api/v1/media-buys/{self._requested_update_target(kwargs)}"
         body = self._build_update_rest_body(**kwargs)
-        # Same rule as REST_ENDPOINT above: the id in the URL is the one the SCENARIO
-        # named, from a typed ``req`` OR a plain ``media_buy_id`` kwarg. Reading only
-        # ``req`` sent a kwarg-style call to the SEEDED buy, so "Media buy not found --
-        # by media_buy_id" PUT to an existing media buy and got a success. It passed on
-        # a2a/mcp because they carry the id in the body; only REST puts it in the path,
-        # which is why one transport disagreed with the other two about a request the
-        # scenario had specified unambiguously.
-        req = kwargs.get("req")
-        media_buy_id = getattr(req, "media_buy_id", None) or kwargs.get("media_buy_id") or self._seeded_media_buy_id
-        endpoint = f"/api/v1/media-buys/{media_buy_id}"
         # Same signed/unsigned fork as the base POST dispatch, with the update's
         # PUT verb: an env that cannot sign must REFUSE a signed dispatch (a
         # silent unsigned send would let a signing scenario pass with no

@@ -11,6 +11,7 @@ and emits the outcome on the wire (#1417).
 
 from __future__ import annotations
 
+import time
 import uuid
 from functools import lru_cache
 from typing import Any
@@ -19,7 +20,20 @@ from unittest.mock import ANY
 from pytest_bdd import given, parsers, then, when
 
 from tests.bdd.steps._harness_db import db_session as _db_session
-from tests.bdd.steps._outcome_helpers import _get_response_field, payload_or_none, require_payload, wire_field
+from tests.bdd.steps._outcome_helpers import (
+    _get_response_field,
+    payload_or_none,
+    require_payload,
+    wire_entry,
+    wire_field,
+)
+from tests.bdd.steps.domain.uc002_task_query import assert_task_query_outcome, is_task_query_outcome
+from tests.bdd.steps.domain.uc002_v31_request import (
+    assert_governance_skipped_outcome,
+    assert_sandbox_outcome,
+    is_governance_skipped_outcome,
+    is_sandbox_outcome,
+)
 from tests.bdd.steps.generic._account_resolution import ensure_tenant_principal
 from tests.bdd.steps.generic._create_request import build_create_request_kwargs, pricing_option_id
 from tests.factories.account import AccountFactory, AgentAccountAccessFactory
@@ -75,11 +89,18 @@ def _attach_raw_account_shape(ctx: dict, account_value: Any | None) -> None:
 
 
 @given(parsers.parse('a valid create_media_buy request with account_id "{account_id}"'))
+@given(parsers.parse('a valid create_media_buy request with account "{account_id}"'))
 def given_request_with_account_id(ctx: dict, account_id: str) -> None:
-    """Set up a create_media_buy request referencing an explicit account_id."""
-    from adcp.types import AccountReference, AccountReferenceById
+    """Set up a full create_media_buy request referencing an explicit account_id.
 
-    ctx["account_ref"] = AccountReference(root=AccountReferenceById(account_id=account_id))
+    The short form ("with account") used to be a separate step that stashed the reference
+    and built NO request, so a scenario whose When dispatches ``request_kwargs`` sent an
+    empty body and was answered INVALID_REQUEST before reaching anything it grades
+    (@T-UC-002-v31-submitted-envelope-shape on the box). Both sentences mean one request.
+    """
+    from adcp.types import AccountReferenceById
+
+    ctx["account_ref"] = AccountReferenceById(account_id=account_id)
     ctx["request_account_id"] = account_id
     _attach_account_to_full_request(ctx)
 
@@ -87,11 +108,9 @@ def given_request_with_account_id(ctx: dict, account_id: str) -> None:
 @given(parsers.parse('a valid create_media_buy request with account natural key brand "{brand}" operator "{operator}"'))
 def given_request_with_natural_key(ctx: dict, brand: str, operator: str) -> None:
     """Set up a create_media_buy request referencing a natural key (brand + operator)."""
-    from adcp.types import AccountReference, AccountReferenceByNaturalKey, BrandReference
+    from adcp.types import AccountReferenceByNaturalKey, BrandReference
 
-    ctx["account_ref"] = AccountReference(
-        root=AccountReferenceByNaturalKey(brand=BrandReference(domain=brand), operator=operator),
-    )
+    ctx["account_ref"] = AccountReferenceByNaturalKey(brand=BrandReference(domain=brand), operator=operator)
     ctx["request_brand"] = brand
     ctx["request_operator"] = operator
     _attach_account_to_full_request(ctx)
@@ -99,8 +118,14 @@ def given_request_with_natural_key(ctx: dict, brand: str, operator: str) -> None
 
 @given("a create_media_buy request without account field")
 def given_request_without_account(ctx: dict) -> None:
-    """Set up a create_media_buy request with no account field."""
+    """Set up an otherwise complete create_media_buy request with no account field.
+
+    The complete request is what makes the refusal the missing-account one: setting only
+    ``account_ref`` sent no brand, dates or packages, and the harness defaulted an account
+    in, so the INVALID_REQUEST it drew named some other field.
+    """
     ctx["account_ref"] = None
+    _attach_raw_account_shape(ctx, None)
 
 
 @given("a valid create_media_buy request with creative assignments")
@@ -122,15 +147,6 @@ def given_valid_request(ctx: dict) -> None:
 
     ctx.setdefault("account_ref", None)
     _ensure_request_defaults(ctx)
-
-
-@given(parsers.parse('a valid create_media_buy request with account "{account_id}"'))
-def given_request_with_account(ctx: dict, account_id: str) -> None:
-    """Set up a create_media_buy request with account (short form)."""
-    from adcp.types import AccountReference, AccountReferenceById
-
-    ctx["account_ref"] = AccountReference(root=AccountReferenceById(account_id=account_id))
-    ctx["request_account_id"] = account_id
 
 
 @given("the account_id does not exist in the seller's account store")
@@ -283,7 +299,7 @@ def given_account_active(ctx: dict) -> None:
 @given(parsers.parse("a create_media_buy request with account configuration {partition}"))
 def given_request_with_partition(ctx: dict, partition: str) -> None:
     """Set up request based on partition name (for Scenario Outline tables)."""
-    from adcp.types import AccountReference, AccountReferenceById, AccountReferenceByNaturalKey, BrandReference
+    from adcp.types import AccountReferenceById, AccountReferenceByNaturalKey, BrandReference
 
     env = ctx["env"]
     ensure_tenant_principal(ctx, env)
@@ -299,7 +315,7 @@ def given_request_with_partition(ctx: dict, partition: str) -> None:
             operator="explicit.com",
         )
         AgentAccountAccessFactory(tenant_id=tenant.tenant_id, principal=principal, account=account)
-        ctx["account_ref"] = AccountReference(root=AccountReferenceById(account_id="acc-explicit"))
+        ctx["account_ref"] = AccountReferenceById(account_id="acc-explicit")
 
     elif partition == "natural_key_unambiguous":
         account = AccountFactory(
@@ -310,8 +326,8 @@ def given_request_with_partition(ctx: dict, partition: str) -> None:
             operator="natkey.com",
         )
         AgentAccountAccessFactory(tenant_id=tenant.tenant_id, principal=principal, account=account)
-        ctx["account_ref"] = AccountReference(
-            root=AccountReferenceByNaturalKey(brand=BrandReference(domain="natkey.com"), operator="natkey.com"),
+        ctx["account_ref"] = AccountReferenceByNaturalKey(
+            brand=BrandReference(domain="natkey.com"), operator="natkey.com"
         )
 
     elif partition == "missing_account":
@@ -332,11 +348,11 @@ def given_request_with_partition(ctx: dict, partition: str) -> None:
         return
 
     elif partition == "explicit_not_found":
-        ctx["account_ref"] = AccountReference(root=AccountReferenceById(account_id="acc-not-found"))
+        ctx["account_ref"] = AccountReferenceById(account_id="acc-not-found")
 
     elif partition == "natural_key_not_found":
-        ctx["account_ref"] = AccountReference(
-            root=AccountReferenceByNaturalKey(brand=BrandReference(domain="unknown.com"), operator="unknown.com"),
+        ctx["account_ref"] = AccountReferenceByNaturalKey(
+            brand=BrandReference(domain="unknown.com"), operator="unknown.com"
         )
 
     elif partition == "natural_key_ambiguous":
@@ -350,8 +366,8 @@ def given_request_with_partition(ctx: dict, partition: str) -> None:
             owner_for_index=lambda _i: principal,
             account_id_prefix="acc-amb",
         )
-        ctx["account_ref"] = AccountReference(
-            root=AccountReferenceByNaturalKey(brand=BrandReference(domain="ambiguous.com"), operator="ambiguous.com"),
+        ctx["account_ref"] = AccountReferenceByNaturalKey(
+            brand=BrandReference(domain="ambiguous.com"), operator="ambiguous.com"
         )
 
     elif partition == "account_setup_required":
@@ -363,7 +379,7 @@ def given_request_with_partition(ctx: dict, partition: str) -> None:
             operator="setup.com",
         )
         AgentAccountAccessFactory(tenant_id=tenant.tenant_id, principal=principal, account=account)
-        ctx["account_ref"] = AccountReference(root=AccountReferenceById(account_id="acc-setup"))
+        ctx["account_ref"] = AccountReferenceById(account_id="acc-setup")
 
     elif partition == "account_payment_required":
         account = AccountFactory(
@@ -374,7 +390,7 @@ def given_request_with_partition(ctx: dict, partition: str) -> None:
             operator="payment.com",
         )
         AgentAccountAccessFactory(tenant_id=tenant.tenant_id, principal=principal, account=account)
-        ctx["account_ref"] = AccountReference(root=AccountReferenceById(account_id="acc-payment"))
+        ctx["account_ref"] = AccountReferenceById(account_id="acc-payment")
 
     elif partition == "account_suspended":
         account = AccountFactory(
@@ -385,7 +401,7 @@ def given_request_with_partition(ctx: dict, partition: str) -> None:
             operator="suspended.com",
         )
         AgentAccountAccessFactory(tenant_id=tenant.tenant_id, principal=principal, account=account)
-        ctx["account_ref"] = AccountReference(root=AccountReferenceById(account_id="acc-suspended"))
+        ctx["account_ref"] = AccountReferenceById(account_id="acc-suspended")
 
     elif partition == "natural_key_sandbox":
         # v3.1: sandbox natural-key resolution — an active sandbox account is
@@ -400,10 +416,8 @@ def given_request_with_partition(ctx: dict, partition: str) -> None:
             sandbox=True,
         )
         AgentAccountAccessFactory(tenant_id=tenant.tenant_id, principal=principal, account=account)
-        ctx["account_ref"] = AccountReference(
-            root=AccountReferenceByNaturalKey(
-                brand=BrandReference(domain="sandbox.com"), operator="sandbox.com", sandbox=True
-            ),
+        ctx["account_ref"] = AccountReferenceByNaturalKey(
+            brand=BrandReference(domain="sandbox.com"), operator="sandbox.com", sandbox=True
         )
 
     else:
@@ -419,7 +433,7 @@ def given_request_with_partition(ctx: dict, partition: str) -> None:
 @given(parsers.parse("a create_media_buy request with account: {config}"))
 def given_request_with_boundary_config(ctx: dict, config: str) -> None:
     """Set up request based on boundary config string."""
-    from adcp.types import AccountReference, AccountReferenceById, AccountReferenceByNaturalKey, BrandReference
+    from adcp.types import AccountReferenceById, AccountReferenceByNaturalKey, BrandReference
 
     env = ctx["env"]
     ensure_tenant_principal(ctx, env)
@@ -436,11 +450,11 @@ def given_request_with_boundary_config(ctx: dict, config: str) -> None:
             operator=f"{account_id}.com",
         )
         AgentAccountAccessFactory(tenant_id=tenant.tenant_id, principal=principal, account=account)
-        ctx["account_ref"] = AccountReference(root=AccountReferenceById(account_id=account_id))
+        ctx["account_ref"] = AccountReferenceById(account_id=account_id)
 
     elif config.startswith("acc-") and "not-found" in config:
         account_id = config.split()[0]
-        ctx["account_ref"] = AccountReference(root=AccountReferenceById(account_id=account_id))
+        ctx["account_ref"] = AccountReferenceById(account_id=account_id)
 
     elif config.startswith("brand+op") and "single match" in config:
         account = AccountFactory(
@@ -451,13 +465,13 @@ def given_request_with_boundary_config(ctx: dict, config: str) -> None:
             operator="single.com",
         )
         AgentAccountAccessFactory(tenant_id=tenant.tenant_id, principal=principal, account=account)
-        ctx["account_ref"] = AccountReference(
-            root=AccountReferenceByNaturalKey(brand=BrandReference(domain="single.com"), operator="single.com"),
+        ctx["account_ref"] = AccountReferenceByNaturalKey(
+            brand=BrandReference(domain="single.com"), operator="single.com"
         )
 
     elif config.startswith("brand+op") and "no match" in config:
-        ctx["account_ref"] = AccountReference(
-            root=AccountReferenceByNaturalKey(brand=BrandReference(domain="nomatch.com"), operator="nomatch.com"),
+        ctx["account_ref"] = AccountReferenceByNaturalKey(
+            brand=BrandReference(domain="nomatch.com"), operator="nomatch.com"
         )
 
     elif config.startswith("brand+op") and "multi match" in config:
@@ -471,8 +485,8 @@ def given_request_with_boundary_config(ctx: dict, config: str) -> None:
             owner_for_index=lambda _i: principal,
             account_id_prefix="acc-multi",
         )
-        ctx["account_ref"] = AccountReference(
-            root=AccountReferenceByNaturalKey(brand=BrandReference(domain="multi.com"), operator="multi.com"),
+        ctx["account_ref"] = AccountReferenceByNaturalKey(
+            brand=BrandReference(domain="multi.com"), operator="multi.com"
         )
 
     elif "setup-needed" in config:
@@ -484,7 +498,7 @@ def given_request_with_boundary_config(ctx: dict, config: str) -> None:
             operator="setup.com",
         )
         AgentAccountAccessFactory(tenant_id=tenant.tenant_id, principal=principal, account=account)
-        ctx["account_ref"] = AccountReference(root=AccountReferenceById(account_id="acc-setup"))
+        ctx["account_ref"] = AccountReferenceById(account_id="acc-setup")
 
     elif "payment-due" in config:
         account = AccountFactory(
@@ -495,7 +509,7 @@ def given_request_with_boundary_config(ctx: dict, config: str) -> None:
             operator="payment.com",
         )
         AgentAccountAccessFactory(tenant_id=tenant.tenant_id, principal=principal, account=account)
-        ctx["account_ref"] = AccountReference(root=AccountReferenceById(account_id="acc-payment"))
+        ctx["account_ref"] = AccountReferenceById(account_id="acc-payment")
 
     elif "suspended" in config:
         account = AccountFactory(
@@ -506,7 +520,7 @@ def given_request_with_boundary_config(ctx: dict, config: str) -> None:
             operator="suspended.com",
         )
         AgentAccountAccessFactory(tenant_id=tenant.tenant_id, principal=principal, account=account)
-        ctx["account_ref"] = AccountReference(root=AccountReferenceById(account_id="acc-suspended"))
+        ctx["account_ref"] = AccountReferenceById(account_id="acc-suspended")
 
     elif "no account" in config:
         # Schema-shape case: account field omitted entirely. account is REQUIRED on
@@ -533,10 +547,8 @@ def given_request_with_boundary_config(ctx: dict, config: str) -> None:
             sandbox=True,
         )
         AgentAccountAccessFactory(tenant_id=tenant.tenant_id, principal=principal, account=account)
-        ctx["account_ref"] = AccountReference(
-            root=AccountReferenceByNaturalKey(
-                brand=BrandReference(domain="sandboxbo.com"), operator="sandboxbo.com", sandbox=True
-            ),
+        ctx["account_ref"] = AccountReferenceByNaturalKey(
+            brand=BrandReference(domain="sandboxbo.com"), operator="sandboxbo.com", sandbox=True
         )
 
     else:
@@ -575,13 +587,20 @@ def _first_package(ctx: dict) -> dict:
 
 @given(parsers.parse('a package has optimization_goal with kind "metric" and metric "{metric}" not in supported set'))
 def given_package_optimization_unsupported_metric(ctx: dict, metric: str) -> None:
-    """Attach an optimization_goal whose metric is outside the seller's supported set.
+    """Attach the metric-kind optimization goal the sentence names, on a product declaring none.
 
-    Production gap: create_media_buy never reads optimization_goals; the metric
-    is silently accepted (BR-UC-002 ext-u wants UNSUPPORTED_FEATURE).
+    The goal is the one the partition outline's ``unsupported_metric`` row sends, built by
+    the same helpers. It used to be ``{"metric": metric, "weight": 1.0}``: no ``kind``, which
+    core/optimization-goal.json requires as the discriminator, and a ``weight`` it does not
+    declare. The INVALID_REQUEST that malformed goal earned was a schema refusal of the
+    fixture, not an answer about the metric. No seeded product declares
+    ``metric_optimization``, so the metric is outside every supported set and the pin owes
+    TERMS_REJECTED (optimization-reporting.mdx, "Required coherence between layers", rule 1).
+    Production accepts the goal today: prebid/salesagent#2479.
     """
-    pkg = _first_package(ctx)
-    pkg["optimization_goals"] = [{"metric": metric, "weight": 1.0}]
+    from tests.bdd.steps.generic.given_media_buy import _metric_goal, _set_optimization_goals
+
+    _set_optimization_goals(ctx, [_metric_goal(metric)])
 
 
 @given(parsers.parse('a package has optimization_goal with kind "event" and unregistered event_source_id'))
@@ -612,9 +631,10 @@ def given_package_format_id_plain_string(ctx: dict, format_id: str) -> None:
 def given_package_format_id_unregistered_agent(ctx: dict) -> None:
     """Set a well-formed FormatId whose agent_url is not a registered creative agent.
 
-    Production gap: _validate_and_convert_format_ids (the unregistered-agent
-    check) is dead code — never called — so the unregistered agent_url is not
-    detected (ext-h-agent wants a 'not registered' error).
+    The seeded product declares only legacy ``format_ids`` at the reference agent, so
+    this reference satisfies none of them and the package selector gate refuses it
+    UNSUPPORTED_FEATURE (``media-buy/package-request.json`` @ 3.2.7, "Format selector
+    contract (normative)").
     """
     pkg = _first_package(ctx)
     pkg["format_ids"] = [{"agent_url": "https://unregistered-agent.example.com", "id": "banner_300x250"}]
@@ -659,14 +679,12 @@ def given_request_natural_key_sandbox(ctx: dict) -> None:
     the sandbox echo cannot be asserted. Wire-ready: dispatch a full create
     carrying the natural-key reference so production resolves it at the boundary.
     """
-    from adcp.types import AccountReference, AccountReferenceByNaturalKey, BrandReference
+    from adcp.types import AccountReferenceByNaturalKey, BrandReference
 
-    ctx["account_ref"] = AccountReference(
-        root=AccountReferenceByNaturalKey(
-            brand=BrandReference(domain="sandbox-brand.com"),
-            operator="sandbox-brand.com",
-            sandbox=True,
-        )
+    ctx["account_ref"] = AccountReferenceByNaturalKey(
+        brand=BrandReference(domain="sandbox-brand.com"),
+        operator="sandbox-brand.com",
+        sandbox=True,
     )
     _attach_account_to_full_request(ctx)
 
@@ -677,7 +695,19 @@ def given_request_natural_key_sandbox(ctx: dict) -> None:
 
 
 @when("the Buyer Agent sends the create_media_buy request")
+@when("the Buyer Agent sends create_media_buy with the unworkable measurement_terms")
 def when_send_create_media_buy(ctx: dict) -> None:
+    """Send the create_media_buy request and record how long the answer took.
+
+    ``ctx["create_response_seconds"]`` is the wall time from dispatch to the recorded
+    result, on the scenario's transport; NFR-004 grades it.
+    """
+    started = time.perf_counter()
+    _send_create_media_buy(ctx)
+    ctx["create_response_seconds"] = time.perf_counter() - started
+
+
+def _send_create_media_buy(ctx: dict) -> None:
     """Send the create_media_buy request and capture the result or error.
 
     Four dispatch modes share this step text — every one routes a full
@@ -788,10 +818,18 @@ def then_result_should_be(ctx: dict, outcome: str) -> None:
     - Validation passes/skips: request proceeded past the named validation stage
     - Workflow outcomes: correct approval path was taken
     - Persistence outcomes: DB state matches the expected persistence behavior
-    - Task list outcomes: task query returned correctly shaped/ordered results
-    - Error outcomes: AdCPSalesAgentError with matching code and recovery
+    - Task list outcomes: graded by uc002_task_query against the seeded tasks
+    - Error outcomes: AdCPSalesAgentError with matching code and recovery; an error row
+      ending "no records persisted" also proves the rejected update stored nothing
+    - Update outcomes (UC-003): graded by ``uc003_update_media_buy.assert_update_outcome``
     - Unknown: raises ValueError so unmapped rows are caught immediately
     """
+    from tests.bdd.steps.domain.uc003_update_media_buy import (
+        assert_update_not_persisted,
+        assert_update_outcome,
+        is_update_outcome,
+    )
+
     if outcome == "success":
         # Bare success outcome (e.g. UC-003 targeting-overlay "Valid partitions"):
         # the operation proceeded without error and produced a response.
@@ -799,8 +837,16 @@ def then_result_should_be(ctx: dict, outcome: str) -> None:
         assert payload_or_none(ctx) is not None, "Expected a response for success outcome but ctx['response'] is None"
     elif outcome.startswith("account resolution succeeds"):
         _assert_account_resolution_succeeds(ctx)
+    elif is_sandbox_outcome(outcome):
+        assert_sandbox_outcome(ctx, outcome)
+    elif is_governance_skipped_outcome(outcome):
+        assert_governance_skipped_outcome(ctx)
     elif outcome.startswith("error"):
         _assert_error_outcome(ctx, outcome)
+        if outcome.endswith("no records persisted"):
+            assert_update_not_persisted(ctx)
+    elif is_update_outcome(outcome):
+        assert_update_outcome(ctx, outcome)
     elif _is_pipeline_routing_outcome(outcome):
         _assert_pipeline_routing(ctx, outcome)
     elif _is_validation_pass_outcome(outcome):
@@ -809,8 +855,8 @@ def then_result_should_be(ctx: dict, outcome: str) -> None:
         _assert_workflow_outcome(ctx, outcome)
     elif _is_persistence_outcome(outcome):
         _assert_persistence_outcome(ctx, outcome)
-    elif _is_task_list_outcome(outcome):
-        _assert_task_list_outcome(ctx, outcome)
+    elif is_task_query_outcome(outcome):
+        assert_task_query_outcome(ctx, outcome)
     else:
         raise ValueError(f"Unknown outcome: {outcome!r}")
 
@@ -901,18 +947,6 @@ def _is_persistence_outcome(outcome: str) -> bool:
     )
 
 
-def _is_task_list_outcome(outcome: str) -> bool:
-    """Check if outcome is a task list query result."""
-    return (
-        outcome.startswith("tasks sorted by")
-        or outcome.startswith("tasks filtered to")
-        or outcome.startswith("tasks of all")
-        or outcome.startswith("tasks from all")
-        or outcome.startswith("defaults to")
-        or outcome.startswith("results in")
-    )
-
-
 # -- Validation domain extraction ----------------------------------------------
 
 
@@ -981,11 +1015,11 @@ def _assert_validation_pass(ctx: dict, outcome: str) -> None:
         # Verify the resolved account_id matches the Given step's account_ref
         account_ref = ctx.get("account_ref")
         if account_ref is not None:
-            root = account_ref.root
-            if hasattr(root, "account_id"):
-                assert resp == root.account_id, (
+            # adcp 9: AccountReference IS the two-arm union, so the ref is the variant.
+            if hasattr(account_ref, "account_id"):
+                assert resp == account_ref.account_id, (
                     f"Resolved account_id '{resp}' does not match requested "
-                    f"account_id '{root.account_id}' for '{domain}' validation"
+                    f"account_id '{account_ref.account_id}' for '{domain}' validation"
                 )
     else:
         from tests.bdd.steps._outcome_helpers import _get_response_field
@@ -995,6 +1029,84 @@ def _assert_validation_pass(ctx: dict, outcome: str) -> None:
             f"Expected media_buy_id in response for '{domain}' validation pass, "
             f"got {type(resp).__name__} without media_buy_id"
         )
+    if outcome.endswith(" resolves to now"):
+        # The row claims the literal 'asap' was resolved, which a buy id alone does not
+        # show: a seller that stored the literal or any other instant answered the same.
+        # The stored start must be the moment the seller took the buy, as INV-4 grades.
+        from tests.bdd.steps.domain.uc002_invariants import then_start_time_resolved
+
+        then_start_time_resolved(ctx)
+    elif outcome == "start time accepted":
+        # Likewise for a concrete start: the seller must have taken the instant it was sent.
+        from tests.bdd.steps.domain.uc002_invariants import assert_start_time_stored_as_requested
+
+        assert_start_time_stored_as_requested(ctx)
+    if domain in _ECHOED_PACKAGE_FIELDS:
+        _assert_package_echoes_request_field(ctx, *_ECHOED_PACKAGE_FIELDS[domain])
+
+
+#: The package field a passing row of this validation domain claims the seller took, with
+#: its empty value. core/package.json carries all three on the confirmed package:
+#: ``catalogs`` "Echoed from the create_media_buy request", ``optimization_goals``, the goals
+#: "the seller optimizes delivery toward", and ``targeting_overlay`` (create_media_buy.mdx:
+#: "The resulting package echoes the complete effective overlay", and "Non-null additions must
+#: compile exactly or be rejected"). A media_buy_id alone passes for a seller that drops or
+#: alters the field. An array sent empty or absent must come back empty; an overlay sent
+#: empty or absent requests no dimension, so any effective overlay carries it.
+#: @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/package.json
+_ECHOED_PACKAGE_FIELDS: dict[str, tuple[str, type[list] | type[dict]]] = {
+    "catalog": ("catalogs", list),
+    "optimization": ("optimization_goals", list),
+    "targeting": ("targeting_overlay", dict),
+}
+
+
+def _echo_mismatch(sent: Any, echoed: Any, path: str) -> str | None:
+    """``None`` when *echoed* carries everything *sent* does; otherwise the first difference.
+
+    Objects compare as subsets: core/catalog.json and core/optimization-goal.json are open
+    (``additionalProperties: true``) and declare defaults a seller may emit, such as an
+    event source's ``value_factor``. Arrays compare position by position at equal length:
+    goal order is priority order, and a dropped entry is a dropped instruction.
+    """
+    if isinstance(sent, dict):
+        if not isinstance(echoed, dict):
+            return f"{path} is {echoed!r}, expected an object"
+        for key, value in sent.items():
+            if key not in echoed:
+                return f"{path}.{key} is missing"
+            if (mismatch := _echo_mismatch(value, echoed[key], f"{path}.{key}")) is not None:
+                return mismatch
+        return None
+    if isinstance(sent, list):
+        if not isinstance(echoed, list) or len(echoed) != len(sent):
+            return f"{path} is {echoed!r}, expected {len(sent)} entries"
+        for index, (sent_item, echoed_item) in enumerate(zip(sent, echoed, strict=True)):
+            if (mismatch := _echo_mismatch(sent_item, echoed_item, f"{path}[{index}]")) is not None:
+                return mismatch
+        return None
+    return None if sent == echoed else f"{path} is {echoed!r}, expected {sent!r}"
+
+
+def _assert_package_echoes_request_field(ctx: dict, field: str, empty: type[list] | type[dict]) -> None:
+    """Every confirmed package carries the *field* its requested package sent.
+
+    One confirmed package per requested package, each located by its product_id. What was
+    sent is compared to what was echoed by :func:`_echo_mismatch`, with an absent or null
+    value read as *empty*: an array sent empty must come back empty, and an object sent
+    empty is a subset of any echo.
+    """
+    sent_packages = ctx["request_kwargs"]["packages"]
+    assert len(wire_field(ctx, "packages")) == len(sent_packages), (
+        f"expected one confirmed package per requested package ({len(sent_packages)}), "
+        f"got {wire_field(ctx, 'packages')!r}"
+    )
+    for sent_package in sent_packages:
+        product_id = sent_package["product_id"]
+        sent = sent_package.get(field) or empty()
+        echoed = wire_entry(ctx, "packages", product_id=product_id).get(field) or empty()
+        mismatch = _echo_mismatch(sent, echoed, f"package {product_id!r} {field}")
+        assert mismatch is None, f"the confirmed package does not carry the {field} the buyer sent: {mismatch}"
 
 
 def _assert_pipeline_routing(ctx: dict, outcome: str) -> None:
@@ -1033,202 +1145,73 @@ def _assert_pipeline_routing(ctx: dict, outcome: str) -> None:
     )
 
 
-def _assert_workflow_outcome(ctx: dict, outcome: str) -> None:
-    """Assert the correct approval workflow path was taken.
+def _assert_submitted_arm(ctx: dict, outcome: str) -> None:
+    """Assert the wire carries the create_media_buy SUBMITTED arm: status "submitted" + task_id.
 
-    'auto-approved path taken' -- request completed without manual intervention.
-    'manual approval required' -- request was routed to pending_approval state.
+    Human approval is modelled at the task layer: "there is no ``pending_approval``
+    MediaBuy status", and while an internal reviewer acts the seller MUST "keep the task in
+    ``status: "submitted"``" (media-buy/specification.mdx) -- the CreateMediaBuySubmitted arm,
+    which carries a task_id and no media_buy_id.
+    """
+    status = wire_field(ctx, "status")
+    assert status == "submitted", f"Expected the submitted arm for '{outcome}', wire status={status!r}"
+    assert wire_field(ctx, "task_id"), f"Expected a task_id on the submitted arm for '{outcome}'"
+
+
+def _assert_workflow_outcome(ctx: dict, outcome: str) -> None:
+    """Assert the correct approval workflow path was taken, on the wire.
+
+    'auto-approved path taken' -- the success arm: a media_buy_id came back.
+    'manual approval required' -- the submitted arm (:func:`_assert_submitted_arm`).
     """
     assert "error" not in ctx, f"Expected workflow outcome '{outcome}' but got error: {ctx.get('error')}"
-    resp = require_payload(ctx)
-    from tests.bdd.steps._outcome_helpers import _get_response_field
-
     if outcome == "auto-approved path taken":
-        # Auto-approved: media buy should be created with a non-pending status
-        status = _get_response_field(resp, "status")
-        assert status is not None, f"Expected status field on response for auto-approval, got {type(resp).__name__}"
-        assert status != "pending_approval", f"Expected auto-approved status (not pending_approval), got '{status}'"
+        assert wire_field(ctx, "media_buy_id"), "Expected a media_buy_id on the success arm for auto-approval"
     elif outcome == "manual approval required":
-        # Manual approval: media buy should be in pending_approval
-        status = _get_response_field(resp, "status")
-        assert status is not None, f"Expected status field on response for manual approval, got {type(resp).__name__}"
-        assert status == "pending_approval", f"Expected pending_approval status for manual approval, got '{status}'"
+        _assert_submitted_arm(ctx, outcome)
 
 
 def _assert_persistence_outcome(ctx: dict, outcome: str) -> None:
-    """Assert DB persistence matches the expected behavior.
+    """Assert BR-RULE-020 persistence on the wire, the seller's record and the ad server's receipt.
 
-    - 'all records persisted after adapter success': media buy + packages in DB
-    - 'records persisted in pending state': media buy exists with pending_approval
-    - 'no records persisted after adapter failure': error raised, no media buy
+    The same three readings the BR-RULE-020 invariant scenarios grade, composed from their
+    steps (``uc002_invariants``) so a persistence-timing row and an invariant cannot disagree:
+
+    - 'all records persisted after adapter success': the synchronous success for the requested
+      packages, the ad server handed exactly this buy, and the seller holding it -- the caller's,
+      with the answered packages;
+    - 'records persisted in pending state': the submitted task (no media_buy_id by pin), the buy
+      stored ``pending_approval`` with one package per requested package, and the ad server never
+      reached;
+    - 'no records persisted after adapter failure': the ad server's outage on the wire
+      (SERVICE_UNAVAILABLE, the code the Given injects) and no media buy or package stored.
     """
+    from tests.bdd.steps.domain.uc002_invariants import (
+        then_adapter_executed,
+        then_manual_approval,
+        then_media_buy_created,
+        then_media_buy_persisted,
+        then_no_packages_persisted,
+        then_package_records_persisted,
+        then_parked,
+    )
+    from tests.bdd.steps.generic.then_success import then_no_media_buy_record_persisted
+
     if outcome == "no records persisted after adapter failure":
-        assert "error" in ctx, f"Expected error for '{outcome}' but no error in ctx"
+        ctx["result"].assert_wire_error("SERVICE_UNAVAILABLE")
+        then_no_media_buy_record_persisted(ctx)
+        then_no_packages_persisted(ctx)
         return
 
     assert "error" not in ctx, f"Expected '{outcome}' but got error: {ctx.get('error')}"
-    resp = require_payload(ctx)
-    from tests.bdd.steps._outcome_helpers import _get_response_field
-
-    media_buy_id = _get_response_field(resp, "media_buy_id")
-    assert media_buy_id is not None, f"Expected media_buy_id for '{outcome}', got None from {type(resp).__name__}"
     if outcome == "records persisted in pending state":
-        status = _get_response_field(resp, "status")
-        assert status == "pending_approval", f"Expected pending_approval for '{outcome}', got '{status}'"
-
-
-def _extract_tasks_from_response(ctx: dict, outcome: str) -> list:
-    """Extract the tasks list from the response, asserting it exists."""
-    assert "error" not in ctx, f"Expected task list outcome '{outcome}' but got error: {ctx.get('error')}"
-    resp = require_payload(ctx)
-    tasks = None
-    if isinstance(resp, dict):
-        tasks = resp.get("tasks") or resp.get("items") or resp.get("results")
-    elif hasattr(resp, "tasks"):
-        tasks = resp.tasks
-    assert tasks is not None, (
-        f"Expected 'tasks' field in response for '{outcome}', got keys: "
-        f"{list(resp.keys()) if isinstance(resp, dict) else dir(resp)}"
-    )
-    assert isinstance(tasks, list), f"Expected tasks to be a list, got {type(tasks).__name__}"
-    return tasks
-
-
-def _get_task_field(task: object, field: str) -> object:
-    """Extract a field from a task dict or object."""
-    if isinstance(task, dict):
-        return task.get(field)
-    return getattr(task, field, None)
-
-
-_SORT_FIELD_MAP = {
-    "creation timestamp": "created_at",
-    "update timestamp": "updated_at",
-    "status value": "status",
-    "operation type": "task_type",
-    "AdCP domain": "domain",
-}
-
-_FILTER_MAP = {
-    "media-buy domain": ("domain", "media_buy"),
-    "signals domain": ("domain", "signals"),
-    "governance domain": ("domain", "governance"),
-    "creative domain": ("domain", "creative"),
-    "submitted status": ("status", "submitted"),
-    "working status": ("status", "working"),
-    "input-required": ("status", "input_required"),
-    "completed status": ("status", "completed"),
-    "canceled status": ("status", "canceled"),
-    "failed status": ("status", "failed"),
-    "rejected status": ("status", "rejected"),
-    "auth-required": ("status", "auth_required"),
-    "unknown status": ("status", "unknown"),
-}
-
-
-def _assert_tasks_sorted(tasks: list, outcome: str) -> None:
-    """Verify tasks are sorted by the claimed field."""
-    if len(tasks) < 2:
+        then_manual_approval(ctx)
+        then_parked(ctx)
+        then_package_records_persisted(ctx)
         return
-    sort_field = None
-    for desc, field in _SORT_FIELD_MAP.items():
-        if desc in outcome:
-            sort_field = field
-            break
-    if sort_field is None:
-        raise ValueError(f"Unknown sort field in outcome: {outcome!r}")
-    values = [_get_task_field(t, sort_field) for t in tasks]
-    non_none = [v for v in values if v is not None]
-    if len(non_none) >= 2:
-        is_ascending = all(a <= b for a, b in zip(non_none, non_none[1:], strict=False))
-        is_descending = all(a >= b for a, b in zip(non_none, non_none[1:], strict=False))
-        assert is_ascending or is_descending, f"Tasks not sorted by '{sort_field}': values = {non_none[:5]}"
-
-
-def _assert_tasks_filtered(tasks: list, outcome: str) -> None:
-    """Verify all returned tasks match the claimed filter value."""
-    suffix = outcome[len("tasks filtered to ") :]
-    if "multiple" in suffix:
-        _assert_multi_value_filter(tasks, suffix)
-        return
-    for desc, (field, expected_value) in _FILTER_MAP.items():
-        if suffix.strip() == desc:
-            for task in tasks:
-                actual = _get_task_field(task, field)
-                assert actual == expected_value, f"Expected all tasks {field}='{expected_value}', got '{actual}'"
-            return
-    # Remaining: suffix IS the task_type value
-    task_type = suffix.strip()
-    if task_type and "domain" not in task_type and "status" not in task_type:
-        for task in tasks:
-            actual = _get_task_field(task, "task_type")
-            assert actual == task_type, f"Expected task_type='{task_type}', got '{actual}'"
-        return
-    # Unmapped: matched no _FILTER_MAP entry and is not a bare task_type value
-    # (empty, or an unmapped domain/status filter). Fail loudly rather than
-    # passing the scenario with zero filter verification.
-    raise ValueError(f"Unmapped filter outcome (no _FILTER_MAP entry, not a task_type): {outcome!r}")
-
-
-def _assert_multi_value_filter(tasks: list, suffix: str) -> None:
-    """Assert tasks span multiple filter values."""
-    if not tasks:
-        return
-    if "domain" in suffix:
-        values = {_get_task_field(t, "domain") for t in tasks}
-        assert len(values) >= 2, f"Expected multiple domains, got {values}"
-    elif "status" in suffix or "statuses" in suffix:
-        values = {_get_task_field(t, "status") for t in tasks}
-        assert len(values) >= 2, f"Expected multiple statuses, got {values}"
-    elif "type" in suffix:
-        values = {_get_task_field(t, "task_type") for t in tasks}
-        assert len(values) >= 2, f"Expected multiple types, got {values}"
-    else:
-        # Unmapped multi-value dimension — fail loudly rather than skip silently.
-        raise ValueError(f"Unmapped multi-value filter suffix (no domain/status/type): {suffix!r}")
-
-
-def _assert_task_list_outcome(ctx: dict, outcome: str) -> None:
-    """Assert task list query returned the correct shape, ordering, and filtering.
-
-    For sorting outcomes: verifies monotonic ordering by the named field.
-    For filtering outcomes: verifies every task matches the claimed filter.
-    For 'defaults to' outcomes: verifies the default sort was applied.
-    For 'results in' outcomes: verifies ascending/descending direction.
-    """
-    tasks = _extract_tasks_from_response(ctx, outcome)
-
-    if outcome.startswith("tasks sorted by"):
-        _assert_tasks_sorted(tasks, outcome)
-    elif outcome.startswith("tasks filtered to"):
-        _assert_tasks_filtered(tasks, outcome)
-    elif outcome.startswith("tasks of all") or outcome.startswith("tasks from all"):
-        # "of all statuses / from all domains / of all types" IS the multi-value
-        # claim _assert_multi_value_filter already grades, so it grades it. This
-        # branch used to compare against ctx["seeded_task_count"], which no step
-        # writes -- the guard was `if seeded_count is not None`, so the whole
-        # branch asserted nothing at all.
-        _assert_multi_value_filter(tasks, outcome)
-    elif outcome.startswith("defaults to"):
-        if "created_at" in outcome and len(tasks) >= 2:
-            values = [_get_task_field(t, "created_at") for t in tasks]
-            non_none = [v for v in values if v is not None]
-            if len(non_none) >= 2:
-                assert all(a >= b for a, b in zip(non_none, non_none[1:], strict=False)), (
-                    f"Expected default descending created_at sort, values = {non_none[:5]}"
-                )
-    elif outcome.startswith("results in") and len(tasks) >= 2:
-        values = [_get_task_field(t, "created_at") for t in tasks]
-        non_none = [v for v in values if v is not None]
-        if len(non_none) >= 2:
-            if "ascending" in outcome:
-                assert all(a <= b for a, b in zip(non_none, non_none[1:], strict=False)), (
-                    f"Expected ascending order, values = {non_none[:5]}"
-                )
-            elif "descending" in outcome:
-                assert all(a >= b for a, b in zip(non_none, non_none[1:], strict=False)), (
-                    f"Expected descending order, values = {non_none[:5]}"
-                )
+    then_media_buy_created(ctx)
+    then_adapter_executed(ctx)
+    then_media_buy_persisted(ctx)
 
 
 @lru_cache(maxsize=1)
@@ -1243,12 +1226,40 @@ def _pinned_error_codes() -> frozenset[str]:
     return frozenset(load("enums/error-code.json").get("enum") or ())
 
 
+_RECOVERY_VALUES = frozenset({"terminal", "correctable", "transient"})
+
+
+def _parse_structured_error_outcome(remainder: str) -> tuple[str, str | None, str | None, bool]:
+    """Split ``CODE [recovery] [on FIELD] [with suggestion]`` into its four parts.
+
+    The ONE parser of the structured grammar, so an Examples row and the assertion it
+    drives cannot read the outcome differently. ``FIELD`` is the JSONPath-lite pointer
+    ``core/error.json`` defines for ``errors[0].field`` (``packages[0].budget``), written
+    exactly as the wire carries it, because ``assert_wire_error`` compares it by equality
+    on both envelope layers. The code may be quoted (``"INVALID_REQUEST"``). Words after
+    these parts are ignored: several pre-existing rows trail a description
+    (``— rejected``), and the parse never took meaning from them.
+    """
+    tokens = remainder.split()
+    code = tokens[0].strip('"')
+    rest = tokens[1:]
+    recovery = rest.pop(0) if rest and rest[0] in _RECOVERY_VALUES else None
+    field = rest[1] if len(rest) >= 2 and rest[0] == "on" else None
+    return code, recovery, field, "with suggestion" in remainder.lower()
+
+
 def _assert_error_outcome(ctx: dict, outcome: str) -> None:
-    """Assert error outcome with exact code, recovery, and message matching.
+    """Assert error outcome with exact code, recovery, field, and suggestion.
 
     Handles three outcome formats:
-    1. Structured code: "error CODE [recovery] [with suggestion]"
-    2. Suggestion-only: "error with suggestion"
+    1. Structured code: "error CODE [recovery] [on FIELD] [with suggestion]", e.g.
+       ``error INVALID_REQUEST on packages[0].format_ids[0] with suggestion``. Parsed
+       by :func:`_parse_structured_error_outcome` alone. ``recovery`` defaults to the
+       code's CODE_TABLE entry; ``FIELD`` pins ``errors[0].field`` on the wire.
+    2. Suggestion-only: "error with suggestion". It names no code, so it accepts ANY
+       refusal that carries a suggestion -- a CONFIGURATION_ERROR from an unseeded
+       tenant included. Kept only because BR-UC-003 rows still ride this step with it;
+       a new row names its code.
     3. Descriptive: "error <desc>" or "error: <desc>" -- message-contains check.
 
     When the scenario dispatched through a wire transport (``ctx["result"]`` is a
@@ -1309,13 +1320,13 @@ def _assert_error_outcome(ctx: dict, outcome: str) -> None:
     is_structured = bool(first_word) and (first_word in _pinned_error_codes() or "_" in first_word)
 
     if is_structured:
-        expected_code = first_word
-        recovery = parts[1] if len(parts) >= 2 and parts[1] in ("terminal", "correctable", "transient") else None
-        require_suggestion = "with suggestion" in outcome.lower()
+        expected_code, recovery, field, require_suggestion = _parse_structured_error_outcome(remainder)
 
         if result is not None and result.wire_error_envelope is not None:
             # Wire-first: assert the AdCP two-layer envelope the buyer receives.
-            result.assert_wire_error(expected_code, recovery=recovery, require_suggestion=require_suggestion)
+            result.assert_wire_error(
+                expected_code, recovery=recovery, field=field, require_suggestion=require_suggestion
+            )
             return
 
         raise AssertionError(
@@ -1399,8 +1410,13 @@ def _build_idempotency_request_kwargs(ctx: dict) -> dict:
 
 
 @given(parsers.parse('a valid create_media_buy request with idempotency_key "{key}"'))
+@given(parsers.parse('a create_media_buy request with idempotency_key "{key}"'))
 def given_valid_request_with_idempotency_key(ctx: dict, key: str) -> None:
-    """Build a valid create_media_buy request carrying a literal idempotency_key."""
+    """Build a create_media_buy request carrying a literal idempotency_key.
+
+    Valid in every other field, so a scenario that sends a malformed key grades the key's
+    own rejection and nothing else.
+    """
     kwargs = _build_idempotency_request_kwargs(ctx)
     kwargs["idempotency_key"] = key
     ctx["idempotency_create"] = True
@@ -2187,4 +2203,107 @@ def then_valid_actions_are_enum_members(ctx: dict) -> None:
     assert not unknown, (
         f"valid_actions carries {unknown!r}, which the pinned media-buy-valid-action enum does not "
         f"define (legal: {sorted(enum_members)})"
+    )
+
+
+@then("the ad server receives that creative with its clickthrough URL")
+def then_ad_server_receives_clickthrough(ctx: dict) -> None:
+    """Assert what the creative upload CARRIED, read off the adapter boundary.
+
+    The click destination has no response field -- it is not echoed to the buyer -- so the
+    asset dict handed to the ad server is the only place it is observable. That is also
+    exactly why losing it is silent: the buy succeeds, and nothing anywhere reports an ad
+    nobody can click.
+
+    Read through the env's ``uploaded_adapter_assets`` seam rather than by reaching into the
+    env's mock registry from here. The escape-hatch guard refuses that reach in a step -- it
+    "works in-process, cannot work on e2e_rest, and is declarable nowhere" -- and the seam
+    answers on all four transports: in process it reads the adapter mock's call args, and on
+    the live stack it reads the receipt the server's own ad server wrote to its audit trail.
+
+    THREE assertions, and the middle one is what fails before the fix: the upload happened
+    at all, the asset carries a ``click_url``, and it is the URL the manifest declared rather
+    than another the seller might have found. Truthiness alone would pass on a seller that
+    echoed the media URL into it. The expected value is imported from the Given's module
+    rather than restated, so the two cannot drift onto different URLs.
+    """
+    from tests.bdd.steps.generic.given_media_buy import CANONICAL_CLICK_URL
+
+    uploaded = ctx["env"].uploaded_adapter_assets()
+    assert uploaded, (
+        "the create never uploaded the creative, so there is nothing to grade -- the asset "
+        "gate or the closed set refused it before the ad-server call"
+    )
+    asset = uploaded[-1]
+    assert asset.get("click_url"), (
+        f"the ad server received the creative with no clickthrough: {asset!r}. The manifest "
+        f"declared it under the canonical click-destination slot."
+    )
+    assert asset["click_url"] == CANONICAL_CLICK_URL, (
+        f"the ad server was given click_url={asset['click_url']!r}, not the "
+        f"{CANONICAL_CLICK_URL!r} the manifest declared"
+    )
+
+
+@then("the ad server receives that creative with its media URL")
+def then_ad_server_receives_media_url(ctx: dict) -> None:
+    """The audio buy's observable: the upload happened and carried the audio file.
+
+    "The response succeeded" alone would pass on a seller that created the buy and then
+    silently declined to push the creative, which is a different bug wearing the same green.
+    Read through the same seam as its clickthrough sibling, for the same reason.
+    """
+    uploaded = ctx["env"].uploaded_adapter_assets()
+    assert uploaded, (
+        "the create never uploaded the creative -- the asset gate refused it before the "
+        "ad-server call, which is the refusal this scenario exists to grade the absence of"
+    )
+    asset = uploaded[-1]
+    assert asset.get("url"), f"the ad server received the creative with no media URL: {asset!r}"
+
+
+@then(parsers.parse('the ad server receives the inline creative "{creative_id}"'))
+def then_ad_server_receives_inline_creative(ctx: dict, creative_id: str) -> None:
+    """The inline creative reached the ad server, named by the id the buyer gave it.
+
+    A package's inline creatives are written to the library, assigned, and then pushed to
+    the ad server; a seller that stops after the first two answers the buyer success and
+    reads the assignment back, and the creative never serves. The push is observable only at
+    the adapter boundary, so this reads the same ``uploaded_adapter_assets`` seam as the
+    clickthrough Thens: the adapter mock's calls in process, the ad server's own audit
+    receipts on e2e_rest. The asset dict carries ``creative_id``
+    (``_build_adapter_asset_from_creative``), so the assertion names THIS creative rather
+    than accepting any upload.
+    """
+    received = [asset.get("creative_id") for asset in ctx["env"].uploaded_adapter_assets()]
+    assert creative_id in received, (
+        f"the ad server was never handed inline creative {creative_id!r}; it received {received!r}. "
+        f"The creative is in the library and assigned, but nothing pushed it to the ad server."
+    )
+
+
+@then("the ad server receives that creative with no clickthrough")
+def then_ad_server_receives_no_clickthrough(ctx: dict) -> None:
+    """The MUST NOT as an outcome: a url the manifest never identified is not guessed at.
+
+    ``core/assets/url-asset.json``: "When neither ``url_type`` nor a format-side role is
+    available, receivers MUST NOT silently pick a mechanism." The creative ships a url asset
+    under an ``asset_group_id`` the vocabulary registry does not define, with no ``url_type``
+    -- so sending it to the ad server as the click destination would be that pick.
+
+    THE UPLOAD IS STILL ASSERTED, which is what stops this passing for the wrong reason: a
+    creative refused upstream also reaches the ad server with no clickthrough, and that would
+    make the absence true while grading nothing. Through the same
+    ``uploaded_adapter_assets`` seam as its positive sibling.
+    """
+    uploaded = ctx["env"].uploaded_adapter_assets()
+    assert uploaded, (
+        "the create never uploaded the creative, so the missing clickthrough is not evidence "
+        "of anything -- the asset gate or the closed set refused it first"
+    )
+    asset = uploaded[-1]
+    assert not asset.get("click_url"), (
+        f"the ad server was given click_url={asset['click_url']!r} for a url asset the "
+        f"manifest never identified as the click destination -- that is the mechanism guess "
+        f"core/assets/url-asset.json forbids"
     )

@@ -14,10 +14,10 @@ Three scenarios have their own notes below because they were the first wired, an
 spec citations are the ones the rest were checked against:
 
 - ``T-UC-018-storyboard-list-all-creatives-after-sync`` (#1405): after the buyer
-  syncs creatives across formats, ``list_creatives`` with no filters returns the
+  syncs creatives by canonical kind, ``list_creatives`` with no filters returns the
   account's library — schema-valid against ``list-creatives-response.json``, each
-  entry exposing ``creative_id``, ``name``, ``format_id``, ``status``. Source
-  obligation: adcp ``protocols/creative/index.yaml`` · ``list_all``.
+  entry exposing ``creative_id``, ``name``, ``format_kind``, ``status`` and no
+  ``format_id``. Source obligation: adcp ``protocols/creative/index.yaml`` · ``list_all``.
 - ``T-UC-018-storyboard-filter-by-concept-id`` (#1407): ``filters.concept_ids``
   scopes results to a concept; each returned creative exposes ``concept_id`` and
   ``concept_name``. Source: adcp ``creative/list-creatives-request.json`` +
@@ -96,11 +96,21 @@ from collections.abc import Callable, Sequence
 from datetime import UTC, datetime, timedelta
 from typing import Any, NamedTuple
 
+import pytest
 from pytest_bdd import given, parsers, scenarios, then, when
 
-from tests.bdd.steps._outcome_helpers import error_envelope_or_none, require_payload, wire_dict, wire_field
+from src.core.schemas import CreativeFormatIdentity, Format, FormatId, canonical_agent_url
+from tests.bdd.steps._outcome_helpers import (
+    assert_listed_format_option_ref,
+    assert_listed_on_canonical_kind,
+    error_envelope_or_none,
+    require_payload,
+    wire_dict,
+    wire_field,
+)
 from tests.bdd.steps.generic._auth import authenticate_env_as
 from tests.bdd.steps.generic._dispatch import dispatch_request
+from tests.factories.creative import DEFAULT_CREATIVE_AGENT_URL, declared_format_spec, format_option_ref_for_scope
 from tests.helpers.envelope_assertions import assert_envelope_shape
 from tests.helpers.pinned_schema import validator_for
 
@@ -108,13 +118,25 @@ from tests.helpers.pinned_schema import validator_for
 # different formats" precondition. All three are in the standard format registry:
 # the A2A path round-trips format_id through a string and re-validates it against
 # known formats, so an unregistered id would be rejected on that transport.
-_SYNCED_FORMATS = ("display_300x250", "video_640x480", "audio_30s")
+#
+# The audio id is ``audio_15s``, the only audio id the pinned
+# registries/v1-canonical-mapping.json names by glob, so it projects with or without the
+# agent's catalogue. What this precondition needs is three DIFFERENT kinds
+# (image / video_hosted / audio_hosted), which the duration does not change.
+_SYNCED_KINDS = ("image", "video_hosted", "audio_hosted")
 
-# Bind the UC-018 feature. The wired scenarios are @list-after-sync (#1405),
-# @concept-id (#1407), and the @BR-RULE-034 isolation invariants (#1503); the
-# remaining scenarios xfail fast at the conftest _harness_env fixture. Whole-feature
-# binding via scenarios() is the repo convention the CI shard-splitter requires
-# (scripts/ci/shard_split.py).
+# Bind the UC-018 feature. Whole-feature binding via scenarios() is the repo convention
+# the CI shard-splitter requires (scripts/ci/shard_split.py).
+#
+# EVERY scenario here EXECUTES. This comment used to name three wired tags
+# (@list-after-sync #1405, @concept-id #1407, @BR-RULE-034 #1503) and say "the remaining
+# scenarios xfail fast at the conftest _harness_env fixture", which stopped being true when
+# the UC-018 catch-all EnvRoute lost its xfail_reason: that row now builds the same
+# CreativeListEnv as uc018-list and parks nothing. Left as-is it reads as "a new scenario
+# here grades nothing", which is the opposite of the case and the exact misreading that
+# leaves an obligation ungraded on purpose. What a scenario still needs is its STEPS --
+# an unbound step is converted to an xfail by the conftest, and tests/bdd/
+# dormant_scenarios.txt is the shrink-only ledger that catches it.
 scenarios("features/BR-UC-018-list-creatives.feature")
 
 
@@ -127,6 +149,10 @@ def _seed_creative(
     concept_name: str | None = None,
     tags: Sequence[str] | None = None,
     agent_url: str | None = None,
+    format_params: dict[str, Any] | None = None,
+    canonical_kind: str | None = None,
+    format_option_ref: dict[str, Any] | None = None,
+    format_spec: Format | None = None,
     **overrides: Any,
 ) -> Any:
     """Seed one approved creative owned by *principal*, optionally concept- or tag-bearing.
@@ -155,6 +181,20 @@ def _seed_creative(
         kwargs["format"] = fmt
     if agent_url is not None:
         kwargs["agent_url"] = agent_url
+    if format_params is not None:
+        # Parameters of the REFERENCE, not a sidecar: core/format-id.json declares width,
+        # height, duration_ms and pixel_ratio on the format_id object itself.
+        kwargs["format_params"] = format_params
+    if canonical_kind is not None:
+        # The CANONICAL arm: core/creative-asset.json is a oneOf on the identifier, so a
+        # creative carrying a format_kind asserts no legacy reference at all.
+        kwargs["canonical_kind"] = canonical_kind
+    if format_option_ref is not None:
+        kwargs["format_option_ref_document"] = format_option_ref
+    if format_spec is not None:
+        # The declaration an agent other than the reference one serves: the registry
+        # projects an id alone only at the reference agent's origin.
+        kwargs["format_spec"] = format_spec
     # An explicit name (the ``name_contains`` filter is a name substring match), a
     # non-approved status, and explicit created_at / updated_at so the ordering
     # assertions have distinct, deterministic sort keys instead of every row sharing one
@@ -215,16 +255,18 @@ def _get_or_create_tenant_and_principal(env: Any) -> tuple[Any, Any]:
 # extra has_auth flag is read only by a UC-003 step, so nothing here changes.
 
 
-@given("the buyer recently synced three creatives in three different formats via sync_creatives")
+@given("the buyer recently synced three creatives identified by canonical format kinds via sync_creatives")
 def given_recently_synced_three_creatives(ctx: dict) -> None:
-    """Seed three approved creatives (one per format) owned by the authenticated buyer.
+    """Seed three approved creatives (one per canonical kind) owned by the authenticated buyer.
 
-    Seeded via CreativeFactory rather than a live sync_creatives call — see the
-    module docstring. Records the synced creative_ids for the Then steps.
+    Each is identified the way the storyboard's list_all creative was synced: by
+    ``format_kind``, asserting no legacy reference. Seeded via CreativeFactory rather than
+    a live sync_creatives call — see the module docstring. Records the synced creative_ids
+    for the Then steps.
     """
     env = ctx["env"]
     tenant, principal = _get_or_create_tenant_and_principal(env)
-    synced_ids = [_seed_creative(tenant, principal, fmt).creative_id for fmt in _SYNCED_FORMATS]
+    synced_ids = [_seed_creative(tenant, principal, canonical_kind=kind).creative_id for kind in _SYNCED_KINDS]
     ctx["tenant"] = tenant
     ctx["principal"] = principal
     ctx["synced_creative_ids"] = synced_ids
@@ -250,29 +292,11 @@ def when_list_creatives_no_filters(ctx: dict) -> None:
 # ── Then ─────────────────────────────────────────────────────────────
 
 
-def _serialized_response(ctx: dict) -> dict[str, Any]:
-    """Serialize the typed response through the production serializer (JSON mode).
-
-    list_creatives returns the same typed payload on every transport, so each
-    transport's Then steps assert on the same serialized document. ``mode="json"``
-    drives ``NestedModelSerializerMixin`` — the same serializer that produces the
-    on-the-wire bytes (format_id -> {agent_url, id}, datetimes -> ISO strings).
-    ``exclude_none`` omits unset optional fields (format_summary, status_summary,
-    sandbox, errors, ext, context), matching the buyer-visible REST wire and the
-    AdCP contract, which type those fields only when present (a literal ``null``
-    is not a valid array/object/boolean).
-
-    The 4-transport parametrization still exercises each dispatch path end to end:
-    a broken transport surfaces as a missing/errored dispatch payload here.
-    """
-    return require_payload(ctx).model_dump(mode="json", exclude_none=True)
-
-
 @then("the creatives array should include each of the synced creatives")
 def then_creatives_include_synced(ctx: dict) -> None:
     """Assert every creative_id seeded by the Given is present in the library."""
     expected = set(ctx["synced_creative_ids"])
-    returned = {entry["creative_id"] for entry in _serialized_response(ctx)["creatives"]}
+    returned = {entry["creative_id"] for entry in _wire_creatives(ctx)}
     missing = expected - returned
     assert not missing, (
         f"synced creatives missing from the list_creatives library: {sorted(missing)}; "
@@ -280,20 +304,25 @@ def then_creatives_include_synced(ctx: dict) -> None:
     )
 
 
-@then("each creative entry should expose creative_id, name, format_id, and status")
+@then("each creative entry should expose creative_id, name, format_kind, and status, and no format_id")
 def then_each_creative_exposes_core_fields(ctx: dict) -> None:
-    """Assert every entry carries the four core fields, format_id as a {agent_url, id} object."""
-    creatives = _serialized_response(ctx)["creatives"]
-    assert creatives, "list_creatives returned an empty creatives array"
-    for entry in creatives:
-        for field in ("creative_id", "name", "format_id", "status"):
-            assert field in entry, f"creative entry missing {field!r}: {entry}"
-            assert entry[field] not in (None, "", {}), f"creative entry has empty {field!r}: {entry}"
-        # v3.1 federation contract: format_id is an object carrying agent_url + id.
-        fid = entry["format_id"]
-        assert isinstance(fid, dict) and fid.get("agent_url") and fid.get("id"), (
-            f"format_id must be an object with agent_url and id, got: {fid!r}"
-        )
+    """Assert every synced entry carries list_all's four fields, and the kind it was synced by.
+
+    list_all: "Each creative includes: creative_id, name, format_kind, status". The kind is
+    asserted to be the SEEDED one, not merely present, and ``format_id`` absent: the item
+    schema's oneOf makes the two exclusive, and the deprecated arm is for creatives synced
+    on the legacy path, which these were not.
+    """
+    synced = dict(zip(ctx["synced_creative_ids"], _SYNCED_KINDS, strict=True))
+    entries = {entry["creative_id"]: entry for entry in _wire_creatives(ctx) if entry.get("creative_id") in synced}
+    assert entries.keys() == synced.keys(), (
+        f"synced creatives missing from the listing: {sorted(synced.keys() - entries.keys())}"
+    )
+    for creative_id, kind in synced.items():
+        entry = entries[creative_id]
+        for field in ("name", "status"):
+            assert entry.get(field) not in (None, ""), f"creative entry has no {field!r}: {entry}"
+        assert_listed_on_canonical_kind(entry, kind)
 
 
 # ── @concept-id storyboard scenario (#1407) ─────────────────────────────
@@ -372,7 +401,7 @@ def when_list_creatives_concept_ids(ctx: dict, concept_list: str) -> None:
     """
     import re
 
-    from adcp import CreativeFilters
+    from adcp.types import LegacyCreativeFilters as CreativeFilters
 
     from tests.bdd.steps.generic.when_request import _call_via
 
@@ -702,12 +731,21 @@ def _max_results(raw: str) -> object:
 def _every_selectable_field(expected_count: int) -> list[str]:
     """The whole ``fields`` enum, READ OFF the pinned request schema.
 
-    A row that says "all 13 enum values" is asking for every member there is, so the list
+    A row that says "all 20 enum values" is asking for every member there is, so the list
     comes from list-creatives-request.json rather than being copied into the feature file
     or into this module — two places that would then have to be updated when the enum
     grows, and would silently under-select until someone did. The count the row states is
     asserted against the enum's real size, so a spec bump reddens the row instead of
     quietly changing what it means.
+
+    That tripwire has now fired once, as designed: ``creative/list-creatives-request.json``
+    went 13 members at 3.1 to 20 at the 3.2.1 pin (nothing removed; added ``format_kind``,
+    ``format_option_ref``, ``assets``, ``rights``, ``rights_attestation_evaluations``,
+    ``localization``, ``localization_unavailable``), and the rows said 13. The COUNT stays
+    the assertion rather than becoming a membership check: the member list is derived from
+    the pin, so asserting membership here would compare the pin with itself and could not
+    falsify anything. The count is the only independently-authored number in the row, which
+    is exactly why it caught the bump.
     """
     members = validator_for("creative/list-creatives-request.json").schema["properties"]["fields"]["items"]["enum"]
     assert len(members) == expected_count, (
@@ -803,7 +841,8 @@ _REQUEST_PHRASES: tuple[tuple[str, Callable[[re.Match[str], dict], dict[str, Any
         lambda match, ctx: {f"include_{match.group(1)}": match.group(2) == "true"},
     ),
     (r"include_pricing true and no account(?: reference)?", lambda match, ctx: {"include_pricing": True}),
-    # fields — the array itself is pin-declared (minItems 1, closed enum of 13 values).
+    # fields — the array itself is pin-declared (minItems 1, closed enum of 20 values at
+    # AdCP 3.2.1; 13 at 3.1).
     (r"fields as empty array", lambda match, ctx: {"fields": []}),
     (
         r"fields with all (\d+) enum values",
@@ -1550,7 +1589,12 @@ def given_creatives_in_two_formats(ctx: dict) -> None:
     wanted = _seed_creative(tenant, principal, _CONCEPT_FORMATS[0], name="display creative on this agent")
     sibling = _seed_creative(tenant, principal, _CONCEPT_FORMATS[1], name="video creative on this agent")
     decoy = _seed_creative(
-        tenant, principal, _CONCEPT_FORMATS[0], name="display creative on another agent", agent_url=other_agent_url
+        tenant,
+        principal,
+        _CONCEPT_FORMATS[0],
+        name="display creative on another agent",
+        agent_url=other_agent_url,
+        format_spec=declared_format_spec(other_agent_url, _CONCEPT_FORMATS[0]),
     )
     ctx["tenant"] = tenant
     ctx["principal"] = principal
@@ -1559,8 +1603,266 @@ def given_creatives_in_two_formats(ctx: dict) -> None:
         _Seeded(sibling.creative_id, "video creative on this agent", "approved", (), None),
         _Seeded(decoy.creative_id, "display creative on another agent", "approved", (), None),
     ]
-    ctx["format_filter_agent_url"] = wanted.agent_url
+    # The filter names the agent_url the seeded creative ASSERTS, read off its stored
+    # identity -- the same spelling the buyer would send, which is what the decoy on another
+    # agent makes falsifiable.
+    wanted_assertion = CreativeFormatIdentity.from_row(wanted).assertion
+    assert wanted_assertion is not None, "the seeded creative must assert a legacy format_id to filter on"
+    ctx["format_filter_agent_url"] = str(wanted_assertion.agent_url)
     ctx["format_filter_id"] = _CONCEPT_FORMATS[0]
+
+
+#: A spelling of the reference creative agent's URL that the AdCP canonicalization normalizes
+#: away entirely: uppercase host plus an explicit default port. Canonically EQUAL to
+#: ``DEFAULT_CREATIVE_AGENT_URL`` and byte-DIFFERENT from it, which is the whole point —
+#: a creative stores the buyer's own spelling, because sync_creatives owes that spelling back.
+_RESPELLED_AGENT_URL = "https://Creative.AdContextProtocol.ORG:443"
+
+#: An agent no canonicalization makes equal to the reference one. The counter-example that
+#: stops the canonicalizing filter from degrading into "match on id alone".
+_UNRELATED_AGENT_URL = "https://other-creative.example.com"
+
+_RESPELLED_LABEL = "creative stored under the respelled agent_url"
+_UNRELATED_LABEL = "creative stored under a genuinely different agent"
+
+
+@given(
+    "the buyer synced a creative whose format_id agent_url differs from the canonical form "
+    "only in host case and a default port"
+)
+def given_creative_under_respelled_agent_url(ctx: dict) -> None:
+    """Seed one creative under a canonically-equal respelling, and one under a different agent.
+
+    The respelling is asserted to be BOTH byte-different and canonically equal before
+    anything is seeded. Without that guard the scenario is unfalsifiable in the quiet
+    direction: a respelling the canonicalization happens not to touch would make the filter
+    match for the boring reason, and the obligation would go ungraded while reading green.
+    """
+    assert _RESPELLED_AGENT_URL != DEFAULT_CREATIVE_AGENT_URL, (
+        "the respelling is byte-identical to the canonical form, so this scenario grades nothing"
+    )
+    assert canonical_agent_url(_RESPELLED_AGENT_URL) == canonical_agent_url(DEFAULT_CREATIVE_AGENT_URL), (
+        "the respelling is NOT canonically equal to the reference agent_url, so a filter that "
+        "matched it would be wrong rather than right"
+    )
+    assert canonical_agent_url(_UNRELATED_AGENT_URL) != canonical_agent_url(DEFAULT_CREATIVE_AGENT_URL), (
+        "the counter-example agent canonicalizes to the reference one, so excluding it cannot fail"
+    )
+
+    env = ctx["env"]
+    tenant, principal = _get_or_create_tenant_and_principal(env)
+    respelled = _seed_creative(
+        tenant, principal, _CONCEPT_FORMATS[0], name=_RESPELLED_LABEL, agent_url=_RESPELLED_AGENT_URL
+    )
+    unrelated = _seed_creative(
+        tenant,
+        principal,
+        _CONCEPT_FORMATS[0],
+        name=_UNRELATED_LABEL,
+        agent_url=_UNRELATED_AGENT_URL,
+        format_spec=declared_format_spec(_UNRELATED_AGENT_URL, _CONCEPT_FORMATS[0]),
+    )
+    ctx["tenant"] = tenant
+    ctx["principal"] = principal
+    ctx["library"] = [
+        _Seeded(respelled.creative_id, _RESPELLED_LABEL, "approved", (), None),
+        _Seeded(unrelated.creative_id, _UNRELATED_LABEL, "approved", (), None),
+    ]
+    # The buyer sends the CANONICAL spelling; neither stored creative carries it verbatim.
+    ctx["format_filter_agent_url"] = DEFAULT_CREATIVE_AGENT_URL
+    ctx["format_filter_id"] = _CONCEPT_FORMATS[0]
+
+
+@then("the creatives array should include the creative stored under the respelled agent_url")
+def then_respelled_creative_returned(ctx: dict) -> None:
+    """The creative whose stored agent_url is only canonically equal must come back.
+
+    core/format-id.json makes canonicalizing agent_url before treating two references as the
+    same format a MUST, and this filter is such a caller. A comparison against the stored
+    spelling misses here, which is what it did while the filter compared the raw column.
+    """
+    returned = set(_wire_creative_ids(ctx))
+    expected = _ids_labelled(ctx, _RESPELLED_LABEL)
+    assert expected <= returned, (
+        "the format_ids filter did not match a creative whose stored agent_url is canonically "
+        f"equal to the filter's: expected {sorted(expected)} among {sorted(returned)}"
+    )
+
+
+@then("the creatives array should NOT include the creative stored under a genuinely different agent_url")
+def then_unrelated_agent_creative_excluded(ctx: dict) -> None:
+    """And exactly that one creative, so canonicalizing has not become id-only matching.
+
+    Asserted as an exact set rather than a bare exclusion: a filter that canonicalized the
+    agent_url away entirely would return BOTH creatives and still pass a containment check
+    on the first outcome.
+    """
+    _assert_returned_exactly(ctx, _ids_labelled(ctx, _RESPELLED_LABEL), "the canonically-matching creative")
+
+
+#: Every parameter ``core/format-id.json`` declares beyond the identity pair, read OFF the
+#: pinned model. Listing them here is the defect this scenario grades: the readback copied
+#: three by name and the model declares four, so a parameterized format came back as a
+#: different format than the buyer sent. Deriving the set means a parameter the pin adds is
+#: graded without editing this line.
+_DECLARED_FORMAT_ID_PARAMETERS = frozenset(FormatId.model_fields) - {"agent_url", "id"}
+
+#: One value per declared parameter, so NONE of them can be dropped unnoticed. Chosen to be
+#: valid for a display reference: a 2x-density 300x250 with a duration, which the reference
+#: object permits regardless of the shape it parameterizes.
+_PARAMETERIZED_REFERENCE = {"width": 300, "height": 250, "pixel_ratio": 2.0, "duration_ms": 15000.0}
+
+_PARAMETERIZED_LABEL = "creative on a parameterized format_id"
+
+
+@given("the buyer synced a creative on a format_id parameterized by width, height and pixel_ratio")
+def given_creative_on_parameterized_format_id(ctx: dict) -> None:
+    """Seed one creative whose asserted reference carries EVERY declared parameter.
+
+    The scenario names three, and the seed carries all four the pin declares — the Then
+    grades the full declared set, so a parameter added to the pin is covered without the
+    scenario naming it. The guard below is what makes that non-vacuous: if the pin ever
+    declares a parameter this fixture does not set, the Then would be asserting over a value
+    nobody sent.
+    """
+    missing = _DECLARED_FORMAT_ID_PARAMETERS - set(_PARAMETERIZED_REFERENCE)
+    assert not missing, (
+        f"core/format-id.json declares parameters this fixture does not seed: {sorted(missing)}; "
+        "add them, or the round-trip assertion silently stops covering them"
+    )
+
+    env = ctx["env"]
+    tenant, principal = _get_or_create_tenant_and_principal(env)
+    creative = _seed_creative(
+        tenant,
+        principal,
+        _CONCEPT_FORMATS[0],
+        name=_PARAMETERIZED_LABEL,
+        format_params=_PARAMETERIZED_REFERENCE,
+    )
+    ctx["tenant"] = tenant
+    ctx["principal"] = principal
+    ctx["library"] = [_Seeded(creative.creative_id, _PARAMETERIZED_LABEL, "approved", (), None)]
+
+
+@then("the listed creative's format_id should carry every parameter the buyer sent, pixel_ratio included")
+def then_parameterized_format_id_roundtrips(ctx: dict) -> None:
+    """Every declared parameter survives the readback, compared value by value.
+
+    Asserted over the DERIVED declared set rather than a list written here, and each value
+    compared rather than merely present: a readback that emitted the keys with null values
+    would pass a presence check while still having lost the buyer's reference.
+    """
+    entries = _wire_creatives(ctx)
+    assert len(entries) == 1, f"expected the one seeded creative on the wire, got {len(entries)}"
+    listed = entries[0]["format_id"]
+    assert listed is not None, "the listed creative carries no format_id at all"
+
+    dropped = {
+        name: (expected, listed.get(name))
+        for name, expected in _PARAMETERIZED_REFERENCE.items()
+        if listed.get(name) != expected
+    }
+    assert not dropped, (
+        "the listed format_id does not name the format the buyer synced; these parameters "
+        f"came back changed or absent (expected, got): {dropped}"
+    )
+
+
+#: The pinned reference document, validated through the same file the response schema
+#: $refs. Built once: the resolver walks the pinned tree per call.
+_FORMAT_OPTION_REF_VALIDATOR = validator_for("core/format-option-ref.json")
+
+_CANONICAL_OPTION_LABEL = "creative on a canonical format option"
+
+
+@given(
+    parsers.parse('the buyer synced a creative on format_kind "{format_kind}" with a {scope}-scope format_option_ref')
+)
+def given_creative_on_canonical_format_option(ctx: dict, format_kind: str, scope: str) -> None:
+    """Seed one creative identified by its canonical kind and narrowed to one option.
+
+    The reference the buyer sent is recorded in ``ctx`` rather than recomputed in the Then,
+    so the two sides cannot drift into agreeing about a value neither of them sent.
+
+    ``format_option_ref_for_scope`` refuses a scope the oneOf has no arm for and checks the
+    document against the pinned file BEFORE anything is stored, which is what keeps the row
+    non-vacuous: a malformed fixture would make the readback compare one invalid document
+    to another.
+    """
+    reference = format_option_ref_for_scope(scope)
+
+    env = ctx["env"]
+    tenant, principal = _get_or_create_tenant_and_principal(env)
+    creative = _seed_creative(
+        tenant,
+        principal,
+        name=_CANONICAL_OPTION_LABEL,
+        canonical_kind=format_kind,
+        format_option_ref=reference,
+    )
+    ctx["tenant"] = tenant
+    ctx["principal"] = principal
+    ctx["library"] = [_Seeded(creative.creative_id, _CANONICAL_OPTION_LABEL, "approved", (), None)]
+    ctx["sent_format_option_ref"] = reference
+
+
+def _single_listed_creative(ctx: dict) -> dict[str, Any]:
+    """The one seeded creative exactly as the buyer received it on the wire."""
+    entries = _wire_creatives(ctx)
+    assert len(entries) == 1, f"expected the one seeded creative on the wire, got {len(entries)}"
+    return entries[0]
+
+
+def _listed_format_option_ref(ctx: dict) -> dict[str, Any]:
+    """The one seeded creative's ``format_option_ref`` exactly as the buyer received it."""
+    entry = _single_listed_creative(ctx)
+    listed = entry.get("format_option_ref")
+    assert listed is not None, (
+        "the listed creative carries no format_option_ref, so the buyer cannot tell which "
+        f"concrete format option it targets: {sorted(entry)}"
+    )
+    return listed
+
+
+@then("the listed creative's format_option_ref should equal the reference the buyer sent, scope included")
+def then_format_option_ref_roundtrips(ctx: dict) -> None:
+    """The whole reference comes back, compared as a document rather than member by member.
+
+    The equality is :func:`assert_listed_format_option_ref`, the same one the UC-006
+    sync-then-list readback uses.
+    """
+    assert_listed_format_option_ref(_single_listed_creative(ctx), ctx["sent_format_option_ref"])
+
+
+@then("the listed creative's format_option_ref should be valid against core/format-option-ref.json")
+def then_format_option_ref_is_pin_valid(ctx: dict) -> None:
+    """And it names an arm of the pinned oneOf, which an echo of a malformed document cannot.
+
+    Independent of the equality above on purpose: the two fail for different reasons. This
+    one fires when the seller's stored shape is wrong in a way the buyer's own schema check
+    would refuse, whatever the seller echoed.
+    """
+    _FORMAT_OPTION_REF_VALIDATOR.validate(_listed_format_option_ref(ctx))
+
+
+@then(parsers.parse('the listed creative should carry format_kind "{kind}" and no format_id'))
+def then_listed_creative_carries_format_kind(ctx: dict, kind: str) -> None:
+    """The one seeded creative is listed on the canonical arm, with the kind it was synced by.
+
+    The VALUE is compared, not mere presence: a projection that kept some identity but the
+    wrong one would satisfy a presence check. ``format_id`` absent because the item's oneOf
+    makes the arms exclusive and this creative was synced on the canonical one.
+    """
+    assert_listed_on_canonical_kind(_single_listed_creative(ctx), kind)
+
+
+def _dispatch_format_ids_filter(ctx: dict) -> None:
+    """Send ``filters.format_ids`` carrying the one {agent_url, id} object the Given named."""
+    dispatch_request(
+        ctx,
+        filters={"format_ids": [{"agent_url": ctx["format_filter_agent_url"], "id": ctx["format_filter_id"]}]},
+    )
 
 
 @when(
@@ -1575,9 +1877,297 @@ def when_list_creatives_format_ids(ctx: dict, format_id: str) -> None:
     format_ids items are format_id OBJECTS (core/format-id.json), never bare strings, so
     the filter names both members of the seeded creative's format.
     """
-    dispatch_request(
-        ctx,
-        filters={"format_ids": [{"agent_url": ctx["format_filter_agent_url"], "id": ctx["format_filter_id"]}]},
+    _dispatch_format_ids_filter(ctx)
+
+
+@when("the Buyer Agent sends list_creatives with filters.format_ids carrying that format_id in canonical form")
+def when_list_creatives_format_ids_canonical(ctx: dict) -> None:
+    """The same one-object filter, with the Given having put the CANONICAL agent_url in ctx.
+
+    A separate binding rather than a reworded reuse, because the scenario's point is which
+    SPELLING the buyer sends: here the canonical one, against a creative stored under a
+    respelled one. Both bindings dispatch through the one helper, so the two scenarios cannot
+    drift apart in how the filter is shaped.
+    """
+    _dispatch_format_ids_filter(ctx)
+
+
+# ── @format-kind: filters.format_kinds, the canonical-library filter ──────────
+#
+# The vocabulary is READ OFF the pin rather than spelled here, so a scenario naming a kind
+# core/canonical-format-kind.json does not define fails at its own Given instead of seeding
+# a kind production refuses and grading the empty answer.
+_CANONICAL_FORMAT_KINDS: frozenset[str] = frozenset(validator_for("core/canonical-format-kind.json").schema["enum"])
+
+
+def _kind_label(kind: str) -> str:
+    """The seeded label of the creative carrying canonical kind *kind*."""
+    return f"creative on canonical kind {kind}"
+
+
+def _legacy_label(format_id: str) -> str:
+    """The seeded label of the creative asserting legacy reference *format_id*."""
+    return f"creative on legacy format_id {format_id}"
+
+
+@given(parsers.parse('the buyer synced creatives on canonical format_kinds "{first}" and "{second}"'))
+def given_creatives_on_canonical_kinds(ctx: dict, first: str, second: str) -> None:
+    """Seed one canonically-identified creative per named kind — a mixed canonical library.
+
+    The two kinds are checked against the PINNED vocabulary before anything is seeded. A
+    kind outside it would be refused by ``CreativeFormatIdentity`` on construction, so the
+    scenario would fail somewhere in the factory with no sign that the SCENARIO named a kind
+    the pin dropped; and if the refusal ever moved, it would seed an unmatchable row and
+    grade "the filter returned nothing" under a sentence promising a library.
+
+    They are also asserted DISTINCT: the whole grader is "one kind in, the other kind out",
+    which a single kind spelled twice satisfies trivially.
+    """
+    named = (first, second)
+    unknown = sorted(set(named) - _CANONICAL_FORMAT_KINDS)
+    assert not unknown, (
+        f"the scenario names format_kinds {unknown} that core/canonical-format-kind.json "
+        f"does not define; the pinned vocabulary is {sorted(_CANONICAL_FORMAT_KINDS)}"
+    )
+    assert first != second, f"the scenario must name two DIFFERENT kinds to partition on, got {first!r} twice"
+
+    env = ctx["env"]
+    tenant, principal = _get_or_create_tenant_and_principal(env)
+    seeded = [
+        _Seeded(
+            _seed_creative(tenant, principal, canonical_kind=kind, name=_kind_label(kind)).creative_id,
+            _kind_label(kind),
+            "approved",
+            (),
+            None,
+        )
+        for kind in named
+    ]
+    ctx["tenant"] = tenant
+    ctx["principal"] = principal
+    ctx["library"] = seeded
+
+
+@given(
+    parsers.parse(
+        'the buyer synced a creative on legacy format_id "{projecting}" and was refused a creative '
+        'on "{unprojectable}", which no registry pattern projects'
+    )
+)
+def given_creatives_on_legacy_ids(ctx: dict, projecting: str, unprojectable: str) -> None:
+    """One legacy-arm creative that projects, and one the write path REFUSES.
+
+    ``_seed_creative`` derives the stored columns with the same production accessor the
+    sync path runs — including the v1 -> v2 projection — so which reference resolves is
+    decided by the seller's own registry order rather than by this fixture. A fixture that
+    stamped the kinds itself would grade its own arithmetic.
+
+    THE SECOND HALF IS A REFUSAL AND NOT A ROW, which is where this scenario moved. It
+    used to seed both and assert ``kinds[unprojectable] is None``: a creative carrying no
+    canonical kind, which the read filter then had to decline to match. That state is
+    unrepresentable now — ``creatives.format_kind`` is NOT NULL and
+    ``creative_identity_of`` refuses a reference with no canonical projection — so the
+    assertion is on the REFUSAL, which is what fails closed today. The partition is still
+    asserted BOTH WAYS before the filter runs, so a registry or catalogue change that started
+    projecting the refused id (or stopped projecting ``display_300x250``) reddens this step
+    instead of making the scenario pass vacuously.
+
+    ``AdCPCapabilityNotSupportedError`` and not a bare ``Exception``: the code the gate
+    raises is ``UNSUPPORTED_FEATURE``, and matching anything would let a database error,
+    an authentication failure or a typo in the id satisfy the precondition.
+    """
+    from src.core.exceptions import AdCPCapabilityNotSupportedError
+
+    env = ctx["env"]
+    tenant, principal = _get_or_create_tenant_and_principal(env)
+    row = _seed_creative(tenant, principal, projecting, name=_legacy_label(projecting))
+    projected_kind = CreativeFormatIdentity.from_row(row).kind
+    assert projected_kind in _CANONICAL_FORMAT_KINDS, (
+        f"the scenario needs {projecting!r} to project to a canonical kind, but the seeded row "
+        f"carries kind={projected_kind!r}; the partition this scenario grades does not exist"
+    )
+    with pytest.raises(AdCPCapabilityNotSupportedError):
+        _seed_creative(tenant, principal, unprojectable, name=_legacy_label(unprojectable))
+
+    ctx["tenant"] = tenant
+    ctx["principal"] = principal
+    ctx["library"] = [_Seeded(row.creative_id, _legacy_label(projecting), "approved", (), None)]
+    ctx["projected_kind"] = projected_kind
+    # Which label the fail-closed Then looks for is recorded here rather than spelled there,
+    # so the id lives once -- in the scenario -- and the step cannot name a different one.
+    ctx["unprojectable_label"] = _legacy_label(unprojectable)
+
+
+@given(parsers.parse('the buyer\'s library holds creatives on legacy format_ids "{first}" and "{second}"'))
+def given_library_on_two_legacy_ids(ctx: dict, first: str, second: str) -> None:
+    """One creative per legacy reference, each at the reference creative agent.
+
+    Seeded through ``_seed_creative``, which stores the reference and its key with the same
+    production accessor the sync path writes through.
+    """
+    env = ctx["env"]
+    tenant, principal = _get_or_create_tenant_and_principal(env)
+    ctx["tenant"] = tenant
+    ctx["principal"] = principal
+    ctx["library"] = [
+        _Seeded(
+            _seed_creative(tenant, principal, fmt, name=_legacy_label(fmt)).creative_id,
+            _legacy_label(fmt),
+            "approved",
+            (),
+            None,
+        )
+        for fmt in (first, second)
+    ]
+
+
+@when(
+    parsers.parse(
+        'the Buyer Agent sends list_creatives with filters.format_ids naming "{format_id}" at the standard creative agent'
+    )
+)
+def when_list_creatives_format_id_at_reference_agent(ctx: dict, format_id: str) -> None:
+    """Dispatch ``filters.format_ids`` carrying the one reference the sentence names, as named."""
+    ctx["format_filter_agent_url"] = DEFAULT_CREATIVE_AGENT_URL
+    ctx["format_filter_id"] = format_id
+    _dispatch_format_ids_filter(ctx)
+
+
+@when(parsers.re(r'the Buyer Agent sends list_creatives with filters\.format_kinds \["(?P<kind>[^"]+)"\]'))
+def when_list_creatives_format_kinds(ctx: dict, kind: str) -> None:
+    """Dispatch ``filters.format_kinds`` naming the one canonical kind the scenario filters on.
+
+    Items are BARE kind strings, not objects: core/creative-filters.json refs
+    core/canonical-format-kind.json, which is a string enum — unlike the deprecated
+    ``format_ids`` beside it, whose items are format_id objects.
+    """
+    dispatch_request(ctx, filters={"format_kinds": [kind]})
+
+
+@when(
+    parsers.re(
+        r'the Buyer Agent sends list_creatives with filters\.format_kinds \["(?P<first>[^"]+)", "(?P<second>[^"]+)"\]'
+    )
+)
+def when_list_creatives_two_format_kinds(ctx: dict, first: str, second: str) -> None:
+    """Dispatch ``filters.format_kinds`` naming two kinds — the union the pin's "any" asks for.
+
+    A separate binding rather than a widened one: the single-kind regex cannot match a
+    two-item array (``[^"]+`` does not cross a quote), so the two sentences stay distinct and
+    the scenario's own text says how many kinds it sends. Order is the scenario's order,
+    which is also what ``filters_applied`` reports back.
+    """
+    dispatch_request(ctx, filters={"format_kinds": [first, second]})
+
+
+@then(parsers.parse('the creatives array should contain both the "{first}" and the "{second}" creative'))
+def then_both_kinds_creatives(ctx: dict, first: str, second: str) -> None:
+    """Both kinds' creatives come back, and nothing else — an intersection returns neither.
+
+    An exact set rather than two containment checks: a seller that returned the whole
+    library would satisfy "both are present" while having ignored the filter entirely,
+    which is the very defect this family grades.
+    """
+    _assert_returned_exactly(
+        ctx, _ids_labelled(ctx, _kind_label(first), _kind_label(second)), f"the {first} and {second} creatives"
+    )
+
+
+@then(parsers.parse('the creatives array should contain exactly the "{kind}" creative, carrying that format_kind'))
+def then_only_the_kinds_creative(ctx: dict, kind: str) -> None:
+    """Exactly the one creative of the filtered kind, and the wire says which kind it is.
+
+    Two assertions, and the second is not redundant: the set check pins WHICH row came back
+    by the id the Given recorded, while the ``format_kind`` read pins what the buyer can
+    actually SEE. A seller that filtered correctly and emitted the wrong kind (or none)
+    passes the first and fails the second.
+    """
+    _assert_returned_exactly(ctx, _ids_labelled(ctx, _kind_label(kind)), f"the {kind} creative")
+    listed = _wire_creatives(ctx)[0]
+    assert listed.get("format_kind") == kind, (
+        f"the returned creative does not report the kind the buyer filtered on: "
+        f"format_kind={listed.get('format_kind')!r}, expected {kind!r}"
+    )
+
+
+@then(parsers.parse('the creatives array should NOT include the "{kind}" creative'))
+def then_not_the_other_kinds_creative(ctx: dict, kind: str) -> None:
+    """The other kind's creative is absent — named by the id the Given seeded it under.
+
+    Keyed on the seeded id rather than on the absence of a ``format_kind`` VALUE on the
+    wire, so an empty array does not satisfy it by accident: ``_ids_labelled`` fails loudly
+    if the Given never seeded the row this sentence names.
+    """
+    excluded = _ids_labelled(ctx, _kind_label(kind))
+    returned = set(_wire_creative_ids(ctx))
+    assert not (returned & excluded), (
+        f"the format_kinds filter leaked the {kind} creative: {sorted(returned & excluded)}"
+    )
+
+
+@then(parsers.parse('query_summary.filters_applied should report format_kinds "{kind}"'))
+def then_filters_applied_names_format_kinds(ctx: dict, kind: str) -> None:
+    """POST-S7: the buyer reads which filters ran, and this one used not to be named at all.
+
+    The defect this grades was precisely a filter that was accepted and left out of
+    ``filters_applied``, so there was nothing in the response to say it had been dropped.
+    """
+    applied = (wire_dict(ctx).get("query_summary") or {}).get("filters_applied") or []
+    expected = f"format_kinds={kind}"
+    assert expected in applied, f"expected {expected!r} among the applied filters, got {applied}"
+
+
+@then(parsers.parse('the creatives array should contain exactly the creative synced on "{format_id}"'))
+def then_only_the_legacy_creative(ctx: dict, format_id: str) -> None:
+    """The legacy-arm creative whose reference projects to the filtered kind, and nothing else."""
+    _assert_returned_exactly(ctx, _ids_labelled(ctx, _legacy_label(format_id)), f"the creative synced on {format_id}")
+
+
+@then("that creative should be listed by format_id, carrying no format_kind")
+def then_legacy_creative_listed_by_format_id(ctx: dict) -> None:
+    """The wire picks ONE arm, and for a legacy creative it is the one the buyer sent.
+
+    This is what stops the scenario above from being read as "the seller emits the projected
+    kind": list-creatives-response.json's item schema declares format_id and format_kind as
+    a oneOf whose arms forbid each other, so a creative synced by format_id is listed by
+    format_id. The kind is the IDENTITY the filter matched on, not a second wire field — and
+    emitting both is a shape the response model refuses outright.
+    """
+    listed = _wire_creatives(ctx)[0]
+    assert listed.get("format_id") is not None, (
+        f"the legacy creative is not listed by the format_id the buyer sent: {sorted(listed)}"
+    )
+    assert listed.get("format_kind") is None, (
+        f"the listed creative carries BOTH arms of the response oneOf: format_kind="
+        f"{listed.get('format_kind')!r} beside format_id={listed.get('format_id')!r}"
+    )
+
+
+@then("the library holds no creative for the reference that projects to no canonical kind")
+def then_unprojectable_creative_excluded(ctx: dict) -> None:
+    """Fail closed: a reference with no canonical identity never becomes a row.
+
+    THE CONSEQUENCE OF THE GIVEN'S REFUSAL, asserted on the wire rather than inferred from
+    it. The Given has already shown the write path refuses the reference; this shows the
+    buyer's own view agrees -- no entry under that name comes back, so there is no row for
+    a kind filter to have to decline.
+
+    IT IS NOT IMPLIED BY THE GIVEN'S ``pytest.raises``, which is why it is still here. A
+    raise says the call ended in an error; it does not say nothing was written. A seller
+    that inserted the row and THEN failed the projection leaves exactly the state this
+    scenario is about -- a creative with no canonical identity in the library -- and the
+    wire envelope cannot tell the two apart. The buyer's own read can.
+
+    Matched on the NAME and not on a creative_id, because the refused creative has no id:
+    it was never created. ``_ids_labelled`` would refuse the lookup rather than answer an
+    empty set, so there is no way to write this as an id intersection that could fail.
+    """
+    label = ctx["unprojectable_label"]
+    stored = [entry.get("name") for entry in _wire_creatives(ctx)]
+    assert label not in stored, (
+        f"a creative was stored for a reference with no canonical projection, so the write "
+        f"gate did not fail closed before inserting: the buyer's library carries {label!r} "
+        f"and the filter answered it as matching {ctx['projected_kind']!r}. Returned: {stored}"
     )
 
 
@@ -2031,6 +2621,40 @@ def then_creative_returned_with_status(ctx: dict, status: str) -> None:
     )
 
 
+@then(parsers.re(r'exactly one entry in errors\[\] names that creative with code "(?P<code>[A-Z_]+)"'))
+def then_one_advisory_names_the_creative(ctx: dict, code: str) -> None:
+    """The record that could not be fully described is named in the success envelope.
+
+    ``errors[]`` is on the SUCCESS path of list-creatives-response.json for exactly this
+    case, so the substitution is only half the obligation: the buyer also has to be told
+    which creative it applies to, or a fabricated status is indistinguishable from a real
+    one.
+
+    Exactly one, because a per-row advisory emitted twice reads as two defective records.
+    The code is asserted and the recovery is not -- recovery is a read-only property over
+    the code table, so it is right whenever the code is right.
+    """
+    creatives = _wire_creatives(ctx)
+    assert len(creatives) == 1, f"expected the one seeded creative, got {len(creatives)}"
+    creative_id = creatives[0]["creative_id"]
+
+    advisories = [entry for entry in (require_payload(ctx).errors or []) if creative_id in str(entry)]
+    assert len(advisories) == 1, (
+        f"expected exactly one errors[] entry naming creative {creative_id!r}, got {len(advisories)}: "
+        f"{require_payload(ctx).errors!r}"
+    )
+    # ``.code`` directly. ``core/error.json`` makes it required, and this response's
+    # ``errors[]`` holds the library ``core.error.Error``, whose ``code`` is typed ``str`` --
+    # so there is nothing to unwrap and nothing to tolerate. A getattr with a fallback stood
+    # here, which would have survived a missing code; the absence of a required field is a
+    # crash, not a default.
+    assert advisories[0].code == code, (
+        f"advisory code is {advisories[0].code!r}, expected {code!r} — a code outside the wire-standard "
+        "set collapses to SERVICE_UNAVAILABLE, which tells the buyer to retry a row only the seller "
+        "can repair"
+    )
+
+
 @then(
     parsers.re(
         r"(?:all fields included in each creative object|all fields included in response|all fields returned"
@@ -2233,14 +2857,32 @@ def then_operation_succeeds_with_full_array(ctx: dict) -> None:
 
 # ── The fields projection ────────────────────────────────────────────
 #
-# The six members list-creatives-response.json marks REQUIRED on every creative item.
-# They are on the wire whatever the buyer selected, because `fields` cannot express keeping
-# them and a projection that dropped one would violate the schema the selection was made
-# against. Read off the pinned schema rather than typed out here, so a future required
-# member is picked up by both sides at once.
-_REQUIRED_CREATIVE_FIELDS = frozenset(
-    validator_for("creative/list-creatives-response.json").schema["properties"]["creatives"]["items"]["required"]
+# What list-creatives-response.json puts on every creative item whatever the buyer selected,
+# because `fields` cannot express keeping it and a projection that dropped it would violate
+# the schema the selection was made against.
+#
+# TWO keywords say this, and reading only the first is what made this set wrong. `required`
+# names five members. The item ALSO carries a `oneOf` whose two arms are "Listed creative
+# (named-format reference)" -> requires format_id, forbids format_kind, and "Listed creative
+# (canonical format kind)" -> requires format_kind, forbids format_id. So exactly one format
+# identity is mandatory on every item, and WHICH one is a property of the creative rather
+# than of the selection -- the request schema names it in those words, "the selected format
+# identity", when it lists what selecting localization automatically includes.
+#
+# A creative therefore cannot be projected down to no identity at all. Reading `required`
+# alone concluded that `format_id` was droppable, and graded a seller that kept it -- which
+# is the only schema-valid thing to do -- as carrying a member the buyer had not selected.
+_CREATIVE_ITEM_SCHEMA = validator_for("creative/list-creatives-response.json").schema["properties"]["creatives"][
+    "items"
+]
+
+#: The format-identity members, derived from the oneOf arms rather than named here, so an
+#: arm added or renamed by a future pin is picked up instead of silently missed.
+_FORMAT_IDENTITY_FIELDS = frozenset(
+    member for arm in _CREATIVE_ITEM_SCHEMA.get("oneOf", ()) for member in arm.get("required", ())
 )
+
+_REQUIRED_CREATIVE_FIELDS = frozenset(_CREATIVE_ITEM_SCHEMA["required"])
 
 #: The two `fields` members that name more than one response member. The request schema
 #: states the first ("The 'concept' value returns both concept_id and concept_name"); the
@@ -2275,7 +2917,11 @@ def then_only_selected_and_required_fields(ctx: dict) -> None:
     # The required members, the selected ones, and the members the `fields` vocabulary
     # cannot name: a buyer with no way to ask for `assets` had no way to decline it either,
     # so a projection that dropped it would answer a selection the buyer never made.
-    permitted = set(_REQUIRED_CREATIVE_FIELDS) | _UNSELECTABLE_WIRE_FIELDS
+    # The required members, the selected ones, the members `fields` cannot name, and the
+    # creative's format identity -- which the item's `oneOf` makes mandatory whatever the
+    # buyer selected, so a seller that dropped it would answer the selection with a document
+    # that fails the schema the selection was made against.
+    permitted = set(_REQUIRED_CREATIVE_FIELDS) | _UNSELECTABLE_WIRE_FIELDS | _FORMAT_IDENTITY_FIELDS
     for field in selected:
         permitted.update(_FIELD_SELECTS_ON_THE_WIRE.get(field, (field,)))
 
@@ -2288,6 +2934,14 @@ def then_only_selected_and_required_fields(ctx: dict) -> None:
         )
         missing = sorted(_REQUIRED_CREATIVE_FIELDS - set(entry))
         assert not missing, f"creative {entry['creative_id']!r} is missing required members: {missing}"
+        # Exactly one identity, not merely "an identity is permitted": the oneOf arms forbid
+        # each other, so a creative carrying both is as invalid as one carrying neither, and
+        # a permit-list alone would grade both as fine.
+        identities = sorted(_FORMAT_IDENTITY_FIELDS & set(entry))
+        assert len(identities) == 1, (
+            f"creative {entry['creative_id']!r} must carry exactly one format identity "
+            f"({sorted(_FORMAT_IDENTITY_FIELDS)}), carries {identities}"
+        )
 
 
 # ── The v3.1 boolean filters, and the enrichments read off the creative platform ──

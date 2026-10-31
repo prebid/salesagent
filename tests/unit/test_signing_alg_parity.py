@@ -27,7 +27,7 @@ from src.core.database.models import SigningKey
 from tests.helpers.orm_constraints import check_constraint_values
 
 # The authoritative spec value-set for RFC 9421 signing algorithms, pinned by tag.
-# @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/bundled/protocol/get-adcp-capabilities-response.json
+# @source repo=adcp ref=v3.2.1 path=dist/schemas/3.1.1/bundled/protocol/get-adcp-capabilities-response.json
 #         pointer=/properties/webhook_signing/properties/algorithms/items/enum
 _SPEC_SIGNING_ALGS = ("ed25519", "ecdsa-p256-sha256")
 

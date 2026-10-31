@@ -48,7 +48,15 @@ from a2a.types import (
 )
 from a2a.utils.errors import A2AError
 from adcp.server.mcp_tools import ADCP_TOOL_DEFINITIONS
-from adcp.types.generated_poc.enums.task_status import TaskStatus as LibraryTaskStatus
+
+# The spec's nine-value task status, off the PUBLIC surface. Until the pinned SDK,
+# ``adcp.types.TaskStatus`` resolved to a hand-written five-value enum and the real one was
+# reachable only through the private generated tree, which is why this import used to go
+# there. the pinned SDK deletes the hand-written enum outright and ``GeneratedTaskStatus`` is the
+# public name for the generated one (identity-checked: it IS
+# ``adcp.types.domains.enums.task_status.TaskStatus``). The local ALIAS stays, because
+# ``TaskStatus`` above is a2a's protobuf message of the same name.
+from adcp.types import GeneratedTaskStatus as LibraryTaskStatus
 from google.protobuf import json_format, struct_pb2
 
 from src.a2a_server.context_builder import EXCHANGE_STATE_KEY
@@ -98,7 +106,7 @@ def _dict_to_struct(d: dict) -> struct_pb2.Struct:
     return s
 
 
-# Field names typed `integer` (not `number`) in the pinned AdCP v3.1.1 schema
+# Field names typed `integer` (not `number`) in the pinned schema
 # that this server can place in an A2A Part.data (via _dict_to_value above).
 #
 # google.protobuf.Value/Struct -- the well-known types backing Part.data --
@@ -513,7 +521,7 @@ class AdCPRequestHandler(RequestHandler):
         read ``params.message.parts`` and nothing else, so a registration sent here was
         silently DROPPED: the buyer received 200 for a webhook that was never registered.
         Worse, since the config never reached the validated request, neither the
-        security.mdx @ v3.1.1 :1464 log duty nor the :1465 signature escalation ran for a
+        security.mdx :1464 log duty nor the :1465 signature escalation ran for a
         payload carrying ``authentication`` — the two obligations the AdCP field triggers on
         every transport, including this one. Dropping and declining are indistinguishable
         from inside this agent and opposite from outside it.
@@ -570,8 +578,9 @@ def _derived_skills() -> list[AgentSkill]:
 
     ``id`` and ``name`` are the tool name -- a REST route, an MCP tool and an A2A skill for
     one tool carry one name, so there is nothing here that could diverge from the other two
-    transports. ``description`` comes from the pinned SDK, the same source MCP registration
-    reads. ``tags`` come off the DTO (``DTO.TAGS``): the SDK carries none, so they are ours,
+    transports. ``description`` is ``ToolSpec.advertised_description``, the one answer MCP
+    registration reads too: the pinned SDK's sentence, or the pinned request schema's own for
+    a deprecated compatibility surface. ``tags`` come off the DTO (``DTO.TAGS``): the SDK carries none, so they are ours,
     but they describe the tool's shape like the field descriptions beside them rather than
     its wiring -- so they sit with the shape, not in the registry.
 
@@ -584,7 +593,8 @@ def _derived_skills() -> list[AgentSkill]:
         AgentSkill(
             id=name,
             name=name,
-            description=descriptions.get(name, (spec.impl.__doc__ or "").strip().split("\n")[0]),
+            description=spec.advertised_description(descriptions.get(name))
+            or (spec.impl.__doc__ or "").strip().split("\n")[0],
             tags=list(getattr(spec.dto, "TAGS", ())),
         )
         for name, spec in TOOLS.items()

@@ -54,6 +54,38 @@ Feature: BR-UC-006 Sync Creative Assets
     And the response should include the creative with action "unchanged"
     # POST-S2: Buyer knows action = unchanged
 
+  # core/format-id.json -- byte-identical at the 3.1 and 3.2 pins -- makes this a MUST:
+  # "Callers comparing two `format-id` values MUST canonicalize `agent_url` per the AdCP
+  # URL canonicalization rules before treating two formats as the same."
+  # So a buyer that respells the SAME agent is not changing the format, and POST-S2 owes
+  # "unchanged". Each row below is one canonicalization axis the algorithm normalizes:
+  # step 1 (scheme case), step 2 (host case), step 3 (userinfo stripped).
+  # The spelling is varied ACROSS the two syncs, not within one request: the stored value
+  # and the resent value have to disagree for the comparison to be exercised at all.
+  # The agent is the one the Seller already knows, respelled -- not a different host --
+  # so a cell that fails is reporting on the comparison and not on agent resolution.
+  # Every axis touches only the scheme, the host or the userinfo, never the path or the
+  # port. That is deliberate: the agent URL's shape differs by transport (in-process
+  # serves a bare authority, e2e_rest one with a port AND a path), so an axis that moved
+  # the path or the port would name a DIFFERENT agent on one of them. Two such axes --
+  # appending "/" and appending ":443" -- shipped here and failed over e2e_rest for
+  # exactly that reason: production was right and the rows were wrong.
+  @T-UC-006-unchanged-respelled @main-flow
+  Scenario Outline: Sync creatives — respelling agent_url is not a format change (<axis>)
+    Given the Buyer is authenticated
+    And a creative with name "Summer Banner" and a known format_id
+    And the creative already exists with identical data
+    And the resync respells the same agent_url by <axis>
+    When the Buyer Agent syncs the creative
+    Then the response is compliant with the sync_creatives success spec
+    And the response should include the creative with action "unchanged"
+
+    Examples:
+      | axis                     |
+      | upper-casing the scheme  |
+      | upper-casing the host    |
+      | adding ignored userinfo  |
+
   @T-UC-006-main-assign @main-flow
   Scenario: Sync creatives — with package assignments
     Given the Buyer is authenticated
@@ -171,7 +203,7 @@ Feature: BR-UC-006 Sync Creative Assets
     # push-config endpoints map the same gate to InvalidParamsError with the
     # AdCP VALIDATION_ERROR envelope in data= — unit-pinned, not this scenario.
     # recovery=correctable comes from error-code.json's enumMetadata.
-    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/enums/error-code.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json pointer=/enumDescriptions/INVALID_REQUEST
     # POST-F1, POST-F2, POST-F3
     # --- ext-b: AUTH_INVALID ---
 
@@ -232,9 +264,12 @@ Feature: BR-UC-006 Sync Creative Assets
     # --- ext-e: INVALID_REQUEST ---
 
   @T-UC-006-ext-e @extension @ext-e @error
-  # format_id is in core/creative-asset.json /required: omitting it is a schema
-  # violation and the whole request is refused with INVALID_REQUEST at the transport,
-  # before any creative is processed -- not a per-item failure.
+  # core/creative-asset.json's root oneOf requires exactly one of format_id (the
+  # deprecated arm) and format_kind (the canonical arm). A creative naming neither -- here
+  # format_id null and no format_kind -- matches no arm, a schema violation, so the whole
+  # request is refused with INVALID_REQUEST at the transport, before any creative is
+  # processed -- not a per-item failure. format_id alone is not in /required.
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/creative-asset.json pointer=/oneOf
   Scenario: Creative format required — missing format_id
     Given the Buyer is authenticated
     And a creative with name "Banner" but no format_id
@@ -501,42 +536,64 @@ Feature: BR-UC-006 Sync Creative Assets
     And the creative should have generated content
 
   @T-UC-006-rule-036-inv2 @invariant @BR-RULE-036
-  Scenario: INV-2 — prompt from assets (message role)
+  Scenario: INV-2 — the build's prompt is the generation_prompt its format declares, ahead of any other prompt role
     Given the Buyer is authenticated
-    And a generative creative with an asset of role "message" containing "Create summer vibes"
+    And a generative creative whose "message" asset carrying "Make it look wintry" comes before its generation_prompt carrying "Create summer vibes"
     And GEMINI_API_KEY is configured
     When the Buyer Agent syncs the creative
     Then the response is compliant with the sync_creatives success spec
     And the generative build should use "Create summer vibes" as the prompt
 
+  # THE PROMPT IS THE ASSET THE FORMAT DECLARES FOR IT. display_300x250_generative, as the
+  # reference agent serves it, requires one asset, generation_prompt (text), and
+  # core/canonical-projection-ref.json names "a generative entry whose input is
+  # generation_prompt: text". So a conformant generative creative always carries it, and a
+  # message asset beside it is not the input. The message comes FIRST in the payload and says
+  # something else, so a seller that reads the first prompt role in the buyer's key order builds
+  # from "Make it look wintry" and the Then reddens.
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/canonical-projection-ref.json
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/format.json pointer=/$defs/baseIndividualAsset/properties/required
+
   @T-UC-006-rule-036-inv3 @invariant @BR-RULE-036
-  Scenario: INV-3 — prompt fallback to inputs context_description
+  Scenario: INV-3 — a generative creative carrying no prompt asset is refused, inputs notwithstanding
     Given the Buyer is authenticated
     And a generative creative with no prompt assets but inputs[0].context_description = "Holiday theme"
     And GEMINI_API_KEY is configured
     When the Buyer Agent syncs the creative
     Then the response is compliant with the sync_creatives success spec
-    And the generative build should use "Holiday theme" as the prompt
+    And the creative is reported failed with CREATIVE_VALIDATION_FAILED_GENERIC at "creatives[0]" and nothing is stored
 
   @T-UC-006-rule-036-inv4 @invariant @BR-RULE-036
-  Scenario: INV-4 — create fallback to creative name as prompt
+  Scenario: INV-4 — a new generative creative carrying no prompt asset is refused, not built from its name
     Given the Buyer is authenticated
     And a generative creative named "Summer Sale Banner" with no prompt assets or inputs
     And GEMINI_API_KEY is configured
     When the Buyer Agent creates the creative
     Then the response is compliant with the sync_creatives success spec
-    And the generative build should use "Create a creative for: Summer Sale Banner" as the prompt
+    And the creative is reported failed with CREATIVE_VALIDATION_FAILED_GENERIC at "creatives[0]" and nothing is stored
 
   @T-UC-006-rule-036-inv5 @invariant @BR-RULE-036
-  Scenario: INV-5 — update without prompt preserves existing data
+  Scenario: INV-5 — an update carrying no prompt asset is refused and the existing data kept
     Given the Buyer is authenticated
     And a generative creative that already exists with generated content
     And no prompt assets or inputs
     And GEMINI_API_KEY is configured
     When the Buyer Agent updates the creative
     Then the response is compliant with the sync_creatives success spec
-    And the generative build should be skipped
+    And the creatives entry for "creative-gen-inv5-001" carries error code "CREATIVE_VALIDATION_FAILED_GENERIC"
     And the existing creative data should be preserved
+
+  # INV-3 TO INV-5 USED TO GRADE A PROMPT FALLBACK (inputs, then the creative's name, then a
+  # skipped build on update) for a generative creative carrying no prompt asset. The format
+  # every one of them names, the reference agent's display_300x250_generative, declares its
+  # prompt as a REQUIRED asset (generation_prompt, text), and core/format.json says each
+  # asset's asset_id "must be used as the key in creative manifests" and that "Required
+  # assets must be provided for a valid creative". creative-manifests.mdx § Validation puts
+  # final acceptance at sync_creatives: "Confirm all required slots are present". So the
+  # creative is refused per item, before any fallback, and an update leaves the stored
+  # creative as it was.
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/format.json pointer=/$defs/baseIndividualAsset/properties/required
+  # @source repo=adcp ref=v3.2.7 path=docs/creative/creative-manifests.mdx section="Validation"
 
   @T-UC-006-rule-036-inv6 @invariant @BR-RULE-036
   Scenario: INV-6 — user assets take priority over generative output
@@ -931,8 +988,8 @@ Feature: BR-UC-006 Sync Creative Assets
     Examples: Generative partitions
       | partition                       | format_type                        | prompt_source                          | expected                                                          |
       | static_creative                 | no output_format_ids               | any assets                             | the creative should be processed without generative build         |
-      | generative_with_prompt          | output_format_ids present          | message asset with prompt text         | the generative build should use the message asset as the prompt   |
-      | generative_create_name_fallback | output_format_ids present (create) | no prompt assets or inputs             | the system should use the creative name as prompt fallback        |
+      | generative_with_prompt          | output_format_ids present          | a message asset ahead of the generation_prompt | the generative build should use the generation_prompt asset as the prompt |
+      | generative_without_prompt_asset | output_format_ids present (create) | no prompt assets or inputs             | the creatives entry carries error code "CREATIVE_VALIDATION_FAILED_GENERIC" |
       | generative_no_gemini_key        | output_format_ids present          | message asset but no GEMINI_API_KEY    | the creatives entry carries error code "CONFIGURATION_ERROR"      |
 
   @T-UC-006-partition-assignment-pkg @partition @assignment-package
@@ -1129,7 +1186,7 @@ Feature: BR-UC-006 Sync Creative Assets
     # sync_creatives' pinned request schema marks idempotency_key REQUIRED, but the
     # universal storyboard has NO `task: sync_creatives` step at 3.1.1 — the obligation
     # is mandated and UNGRADED, so these two scenarios are its only grading for this tool.
-    # @source repo=adcp ref=v3.1.1 path=dist/compliance/3.1.1/universal/idempotency.yaml
+    # @source repo=adcp ref=v3.2.7 path=static/compliance/source/universal/idempotency.yaml
 
   @T-UC-006-idempotency-replay @uc006-idempotency @idempotency-key @happy-path
   Scenario: Retrying a sync with the same idempotency_key does not re-execute the write
@@ -1227,7 +1284,7 @@ Feature: BR-UC-006 Sync Creative Assets
       | boundary_point                         | creative_state                                                        | expected                                                          |
       | static creative (no output_format_ids) | a creative with a static format (no output_format_ids)                | the creative should be processed without generative build         |
       | generative with prompt from assets     | a creative with a generative format and prompt in assets              | the system should invoke generative build with the asset prompt   |
-      | generative create, name fallback       | a new creative with a generative format and no prompt but a name      | the system should use the creative name as prompt fallback        |
+      | generative create, no prompt asset     | a new creative with a generative format and no prompt but a name      | the creatives entry carries error code "CREATIVE_VALIDATION_FAILED_GENERIC" |
       | generative, no GEMINI_API_KEY          | a creative with a generative format but GEMINI_API_KEY not configured | the creatives entry carries error code "CONFIGURATION_ERROR"      |
 
   @T-UC-006-boundary-creative-scope @boundary @creative-scope
@@ -1423,7 +1480,7 @@ Feature: BR-UC-006 Sync Creative Assets
     # status surface here is the advisory CreativeStatus on each per-creative RESULT
     # of the SyncCreativesSuccess shape. These boundaries fix the enum membership of
     # that response value.
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/creative/sync-creatives-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/creative/sync-creatives-request.json
 
     Examples: Valid scope combinations
       | boundary_point                          | scope_setup                                              | expected                                                       |
@@ -1465,7 +1522,7 @@ Feature: BR-UC-006 Sync Creative Assets
     # synchronously, so the pin's third shape is never produced and cannot be graded.
     # sync_creatives makes no ad-platform call and bills nothing on any account, so
     # INV-2/INV-3 have no observable here beyond the flag itself.
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/creative/sync-creatives-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/creative/sync-creatives-request.json
 
     Examples: Synchronous success shape (sandbox permitted)
       | boundary_point                      | creative                          | account_kind                             | expected                                        |
@@ -1516,7 +1573,7 @@ Feature: BR-UC-006 Sync Creative Assets
     # ("DAAST has no NonLinearAds element"). A refused tracker is a schema violation,
     # so the whole request is INVALID_REQUEST (as ext-c). Accepted trackers are stored
     # as sent, for the sales agent to assemble into TrackingEvents at serve time.
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/creative/sync-creatives-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/creative/sync-creatives-request.json
 
     Examples: Accepted trackers, persisted as sent
       | partition            | tracker_assets                                               | expected                                                      |
@@ -1559,7 +1616,7 @@ Feature: BR-UC-006 Sync Creative Assets
     # provenance_enforcement Phase 2: cheapest buyer mistake -- no provenance attached.
     # Seller accepts envelope but per-creative action=failed with PROVENANCE_REQUIRED.
     # provenance_enforcement: provenance entirely absent under provenance_required policy
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/compliance/source/protocols/media-buy/scenarios/provenance_enforcement.yaml phase=reject_no_provenance step=sync_creatives_no_provenance
+    # @source repo=adcp ref=v3.2.7 path=static/compliance/source/protocols/media-buy/scenarios/provenance_enforcement.yaml phase=reject_no_provenance step=sync_creatives_no_provenance
 
   @T-UC-006-storyboard-provenance-digital-source-type-missing @uc006-storyboard-routing @storyboard-v3.1 @v3-1 @provenance @rejection
   Scenario: PROVENANCE_DIGITAL_SOURCE_TYPE_MISSING -- provenance present but digital_source_type omitted
@@ -1573,7 +1630,7 @@ Feature: BR-UC-006 Sync Creative Assets
     # under a policy with require_digital_source_type=true. Distinct from
     # PROVENANCE_REQUIRED because provenance IS present.
     # provenance_enforcement: digital_source_type missing under require_digital_source_type policy
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/compliance/source/protocols/media-buy/scenarios/provenance_enforcement.yaml phase=reject_missing_digital_source_type step=sync_creatives_no_digital_source_type
+    # @source repo=adcp ref=v3.2.7 path=static/compliance/source/protocols/media-buy/scenarios/provenance_enforcement.yaml phase=reject_missing_digital_source_type step=sync_creatives_no_digital_source_type
 
   @T-UC-006-storyboard-provenance-disclosure-missing @uc006-storyboard-routing @storyboard-v3.1 @v3-1 @provenance @rejection
   Scenario: PROVENANCE_DISCLOSURE_MISSING -- provenance present but disclosure block omitted under require_disclosure_metadata
@@ -1587,7 +1644,7 @@ Feature: BR-UC-006 Sync Creative Assets
     # submitted manifest against creative_policy.provenance_requirements.require_disclosure_metadata
     # without calling any verifier. error.field points at the missing disclosure path.
     # provenance_enforcement: disclosure block missing under require_disclosure_metadata policy
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/compliance/source/protocols/media-buy/scenarios/provenance_enforcement.yaml phase=reject_missing_disclosure step=sync_creatives_missing_disclosure
+    # @source repo=adcp ref=v3.2.7 path=static/compliance/source/protocols/media-buy/scenarios/provenance_enforcement.yaml phase=reject_missing_disclosure step=sync_creatives_missing_disclosure
 
   @T-UC-006-storyboard-provenance-corrected-acceptance @uc006-storyboard-routing @storyboard-v3.1 @v3-1 @provenance @acceptance
   Scenario: Corrected resubmission with disclosure block and on-list verifier is accepted
@@ -1595,14 +1652,17 @@ Feature: BR-UC-006 Sync Creative Assets
     And the Buyer Agent resubmits with a complete disclosure block and an on-list verify_agent from the seller's accepted_verifiers
     When the Buyer Agent sends sync_creatives with the corrected manifest
     Then the response is compliant with the sync_creatives success spec
-    And the per-creative result should report action "created"
+    And the per-creative result's action should be "created" or "updated"
     # provenance_enforcement Phase 6: the structural-rejection contract terminates in a
     # corrected acceptance. Buyer reads the rejection error codes from prior phases,
     # attaches a complete disclosure block, and represents an on-list verify_agent
     # drawn from creative_policy.accepted_verifiers. Per-creative action transitions
     # to created/updated (not failed); the creative enters the seller's review lifecycle.
+    # BOTH values are conformant: the step's validation is `allowed_values: ["created",
+    # "updated"]`, and phases 5 and 6 submit the same creative_id, so a seller that kept
+    # the failed phase-5 entry answers "updated" for the resubmission.
     # provenance_enforcement: corrected resubmission terminates the rejection cascade
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/compliance/source/protocols/media-buy/scenarios/provenance_enforcement.yaml phase=accept_with_disclosure step=sync_creatives_with_disclosure
+    # @source repo=adcp ref=v3.2.7 path=static/compliance/source/protocols/media-buy/scenarios/provenance_enforcement.yaml phase=accept_with_disclosure step=sync_creatives_with_disclosure
 
   @T-UC-006-storyboard-provenance-claim-contradicted @uc006-storyboard-routing @schema-v3.1 @v3-1 @provenance @rejection @truth-of-claim
   Scenario: PROVENANCE_CLAIM_CONTRADICTED -- on-list verifier refutes buyer's digital_source_type claim
@@ -1622,9 +1682,22 @@ Feature: BR-UC-006 Sync Creative Assets
     # claimed_value, observed_value, confidence) -- no detail_url, no verifier extension
     # fields. This is the cross-tenant trust boundary.
     # provenance_truth_of_claim: verifier contradicts buyer claim; details bounded to audit-safe allowlist
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/compliance/source/protocols/creative/index.yaml
+    # @source repo=adcp ref=v3.2.7 path=static/compliance/source/protocols/media-buy/scenarios/provenance_truth_of_claim.yaml phase=reject_contradicted_claim step=sync_creatives_contradicted
+    # NOT IMPLEMENTED, deliberately: provenance verification is deferred feature work,
+    # tracked at https://github.com/prebid/salesagent/issues/1074 (accepted_verifiers on the
+    # creative policy, the outbound get_creative_features call, the
+    # PROVENANCE_CLAIM_CONTRADICTED refusal and its details class, and a verifier the e2e
+    # stack can reach). It stays expected-to-fail until that lands.
 
-  @T-UC-006-storyboard-multi-format-sync @uc006-storyboard-routing @storyboard-v3.1 @v3-1 @bulk-sync @multi-format
+  # STORYBOARD CLAIM WITHDRAWN at the AdCP 3.2.1 pin — RESTORABLE BY DECLARING.
+    # Gated upstream by the `creative` PROTOCOL, which AdCP 3.2 split creatives into and which this seller does not declare, so the claim that an AdCP storyboard grades this scenario is FALSE at 3.2.1
+    # and feeding a guard a false claim is the guard grading a fiction. Declaring it
+    # restores the claim and the coverage with it; that decision is salesagent-o1wxm,
+    # because declaring a capability is a get_adcp_capabilities behaviour change and this
+    # repo declares a posture only where the implementation backs it.
+    # The `@storyboard-v3.1` TAG is gone and nothing else is: every Given, When and Then
+    # below still runs on every transport.
+  @T-UC-006-storyboard-multi-format-sync @uc006-storyboard-routing @v3-1 @bulk-sync @multi-format
   Scenario: Bulk sync of three creatives in three different formats returns per-creative action
     Given the Buyer Agent submits three creatives in three different formats in a single sync_creatives call
     When the Buyer Agent sends sync_creatives
@@ -1632,41 +1705,333 @@ Feature: BR-UC-006 Sync Creative Assets
     And the creatives array should carry one result per submitted creative
     And every per-creative result should expose an action field
     And every action value should be "created", "updated", or "failed"
-    # creative/index.yaml sync_multiple: a single sync_creatives call carries three
-    # creatives (display 300x250, video 30s, native_content). The seller validates each
-    # against its format spec independently and returns per-creative action plus status.
+    # sync-creatives-response.json: creatives[] is "Results for each creative processed",
+    # one entry per submitted creative, each carrying an action from creative-action.json
+    # (created, updated, unchanged, failed, deleted). The asserted set leaves out deleted,
+    # which only delete_missing produces, and unchanged, which only a byte-identical
+    # resubmission produces; this call carries neither. The storyboard's
+    # creative/index.yaml sync_multiple step syncs ONE 300x250 image creative; the bulk
+    # shape is the schema's, not that step's.
     # This half grades the ACTION obligations; the per-creative STATUS obligations are
     # graded by the sibling scenario below, split out because their known production gap
     # aborted this scenario and left these assertions dead (#1858).
-    # sync_multiple: bulk multi-format validation returns per-creative action+status
-    # @source repo=adcp ref=v3.1.1 path=static/compliance/source/protocols/media-buy/index.yaml phase=creative_sync step=sync_creatives
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/creative/sync-creatives-response.json pointer=/oneOf/0/properties/creatives
 
-  @T-UC-006-storyboard-multi-format-sync-status @uc006-storyboard-routing @storyboard-v3.1 @v3-1 @bulk-sync @multi-format
+  # STORYBOARD CLAIM WITHDRAWN at the AdCP 3.2.1 pin — RESTORABLE BY DECLARING.
+    # Gated upstream by the `creative` PROTOCOL, which AdCP 3.2 split creatives into and which this seller does not declare, so the claim that an AdCP storyboard grades this scenario is FALSE at 3.2.1
+    # and feeding a guard a false claim is the guard grading a fiction. Declaring it
+    # restores the claim and the coverage with it; that decision is salesagent-o1wxm,
+    # because declaring a capability is a get_adcp_capabilities behaviour change and this
+    # repo declares a posture only where the implementation backs it.
+    # The `@storyboard-v3.1` TAG is gone and nothing else is: every Given, When and Then
+    # below still runs on every transport.
+  @T-UC-006-storyboard-multi-format-sync-status @uc006-storyboard-routing @v3-1 @bulk-sync @multi-format
   Scenario: Bulk sync of three creatives in three different formats returns per-creative status
     Given the Buyer Agent submits three creatives in three different formats in a single sync_creatives call
     When the Buyer Agent sends sync_creatives
     Then the response is compliant with the sync_creatives success spec
-    And every per-creative result should expose a status field
+    And every per-creative result should carry a status exactly when its action is neither failed nor deleted
     And every status value should be drawn from the creative-status enum
-    # The STATUS half of the same storyboard step as the sibling scenario above.
-    # Per-creative status is from creative-status (approved, pending_review, rejected).
-    # sync_multiple: bulk multi-format validation returns per-creative action+status
-    # @source repo=adcp ref=v3.1.1 path=static/compliance/source/protocols/media-buy/index.yaml phase=creative_sync step=sync_creatives
+    # The STATUS half of the sibling scenario above. sync-creatives-response.json, on the
+    # per-creative status: "Values come from CreativeStatus only (processing,
+    # pending_review, approved, suspended, rejected, archived)", and it "MUST be omitted
+    # when action is failed or deleted ... Omit entirely when the seller has no review
+    # lifecycle at all." This seller has a review lifecycle, so every entry that was not
+    # failed or deleted carries one, and an entry that was carries none.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/creative/sync-creatives-response.json pointer=/oneOf/0/properties/creatives/items/properties/status
 
-  @T-UC-006-storyboard-format-id-roundtrip-on-sync @uc006-storyboard-routing @storyboard-v3.1 @v3-1 @format-id-roundtrip
+  # STORYBOARD CLAIM WITHDRAWN at the AdCP 3.2.1 pin — RESTORABLE BY DECLARING.
+    # Gated upstream by the `creative` PROTOCOL, which AdCP 3.2 split creatives into and which this seller does not declare, so the claim that an AdCP storyboard grades this scenario is FALSE at 3.2.1
+    # and feeding a guard a false claim is the guard grading a fiction. Declaring it
+    # restores the claim and the coverage with it; that decision is salesagent-o1wxm,
+    # because declaring a capability is a get_adcp_capabilities behaviour change and this
+    # repo declares a posture only where the implementation backs it.
+    # The `@storyboard-v3.1` TAG is gone and nothing else is: every Given, When and Then
+    # below still runs on every transport.
+  @T-UC-006-storyboard-format-id-roundtrip-on-sync @uc006-storyboard-routing @v3-1 @format-id-roundtrip
   Scenario: Sync creative with the same format_id object returned by get_products -- seller MUST accept its own format_id
     Given the Buyer Agent captured a format_id {agent_url, id} from a prior get_products response
     When the Buyer Agent sends sync_creatives carrying a creative whose format_id matches the captured object
     Then the response is compliant with the sync_creatives success spec
     And the per-creative result should NOT report action "failed" due to format_id rejection
     And the seller's own format_id object should roundtrip through sync_creatives without modification
-    # media-buy/index.yaml creative_sync (format_id roundtrip): the buyer submits a
-    # creative whose format_id is the EXACT object returned by get_products
-    # (products[0].format_ids[0]). If the seller's validation rejects a format_id
-    # that it returned in products, its catalog does not roundtrip and a buy
-    # would silently fail at sync_creatives after commit.
-    # format_id roundtrip: seller MUST accept its own format_ids on sync_creatives
-    # @source repo=adcp ref=v3.1.1 path=static/compliance/source/protocols/media-buy/index.yaml phase=creative_sync step=sync_creatives
+    # universal/schema-validation.yaml, phase format_option_reconciliation: "Identifiers
+    # returned by get_products must be accepted back by the same agent in subsequent
+    # calls." The buyer submits a creative whose format_id is the EXACT object returned by
+    # get_products (products[0].format_ids[0]). The pin's own worked example of the
+    # principle is the canonical one -- the selected format_kind and option reference
+    # echoed into sync_creatives -- and format_id is the deprecated 3.x branch
+    # (creative-asset.json: "DEPRECATED in 3.2"); a product that still emits a format_id
+    # is still handing the buyer an identifier, so the principle covers it. The phase's
+    # pointer to a media_buy_seller creative_sync phase names nothing at the pin.
+    # @source repo=adcp ref=v3.2.7 path=static/compliance/source/universal/schema-validation.yaml phase=format_option_reconciliation
+
+  @T-UC-006-canonical-identity-roundtrip-on-sync @schema-v3.2 @format-kind @format-option-ref
+  Scenario Outline: A creative synced by format_kind with a <scope>-scope format_option_ref is listed back with that identity intact
+    Given the Buyer is authenticated
+    And the buyer syncs a creative identified by canonical kind "image" with a <scope>-scope format_option_ref
+    When the Buyer Agent syncs the creative
+    Then the response is compliant with the sync_creatives success spec
+    And the response should include the creative with action "created"
+    And listing the library returns the creative on format_kind "image" with the format_option_ref the buyer last sent, scope included
+
+    Examples: the two scopes the reference discriminates between
+      | scope     |
+      | product   |
+      | publisher |
+
+    # canonical-formats-migration.mdx's completion checklist: "Preview, sync, library, and
+    # delivery paths preserve `format_kind` and `format_option_ref`." The checklist item
+    # carries no RFC 2119 keyword; the force comes from the schemas it points at. The sync
+    # request's item (core/creative-asset.json) carries the canonical arm, and
+    # list-creatives-response.json declares format_kind and format_option_ref on every
+    # listed creative. sync-creatives-response.json carries no format identity per
+    # creative, so a following list_creatives is the only place the buyer can observe that
+    # the sync kept it. That makes this sync-then-list scenario the only way the sync half
+    # can be graded. The library-side roundtrip (@T-UC-018-canonical-format-option-ref-roundtrip)
+    # seeds its creative with a factory and never drives the sync write path.
+    #
+    # Both scopes are rows because core/format-option-ref.json discriminates on `scope`,
+    # and a product-scope and a publisher-scope option with the same format_option_id are
+    # different options. A single row would pass on a seller that hard-coded the other.
+    # @source repo=adcp ref=v3.2.7 path=docs/creative/canonical-formats-migration.mdx section="Completion checklist"
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/format-option-ref.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/creative/list-creatives-response.json pointer=/properties/creatives/items property=format_option_ref
+
+  @T-UC-006-canonical-identity-resync-replaces-option @schema-v3.2 @format-kind @format-option-ref
+  Scenario: Re-syncing a canonical creative onto a different format_option_ref stores and lists the new option
+    Given the Buyer is authenticated
+    And the buyer syncs a creative identified by canonical kind "image" with a product-scope format_option_ref
+    And the creative already exists with identical data
+    And the resync narrows the same creative to a publisher-scope format_option_ref
+    When the Buyer Agent syncs the creative
+    Then the response is compliant with the sync_creatives success spec
+    And the response should include the creative with action "updated"
+    And listing the library returns the creative on format_kind "image" with the format_option_ref the buyer last sent, scope included
+
+    # The update half of the same checklist item. The first sync goes through the
+    # transport (the "identical data" Given), so the stored row is exactly what the write
+    # path left. The resync then names a different option on the same kind. A different
+    # option is a different format identity, so the update is a real change, answered
+    # "updated" (enums/creative-action.json), and the listing must now carry the new
+    # reference. A seller that kept the first-stored option on update would list the
+    # product-scope reference and fail the readback.
+    # @source repo=adcp ref=v3.2.7 path=docs/creative/canonical-formats-migration.mdx section="Completion checklist"
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/creative-action.json
+
+  @T-UC-006-canonical-identity-through-preview @schema-v3.2 @format-kind @format-option-ref
+  Scenario: A creative synced by format_kind is previewed by the operator's creative agent with that identity intact
+    Given the Buyer is authenticated
+    And the buyer syncs a creative carrying only a tag_url, identified by canonical kind "display_tag" with a publisher-scope format_option_ref
+    And the operator's creative agent previews that creative's canonical identity
+    When the Buyer Agent syncs the creative
+    Then the response is compliant with the sync_creatives success spec
+    And the response should include the creative with action "created"
+    And the stored creative carries the preview the operator's creative agent returned
+    And listing the library returns the creative on format_kind "display_tag" with the format_option_ref the buyer last sent, scope included
+
+    # The PREVIEW half of the completion checklist ("Preview, sync, library, and delivery
+    # paths preserve `format_kind` and `format_option_ref`"). A creative identified by
+    # format_kind names no creative agent, so the seller previews it with its own -- the
+    # operator's -- and the request carries the identity where
+    # creative/preview-creative-request.json puts it: no `format_id` (deprecated in 3.2) and
+    # `creative_manifest.format_kind` plus `creative_manifest.format_option_ref`.
+    #
+    # display_tag because the operator's agent declares exactly one format of that kind.
+    # The same schema lets a request omit `target_capability_id` only when exactly one
+    # advertised capability matches; this seller does not read the agent's capabilities,
+    # so that is the case it can route, and on e2e the pinned reference agent resolves it.
+    # The creative carries only the slot formats/canonical/display_tag.json requires.
+    #
+    # What is graded is what the seller STORED and RETURNED, not the agent's rendering: the
+    # sync answers "created", the stored row holds a preview with a render, and the listing
+    # returns the identity whole. A seller that never previews a format_kind creative stores
+    # no preview; one that previews it without the canonical identity is not rendered.
+    # @source repo=adcp ref=v3.2.7 path=docs/creative/canonical-formats-migration.mdx section="Completion checklist"
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/creative/preview-creative-request.json pointer=/properties/format_id
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/creative/preview-creative-request.json pointer=/properties/target_capability_id
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/formats/canonical/display_tag.json pointer=/properties/slots
+
+  @T-UC-006-canonical-unchanged-resync-keeps-review @schema-v3.2 @format-kind @format-option-ref
+  Scenario: An unchanged resync of an approved creative identified by format_kind keeps its approval
+    Given the Buyer is authenticated
+    And the tenant has approval_mode "auto-approve"
+    And the buyer syncs a creative identified by canonical kind "image" with a product-scope format_option_ref
+    And the creative already exists with identical data
+    And the tenant has approval_mode "require-human"
+    When the Buyer Agent syncs the creative
+    Then the response is compliant with the sync_creatives success spec
+    And the response should include the creative with action "unchanged"
+    And the per-creative result should carry advisory status "approved"
+
+  @T-UC-006-canonical-changed-resync-enters-review @schema-v3.2 @format-kind @format-option-ref
+  Scenario: A resync that changes the format_option_ref of an approved creative sends it back to review
+    Given the Buyer is authenticated
+    And the tenant has approval_mode "auto-approve"
+    And the buyer syncs a creative identified by canonical kind "image" with a product-scope format_option_ref
+    And the creative already exists with identical data
+    And the tenant has approval_mode "require-human"
+    And the resync narrows the same creative to a publisher-scope format_option_ref
+    When the Buyer Agent syncs the creative
+    Then the response is compliant with the sync_creatives success spec
+    And the response should include the creative with action "updated"
+    And the per-creative result should carry advisory status "pending_review"
+
+    # Review on RESYNC, for a creative identified by format_kind. Both scenarios approve the
+    # creative on its first sync (auto-approve) and switch the tenant to require-human
+    # before the second, so the mode now in force would move the status if it were applied.
+    #
+    # Changed content enters review. docs/creative/specification.mdx § Creative revision
+    # identity: "Prior approval does not transfer: an accepted content-bearing unversioned
+    # update enters the ordinary review lifecycle", and format identity is revision-bearing
+    # content in the same section. A different format_option_ref is a different identity,
+    # so the second scenario answers "updated" and goes back to pending_review.
+    #
+    # An unchanged resync is not an update and keeps its review state. § Creative Status
+    # Lifecycle allows approved -> pending_review for a buyer-initiated revision update, or as a
+    # seller-initiated re-review that MUST fire creative.status_changed. A resync that
+    # changes nothing is neither, so the first scenario answers "unchanged" and stays
+    # approved; a seller that re-applies the mode on every resync answers pending_review.
+    # @source repo=adcp ref=v3.2.7 path=docs/creative/specification.mdx section="Creative revision identity"
+    # @source repo=adcp ref=v3.2.7 path=docs/creative/specification.mdx section="Creative Status Lifecycle"
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/creative/sync-creatives-response.json pointer=/oneOf/0/properties/creatives/items/properties/status
+
+  @T-UC-006-canonical-renamed-resync-keeps-review @schema-v3.2 @format-kind @format-option-ref
+  Scenario: A resync that only renames an approved creative identified by format_kind is updated and keeps its approval
+    Given the Buyer is authenticated
+    And the tenant has approval_mode "auto-approve"
+    And the buyer syncs a creative identified by canonical kind "image" with a product-scope format_option_ref
+    And the creative already exists with identical data
+    And the tenant has approval_mode "require-human"
+    And the creative name is changed to "Renamed Canonical Creative"
+    When the Buyer Agent syncs the creative
+    Then the response is compliant with the sync_creatives success spec
+    And the response should include the creative with action "updated"
+    And the per-creative result should carry advisory status "approved"
+
+    # A rename is metadata, not revision content. docs/creative/specification.mdx
+    # § Creative revision identity excludes "the explicit operational/metadata fields
+    # `name`, `tags`, `status`, `weight`, `placement_refs`, and `placement_ids`" from
+    # revision content, and says "a metadata-only mutation may still return `updated`"
+    # while the current revision, and so its review state, is kept. The resync therefore
+    # answers "updated" (the name did change) and stays "approved" under the require-human
+    # mode now in force. § Creative Status Lifecycle allows approved -> pending_review for a
+    # buyer-initiated revision update or a seller-initiated re-review that MUST fire
+    # creative.status_changed; a rename is neither, so a seller that re-reviews on it
+    # answers pending_review here.
+    # @source repo=adcp ref=v3.2.7 path=docs/creative/specification.mdx section="Creative revision identity"
+    # @source repo=adcp ref=v3.2.7 path=docs/creative/specification.mdx section="Creative Status Lifecycle"
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/creative-action.json
+
+  @T-UC-006-representation-selection-readback @schema-v3.2 @format-kind @representation-selection
+  Scenario: A creative synced with its representation_selection is listed back with that exact lineage
+    Given the Buyer is authenticated
+    And the buyer syncs a creative identified by canonical kind "image" selected from a representation set
+    When the Buyer Agent syncs the creative
+    Then the response is compliant with the sync_creatives success spec
+    And the response should include the creative with action "created"
+    And listing the library returns the creative carrying the representation_selection the buyer last sent
+
+    # creative-manifests.mdx § Libraries and trafficking: "When a manifest was resolved from
+    # a set of equivalent trafficking representations, it carries representation_selection.
+    # That object preserves the durable creative_id, complete source revision_id plus digest,
+    # selected representation_id, applied deterministic strategy, and derived-output digest
+    # used for review." The seller's half of "carries" is the readback:
+    # list-creatives-response.json representation_lineage_readback is
+    # "required_when_current_creative_was_resolved_from_representation_set" and
+    # "must_equal": "last_accepted_current_representation_selection". The sync response
+    # carries no lineage, so the listing is where the buyer observes it.
+    #
+    # The item's selected_output_digest is computed test-side by the pin's projection rule
+    # (remove $schema, representation_selection, creative_id, revision_id, name, tags,
+    # status, weight, placement_refs, placement_ids and inputs; RFC 8785 JCS; SHA-256), and
+    # that oracle is first held to the pin's worked example, so the accepted row is accepted
+    # for the bytes it carries and not for agreeing with the seller's own arithmetic.
+    # @source repo=adcp ref=v3.2.7 path=docs/creative/creative-manifests.mdx section="Libraries and trafficking"
+    # @source repo=adcp ref=v3.2.7 path=docs/creative/representation-sets.mdx section="Sync, review, and readback"
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/creative/list-creatives-response.json pointer=/properties/creatives/items/properties/representation_selection
+
+  @T-UC-006-representation-selection-refused @schema-v3.2 @format-kind @representation-selection
+  Scenario Outline: A representation_selection that does not describe its item is refused and nothing is stored - <member>
+    Given the Buyer is authenticated
+    And the buyer syncs a creative identified by canonical kind "image" selected from a representation set
+    And the creative's representation_selection disagrees with the item on <member>
+    When the Buyer Agent syncs the creative
+    Then the creative is reported failed with CREATIVE_VALIDATION_FAILED_GENERIC at "creatives[0].representation_selection.<member>" and nothing is stored
+
+    Examples:
+      | member                 |
+      | creative_id            |
+      | revision_id            |
+      | selected_output_digest |
+
+    # sync_creatives.mdx: "When an item carries representation_selection, its creative_id and
+    # revision_id must equal the selection lineage", and "The seller separately verifies
+    # selected_output_digest with the same manifest projection used by build_creative".
+    # sync-creatives-request.json representation_set_projection states the same as
+    # identity_match and selected_output_verification. One row per lineage member, each
+    # perturbing that member alone, so a seller that checks two of the three passes two rows.
+    #
+    # The code is CREATIVE_VALIDATION_FAILED_GENERIC: the pin names no specific code for a
+    # lineage that does not describe its item, and the generic one is "buyer-correctable
+    # validation ... the producer cannot classify ... with a more specific standard code".
+    # CREATIVE_REPRESENTATION_UNRESOLVED is the RESOLVER's refusal when no candidate in a
+    # CreativeRepresentationSet is compatible, and its details require one rejection per
+    # candidate -- a seller receiving only the selected output has no candidates to name.
+    # The refusal is per entry (sync_creatives is a batch tool) and is taken before the
+    # write, so the creative is absent from the library.
+    # @source repo=adcp ref=v3.2.7 path=docs/creative/task-reference/sync_creatives.mdx section="Creative revisions"
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/creative/sync-creatives-request.json pointer=/properties/creatives/items/allOf/1/x-adcp-validation
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json property=CREATIVE_VALIDATION_FAILED_GENERIC
+
+  @T-UC-006-representation-reselection-enters-review @schema-v3.2 @format-kind @representation-selection
+  Scenario: A resync selecting another representation of the same revision is updated and sent back to review
+    Given the Buyer is authenticated
+    And the tenant has approval_mode "auto-approve"
+    And the buyer syncs a creative identified by canonical kind "image" selected from a representation set
+    And the creative already exists with identical data
+    And the tenant has approval_mode "require-human"
+    And the resync selects another representation of the same source revision
+    When the Buyer Agent syncs the creative
+    Then the response is compliant with the sync_creatives success spec
+    And the response should include the creative with action "updated"
+    And the per-creative result should carry advisory status "pending_review"
+    And listing the library returns the creative carrying the representation_selection the buyer last sent
+
+  @T-UC-006-representation-new-revision-keeps-review @schema-v3.2 @format-kind @representation-selection
+  Scenario: A resync carrying a new source revision that selects the same output is updated and keeps its approval
+    Given the Buyer is authenticated
+    And the tenant has approval_mode "auto-approve"
+    And the buyer syncs a creative identified by canonical kind "image" selected from a representation set
+    And the creative already exists with identical data
+    And the tenant has approval_mode "require-human"
+    And the resync carries a new source revision that selects the same output
+    When the Buyer Agent syncs the creative
+    Then the response is compliant with the sync_creatives success spec
+    And the response should include the creative with action "updated"
+    And the per-creative result should carry advisory status "approved"
+    And listing the library returns the creative carrying the representation_selection the buyer last sent
+
+    # The two review invariants of representation-sets.mdx § Sync, review, and readback, one
+    # scenario each, and they differ in which half of the lineage moves. The execution is
+    # (selected_representation_id, selected_output_digest, execution_vast_version,
+    # execution_daast_version): "Changing only the selected execution does not mint a buyer
+    # revision, but it is an updated creative and follows the ordinary re-review lifecycle;
+    # approval never transfers silently to different execution bytes". The first scenario
+    # moves only selected_representation_id, with the same output bytes, so a seller that
+    # decides review on the assets alone keeps it approved and reddens the row.
+    #
+    # The source revision is the other half. core/representation-selection.json
+    # review_identity tracks the execution "separately from the source revision", and
+    # sync-creatives-request.json gives "different_revision_same_current_content" as
+    # "accept_as_updated_make_current_preserve_review_state". The second scenario moves only
+    # revision_id and its digest: the lineage changed, so the creative is "updated" and lists
+    # the new lineage, and the execution did not, so it stays approved. A seller that
+    # re-reviews on any lineage change reddens it; one that ignores the lineage answers
+    # "unchanged" and lists the first revision.
+    # @source repo=adcp ref=v3.2.7 path=docs/creative/representation-sets.mdx section="Sync, review, and readback"
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/representation-selection.json pointer=/x-adcp-validation/verifier_constraints/derived_output/review_identity
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/creative/sync-creatives-request.json pointer=/properties/creatives/items/allOf/1/x-adcp-validation
 
   @T-UC-006-storyboard-creative-reception-stateful-render @uc006-storyboard-routing @schema-v3.1 @v3-1 @stateful-push @creative-reception
   Scenario: Stateful sales agent accepts pushed creatives and exposes them via per-creative status transitions

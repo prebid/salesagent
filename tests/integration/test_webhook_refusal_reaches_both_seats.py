@@ -57,6 +57,7 @@ from typing import Any
 
 import pytest
 
+from tests.factories.webhook import PushNotificationConfigRequestFactory
 from tests.harness import CircuitBreakerEnv, MediaBuyPushRegistrationEnv, ProtocolWebhookEnv
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
@@ -93,11 +94,25 @@ REHYDRATION_LOGGER = "src.core.context_manager"
 
 
 def _stored_registration(*, schemes: list[str], credentials: str | None, url: str) -> dict[str, Any]:
-    """The wire-shaped document every producer of this stash key writes."""
+    """The wire-shaped document every producer of this stash key writes.
+
+    Built through ``PushNotificationConfigRequestFactory.payload`` so the
+    conforming fields -- ``operation_id`` above all -- come from the one place
+    that says what a buyer-sent registration looks like. Hand-rolling the dict
+    here omitted ``operation_id``, which ``core/mcp-webhook-payload.json``
+    /required obliges the seller to echo, so
+    ``test_a_conforming_stash_still_delivers`` was registering a webhook whose
+    envelope cannot be built and then asserting that it delivers.
+
+    ``payload`` applies overrides AFTER ``model_dump``, which is what this helper
+    needs: the non-conforming cases below (an unrecognised scheme, a sub-32
+    credential) must survive into the document unvalidated, because the refusal
+    under test is production's, not the model's.
+    """
     authentication: dict[str, Any] = {"schemes": schemes}
     if credentials is not None:
         authentication["credentials"] = credentials
-    return {"url": url, "authentication": authentication}
+    return PushNotificationConfigRequestFactory.payload(url=url, authentication=authentication)
 
 
 class TestSeatOneStoredRowsRefuseAtTheSeam:

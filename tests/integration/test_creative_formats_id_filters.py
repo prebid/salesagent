@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 from adcp.types import Responsive
-from adcp.types.generated_poc.core.format import Dimensions, Renders  # TODO: no stable alias in adcp.types
+from adcp.types.domains.core.format import Dimensions, Renders  # TODO: no stable alias in adcp.types
 
 from src.core.schemas import Format, FormatId, ListCreativeFormatsRequest
 from tests.factories import TenantFactory
@@ -35,13 +35,11 @@ FILTER_TRANSPORTS = [Transport.A2A, Transport.MCP, Transport.REST]
 def _fmt(
     fmt_id: str,
     name: str,
-    type: str | None = "display",
     **kwargs,
 ) -> Format:
     """Shorthand for creating a Format object."""
     return Format(
         format_id=FormatId(agent_url=AGENT_URL, id=fmt_id),
-        type=type,
         name=name,
         is_standard=True,
         **kwargs,
@@ -51,14 +49,12 @@ def _fmt(
 def _responsive_fmt(
     fmt_id: str,
     name: str,
-    type: str | None = "display",
     **kwargs,
 ) -> Format:
     """Create a responsive format (dimensions.responsive.width=True)."""
     return _fmt(
         fmt_id,
         name,
-        type=type,
         renders=[
             Renders(
                 role="primary",
@@ -78,14 +74,12 @@ def _fixed_fmt(
     name: str,
     width: int = 300,
     height: int = 250,
-    type: str | None = "display",
     **kwargs,
 ) -> Format:
     """Create a non-responsive format with fixed dimensions."""
     return _fmt(
         fmt_id,
         name,
-        type=type,
         renders=[
             Renders(
                 role="primary",
@@ -128,7 +122,7 @@ class TestFormatIdsFilter:
         formats = [
             _fmt("display_300", "Medium Rectangle"),
             _fmt("display_728", "Leaderboard"),
-            _fmt("video_15s", "Pre-roll 15s", type="video"),
+            _fmt("video_15s", "Pre-roll 15s"),
         ]
         with CreativeFormatsEnv() as env:
             TenantFactory(tenant_id="test_tenant")
@@ -247,7 +241,7 @@ class TestIsResponsiveFilter:
         """UC-005-MAIN-MCP-10: is_responsive=True returns only responsive formats."""
         formats = [
             _responsive_fmt("responsive_banner", "Responsive Banner"),
-            _responsive_fmt("responsive_video", "Responsive Video", type="video"),
+            _responsive_fmt("responsive_video", "Responsive Video"),
             _fixed_fmt("fixed_300", "Fixed 300x250"),
         ]
         with CreativeFormatsEnv() as env:

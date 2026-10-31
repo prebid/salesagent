@@ -1,0 +1,187 @@
+<title>Targeting Input/State Gap</title>
+<style>
+  :root {
+    --bg: #fbfaf8; --fg: #1a1a18; --muted: #5f5c55; --rule: #e0ddd6;
+    --code-bg: #f3f1ec; --accent: #7a3e12; --bad: #8a2b20; --good: #2d5e3a;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #17171a; --fg: #e8e6e1; --muted: #a09c93; --rule: #33333a;
+      --code-bg: #1f1f24; --accent: #d79a62; --bad: #e08b7e; --good: #8fc79f;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #17171a; --fg: #e8e6e1; --muted: #a09c93; --rule: #33333a;
+    --code-bg: #1f1f24; --accent: #d79a62; --bad: #e08b7e; --good: #8fc79f;
+  }
+  body { background: var(--bg); color: var(--fg); margin: 0;
+         font: 16px/1.65 ui-serif, Georgia, "Times New Roman", serif; }
+  main { max-width: 46rem; margin: 0 auto; padding: 3rem 1.25rem 6rem; }
+  h1 { font-size: 1.9rem; line-height: 1.2; margin: 0 0 .3rem; letter-spacing: -.01em; }
+  .sub { color: var(--muted); font-size: .95rem; margin: 0 0 2.5rem; }
+  h2 { font-size: 1.25rem; margin: 2.8rem 0 .8rem; padding-top: 1.2rem;
+       border-top: 1px solid var(--rule); }
+  h3 { font-size: 1.02rem; margin: 1.8rem 0 .5rem; color: var(--accent); }
+  p { margin: 0 0 1rem; }
+  pre { background: var(--code-bg); border-radius: 4px; padding: .9rem 1rem; overflow-x: auto;
+        font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; margin: 0 0 1.2rem; }
+  code { background: var(--code-bg); padding: .1em .35em; border-radius: 3px;
+         font: .88em ui-monospace, SFMono-Regular, Menlo, monospace; }
+  pre code { background: none; padding: 0; font-size: inherit; }
+  table { border-collapse: collapse; width: 100%; margin: 0 0 1.3rem; font-size: .92rem; }
+  th, td { text-align: left; padding: .45rem .6rem; border-bottom: 1px solid var(--rule);
+           vertical-align: top; }
+  th { font-weight: 600; font-size: .82rem; text-transform: uppercase;
+       letter-spacing: .04em; color: var(--muted); }
+  blockquote { margin: 0 0 1.2rem; padding: .2rem 0 .2rem 1rem;
+               border-left: 3px solid var(--rule); color: var(--muted); font-style: italic; }
+  .bad { color: var(--bad); font-weight: 600; }
+  .good { color: var(--good); font-weight: 600; }
+  ol, ul { margin: 0 0 1.2rem; padding-left: 1.4rem; }
+  li { margin-bottom: .5rem; }
+  .note { font-size: .9rem; color: var(--muted); }
+  .scroll { overflow-x: auto; }
+</style>
+
+<main>
+<h1>Targeting: input versus state</h1>
+<p class="sub">Why <code>test_targeting_overlay_validation</code> fails, measured against the SDK and the
+pinned spec rather than patched. Branch <code>adopt/sdk-9.0.0</code>, <code>adcp==9.0.0b1</code>, spec 3.2.1.</p>
+
+<p>Three sibling classes appear in one request's path and each layer refuses the previous
+layer's instance. The reflex is to widen the annotations until they agree. The spec says
+that would be wrong: the classes are different <em>on purpose</em>, and what is missing is
+a conversion the application has never had.</p>
+
+<h2>1. What the SDK gives</h2>
+<pre><code>TargetingOverlay        fields=37   base=AdCPBaseModel
+TargetingOverlayInput   fields=37   base=AdCPBaseModel</code></pre>
+<p>Two classes, the same 37 dimensions, <strong>neither a subclass of the other</strong>. The
+app subclasses both, adding its own internal dimensions:</p>
+<pre><code>Targeting       -> TargetingOverlay      -> _InternalTargetingDimensions
+TargetingInput  -> TargetingOverlayInput -> _InternalTargetingDimensions</code></pre>
+<p>So <code>Targeting</code> <em>is</em> a <code>TargetingOverlay</code> and satisfies any field
+declaring one. <code>TargetingInput</code> is not, and never will be.</p>
+
+<h2>2. What the spec says</h2>
+<p>The two generated classes come from two schemas whose descriptions state opposite
+null semantics:</p>
+<table>
+  <thead><tr><th>Schema</th><th>Props</th><th>Stated purpose</th></tr></thead>
+  <tbody>
+    <tr><td><code>core/targeting-input.json</code></td><td>37</td>
+        <td>&ldquo;Request-only targeting mutation input. Each known dimension has three states:
+            omission inherits the product default on create&hellip;&rdquo;</td></tr>
+    <tr><td><code>core/targeting.json</code></td><td>37</td>
+        <td>&ldquo;<strong>Strict non-null</strong> targeting state used during product discovery,
+            commercial snapshots, and media-buy readback.&rdquo;</td></tr>
+  </tbody>
+</table>
+<p>That is the whole design. The input is <strong>tri-state</strong> &mdash; omission means
+inherit the product default, an explicit null means clear, a value means set. The state model
+<strong>forbids nulls</strong>, because a snapshot or a readback has to say what the targeting
+actually is, not what the buyer asked to change.</p>
+<p>They are not interchangeable, and no annotation can make them so. A request shape and a
+state shape are different kinds of document.</p>
+
+<h2>3. What the app has</h2>
+<p>The declarations are <span class="good">already correct at both ends</span>:</p>
+<table>
+  <thead><tr><th>Site</th><th>Declares</th><th>Correct?</th></tr></thead>
+  <tbody>
+    <tr><td><code>_base.py:2266</code> &mdash; <code>PackageRequest</code></td>
+        <td><code>TargetingInput</code></td><td class="good">yes &mdash; request</td></tr>
+    <tr><td><code>_base.py:2663</code> &mdash; request side</td>
+        <td><code>TargetingInput</code></td><td class="good">yes &mdash; request</td></tr>
+    <tr><td><code>_base.py:2587</code> &mdash; <code>MediaPackage</code></td>
+        <td><code>Targeting</code></td><td class="good">yes &mdash; internal state</td></tr>
+    <tr><td><code>_base.py:2623</code> &mdash; package refinements</td>
+        <td><code>Targeting</code></td><td class="good">yes &mdash; state</td></tr>
+    <tr><td><code>_base.py:3374</code> &mdash; response</td>
+        <td><code>Targeting</code></td><td class="good">yes &mdash; readback</td></tr>
+  </tbody>
+</table>
+<p>What is absent is anything that turns one into the other. Measured across <code>src/</code>:</p>
+<pre><code>"inherit ... product default"   0 files
+"three states"                  0 files
+targeting_resolution            0 files
+resolve_targeting               1 file   (adapter CAPABILITIES — unrelated)</code></pre>
+<p>So a buyer&rsquo;s <code>TargetingInput</code> is handed straight to a field declaring state.
+Pydantic validates a model-typed slot <strong>by instance</strong>, so it is refused. One site
+papered over the hole with a cast that asserts a falsehood:</p>
+<pre><code>// src/core/tools/media_buy_create.py:3349
+targeting_overlay=cast(
+    "Targeting | None",
+    matching_package.targeting_overlay if matching_package else None,
+)</code></pre>
+<p>The cast satisfies mypy; the runtime refuses the instance anyway. The refusal is then
+rewrapped as <code class="bad">SERVICE_UNAVAILABLE</code> &mdash; &ldquo;retry with exponential
+backoff&rdquo; &mdash; for a request no amount of retrying can fix. That is a second defect
+sitting on top of the first.</p>
+
+<h3>The failure walks forward as you widen</h3>
+<p>Widening one field moves the refusal to the next layer, which is the tell that the fix is
+not an annotation:</p>
+<pre><code>as shipped          ValidationError for MediaPackage  — expected Targeting,        got TargetingInput
+widen MediaPackage  ValidationError for Package       — expected TargetingOverlay, got TargetingInput</code></pre>
+
+<h2>4. The gap</h2>
+<p>One missing component, stated in the spec&rsquo;s own words: a <strong>resolver</strong> that
+takes a buyer&rsquo;s tri-state <code>TargetingInput</code> plus the product&rsquo;s defaults and
+produces strict non-null <code>Targeting</code> state.</p>
+<table>
+  <thead><tr><th>Input dimension is&hellip;</th><th>Resolver must produce</th></tr></thead>
+  <tbody>
+    <tr><td>omitted</td><td>the product default for that dimension</td></tr>
+    <tr><td>explicitly null</td><td>cleared &mdash; the dimension is not targeted</td></tr>
+    <tr><td>a value</td><td>that value, subject to the seller&rsquo;s capability check</td></tr>
+  </tbody>
+</table>
+<p>Once that exists, every declaration above is already right and nothing widens:
+<code>Targeting</code> subclasses <code>TargetingOverlay</code>, so the response layer accepts it
+for free.</p>
+<p class="note">Note the conversion cannot be <code>Targeting.model_validate(ti,
+from_attributes=True)</code>. That copies the input&rsquo;s nulls into a model whose contract is
+non-null, so a &ldquo;clear this dimension&rdquo; instruction becomes a stored null in a snapshot.
+It appears to work only when the input is empty.</p>
+
+<h2>5. Plan</h2>
+<ol>
+  <li><strong>Write the resolver</strong> &mdash; one function, request input + product defaults
+      &rarr; <code>Targeting</code>. It is the only place the three states are interpreted, and the
+      only place a product default is read for targeting.</li>
+  <li><strong>Call it at the one seam</strong> where a request becomes internal state
+      (<code>media_buy_create</code>, the matching-package path), and <strong>delete the
+      cast</strong>. The declarations do not change.</li>
+  <li><strong>Fix the error classification</strong>: a targeting shape the seller cannot satisfy
+      is not <code>SERVICE_UNAVAILABLE</code>. Whatever the resolver refuses must carry a code the
+      buyer can act on, and must not advise a retry.</li>
+  <li><strong>Grade it in BDD</strong>, which is where behaviour is graded: one scenario per
+      input state &mdash; omitted inherits, explicit null clears, value sets &mdash; across the
+      transports.</li>
+</ol>
+
+<h2>6. Scope beyond targeting</h2>
+<p>This is a shape, not a field. The creative format identity worked out the same way: the
+request accepts <code>format_id</code> <em>or</em> <code>format_kind</code>, while the state model
+must carry exactly one, and the seam between them is where the work lives. Expect the same
+input-versus-state question wherever 3.2 split a mutation input from a state document.</p>
+<p class="note">Not yet measured: how many of the ~22 remaining integration failures are this
+shape. The two <code>CreateMediaBuyRequest</code> accepted-shape failures were a different cause
+(declaration tests), and are closed.</p>
+
+<h2>7. What was wrong in the approach, not just the code</h2>
+<p>Three patch attempts were made and reverted before this was written:</p>
+<ul>
+  <li>widening <code>MediaPackage.targeting_overlay</code> to a union &mdash; moved the refusal one
+      layer on;</li>
+  <li><code>model_validate(..., from_attributes=True)</code> &mdash; would have copied
+      &ldquo;clear me&rdquo; nulls into a strict non-null model, and the probe that appeared to
+      validate it used an empty instance, so it could not have failed;</li>
+  <li>repointing the creative models at <code>canonical_creative</code> &mdash; would have removed
+      the legacy <code>format_id</code> arm the 3.x compatibility window requires.</li>
+</ul>
+<p>Each was a plausible local fix found by following the error message. None was reached by
+asking what the SDK provides, what the spec mandates, and what the app is missing &mdash; which
+took four measurements and produced a different answer.</p>
+</main>

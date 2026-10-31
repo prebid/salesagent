@@ -408,7 +408,6 @@ class TestEnvironmentFirstAuthentication:
                 mock_get_format.return_value = Format(
                     format_id=FormatId(agent_url="https://test.example.com", id="test_format"),
                     name="Test Format",
-                    type="display",
                     is_standard=True,
                 )
 

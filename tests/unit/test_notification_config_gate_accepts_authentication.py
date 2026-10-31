@@ -39,6 +39,12 @@ def test_registration_accepts_a_dict_authentication_block() -> None:
     accepted = accept_push_notification_config(
         {"url": _URL, "authentication": _AUTHENTICATION},
         field_prefix="notification_configs[0]",
+        # The same two arguments ``_check_notification_configs`` passes, this one
+        # included: the gate's correlation-id refusal derives its applicability from
+        # the declaring schema, and ``core/notification-config.json`` declares no
+        # ``operation_id``. Omitting it here would grade the PUSH contract under a
+        # notification_configs field prefix — a shape no caller sends.
+        declared_by=NotificationConfig,
     )
     assert accepted.config.authentication is not None
     assert accepted.config.authentication.credentials == _CREDENTIAL

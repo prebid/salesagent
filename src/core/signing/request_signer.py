@@ -46,7 +46,7 @@ hook (:func:`adcp.signing.install_signing_event_hook`) does with ``dict(request.
 The keyword names mirror :func:`adcp.signing.sign_request`'s own so a seam can hold
 :meth:`RequestSignerStrategy.build_signed_headers` with no adapter in between.
 
-Spec grounding: pinned AdCP 3.1.1, ``docs/building/by-layer/L1/security.mdx``
+Spec grounding: pinned ``docs/building/by-layer/L1/security.mdx``
 §Request signing — the ``adcp/request-signing/v1`` profile over RFC 9421, whose
 ``nonce`` a conformant verifier MUST reject on replay (which is why the seam invokes
 this per attempt rather than once per call). ``adcp==6.6.0``'s
@@ -60,6 +60,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 
 from adcp.signing import SigningConfig, sign_request
+
+from src.core.signing.algorithms import request_signing_profile
 
 
 @dataclass(frozen=True, slots=True)
@@ -105,4 +107,10 @@ class RequestSignerStrategy:
             alg=self.signing.alg,
             cover_content_digest=True,
             tag=self.signing.tag,
+            # The SAME derivation the inbound verifier reads, not a second one that
+            # agrees with it today: ``request_signing_profile`` is the one place the
+            # profile is decided, and its docstring carries why (we once signed 3.2 and
+            # verified legacy). the pinned SDK made this keyword required here; ``VerifyOptions``
+            # defaults it, which is how the halves came apart.
+            signing_profile_version=request_signing_profile(),
         ).as_dict()

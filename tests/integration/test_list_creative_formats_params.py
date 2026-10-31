@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import pytest
 from adcp.types import HtmlFormatAsset, ImageFormatAsset, Responsive, VideoFormatAsset
-from adcp.types.generated_poc.core.format import Dimensions, Renders  # TODO: no stable alias in adcp.types
+from adcp.types.domains.core.format import Dimensions, Renders  # TODO: no stable alias in adcp.types
 
 from src.core.schemas import Format, FormatId, ListCreativeFormatsRequest
 from tests.factories import TenantFactory

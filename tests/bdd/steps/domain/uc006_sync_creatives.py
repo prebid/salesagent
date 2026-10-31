@@ -15,8 +15,8 @@ Three rules follow from its override contract (tests/factories/request.py):
 
 * ``format_id`` is ALWAYS stated. The factory's default normalises ``AGENT_URL`` to
   a trailing slash and names ``creative.adcontextprotocol.org``, while these
-  scenarios talk to ``env.DEFAULT_AGENT_URL`` — inheriting it would silently change
-  WHICH creative agent the payload names.
+  scenarios talk to ``env.catalog_agent_url(...)`` (through :func:`_format_payload`) —
+  inheriting it would silently change WHICH creative agent the payload names.
 * ``assets`` is stated only when it differs from the conformant baseline. A step
   that says nothing about assets means "any valid asset will do", which is exactly
   what the baseline supplies.
@@ -31,8 +31,10 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Callable
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any
+from urllib.parse import SplitResult, urlsplit
 
 from pytest_bdd import given, parsers, then, when
 
@@ -42,18 +44,19 @@ from tests.bdd.steps._outcome_helpers import is_e2e, payload_or_none, require_pa
 from tests.bdd.steps.generic._account_resolution import ensure_tenant_principal
 from tests.bdd.steps.generic._dispatch import dispatch_request
 from tests.factories import CreativeFactory
+from tests.factories.core import set_adapter_type
 from tests.factories.creative_asset import (
     assert_assets,
     asset_spec,
     build_assets,
     image_spec,
+    named_format_assets,
     text_spec,
     url_spec,
 )
 from tests.factories.malformed import malformed
 from tests.factories.principal import PrincipalFactory
 from tests.factories.request import OMIT, CreativeAssetRequestFactory
-from tests.harness.creative_sync import creative_fingerprint
 from tests.harness.media_buy_create import OMIT_ACCOUNT, OMIT_IDEMPOTENCY_KEY
 from tests.helpers.account_seeding import seed_account_with_access, seed_natural_key_matches
 
@@ -66,44 +69,81 @@ if TYPE_CHECKING:
 # E2E format helpers — real creative agent data for Docker transport
 # ═══════════════════════════════════════════════════════════════════════
 
-# Docker's creative agent URL (internal to Docker network, used by the app
-# container) — https via the shared tls-proxy front; the seam requires https
-# unconditionally now (#1757), so this stopped being reachable at all once
-# ADCP_OUTBOUND_ALLOW_INSECURE was deleted, and this literal was the one thing
-# in this file that was never caught by that disease scan (it hardcodes a URL,
-# not the flag itself).
-_E2E_AGENT_URL = "https://creative-agent.adcp.test:8443/api/creative-agent"
-# Real format that exists in Docker's creative agent catalog
-_E2E_FORMAT_ID = "display_300x250_image"
-# A creative agent that does not answer, on the wire: the TLS front's own name (so the
-# egress gate resolves it and lets the dial through) at a port nothing listens on. A
-# made-up host fails DNS inside the gate instead, which is a VALIDATION_ERROR on the
-# buyer's agent_url -- a different outcome from an agent that is down.
-_E2E_UNREACHABLE_AGENT_URL = "https://creative-agent.adcp.test:8444/api/creative-agent"
+#: The format every transport names. A CAPTURED id -- one of the formats in
+#: tests/fixtures/creative_formats/reference_formats.json, which both the in-process
+#: registry and the e2e server answer from. Paired with ``env.catalog_agent_url``, the
+#: agent that publishes it for this scenario; the pair is what ``find_format`` matches on,
+#: so naming either half differently resolves to nothing. Replaces the
+#: in-process/e2e_rest switch on ``_E2E_FORMAT_ID`` -- see ``_format_payload``.
+_CATALOG_FORMAT_ID = "display_300x250_image"
+#: The GENERATIVE format every transport names, same rule and same capture. The reference
+#: agent's seven generative formats all end in ``_generative`` and carry a real
+#: ``output_format_ids``, which is what ``format_resolver.is_generative`` reads. Replaces
+#: the invented ``gen_banner`` / ``display_gen``, which no catalogue carried: measured,
+#: ``canonical_kind_for`` refuses both outright ("no canonical projection for legacy
+#: format_id"), so the scenarios naming them were refused before reaching their subject.
+_CATALOG_GENERATIVE_FORMAT_ID = "display_300x250_generative"
+#: A STATIC captured format whose only required asset is text, so a conformant creative in
+#: it carries no media url. Its one required asset is ``generation_prompt`` and it has no
+#: ``output_format_ids``, so ``is_generative`` reads it as static and it is previewed.
+_CATALOG_TEXT_ONLY_FORMAT_ID = "display_generative"
+
+
+def _with_prompt_assets(creative: dict, content: str) -> None:
+    """Add to *creative* the assets the format it names requires, its prompt carrying *content*.
+
+    A legacy manifest is held to its named format's required assets (``_validation.py``),
+    and the reference generative formats require ``generation_prompt``, the asset the
+    build's prompt is read from.
+    """
+    creative.setdefault("assets", {}).update(named_format_assets(creative["format_id"]["id"], prompt=content))
 
 
 def _format_payload(ctx: dict, env: object) -> tuple[str, str, dict]:
-    """Return (format_id, agent_url, assets) appropriate for current transport.
+    """Return (format_id, agent_url, assets) — the SAME format on every transport.
 
-    For in-process transports: uses mock format/agent that the patched registry accepts.
-    For e2e_rest: uses real format from Docker's creative agent catalog.
+    THIS USED TO SWITCH, and the switch was the parity break. Its own docstring said so:
+    "For in-process transports: uses mock format/agent that the patched registry accepts.
+    For e2e_rest: uses real format from Docker's creative agent catalog." So one scenario
+    sent ``display_300x250`` @ ``https://creative.test.example.com`` in process and
+    ``display_300x250_image`` @ the Docker agent on the wire, and the four transports
+    graded two different sellers against two different catalogues.
+
+    Neither side resolved, measured at ADCP_TESTING=true against the committed capture
+    (``find_format``, the pair match ``_sync.py`` performs):
+
+        (creative.test.example.com,              display_300x250)        found=False
+        (creative-agent.adcp.test:8443/...,      display_300x250_image)  found=False
+        (creative.adcontextprotocol.org,         display_300x250_image)  found=True
+
+    One reference now, the capture's own. Both transports' registries are
+    ``ReferenceFormatsRegistry`` serving that capture -- in process because the harness
+    installs it, on the wire because docker-compose.e2e.yml sets ``ADCP_TESTING`` -- so
+    the one reference is the one both can resolve, and ``identity_spec`` is non-None on
+    both, which is what makes step 1 of the projection order graded rather than skipped.
+
+    The AGENT is the env's to name (``env.catalog_agent_url``), because a static creative
+    in this format is previewed by dialling that agent: in process it is the standard
+    agent the capture came from, whose previews the harness records; on e2e it is the
+    tenant's hosted agent publishing the same entry, so a sync never dials the shared
+    reference agent and its 60-a-minute limit (adcontextprotocol/adcp#8574).
+
+    ``ctx`` stays in the signature: callers pass it and the e2e/in-process distinction
+    may matter again for a different fact. It is deliberately NOT consulted for the
+    format.
+
+    SDK 5.7 / AdCP 3.1: creative assets are a discriminated union keyed by role. Built
+    via the canonical AssetSpec mechanism (image_spec/build_assets) so the shape lives in
+    exactly one place — see GH #1391. The click url rode only the e2e branch before and
+    now rides both, which is the same "one scenario, one payload" rule.
     """
-    if is_e2e(ctx):
-        return (
-            _E2E_FORMAT_ID,
-            _E2E_AGENT_URL,
-            build_assets(
-                image_spec("banner_image", url="https://example.com/banner.png"),
-                url_spec("click_url", url="https://example.com/landing"),
-            ),
-        )
-    # SDK 5.7 / AdCP 3.1: creative assets are a discriminated union keyed by role.
-    # Build via the canonical AssetSpec mechanism (image_spec/build_assets) so the
-    # shape lives in exactly one place — see GH #1391.
     return (
-        "display_300x250",
-        env.DEFAULT_AGENT_URL,
-        build_assets(image_spec("image")),
+        _CATALOG_FORMAT_ID,
+        env.catalog_agent_url(_CATALOG_FORMAT_ID),
+        build_assets(
+            image_spec("banner_image", url="https://example.com/banner.png"),
+            url_spec("click_url", url="https://example.com/landing"),
+        ),
     )
 
 
@@ -131,11 +171,12 @@ def _product_format_entry(ctx: dict, env: object) -> dict[str, str]:
     """Return a single ``{"agent_url": ..., "id": ...}`` for ProductFactory.format_ids.
 
     Must match the creative format_id returned by ``_format_payload`` so that
-    format compatibility checks pass on all transports including e2e_rest.
+    format compatibility checks pass on all transports including e2e_rest -- so it is
+    DERIVED from it rather than re-stated. It used to carry its own copy of the same
+    transport switch, which is two places one pairing had to agree in.
     """
-    if is_e2e(ctx):
-        return {"agent_url": _E2E_AGENT_URL, "id": _E2E_FORMAT_ID}
-    return {"agent_url": env.DEFAULT_AGENT_URL, "id": "display_300x250"}
+    format_id, agent_url, _assets = _format_payload(ctx, env)
+    return {"agent_url": agent_url, "id": format_id}
 
 
 def _scenario_format_entry(ctx: dict, env: object) -> dict[str, str]:
@@ -154,6 +195,23 @@ def _scenario_format_entry(ctx: dict, env: object) -> dict[str, str]:
     """
     _default_id, agent_url, _assets = _format_payload(ctx, env)
     return {"id": _scenario_format_id(ctx, env), "agent_url": agent_url}
+
+
+def seeded_format_columns(env: Any, entry: dict[str, str]) -> dict[str, Any]:
+    """``CreativeFactory``'s format kwargs for a library row naming *entry* (``{id, agent_url}``).
+
+    The row carries the reference the scenario's sync names AND the declaration that sync
+    resolves it against (``env.published_format_spec``), so the factory projects the row's
+    canonical kind the way production projects the synced creative's. Without the
+    declaration a row in the catalog format at the e2e hosted agent was refused in the test
+    process -- the SDK maps ``display_300x250_image`` only at the reference agent's origin --
+    while the server resolved the same reference from the agent's own ``canonical.kind``.
+    """
+    return {
+        "agent_url": entry["agent_url"],
+        "format": entry["id"],
+        "format_spec": env.published_format_spec(entry["agent_url"], entry["id"]),
+    }
 
 
 def _creative_format_id_entry(ctx: dict, env: object) -> dict[str, str]:
@@ -177,12 +235,14 @@ def _scenario_format_id(ctx: dict, env: object) -> str:
 
     ``ctx["creative_format_id"]`` is this module's carrier for "the format under test" -- 30
     steps write it and several read it back. The reads used to default to the literal
-    ``"display_300x250"``, which is the quiet half of the same defect: a scenario that never
-    wrote the key got the IN-PROCESS format on every transport, including e2e_rest where the
-    creative it is compared against had switched to ``display_300x250_image``.
+    ``"display_300x250"``, which was the quiet half of the transport switch
+    :func:`_format_payload` used to carry: a scenario that never wrote the key got the
+    IN-PROCESS format on every transport, including e2e_rest where the creative it is
+    compared against had switched to ``display_300x250_image``.
 
-    Defaulting through :func:`_format_payload` keeps the fallback on the same switch as the
-    value it stands in for. A literal default is the same bug one level down.
+    Defaulting through :func:`_format_payload` keeps the fallback on the same value it
+    stands in for. There is no switch left for it to disagree with, and a literal default
+    would still be the same bug one level down if one ever came back.
     """
     recorded = ctx.get("creative_format_id")
     if recorded:
@@ -272,7 +332,7 @@ def given_account_is(ctx: dict, account_setup: str) -> None:
     Parses account_setup as JSON to build an AccountReference, or handles
     sentinel values like "not provided".
     """
-    from adcp.types import AccountReference, AccountReferenceById, AccountReferenceByNaturalKey, BrandReference
+    from adcp.types import AccountReferenceById, AccountReferenceByNaturalKey, BrandReference
 
     env = ctx["env"]
     ensure_tenant_principal(ctx, env)
@@ -296,7 +356,7 @@ def given_account_is(ctx: dict, account_setup: str) -> None:
 
     if "account_id" in config:
         account_id = config["account_id"]
-        ctx["account_ref"] = AccountReference(root=AccountReferenceById(account_id=account_id))
+        ctx["account_ref"] = AccountReferenceById(account_id=account_id)
         ctx["request_account_id"] = account_id
 
         # Create DB state based on known account IDs from the spec
@@ -305,9 +365,7 @@ def given_account_is(ctx: dict, account_setup: str) -> None:
     elif "brand" in config:
         brand_domain = config["brand"]["domain"]
         operator = config["operator"]
-        ctx["account_ref"] = AccountReference(
-            root=AccountReferenceByNaturalKey(brand=BrandReference(domain=brand_domain), operator=operator),
-        )
+        ctx["account_ref"] = AccountReferenceByNaturalKey(brand=BrandReference(domain=brand_domain), operator=operator)
         ctx["request_brand"] = brand_domain
         ctx["request_operator"] = operator
 
@@ -841,7 +899,7 @@ def _creative_status_values() -> frozenset[str]:
     (processing, pending_review, approved, suspended, rejected, archived) — never
     from CreativeAction."
     """
-    from adcp.types.generated_poc.enums.creative_status import CreativeStatus
+    from adcp.types.domains.enums.creative_status import CreativeStatus
 
     return frozenset(member.value for member in CreativeStatus)
 
@@ -1134,8 +1192,7 @@ def _seed_library_creative(ctx: dict, creative_id: str) -> None:
         principal=ctx["principal"],
         creative_id=creative_id,
         name="Library Creative",
-        agent_url=fmt["agent_url"],
-        format=fmt["id"],
+        **seeded_format_columns(env, fmt),
     )
     env._commit_factory_data()
 
@@ -1237,8 +1294,7 @@ def _seed_absent_library_creative(ctx: dict) -> str:
         principal=ctx["principal"],
         creative_id=absent_id,
         name="Absent From Request",
-        agent_url=fmt["agent_url"],
-        format=fmt["id"],
+        **seeded_format_columns(env, fmt),
     )
     env._commit_factory_data()
     ctx["absent_creative_id"] = absent_id
@@ -1385,8 +1441,7 @@ def given_assignment_already_exists(ctx: dict) -> None:
         principal=principal,
         creative_id=creative_id,
         name=creative_payload["name"],
-        agent_url=fmt_entry["agent_url"],
-        format=fmt_entry["id"],
+        **seeded_format_columns(env, fmt_entry),
     )
     existing_assignment = CreativeAssignmentFactory(
         creative=creative,
@@ -1458,8 +1513,7 @@ def given_creative_already_assigned_to_package(ctx: dict) -> None:
         principal=principal,
         creative_id=creative_id,
         name=creative_payload["name"],
-        agent_url=_scenario_format_entry(ctx, env)["agent_url"],
-        format=_scenario_format_entry(ctx, env)["id"],
+        **seeded_format_columns(env, _scenario_format_entry(ctx, env)),
     )
     existing_assignment = CreativeAssignmentFactory(
         creative=creative,
@@ -2078,40 +2132,25 @@ def given_creative_with_unknown_format(ctx: dict) -> None:
 
 @given("a creative with a format_id whose agent_url is unreachable")
 def given_creative_with_unreachable_agent(ctx: dict) -> None:
-    """Set up a creative whose format agent returns a connection error.
+    """Set up a creative whose format names a creative agent that does not answer.
 
-    Configures the registry mock's ``get_format`` coroutine to raise a
-    ConnectionError so ``_validate_creative_input`` wraps it into a
-    'Cannot validate format ... is unreachable' ValueError, producing
-    a failed SyncCreativeResult (POST-F2/F3).
+    The same creative on every transport: the env's unreachable agent
+    (``unreachable_creative_agent_url``), whose dial fails as the egress seam fails an
+    undelivered request -- ``OutboundDeliveryFailed``, which IS an
+    AdCPServiceUnavailableError. The sync re-raises it as the request's answer
+    (SERVICE_UNAVAILABLE, transient) rather than as a per-item failure (POST-F2/F3).
     """
-    from unittest.mock import AsyncMock
-
     env = ctx["env"]
     ensure_tenant_principal(ctx, env)
 
     format_id, _, _ = _format_payload(ctx, env)
-    creative_id = "creative-unreachable-001"
-    # In-process the mock below is what does not answer; on e2e_rest the wire itself
-    # must, so the creative names a resolvable agent at a closed port.
-    agent_url = _E2E_UNREACHABLE_AGENT_URL if is_e2e(ctx) else env.DEFAULT_AGENT_URL
     creative_payload = CreativeAssetRequestFactory.payload(
-        creative_id=creative_id,
+        creative_id="creative-unreachable-001",
         name="Unreachable Agent Creative",
-        format_id={"id": format_id, "agent_url": agent_url},
+        format_id={"id": format_id, "agent_url": env.unreachable_creative_agent_url()},
     )
     ctx.setdefault("creatives", []).append(creative_payload)
     ctx["creative_format_id"] = format_id
-
-    # What the registry actually raises when the agent does not answer: the egress
-    # seam types every undelivered request as OutboundDeliveryFailed, which IS an
-    # AdCPServiceUnavailableError, and _processing.py re-raises it as the request's
-    # answer (SERVICE_UNAVAILABLE, transient). A raw ConnectionError modelled a leak
-    # production's registry never has, and landed in the generic per-item branch.
-    from src.core.security.egress.attempts import OutboundDeliveryFailed
-
-    registry = env.mock["registry"].return_value
-    registry.get_format = AsyncMock(side_effect=OutboundDeliveryFailed(attempts=1, http_status=None))
 
 
 # "the request has an empty principal_id" is a sentence of the generic
@@ -2479,8 +2518,24 @@ def given_creative_does_not_exist(ctx: dict) -> None:
 
 
 @given("the creative already exists in the Seller's library for this principal")
-def given_creative_already_exists(ctx: dict) -> None:
-    """Pre-seed the creative in the DB so sync produces action="updated"."""
+def given_creative_already_exists(ctx: dict, stored_name: str | None = None) -> None:
+    """Pre-seed the creative in the DB so sync reaches the UPDATE branch.
+
+    ``stored_name`` is the name the ROW carries, which defaults to the request's own
+    name. Pass a different one when the scenario needs the resync to be a REAL update:
+    ``action`` is ``"updated"`` only if something actually differs, so a row seeded
+    identically answers ``"unchanged"`` -- correctly. A caller that asserts ``"updated"``
+    has to supply the difference it is asserting about.
+
+    This matters because the row is written by the FACTORY, which sets the column
+    directly and bypasses the sync write path. The agent_url therefore cannot be relied
+    on to supply the difference: ``comparison_changes`` canonicalizes before comparing
+    (``_same_agent``), so the factory's spelling and the request's spelling name one
+    agent and the format reads as unchanged. Before that canonicalization existed, a
+    trailing-slash mismatch between the two supplied a spurious ``format`` change and
+    these scenarios passed on it -- which is exactly the vacuous pass salesagent-jnp2s
+    uncovered, not a behavior to preserve.
+    """
     from tests.factories import CreativeFactory
 
     env = ctx["env"]
@@ -2494,9 +2549,10 @@ def given_creative_already_exists(ctx: dict) -> None:
         tenant=tenant,
         principal=principal,
         creative_id=creative_id,
-        name=creative_payload["name"],
-        agent_url=fmt_id["agent_url"],
-        format=fmt_id["id"],
+        name=stored_name if stored_name is not None else creative_payload["name"],
+        # The declaration a sync of this payload resolves against, which is a format THIS
+        # ENV was told to serve when a Given configured one (``published_format_spec``).
+        **seeded_format_columns(env, fmt_id),
     )
     env._commit_factory_data()
 
@@ -2513,6 +2569,91 @@ def given_creative_already_exists_identical(ctx: dict) -> None:
     second one a true resync, on every transport.
     """
     when_sync_creative(ctx)
+
+
+#: One canonicalization axis -> the literal respelling that exercises it. Authored, not
+#: derived: calling the production canonicalizer to build these would compare the
+#: implementation with itself. Each inverts a step of the algorithm in
+#: docs/reference/url-canonicalization that ``canonical_agent_url`` applies -- step 1
+#: (scheme case), step 2 (host case), step 3 (userinfo stripped).
+#:
+#: Every axis touches ONLY the scheme, the host or the userinfo, and that restriction is
+#: the whole design. Two earlier axes -- appending "/" and appending ":443" -- were
+#: identity-preserving for a bare authority and NOT for an agent URL carrying a port or a
+#: path, which is what e2e_rest seeded when it named the stack agent's transport URL as the
+#: identity (``https://creative-agent.adcp.test:8443/api/creative-agent``; every transport
+#: now names the public agent, whose origin the stack agent stands in for). Measured there:
+#: appending "/" turns ``/api/creative-agent`` into a genuinely different path, because
+#: canonicalization deliberately does not rstrip -- the spec keeps ``/a`` and ``/a/``
+#: distinct, and step 5 covers an EMPTY path only. Appending ":443" to ``:8443`` produced
+#: ``:8443:443``, which the canonicalizer rejects outright. So those two rows asserted
+#: "same agent" about URLs that named different agents, and production was right to
+#: report a change. The axes below are shape-independent: they hold for a bare authority
+#: and for one with a port and a path alike, so the same three rows grade every transport.
+def _authority_tail(parts: SplitResult) -> str:
+    """The path-and-port half of a URL, as a comparable string that never raises.
+
+    ``SplitResult.port`` raises ``ValueError`` on a netloc carrying two colons
+    (``host:8443:443``), which is precisely the malformed authority a bad respelling
+    produces -- so reading it to decide whether a respelling is safe would crash on the
+    one input the check exists to reject. The port is taken off the netloc textually
+    instead, leaving the rejection to the caller's own assertion message.
+    """
+    _, _, port = parts.netloc.rpartition(":")
+    return f"{parts.path!r}:{port if port != parts.netloc else ''}"
+
+
+_AGENT_URL_RESPELLINGS: dict[str, Callable[[str], str]] = {
+    "upper-casing the scheme": lambda url: url.partition("://")[0].upper() + "://" + url.partition("://")[2],
+    "upper-casing the host": lambda url: url.replace(urlsplit(url).netloc, urlsplit(url).netloc.upper(), 1),
+    "adding ignored userinfo": lambda url: url.replace(urlsplit(url).netloc, "ignored-user@" + urlsplit(url).netloc, 1),
+}
+
+
+@given(parsers.parse("the resync respells the same agent_url by {axis}"))
+def given_resync_respells_agent_url(ctx: dict, axis: str) -> None:
+    """Respell the pending request's ``agent_url`` without naming a different agent.
+
+    The preceding Given has already synced this payload once, so the row holds whatever
+    the write path stores. This mutates only the spelling the NEXT sync sends, which is
+    what puts the stored value and the incoming value in disagreement -- the condition
+    ``comparison_changes`` is actually being graded on. Respelling within a single
+    request would grade nothing.
+
+    The respelling must leave the agent IDENTITY alone: ``core/format-id.json`` makes
+    canonicalization a MUST before two references are treated as the same, so every axis
+    here is one the algorithm normalizes away. A cell that named a different agent would
+    be testing agent resolution instead, and would fail for a reason this scenario does
+    not name.
+
+    Both guards below are STRUCTURAL and authored. Neither calls
+    ``canonical_agent_url``: asking production's normalizer whether the respelling
+    preserved identity, and then asking production whether it preserved identity, is one
+    question asked twice. Checking that the path and the port came through untouched says
+    the same thing without consulting the implementation under test -- and it is the guard
+    whose absence let two shape-dependent axes ship. They changed the string, so the
+    first assertion passed; they also moved the path or mangled the port, which only
+    e2e_rest's port-and-path agent URL exposed.
+    """
+    respell = _AGENT_URL_RESPELLINGS.get(axis)
+    assert respell is not None, f"No respelling registered for axis {axis!r}; have {sorted(_AGENT_URL_RESPELLINGS)}"
+
+    creative_payload = ctx["creatives"][-1]
+    before = creative_payload["format_id"]["agent_url"]
+    after = respell(before)
+    assert after != before, (
+        f"Axis {axis!r} left {before!r} unchanged, so this cell would pass without "
+        "exercising any comparison. Fix the respelling or the seeded agent_url."
+    )
+    before_parts, after_parts = urlsplit(before), urlsplit(after)
+    assert _authority_tail(after_parts) == _authority_tail(before_parts), (
+        f"Axis {axis!r} respelled {before!r} as {after!r}, which moves the path or the port "
+        f"({_authority_tail(before_parts)} -> {_authority_tail(after_parts)}). Those name a "
+        "DIFFERENT agent -- canonicalization keeps '/a' and '/a/' distinct and cannot reconcile "
+        "two ports -- so the cell would assert 'unchanged' about a real change. An axis must "
+        "touch only the scheme, the host or the userinfo."
+    )
+    creative_payload["format_id"]["agent_url"] = after
 
 
 @given("a creative that does not exist in the library")
@@ -2641,11 +2782,25 @@ def _get_sync_creative_result(ctx: dict) -> object:
 
 @then(parsers.parse('the response should include the creative with action "{action}"'))
 def then_response_includes_creative_with_action(ctx: dict, action: str) -> None:
-    """Assert the first SyncCreativeResult has the expected action (POST-S2)."""
-    result = _get_sync_creative_result(ctx)
-    action_val = getattr(result, "action", None)
-    action_str = str(getattr(action_val, "value", action_val))
-    assert action_str == action, f"POST-S2: Expected creative action '{action}', got '{action_str}'"
+    """Assert the creative's action on the WIRE (POST-S2).
+
+    Migrated off ``require_payload`` to the wire entry, for the reason
+    ``_assert_creative_status`` gives one screen up: POST-S2 is a promise about what
+    the BUYER is told, so the response body is the authoritative observable and the
+    reconstructed payload model is a second representation of it. Reading the model
+    graded our serializer against itself and would have reported a pass on any
+    divergence between the two.
+
+    Boy-scouted here because salesagent-jnp2s' cross-vintage scenarios bind to this
+    step, and their whole verdict is this one field: a canonicalization bug shows up
+    as "updated" where "unchanged" is owed, which a payload-side read cannot be
+    trusted to see.
+    """
+    _assert_success_response(ctx)
+    entry = _wire_creatives_entry(ctx, latest_creative_id(ctx))
+    assert entry.get("action") == action, (
+        f"POST-S2: expected creative action {action!r} on the wire, got {entry.get('action')!r}"
+    )
 
 
 @then("the creative should have a status reflecting the approval workflow")
@@ -2969,8 +3124,7 @@ def given_existing_assignment_in_media_buy(ctx: dict) -> None:
         principal=principal,
         creative_id=creative_id,
         name=creative_payload["name"],
-        agent_url=_scenario_format_entry(ctx, env)["agent_url"],
-        format=_scenario_format_entry(ctx, env)["id"],
+        **seeded_format_columns(env, _scenario_format_entry(ctx, env)),
     )
     CreativeAssignmentFactory(
         creative=creative,
@@ -3225,9 +3379,19 @@ def then_ai_review_observes_committed_creative(ctx: dict) -> None:
     equality is the whole invariant, and each branch fails it differently while the
     submit stays inside the transaction: the create branch's row is not there at all
     (``None``), the update branch's is there carrying its PRE-update state.
+
+    The second assertion keeps the update branch from passing vacuously: if the resync
+    left the row's ``data`` as seeded, a pre-update read and a post-commit read would
+    fingerprint alike and the equality would hold either way. The Given seeds different
+    assets, so ``data`` the job saw that still equals the row as seeded before the
+    request is a read taken before the update committed.
+
+    Not graded over e2e_rest: the submit runs in the server, where the job's own read
+    comes after the review and so races the sync's commit (see the ``e2e_unsupported``
+    declaration on ``CreativeSyncEnv.ai_review_observations``).
     """
     _assert_success_response(ctx)
-    observed = ctx["env"].ai_review_commit_observations
+    observed = ctx["env"].ai_review_observations()
     expected_ids = [c["creative_id"] for c in ctx["creatives"]]
     committed = _persisted_creative_fingerprints(ctx)
 
@@ -3239,34 +3403,48 @@ def then_ai_review_observes_committed_creative(ctx: dict) -> None:
         f"committed {committed} — the job opens its own session, so it would have read exactly "
         "what is observed here (None = no row yet; a differing fingerprint = pre-update state)"
     )
+    before = ctx["pre_request_library"]
+    pre_update_reads = [
+        creative_id
+        for creative_id in expected_ids
+        if creative_id in before
+        and observed[creative_id] is not None
+        and observed[creative_id][1] == before[creative_id][1]
+    ]
+    assert not pre_update_reads, (
+        f"the AI review of {pre_update_reads} saw the creative's data as it was BEFORE this sync "
+        f"updated it ({ {cid: before[cid] for cid in pre_update_reads} }) — the job was handed the "
+        "creative before the update committed"
+    )
 
 
 def _creative_agent_calls(ctx: dict) -> list[str]:
-    """Outbound creative-agent calls the sync made, as method names.
+    """Outbound creative-agent operations the sync performed, by name.
 
-    ``registry`` is the patched external service
-    (CreativeSyncEnv.EXTERNAL_PATCHES), so build_creative / preview_creative
-    land on it as recorded calls. This is the ONLY way to grade the four
+    ``env.creative_agent_requests`` owns the per-transport answer: the registry's
+    recorders in process, and over e2e_rest the tool calls the tenant's hosted agent
+    recorded on its side of the wire. This is the ONLY way to grade the four
     outbound gates: they exist to make a preview DIFFER from a live run in side
     effects, and the dry_run parity oracle compares preview against live, so by
     construction it can never see them (a parity oracle scores un-gating as MORE
     parity, not less).
     """
-    registry = ctx["env"].mock.get("registry")
-    assert registry is not None, (
-        "CreativeSyncEnv must patch src.core.creative_agent_registry.get_creative_agent_registry "
-        "for the outbound creative-agent calls to be observable"
-    )
-    # Read the two methods directly rather than parent.method_calls: the env
-    # ASSIGNS build_creative as its own AsyncMock, which replaces the auto-created
-    # child and so never lands in the parent's method_calls -- an accessor reading
-    # only method_calls would report "no calls" for a live run and grade nothing.
-    agent_registry = registry.return_value
-    return [
-        name
-        for name in ("build_creative", "preview_creative")
-        if getattr(getattr(agent_registry, name, None), "call_count", 0)
-    ]
+    env = ctx["env"]
+    return [tool for tool in ("build_creative", "preview_creative") if env.creative_agent_requests(tool)]
+
+
+def _build_requests(ctx: dict) -> list[dict]:
+    """Every build_creative request the sync made of the creative agent, oldest first."""
+    return ctx["env"].creative_agent_requests("build_creative")
+
+
+def _last_build_prompt(ctx: dict) -> str:
+    """The prompt (``message``) of the last build_creative request; refuses when there was none."""
+    requests = _build_requests(ctx)
+    assert requests, "build_creative should have been called for generative format"
+    message = requests[-1].get("message")
+    assert message is not None, f"build_creative must be called with a message/prompt, got {requests[-1]}"
+    return message
 
 
 @given("a generative creative whose format is served by a creative agent")
@@ -3281,22 +3459,20 @@ def given_generative_creative_served_by_agent(ctx: dict) -> None:
     env = ctx["env"]
     ensure_tenant_principal(ctx, env)
 
-    fmt = env.setup_generative_build(format_id="gen_banner")
+    fmt = env.setup_generative_build(format_id=_CATALOG_GENERATIVE_FORMAT_ID)
     creative_id = "creative-generative-001"
     ctx.setdefault("creatives", []).append(
         CreativeAssetRequestFactory.payload(
             creative_id=creative_id,
             name="Generative Creative",
             format_id=fmt,
-            # Built through the canonical AssetSpec mechanism, never hand-rolled:
-            # 3.1 assets are a discriminated union keyed by role, and a hand-built
-            # dict misses the asset_type discriminator (GH #1391).
-            assets=build_assets(text_spec("prompt", content="a headline about running shoes")),
+            # What the named format requires, keyed by its asset ids (``generation_prompt``
+            # for the captured generative formats): a legacy manifest is held to them.
+            assets=named_format_assets(fmt["id"], prompt="a headline about running shoes"),
         )
     )
     ctx["creative_format_id"] = fmt["id"]
     ctx["creative_agent_url"] = fmt["agent_url"]
-    ctx["expected_creative_ids"] = [creative_id]
 
 
 def _persisted_creative_fingerprints(ctx: dict) -> dict[str, tuple]:
@@ -3307,15 +3483,11 @@ def _persisted_creative_fingerprints(ctx: dict) -> dict[str, tuple]:
     -- and the update branch is exactly where that happens. Measured: with the
     transaction disposal inverted, the seeded rows came back carrying
     generative_build_result / preview_response and an id-set oracle still passed.
-    """
-    from src.core.database.repositories.uow import CreativeUoW
 
-    with CreativeUoW(ctx["tenant"].tenant_id) as uow:
-        assert uow.creatives is not None
-        return {
-            c.creative_id: creative_fingerprint(c)
-            for c in uow.creatives.list_by_principal(ctx["principal"].principal_id)
-        }
+    Read by the env, on the database the request wrote on every transport
+    (``CreativeSyncEnv.committed_creative_fingerprints``).
+    """
+    return ctx["env"].committed_creative_fingerprints()
 
 
 @given(parsers.parse("a {creative_state} creative on a {format_kind} format served by a creative agent"))
@@ -3341,7 +3513,7 @@ def given_creative_reaching_the_agent(ctx: dict, creative_state: str, format_kin
 
     generative = format_kind == "generative"
     fmt = env.configure_agent_served_creative(
-        generative=generative, format_id="gen_banner" if generative else "static_300x250"
+        generative=generative, format_id=_CATALOG_GENERATIVE_FORMAT_ID if generative else _CATALOG_FORMAT_ID
     )
 
     creative_id = f"creative-{creative_state}-{format_kind}-001"
@@ -3350,17 +3522,27 @@ def given_creative_reaching_the_agent(ctx: dict, creative_state: str, format_kin
             creative_id=creative_id,
             name="Agent-served Creative",
             format_id=fmt,
-            assets=build_assets(text_spec("prompt", content="a headline about running shoes")),
+            assets=named_format_assets(fmt["id"], prompt="a headline about running shoes"),
         )
     )
     ctx["creative_format_id"] = fmt["id"]
     ctx["creative_agent_url"] = fmt["agent_url"]
-    ctx["expected_creative_ids"] = [creative_id]
 
     if creative_state == "existing":
         # The update branch is unreachable for a creative that is not already on
         # file, so two of the four sites can only be graded from a seeded row.
-        given_creative_already_exists(ctx)
+        #
+        # The row carries a DIFFERENT name, because the outline's existing_* rows assert
+        # action "updated" and that is only true if the resync changes something. Seeded
+        # identically, the row answers "unchanged" -- which is the correct answer and
+        # would make those rows wrong rather than the production path wrong.
+        #
+        # The name alone does not send the update to review: it is metadata, not revision
+        # content (docs/creative/specification.mdx, v3.2.7, § Creative revision identity).
+        # The rows that assert an AI review submission rely on the CONTENT difference the
+        # seed also carries: the factory row stores its default banner image, and this
+        # payload submits a text prompt, so the resync reports ``assets`` as changed.
+        given_creative_already_exists(ctx, stored_name="Agent-served Creative (prior revision)")
 
     # The persisted set BEFORE the request. A preview must leave it exactly as
     # it found it -- which for a new creative means "still empty" and for an
@@ -3745,24 +3927,24 @@ def given_product_agent_url_different_path(ctx: dict) -> None:
 
 @given("the creative agent is reachable")
 def given_creative_agent_is_reachable(ctx: dict) -> None:
-    """Ensure the creative agent mock returns valid format data (agent reachable).
+    """The agent the creative's format names serves that format, so the seller can reach it.
 
-    The CreativeSyncEnv already mocks the registry by default. This step
-    explicitly configures it to return a successful response for the creative's
-    format, confirming the agent is reachable.
+    A PRECONDITION, checked rather than arranged: the format Given before it
+    (``configure_agent_served_creative``) already put the format in the catalogue of the
+    agent its identity names -- the standard agent's capture in process, the tenant's
+    hosted agent on e2e -- and that agent answers the preview request. Arranging it a
+    second time here would be a second spelling of one setup.
+
+    This step used to replace ``registry.get_format`` with a stand-in answering a
+    FormatFactory declaration: an invented Format no agent serves, and an instrument
+    with no e2e realization, which parked the scenario on e2e_rest.
     """
-    from unittest.mock import AsyncMock
-
     env = ctx["env"]
-    agent_url = env.DEFAULT_AGENT_URL
     format_id = _scenario_format_id(ctx, env)
-
-    from tests.factories.format import FormatFactory, FormatIdFactory
-
-    fid = FormatIdFactory(agent_url=agent_url, id=format_id)
-    fmt = FormatFactory(format_id=fid)
-    registry = env.mock["registry"].return_value
-    registry.get_format = AsyncMock(return_value=fmt)
+    assert env.serves_format(format_id), (
+        f"the creative names format {format_id!r}, which no creative agent of this env serves; "
+        "a Given naming a served HTTP format has to run before this one"
+    )
 
 
 # --- rx9u: asset-level provenance replaces creative-level (BR-RULE-094 INV-5) ---
@@ -3815,9 +3997,48 @@ def given_asset_with_provenance_source_type(ctx: dict, source_type: str) -> None
     """
     creative_payload = ctx["creatives"][-1]
     assets = creative_payload.get("assets", {})
-    first_key = next(iter(assets))
-    assets[first_key]["provenance"] = {"digital_source_type": source_type}
+    role = next(iter(assets))
+    assets[role]["provenance"] = {"digital_source_type": source_type}
     ctx["asset_provenance_source_type"] = source_type
+    #: WHICH asset carries it. The two Thens below used to read
+    #: ``next(iter(stored_assets.values()))`` -- "whichever asset the stored document
+    #: happens to list first" -- which was only ever the right asset while the payload
+    #: carried exactly ONE. It carries two now (``banner_image`` + ``click_url``, the
+    #: capture format's reference), and the stored document does not preserve the
+    #: request's key order: measured on the box, the read-back lists ``click_url``
+    #: first, so the assertion read the url asset, found no provenance on it, and
+    #: reported a production gap that production does not have. An assertion must read
+    #: the asset the precondition named.
+    ctx["asset_provenance_role"] = role
+
+
+def _provenance_bearing_asset(ctx: dict, data: dict) -> dict:
+    """The stored asset the provenance precondition attached its declaration to.
+
+    ONE definition, because both INV-5 Thens need the same asset and both used to take
+    "the first stored one" -- a read that is correct only for a single-asset payload and
+    silently moves to a different asset the moment the payload or the storage order
+    changes. The role is recorded by
+    :func:`given_asset_with_provenance_source_type`; a scenario that reaches a Then
+    without it is a wiring error and says so rather than falling back to an arbitrary
+    asset.
+    """
+    role = ctx.get("asset_provenance_role")
+    assert role is not None, (
+        "no asset was named by a provenance precondition — this Then requires the Given "
+        "'an asset within the creative declaring digital_source_type ...'"
+    )
+    assets = data.get("assets") or {}
+    assert assets, (
+        "SPEC-PRODUCTION GAP: creative.data has no 'assets' key — asset-level provenance "
+        "storage not implemented in production. BR-RULE-094 INV-5: asset-level provenance "
+        "should replace creative-level."
+    )
+    assert role in assets, (
+        f"the stored creative does not carry the asset the precondition named: expected "
+        f"role {role!r}, stored roles {sorted(assets)}"
+    )
+    return assets[role] or {}
 
 
 @then(
@@ -3842,12 +4063,8 @@ def then_asset_has_provenance_not_inherited(ctx: dict, expected: str, inherited:
     # This is a band-aid, kept only so the next run reports the obligation instead of a
     # crash — the defect is the untyped traversal itself: FIXME(#2236) on
     # `_get_creative_from_db`.
-    assets = data.get("assets") or {}
-    assert assets, (
-        "SPEC-PRODUCTION GAP: creative.data has no 'assets' key — asset-level provenance storage not implemented in production. BR-RULE-094 INV-5: asset-level provenance should replace creative-level."
-    )
-    first_asset = next(iter(assets.values())) or {}
-    asset_provenance = (first_asset or {}).get("provenance") or {}
+    asset = _provenance_bearing_asset(ctx, data)
+    asset_provenance = asset.get("provenance") or {}
     asset_source = asset_provenance.get("digital_source_type")
     assert asset_source is not None, (
         "SPEC-PRODUCTION GAP: asset-level provenance.digital_source_type not stored in creative.data.assets — production may not support per-asset provenance yet. BR-RULE-094 INV-5."
@@ -3872,13 +4089,8 @@ def then_no_field_level_merging(ctx: dict) -> None:
     # `or {}` at every hop — see the sibling step above: a .get default does not fire on a
     # key that is present and null, which is how the live server stores an undeclared
     # block. Band-aid, same FIXME(#2236).
-    assets = data.get("assets") or {}
-    assert assets, (
-        "SPEC-PRODUCTION GAP: creative.data has no 'assets' key — cannot verify no-merge semantics. BR-RULE-094 INV-5."
-    )
     creative_provenance = data.get("provenance") or {}
-    first_asset = next(iter(assets.values())) or {}
-    asset_provenance = (first_asset or {}).get("provenance") or {}
+    asset_provenance = _provenance_bearing_asset(ctx, data).get("provenance") or {}
     assert asset_provenance, (
         "SPEC-PRODUCTION GAP: no asset-level provenance stored — cannot verify replacement semantics. BR-RULE-094 INV-5."
     )
@@ -4003,8 +4215,7 @@ def given_creative_exists_for_principal(ctx: dict, creative_id: str, principal_i
         principal=principal,
         creative_id=creative_id,
         name=f"Pre-existing creative {creative_id}",
-        agent_url=_scenario_format_entry(ctx, env)["agent_url"],
-        format=_scenario_format_entry(ctx, env)["id"],
+        **seeded_format_columns(env, _scenario_format_entry(ctx, env)),
     )
     env._commit_factory_data()
     ctx["pre_existing_creative_id"] = creative_id
@@ -4161,14 +4372,36 @@ def then_valid_not_affected_by_invalid(ctx: dict) -> None:
 
 @given("a creative with a non-HTTP adapter format_id")
 def given_creative_with_adapter_format(ctx: dict) -> None:
-    """Set up a creative whose format_id has a non-HTTP agent_url (adapter format)."""
+    """A creative naming a format THIS SELLER'S ADAPTER ACTUALLY SERVES.
+
+    The reference is ``broadstreet_static`` at ``broadstreet://<tenant_id>`` because that
+    is a pair ``BroadstreetAdapter.creative_formats`` answers, and the tenant's
+    ``AdapterConfig`` is pointed at Broadstreet so it does -- the ONE fact
+    ``adapter_served_creative_formats`` reads. A non-HTTP ``agent_url`` is only half of
+    what INV-2 is about: the other half is that the seller can still resolve the format,
+    and the only route for a pseudo-URL is the adapter's own ``canonical`` declaration
+    (``core/canonical-projection-ref.json`` step 1).
+
+    IT USED TO NAME ``adapter_display_300x250`` AT ``adapter://local-gam``, which nothing
+    serves. No adapter in ``ADAPTER_REGISTRY`` declares that id -- GAM overrides
+    ``creative_formats`` not at all -- so the scenario asserted that a creative in a
+    format this seller does not have is processed successfully, and passed only while
+    nothing checked the format could be resolved. The write gate (salesagent-jzhea) made
+    the hole visible: the id has no canonical projection, so ``creative_identity_of``
+    refused it and the creative came back ``failed``. Renaming it to a format the adapter
+    DOES declare is what makes this scenario grade the production route rather than an
+    invented one (salesagent-zthsk) -- and it grades it on all four transports, because
+    the declaration lives in the adapter, not in the harness.
+    """
     env = ctx["env"]
     ensure_tenant_principal(ctx, env)
-    format_id = "adapter_display_300x250"
+    tenant_id = ctx["tenant"].tenant_id
+    set_adapter_type(env, tenant_id, "broadstreet")
+    format_id = "broadstreet_static"
     creative_payload = CreativeAssetRequestFactory.payload(
         creative_id="creative-adapter-fmt-001",
         name="Adapter Format Creative",
-        format_id={"id": format_id, "agent_url": "adapter://local-gam"},
+        format_id={"id": format_id, "agent_url": f"broadstreet://{tenant_id}"},
     )
     ctx.setdefault("creatives", []).append(creative_payload)
     ctx["creative_format_id"] = format_id
@@ -4176,12 +4409,30 @@ def given_creative_with_adapter_format(ctx: dict) -> None:
 
 @then("the creative should be processed without external agent validation")
 def then_processed_without_external_validation(ctx: dict) -> None:
-    """Assert the creative was processed without external agent validation.
+    """The creative is processed, AND no request was made to a creative agent for it.
 
-    The load-bearing assertion is that the external validation agent mock was
-    NOT invoked (call_count == 0). The creative should still be processed
-    successfully (action created/updated). If the harness does not wire an
-    external validation mock, xfail only that specific check.
+    Two assertions, and the second is the one the sentence is about. Processed alone
+    would pass for a creative the seller merely stored; no-dial alone would pass for a
+    creative the seller REFUSED, because a refusal dials nothing either.
+
+    THE OBSERVABLE IS ``preview_creative``, which is the external validation for a static
+    creative -- ``_processing.py`` calls it "for validation (update)" / "for validation",
+    reaching the agent named by ``format_obj.agent_url``. It is one of the two recorders
+    ``HarnessCreativeAgentRegistry`` adds, so the count is readable with no instrument of
+    this step's own.
+
+    IT USED TO READ ``get_format.await_count``, and that was unreadable here. Land
+    replaced the registry stand-in with production's own ``ReferenceFormatsRegistry``
+    (salesagent-6xtxb), so ``get_format`` is a bound METHOD with no counter unless a
+    Given has replaced it -- which the sibling "the creative agent is reachable" Given
+    does and this scenario, correctly, does not. Measured on box run innet_171026_2343:
+    ``AttributeError: 'function' object has no attribute 'await_count'`` on all nine
+    in-process rows, reached only because the action assertion above had STARTED passing.
+
+    ``preview_creative`` is also the call that was being made wrongly: with the format
+    resolvable, the agent-backed branch dialled ``broadstreet://<tenant_id>`` and the
+    egress seam refused it (salesagent-zufx8). So this assertion now grades the fix
+    rather than an attribute that happened to exist.
     """
     assert "error" not in ctx, (
         f"Expected adapter format to skip external validation, but production raised: {ctx.get('error')}"
@@ -4196,15 +4447,17 @@ def then_processed_without_external_validation(ctx: dict) -> None:
     )
     # The external validation IS the creative-agent registry lookup: _validation.py
     # resolves a dialled agent_url through fetch_format_spec -> registry.get_format,
-    # and skips that call for an adapter (non-HTTP) agent_url. CreativeSyncEnv patches
-    # that registry, so "no external validation" is measurable as "get_format was never
-    # awaited". This used to look for validate_creative / external_validation /
-    # creative_agent_validate -- names no env has ever wired -- and refused on the
-    # missing mock, which parked every scenario carrying the sentence.
-    get_format = ctx["env"].mock["registry"].return_value.get_format
-    assert get_format.await_count == 0, (
+    # and skips that call for an adapter (non-HTTP) agent_url. So "no external
+    # validation" is measurable as "the registry's single-format read never ran" --
+    # counted on the env's real registry, not read as an await_count off a stand-in
+    # (the registry is production's ReferenceFormatsRegistry now, whose get_format is a
+    # method and has no mock counters). This used to look for validate_creative /
+    # external_validation / creative_agent_validate -- names no env has ever wired --
+    # and refused on the missing mock, which parked every scenario carrying the sentence.
+    fetches = ctx["env"].format_fetches
+    assert fetches == 0, (
         f"an adapter (non-HTTP) format must not be looked up with the creative agent, "
-        f"but registry.get_format was awaited {get_format.await_count} time(s)"
+        f"but the registry's single-format read ran {fetches} time(s)"
     )
 
 
@@ -4441,12 +4694,12 @@ def given_creative_with_generative_format(ctx: dict) -> None:
     """Set up a creative with a generative format (output_format_ids populated)."""
     env = ctx["env"]
     ensure_tenant_principal(ctx, env)
-    fmt = env.setup_generative_build(format_id="display_gen", gemini_api_key="test-gemini-key")
+    fmt = env.setup_generative_build(format_id=_CATALOG_GENERATIVE_FORMAT_ID, gemini_api_key="test-gemini-key")
     creative_payload = CreativeAssetRequestFactory.payload(
         creative_id="creative-generative-001",
         name="Generative Creative",
         format_id=fmt,
-        assets=build_assets(text_spec("message", content="Generate a banner ad for summer sale")),
+        assets=named_format_assets(fmt["id"], prompt="Generate a banner ad for summer sale"),
     )
     ctx.setdefault("creatives", []).append(creative_payload)
     ctx["creative_format_id"] = fmt["id"]
@@ -4454,7 +4707,7 @@ def given_creative_with_generative_format(ctx: dict) -> None:
 
 @given("the Seller Agent does not have GEMINI_API_KEY configured")
 def given_no_gemini_api_key(ctx: dict) -> None:
-    """Remove GEMINI_API_KEY from the config mock."""
+    """The seller's tenant has no Gemini API key, which is the key the generative build reads."""
     ctx["env"].set_gemini_api_key(None)
 
 
@@ -4487,7 +4740,7 @@ def given_creative_with_known_http_format(ctx: dict) -> None:
     from src.core.format_resolver import is_dialled_agent_url
 
     env = ctx["env"]
-    fmt = env.configure_agent_served_creative(generative=False, format_id="display_300x250")
+    fmt = env.configure_agent_served_creative(generative=False, format_id=_CATALOG_FORMAT_ID)
     assert is_dialled_agent_url(fmt["agent_url"]), (
         f"this sentence promises an HTTP-based format, but the agent_url is {fmt['agent_url']!r}, "
         "which production classifies as an adapter format and exempts from external validation"
@@ -4505,10 +4758,10 @@ def given_creative_with_no_format_id(ctx: dict) -> None:
     (``And a creative with <format_setup>``, row ``missing_format_id`` whose
     ``format_setup`` is ``no format_id``). That renders to exactly this step name and
     resolves here — confirmed against pytest-bdd's own registered parsers, not by
-    grep. It grades three nodeids, ``test_format_validation__partition``
-    ``[a2a|mcp|rest-missing_format_id-...]``, all xfail-dormant at SETUP on
-    "UC-006 harness not yet wired for non-account scenarios" — so deleting this step
-    would leave every count unchanged while removing the binding.
+    grep. It grades the ``test_format_validation__partition`` ``missing_format_id``
+    row on every transport, and it is the only TRUE "neither identifier" case: the
+    ext-e Given sends ``format_id: null`` as a present key, which the pin's ``required``
+    counts as supplied.
     """
     env = ctx["env"]
     ensure_tenant_principal(ctx, env)
@@ -4631,15 +4884,19 @@ def given_creative_no_preview_no_media_url(ctx: dict) -> None:
     is no media_url to fall back on -- which production classifies as CREATIVE_REJECTED
     carrying ``reasons`` (src/core/tools/creatives/_processing.py). The env method
     declares its own e2e unrealizability: a live agent cannot be told to answer nothing.
+
+    The format is one whose required assets are text alone (:data:`_CATALOG_TEXT_ONLY_FORMAT_ID`):
+    a legacy manifest is held to its named format's required assets, so a creative in the
+    display format must carry its image, and an image is a media url.
     """
     env = ctx["env"]
     ensure_tenant_principal(ctx, env)
-    fmt = env.configure_agent_no_preview(format_id=_scenario_format_id(ctx, env))
+    fmt = env.configure_agent_no_preview(format_id=_CATALOG_TEXT_ONLY_FORMAT_ID)
     creative_payload = CreativeAssetRequestFactory.payload(
         creative_id="creative-no-preview-001",
         name="Nothing Renderable",
         format_id={"id": fmt["id"], "agent_url": fmt["agent_url"]},
-        assets=build_assets(text_spec("headline", content="Nothing renderable here")),
+        assets=named_format_assets(fmt["id"], prompt="Nothing renderable here"),
     )
     ctx.setdefault("creatives", []).append(creative_payload)
 
@@ -4669,8 +4926,8 @@ def given_creative_with_unreachable_agent_format(ctx: dict) -> None:
 def _assert_standard_processing(ctx: dict) -> None:
     """Assert creative was processed as static (no generative build invoked).
 
-    Production returns action=created/updated. The registry.build_creative
-    mock must NOT have been called.
+    Production returns action=created/updated, and the creative agent receives no
+    build_creative request.
     """
     error = ctx.get("error")
     assert error is None, (
@@ -4683,12 +4940,8 @@ def _assert_standard_processing(ctx: dict) -> None:
         f"Expected created/updated/unchanged for static processing, got {actions}"
     )
     # Verify generative build was NOT invoked
-    env = ctx["env"]
-    registry = env.mock["registry"].return_value
-    if hasattr(registry.build_creative, "called"):
-        assert not registry.build_creative.called, (
-            "build_creative should NOT be called for static (non-generative) creatives"
-        )
+    builds = _build_requests(ctx)
+    assert builds == [], f"build_creative should NOT be called for static (non-generative) creatives, got {builds}"
 
 
 def _assert_generative_build(ctx: dict, prompt_source: str) -> None:
@@ -4708,20 +4961,8 @@ def _assert_generative_build(ctx: dict, prompt_source: str) -> None:
     assert any(a in ("created", "updated") for a in actions), (
         f"Expected created/updated for generative build, got {actions}"
     )
-    # Verify build_creative WAS invoked
-    env = ctx["env"]
-    registry = env.mock["registry"].return_value
-    assert registry.build_creative.called, "build_creative should have been called for generative format"
-    # Verify prompt content
-    call_kwargs = registry.build_creative.call_args
-    message_arg = call_kwargs.kwargs.get("message") or (call_kwargs.args[2] if len(call_kwargs.args) > 2 else None)
-    if message_arg is None:
-        # Try positional or named kwarg patterns
-        for kw_name in ("message", "prompt"):
-            message_arg = call_kwargs.kwargs.get(kw_name)
-            if message_arg:
-                break
-    assert message_arg is not None, "build_creative must be called with a message/prompt"
+    # Verify build_creative WAS invoked, and read its prompt
+    message_arg = _last_build_prompt(ctx)
     if prompt_source == "assets":
         assert "Create a creative for:" not in message_arg, (
             f"Expected prompt from assets, but got name fallback: {message_arg!r}"
@@ -4755,7 +4996,7 @@ def given_creative_no_output_format_ids(ctx: dict) -> None:
     was therefore passing on a request that had no format to classify, which is a
     weaker fact than the one it claims and is true of an unknown format too.
     """
-    ctx["env"].configure_agent_served_creative(generative=False, format_id="display_300x250")
+    ctx["env"].configure_agent_served_creative(generative=False, format_id=_CATALOG_FORMAT_ID)
     given_creative_with_format(ctx)
 
 
@@ -4772,14 +5013,14 @@ def given_creative_output_format_ids_present(ctx: dict) -> None:
     chosen later. NOT declared ``malformed``, and that is measured rather than
     assumed — the pin does reject an absent ``assets``, but every scenario using
     this sentence follows it with a step that writes the key
-    (``message asset with prompt text``, ``no prompt assets or inputs``,
+    (``a message asset ahead of the generation_prompt``, ``no prompt assets or inputs``,
     ``message asset but no GEMINI_API_KEY``; feature lines 894-896), so the
     DISPATCHED item is conformant. ``malformed(..., pin_rejects=True)`` here would
     be graded against the dispatched bytes and reported as REPAIRED.
     """
     env = ctx["env"]
     ensure_tenant_principal(ctx, env)
-    fmt = env.setup_generative_build(format_id="display_gen", gemini_api_key="test-gemini-key")
+    fmt = env.setup_generative_build(format_id=_CATALOG_GENERATIVE_FORMAT_ID, gemini_api_key="test-gemini-key")
     creative_payload = CreativeAssetRequestFactory.payload(
         creative_id="creative-generative-part-001",
         name="Generative Partition Creative",
@@ -4803,7 +5044,7 @@ def given_creative_output_format_ids_present_create(ctx: dict) -> None:
     """
     env = ctx["env"]
     ensure_tenant_principal(ctx, env)
-    fmt = env.setup_generative_build(format_id="display_gen", gemini_api_key="test-gemini-key")
+    fmt = env.setup_generative_build(format_id=_CATALOG_GENERATIVE_FORMAT_ID, gemini_api_key="test-gemini-key")
     creative_payload = CreativeAssetRequestFactory.payload(
         creative_id="creative-generative-create-001",
         name="My Summer Campaign Banner",
@@ -4827,33 +5068,34 @@ def given_any_assets(ctx: dict) -> None:
     last_creative.setdefault("assets", {}).update(build_assets(image_spec("image")))
 
 
-@given("message asset with prompt text")
+@given("a message asset ahead of the generation_prompt")
 def given_message_asset_with_prompt(ctx: dict) -> None:
-    """Add a message asset with prompt text to the last creative.
+    """Give the last creative a ``message`` asset, then the ``generation_prompt`` its format requires.
 
-    Production extracts prompt from assets with role "message", "brief",
-    or "prompt" (BR-RULE-036 INV-2).
+    The two carry DIFFERENT text and the message comes first in the payload, so a seller
+    that takes the first prompt role in the buyer's order builds from the message and the
+    Then reddens (BR-RULE-036 INV-2). The prompt's text is recorded as
+    ``expected_asset_prompt``.
     """
     creatives = ctx.get("creatives", [])
-    assert creatives, "No creative in context to add message asset to"
+    assert creatives, "No creative in context to add prompt assets to"
     last_creative = creatives[-1]
-    last_creative.setdefault("assets", {}).update(
-        build_assets(text_spec("message", content="Generate a banner ad for summer sale"))
-    )
+    _prompt_behind_message(ctx, last_creative, "message", "Generate a banner ad for summer sale")
 
 
 @given("no prompt assets or inputs")
 def given_no_prompt_assets_or_inputs(ctx: dict) -> None:
     """Ensure the last creative has NO prompt-bearing assets or inputs.
 
-    Removes any message/brief/prompt assets so the create path falls
-    through to name fallback (BR-RULE-036 INV-4).
+    Removes every asset production reads a prompt from, ``generation_prompt`` included. The
+    captured generative formats REQUIRE that asset, so the creative is then a manifest
+    missing what its named format requires, and the seller refuses it (``_validation.py``).
     """
     creatives = ctx.get("creatives", [])
     assert creatives, "No creative in context to strip prompt from"
     last_creative = creatives[-1]
     assets = last_creative.get("assets", {})
-    for role in ("message", "brief", "prompt"):
+    for role in ("generation_prompt", "message", "brief", "prompt"):
         assets.pop(role, None)
     last_creative["assets"] = assets
     last_creative.pop("inputs", None)
@@ -4861,7 +5103,7 @@ def given_no_prompt_assets_or_inputs(ctx: dict) -> None:
 
 @given("message asset but no GEMINI_API_KEY")
 def given_message_asset_no_gemini_key(ctx: dict) -> None:
-    """Add a message asset but remove the GEMINI_API_KEY from config.
+    """Add a message asset and clear the tenant's Gemini API key.
 
     Production checks gemini_api_key early in the generative path and
     raises ValueError when missing (BR-RULE-036, INV formerly-2).
@@ -4869,9 +5111,8 @@ def given_message_asset_no_gemini_key(ctx: dict) -> None:
     creatives = ctx.get("creatives", [])
     assert creatives, "No creative in context to add message asset to"
     last_creative = creatives[-1]
-    last_creative.setdefault("assets", {}).update(
-        build_assets(text_spec("message", content="Generate a banner ad for summer sale"))
-    )
+    _with_prompt_assets(last_creative, "Generate a banner ad for summer sale")
+    last_creative["assets"].update(build_assets(text_spec("message", content="Generate a banner ad for summer sale")))
     ctx["env"].set_gemini_api_key(None)
 
 
@@ -4903,13 +5144,13 @@ def given_creative_generative_with_prompt(ctx: dict) -> None:
     """Set up a generative creative with a message asset containing prompt text (boundary)."""
     env = ctx["env"]
     ensure_tenant_principal(ctx, env)
-    fmt = env.setup_generative_build(format_id="display_gen", gemini_api_key="test-gemini-key")
+    fmt = env.setup_generative_build(format_id=_CATALOG_GENERATIVE_FORMAT_ID, gemini_api_key="test-gemini-key")
     asset_prompt = "Design a responsive ad for holiday promotion"
     creative_payload = CreativeAssetRequestFactory.payload(
         creative_id="creative-gen-prompt-001",
         name="Generative With Prompt",
         format_id=fmt,
-        assets=build_assets(text_spec("message", content=asset_prompt)),
+        assets=named_format_assets(fmt["id"], prompt=asset_prompt),
     )
     ctx.setdefault("creatives", []).append(creative_payload)
     ctx["creative_format_id"] = fmt["id"]
@@ -4920,15 +5161,16 @@ def given_creative_generative_with_prompt(ctx: dict) -> None:
 def given_new_creative_generative_no_prompt_with_name(ctx: dict) -> None:
     """Set up a NEW generative creative with a name but no prompt assets (boundary).
 
-    On the create path, production falls back to 'Create a creative for: {name}'
-    (BR-RULE-036 INV-4).
+    The captured generative formats REQUIRE ``generation_prompt``, so a creative carrying no
+    prompt asset is a manifest missing what its named format requires and is refused
+    (``_validation.py``) before any name fallback.
     """
     env = ctx["env"]
     ensure_tenant_principal(ctx, env)
-    fmt = env.setup_generative_build(format_id="display_gen", gemini_api_key="test-gemini-key")
+    fmt = env.setup_generative_build(format_id=_CATALOG_GENERATIVE_FORMAT_ID, gemini_api_key="test-gemini-key")
     # assets={}, not OMIT: an EMPTY assets object is what the scenario means by "no
     # prompt", and the pin accepts it — so this is a conformant payload whose
-    # wrongness is downstream, not a malformation.
+    # wrongness is downstream (the named format's required asset), not a malformation.
     creative_payload = CreativeAssetRequestFactory.payload(
         creative_id="creative-gen-name-fallback-001",
         name="Summer Sale Banner",
@@ -4951,12 +5193,12 @@ def given_creative_generative_no_gemini(ctx: dict) -> None:
     # Generative format, and the key NOT configured. Said once, as an argument, rather
     # than set and then unset: the two-step form left the env briefly in a state no
     # scenario describes, and the second step had to know the config mock's shape.
-    fmt = env.setup_generative_build(format_id="display_gen", gemini_api_key=None)
+    fmt = env.setup_generative_build(format_id=_CATALOG_GENERATIVE_FORMAT_ID, gemini_api_key=None)
     creative_payload = CreativeAssetRequestFactory.payload(
         creative_id="creative-gen-no-key-001",
         name="Generative No Key",
         format_id=fmt,
-        assets=build_assets(text_spec("message", content="Generate a banner ad")),
+        assets=named_format_assets(fmt["id"], prompt="Generate a banner ad"),
     )
     ctx.setdefault("creatives", []).append(creative_payload)
     ctx["creative_format_id"] = fmt["id"]
@@ -4987,15 +5229,10 @@ def then_processed_without_generative_build(ctx: dict) -> None:
     _assert_standard_processing(ctx)
 
 
-@then("the generative build should use the message asset as the prompt")
-def then_generative_build_uses_message_asset(ctx: dict) -> None:
-    """The build ran, and its prompt came from the request's message asset.
-
-    The outline row that says this does not record the prompt text the way the
-    INV-2 scenario's Given does, so it grades the prompt's SOURCE rather than its
-    exact value; the exact-value form is the sentence below.
-    """
-    _assert_generative_build(ctx, prompt_source="assets")
+@then("the generative build should use the generation_prompt asset as the prompt")
+def then_generative_build_uses_generation_prompt(ctx: dict) -> None:
+    """The build ran, and its prompt is exactly the text of the creative's generation_prompt."""
+    then_generative_build_uses_prompt(ctx, ctx["expected_asset_prompt"])
 
 
 @then("the system should invoke generative build with the asset prompt")
@@ -5011,18 +5248,8 @@ def then_invoke_generative_with_asset_prompt(ctx: dict) -> None:
     assert any(a in ("created", "updated") for a in actions), (
         f"Expected created/updated for generative build, got {actions}"
     )
-    env = ctx["env"]
-    registry = env.mock["registry"].return_value
-    assert registry.build_creative.called, "build_creative should have been called for generative format"
     # Positive assertion: the message arg matches the exact asset prompt from Given
-    call_kwargs = registry.build_creative.call_args
-    message_arg = call_kwargs.kwargs.get("message") or (call_kwargs.args[2] if len(call_kwargs.args) > 2 else None)
-    if message_arg is None:
-        for kw_name in ("prompt",):
-            message_arg = call_kwargs.kwargs.get(kw_name)
-            if message_arg:
-                break
-    assert message_arg is not None, "build_creative must be called with a message/prompt"
+    message_arg = _last_build_prompt(ctx)
     expected_prompt = ctx["expected_asset_prompt"]
     assert expected_prompt in message_arg, (
         f"Expected asset prompt {expected_prompt!r} in build_creative message, got {message_arg!r}"
@@ -5048,11 +5275,12 @@ def given_creative_format_with_output_format_ids(ctx: dict) -> None:
     """
     env = ctx["env"]
     ensure_tenant_principal(ctx, env)
-    fmt = env.setup_generative_build(format_id="display_gen", gemini_api_key="test-gemini-key")
+    fmt = env.setup_generative_build(format_id=_CATALOG_GENERATIVE_FORMAT_ID, gemini_api_key="test-gemini-key")
     creative_payload = CreativeAssetRequestFactory.payload(
         creative_id="creative-gen-inv1-001",
         name="Generative Detection Test",
         format_id=fmt,
+        assets=named_format_assets(fmt["id"]),
     )
     ctx.setdefault("creatives", []).append(creative_payload)
     ctx["creative_format_id"] = fmt["id"]
@@ -5060,7 +5288,7 @@ def given_creative_format_with_output_format_ids(ctx: dict) -> None:
 
 @given("GEMINI_API_KEY is configured")
 def given_gemini_api_key_configured(ctx: dict) -> None:
-    """Ensure the GEMINI_API_KEY is set on the config mock.
+    """Ensure the tenant's Gemini API key is set.
 
     If setup_generative_build was already called, the key is already set.
     This step acts as an explicit guard / documentation step.
@@ -5068,11 +5296,16 @@ def given_gemini_api_key_configured(ctx: dict) -> None:
     ctx["env"].set_gemini_api_key("test-gemini-key")
 
 
-@given(parsers.parse('a generative creative with an asset of role "{role}" containing "{content}"'))
-def given_generative_creative_with_asset_role(ctx: dict, role: str, content: str) -> None:
-    """Set up a generative creative with a specific asset role containing prompt text.
+@given(
+    parsers.parse(
+        'a generative creative whose "{role}" asset carrying "{other}" comes before its generation_prompt carrying "{prompt}"'
+    )
+)
+def given_generative_creative_with_asset_role(ctx: dict, role: str, other: str, prompt: str) -> None:
+    """A generative creative carrying another prompt role AHEAD of its format's generation_prompt.
 
-    INV-2: prompt found in assets (message/brief/prompt role) -> that text used as build prompt.
+    INV-2: the build's prompt is the generation_prompt the named format declares, whatever
+    other prompt role the manifest also carries and wherever it sits in the payload.
 
     The asset goes through ``text_spec`` rather than being written as
     ``{role: {"content": content}}``: that hand-built form carries no
@@ -5084,15 +5317,29 @@ def given_generative_creative_with_asset_role(ctx: dict, role: str, content: str
     """
     env = ctx["env"]
     ensure_tenant_principal(ctx, env)
-    fmt = env.setup_generative_build(format_id="display_gen", gemini_api_key="test-gemini-key")
+    fmt = env.setup_generative_build(format_id=_CATALOG_GENERATIVE_FORMAT_ID, gemini_api_key="test-gemini-key")
     creative_payload = CreativeAssetRequestFactory.payload(
         creative_id="creative-gen-inv2-001",
         name="Generative Prompt From Assets",
         format_id=fmt,
-        assets=build_assets(text_spec(role, content=content)),
+        assets=OMIT,
     )
+    _prompt_behind_message(ctx, creative_payload, role, prompt, other=other)
     ctx.setdefault("creatives", []).append(creative_payload)
     ctx["creative_format_id"] = fmt["id"]
+
+
+def _prompt_behind_message(ctx: dict, creative: dict, role: str, prompt: str, *, other: str | None = None) -> None:
+    """Write *creative*'s *role* asset FIRST, then its format's required assets with *prompt*.
+
+    *role* carries *other* (by default a sentence that is not *prompt*), so the build's prompt
+    tells which asset it was read from. *prompt* is recorded as ``expected_asset_prompt``.
+    """
+    other = other or f"Not the prompt: {prompt}"
+    assert other != prompt, "the two prompt roles must differ, or the build cannot tell them apart"
+    creative["assets"] = build_assets(text_spec(role, content=other))
+    _with_prompt_assets(creative, prompt)
+    ctx["expected_asset_prompt"] = prompt
 
 
 @given(
@@ -5103,12 +5350,13 @@ def given_generative_creative_with_asset_role(ctx: dict, role: str, content: str
 def given_generative_creative_with_context_description(ctx: dict, description: str) -> None:
     """Set up a generative creative with context_description in inputs (no prompt assets).
 
-    INV-3: no prompt in assets, but inputs[0].context_description exists
-    -> context_description used as build prompt.
+    No prompt asset at all, so the manifest lacks the ``generation_prompt`` the captured
+    generative formats require, and the seller refuses it (``_validation.py``) however the
+    ``inputs`` describe a preview context.
     """
     env = ctx["env"]
     ensure_tenant_principal(ctx, env)
-    fmt = env.setup_generative_build(format_id="display_gen", gemini_api_key="test-gemini-key")
+    fmt = env.setup_generative_build(format_id=_CATALOG_GENERATIVE_FORMAT_ID, gemini_api_key="test-gemini-key")
     creative_payload = CreativeAssetRequestFactory.payload(
         creative_id="creative-gen-inv3-001",
         name="Generative Context Description",
@@ -5126,12 +5374,13 @@ def given_generative_creative_with_context_description(ctx: dict, description: s
 def given_generative_creative_named_no_prompt(ctx: dict, name: str) -> None:
     """Set up a NEW generative creative with a name but no prompt sources.
 
-    INV-4: no prompt in assets or inputs (create) -> creative name used as
-    fallback: "Create a creative for: {name}".
+    No prompt asset at all, so the manifest lacks the ``generation_prompt`` the captured
+    generative formats require, and the seller refuses it (``_validation.py``) before any
+    fallback to the creative's name.
     """
     env = ctx["env"]
     ensure_tenant_principal(ctx, env)
-    fmt = env.setup_generative_build(format_id="display_gen", gemini_api_key="test-gemini-key")
+    fmt = env.setup_generative_build(format_id=_CATALOG_GENERATIVE_FORMAT_ID, gemini_api_key="test-gemini-key")
     creative_payload = CreativeAssetRequestFactory.payload(
         creative_id="creative-gen-inv4-001",
         name=name,
@@ -5156,7 +5405,7 @@ def given_generative_creative_exists_with_content(ctx: dict) -> None:
     ensure_tenant_principal(ctx, env)
     tenant = ctx["tenant"]
     principal = ctx["principal"]
-    fmt = env.setup_generative_build(format_id="display_gen", gemini_api_key="test-gemini-key")
+    fmt = env.setup_generative_build(format_id=_CATALOG_GENERATIVE_FORMAT_ID, gemini_api_key="test-gemini-key")
 
     creative_id = "creative-gen-inv5-001"
     existing_data = {
@@ -5177,8 +5426,10 @@ def given_generative_creative_exists_with_content(ctx: dict) -> None:
         principal=principal,
         creative_id=creative_id,
         name="Existing Generative Creative",
-        agent_url=env.DEFAULT_AGENT_URL,
-        format="display_gen",
+        # The format the update names (``fmt``), so the row and the resync carry one
+        # identity on every transport. setup_generative_build already refused a format
+        # the capture does not serve as generative.
+        **seeded_format_columns(env, fmt),
         data=existing_data,
     )
     env._commit_factory_data()
@@ -5207,13 +5458,16 @@ def given_generative_creative_with_user_assets_and_prompt(ctx: dict) -> None:
     """
     env = ctx["env"]
     ensure_tenant_principal(ctx, env)
-    fmt = env.setup_generative_build(format_id="display_gen", gemini_api_key="test-gemini-key")
+    fmt = env.setup_generative_build(format_id=_CATALOG_GENERATIVE_FORMAT_ID, gemini_api_key="test-gemini-key")
     user_image = image_spec("image", url="https://example.com/user-banner.png")
     creative_payload = CreativeAssetRequestFactory.payload(
         creative_id="creative-gen-inv6-001",
         name="Generative With User Assets",
         format_id=fmt,
-        assets=build_assets(text_spec("message", content="Generate a responsive ad"), user_image),
+        assets={
+            **named_format_assets(fmt["id"], prompt="Generate a responsive ad"),
+            **build_assets(text_spec("message", content="Generate a responsive ad"), user_image),
+        },
     )
     ctx.setdefault("creatives", []).append(creative_payload)
     ctx["creative_format_id"] = fmt["id"]
@@ -5266,9 +5520,7 @@ def then_processed_as_generative(ctx: dict) -> None:
         f"Expected created/updated for generative processing, got {actions}"
     )
     # Verify build_creative WAS invoked (generative detection)
-    env = ctx["env"]
-    registry = env.mock["registry"].return_value
-    assert registry.build_creative.called, (
+    assert _build_requests(ctx), (
         "build_creative should have been called for generative format (output_format_ids present)"
     )
 
@@ -5304,9 +5556,7 @@ def then_creative_has_generated_content(ctx: dict) -> None:
     assert "generative_build_result" in creative_data, (
         f"Expected 'generative_build_result' in creative data, got keys: {list(creative_data.keys())}"
     )
-    env = ctx["env"]
-    registry = env.mock["registry"].return_value
-    assert registry.build_creative.called, "build_creative should have been called to generate content"
+    assert _build_requests(ctx), "build_creative should have been called to generate content"
 
 
 @then(parsers.parse('the generative build should use "{expected_prompt}" as the prompt'))
@@ -5322,24 +5572,7 @@ def then_generative_build_uses_prompt(ctx: dict, expected_prompt: str) -> None:
     )
     resp = require_payload(ctx)
 
-    env = ctx["env"]
-    registry = env.mock["registry"].return_value
-    assert registry.build_creative.called, "build_creative should have been called for generative format"
-    call_kwargs = registry.build_creative.call_args
-    # Extract the message argument (keyword or positional)
-    message_arg = call_kwargs.kwargs.get("message")
-    if message_arg is None:
-        # Try positional: build_creative(agent_url, format_id, message, ...)
-        if len(call_kwargs.args) > 2:
-            message_arg = call_kwargs.args[2]
-    if message_arg is None:
-        for kw_name in ("prompt", "text"):
-            message_arg = call_kwargs.kwargs.get(kw_name)
-            if message_arg:
-                break
-    assert message_arg is not None, (
-        f"build_creative must be called with a message/prompt, got args={call_kwargs.args}, kwargs={call_kwargs.kwargs}"
-    )
+    message_arg = _last_build_prompt(ctx)
     assert message_arg == expected_prompt, f"Expected prompt '{expected_prompt}', got '{message_arg}'"
 
 
@@ -5360,9 +5593,8 @@ def then_generative_build_skipped(ctx: dict) -> None:
         f"Expected updated/unchanged when build skipped, got {actions}"
     )
     # build_creative should NOT have been called
-    env = ctx["env"]
-    registry = env.mock["registry"].return_value
-    assert not registry.build_creative.called, "build_creative should NOT be called when update has no prompt"
+    builds = _build_requests(ctx)
+    assert builds == [], f"build_creative should NOT be called when update has no prompt, got {builds}"
 
 
 @then("the existing creative data should be preserved")
@@ -5827,11 +6059,21 @@ def then_existing_creative_unchanged(ctx: dict, principal_id: str) -> None:
 
 @then("the creative should be validated by the creative agent")
 def then_creative_validated_by_agent(ctx: dict) -> None:
-    """Assert the creative was processed through external agent validation.
+    """BR-RULE-035: the creative was synced AND the agent its format names validated it.
 
-    BR-RULE-035: HTTP-based format_ids trigger external creative agent validation.
-    Verifies registry.get_format was called for the specific format_id from Given,
-    and that the response shows a successful sync outcome (action created/updated).
+    The validation production performs for a static agent-served creative is the
+    ``preview_creative`` request ``_processing.py`` sends that agent ("Calling
+    preview_creative for validation"), and it reaches that request only after resolving
+    the format through the same agent. So the observation is the agent's side of it:
+    ``env.creative_agent_requests`` reads the registry's recorder in process and, over
+    e2e_rest, the tool calls the tenant's hosted agent received on its side of the wire.
+    The manifest's ``creative_id`` is what both legs carry verbatim
+    (``CreativeAgentRegistry.preview_creative`` forwards the manifest unchanged); the
+    format route is spelled differently per leg, so it is not compared.
+
+    This used to read ``registry.get_format`` call counts off a stand-in the Given
+    installed -- an instrument with no e2e realization, which parked the scenario on
+    e2e_rest, and a count of a lookup rather than of the validation itself.
     """
     error = ctx.get("error")
     assert error is None, (
@@ -5847,25 +6089,12 @@ def then_creative_validated_by_agent(ctx: dict) -> None:
         f"Expected created/updated action for agent-validated creative, got {actions}"
     )
 
-    # Assert the registry was consulted for the specific format_id
-    env = ctx["env"]
-    registry_mock = env.mock.get("registry")
-    assert registry_mock is not None, "Harness must wire registry mock for agent validation scenario"
-    registry_instance = registry_mock.return_value
-    assert registry_instance.get_format.call_count > 0, (
-        "Expected creative agent validation (registry.get_format called), but it was never called"
+    requests = ctx["env"].creative_agent_requests("preview_creative")
+    validated = sorted({(request.get("creative_manifest") or {}).get("creative_id") for request in requests})
+    assert validated == _requested_creative_ids(ctx), (
+        f"expected the creative agent to be asked to validate exactly {_requested_creative_ids(ctx)}, "
+        f"but its preview_creative requests named {validated} ({len(requests)} request(s))"
     )
-    expected_format_id = ctx.get("creative_format_id")
-    if expected_format_id is not None:
-        # get_format(agent_url, format_id): the id is the SECOND positional argument (or
-        # the keyword). This read args[0] -- the agent_url -- and so could never match.
-        called_format_ids = [
-            c.kwargs.get("format_id", c.args[1] if len(c.args) > 1 else None)
-            for c in registry_instance.get_format.call_args_list
-        ]
-        assert expected_format_id in called_format_ids, (
-            f"Expected get_format called with format_id={expected_format_id!r}, but was called with {called_format_ids}"
-        )
 
 
 @then(parsers.parse('the response should include one creative with action "{action}"'))
@@ -5996,8 +6225,6 @@ def given_creative_already_assigned_to_package_partition(ctx: dict) -> None:
     ensure_tenant_principal(ctx, env)
     tenant = ctx["tenant"]
     principal = ctx["principal"]
-    agent_url = env.DEFAULT_AGENT_URL
-    creative_format = _scenario_format_id(ctx, env)
 
     media_buy = MediaBuyFactory(tenant=tenant, principal=principal, status="active")
     product = ProductFactory(
@@ -6016,8 +6243,8 @@ def given_creative_already_assigned_to_package_partition(ctx: dict) -> None:
         principal=principal,
         creative_id=creative_id,
         name=creative_payload["name"],
-        agent_url=agent_url,
-        format=creative_format,
+        # The row names the agent the synced creative names, or the sync re-points it.
+        **seeded_format_columns(env, _scenario_format_entry(ctx, env)),
     )
     existing_assignment = CreativeAssignmentFactory(
         creative=creative,
@@ -6531,8 +6758,7 @@ def _preseed_creative_for_principal(ctx: dict, creative_id: str, principal_id: s
         principal=owner_principal,
         creative_id=creative_id,
         name=f"Pre-existing creative {creative_id}",
-        agent_url=_scenario_format_entry(ctx, env)["agent_url"],
-        format=_scenario_format_entry(ctx, env)["id"],
+        **seeded_format_columns(env, _scenario_format_entry(ctx, env)),
     )
     env._commit_factory_data()
     ctx["pre_existing_creative_id"] = creative_id
@@ -7050,10 +7276,13 @@ def given_creative_already_synced_with_key(ctx: dict, key: str) -> None:
 
 @given(parsers.parse('the creative name is changed to "{name}"'))
 def given_creative_name_changed(ctx: dict, name: str) -> None:
-    """Materially change the pending creative payload, keeping the same key.
+    """Change only the name on the pending creative payload.
 
-    This is the spec's "same key, materially different payload" input: the key
-    the buyer reuses no longer describes the request it originally identified.
+    Two uses. Under an idempotency key it is the spec's "same key, materially different
+    payload" input: the key the buyer reuses no longer describes the request it
+    originally identified. On a resync it is a metadata-only update: ``name`` is excluded
+    from revision content (docs/creative/specification.mdx, v3.2.7, § Creative revision
+    identity), so the creative is ``updated`` and keeps its review state.
     """
     creatives = ctx.get("creatives")
     assert creatives, "no creative payload to modify — the creative Given must run first"

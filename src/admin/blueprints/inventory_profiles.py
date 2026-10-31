@@ -17,6 +17,7 @@ from collections.abc import Sequence
 from flask import Blueprint, Flask, flash, jsonify, redirect, render_template, request, url_for
 from sqlalchemy import func, select
 
+from src.admin.blueprints.products import _format_labels, _parse_authored_format_options
 from src.admin.utils import require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
 from src.admin.utils.operator_errors import safe_error_message
@@ -29,6 +30,9 @@ from src.core.database.models import (
     PropertyTag,
     Tenant,
 )
+from src.core.format_resolver import format_contract
+from src.core.format_satisfaction import refuse_outside_common_intersection
+from src.core.publisher_format_catalog import PublisherCatalog
 
 logger = logging.getLogger(__name__)
 
@@ -74,28 +78,19 @@ def _get_inventory_summary(inventory_config: dict) -> str:
     return ", ".join(parts) if parts else "No inventory"
 
 
-def _get_format_summary(formats: list[dict], tenant_id: str) -> str:
-    """Generate human-readable format summary.
+def _profile_format_labels(profile: InventoryProfile) -> list[str]:
+    """One label per format the profile declares, read off its format contract."""
+    return _format_labels(format_contract(format_options=profile.format_options, format_ids=profile.format_ids))
 
-    Args:
-        formats: List of format ID objects
-        tenant_id: Tenant ID for format lookup
 
-    Returns:
-        Summary string (e.g., "Display (300x250, 728x90), Video")
-    """
-    if not formats:
+def _get_format_summary(profile: InventoryProfile) -> str:
+    """The profile's formats as a short human-readable list, at most five named."""
+    labels = _profile_format_labels(profile)
+    if not labels:
         return "No formats"
-
-    # Group by type for simpler display
-    format_names = []
-    for fmt in formats[:5]:  # Limit to first 5
-        format_names.append(fmt.get("id", "Unknown"))
-
-    summary = ", ".join(format_names)
-    if len(formats) > 5:
-        summary += f" (+{len(formats) - 5} more)"
-
+    summary = ", ".join(labels[:5])
+    if len(labels) > 5:
+        summary += f" (+{len(labels) - 5} more)"
     return summary
 
 
@@ -158,7 +153,7 @@ def list_inventory_profiles(tenant_id: str):
                     "name": profile.name,
                     "description": profile.description,
                     "inventory_summary": _get_inventory_summary(profile.inventory_config),
-                    "format_summary": _get_format_summary(profile.format_ids, tenant_id),
+                    "format_summary": _get_format_summary(profile),
                     "property_summary": _get_property_summary(profile.publisher_properties),
                     "product_count": product_count,
                     "created_at": profile.created_at,
@@ -201,12 +196,6 @@ def add_inventory_profile(tenant_id: str):
                 "include_descendants": form_data.get("include_descendants") == "on",
             }
 
-            # Parse formats
-            formats = json.loads(form_data.get("formats", "[]"))
-            if not formats:
-                flash("At least one creative format is required", "error")
-                return redirect(url_for("inventory_profiles.add_inventory_profile", tenant_id=tenant_id))
-
             # Parse publisher properties based on property_mode
             # NOTE: New unified inventory page sends either:
             # - property_mode = "all" or "specific" with full publisher_properties JSON
@@ -218,6 +207,21 @@ def add_inventory_profile(tenant_id: str):
                 tenant = prop_session.get(Tenant, tenant_id)
                 if not tenant or not tenant.primary_domain:
                     flash("Tenant primary_domain not configured", "error")
+                    return redirect(url_for("inventory_profiles.add_inventory_profile", tenant_id=tenant_id))
+
+                # The profile's canonical format declarations: what every linked product is
+                # announced from. format_ids is not authored here (core/product.json: "Do not
+                # author a new product from format_ids alone"); a legacy projection comes from
+                # the declarations' v1_format_ref.
+                try:
+                    format_options = _parse_authored_format_options(
+                        form_data.get("format_options"), PublisherCatalog.of(tenant)
+                    )
+                except ValueError as e:
+                    flash(str(e), "error")
+                    return redirect(url_for("inventory_profiles.add_inventory_profile", tenant_id=tenant_id))
+                if not format_options:
+                    flash("At least one canonical format declaration (format_options) is required", "error")
                     return redirect(url_for("inventory_profiles.add_inventory_profile", tenant_id=tenant_id))
 
                 publisher_domain = tenant.primary_domain
@@ -331,7 +335,7 @@ def add_inventory_profile(tenant_id: str):
                     name=name,
                     description=description if description else None,
                     inventory_config=inventory_config,
-                    format_ids=formats,
+                    format_options=format_options,
                     publisher_properties=publisher_properties,
                     targeting_template=targeting_template,
                 )
@@ -415,20 +419,26 @@ def edit_inventory_profile(tenant_id: str, profile_id: int):
                 }
                 profile.inventory_config = inventory_config
 
-                # Update formats
-                formats = json.loads(form_data.get("formats", "[]"))
-                if formats:
-                    profile.format_ids = formats
-
-                # Update publisher properties based on property_mode
-                property_mode = form_data.get("property_mode", "tags")
-
                 tenant_obj = session.get(Tenant, tenant_id)
                 if not tenant_obj or not tenant_obj.primary_domain:
                     flash("Tenant primary_domain not configured", "error")
                     return redirect(
                         url_for("inventory_profiles.edit_inventory_profile", tenant_id=tenant_id, profile_id=profile_id)
                     )
+
+                # The canonical arm. An empty editor leaves the stored arms alone, so a
+                # legacy-only profile stays editable; authoring declarations retires its
+                # stored format_ids, which its linked products no longer read once the
+                # profile carries a canonical arm (``Product.format_contract``).
+                authored_format_options = _parse_authored_format_options(
+                    form_data.get("format_options"), PublisherCatalog.of(tenant_obj)
+                )
+                if authored_format_options:
+                    profile.format_options = authored_format_options
+                    profile.format_ids = None
+
+                # Update publisher properties based on property_mode
+                property_mode = form_data.get("property_mode", "tags")
 
                 publisher_domain = tenant_obj.primary_domain
 
@@ -548,6 +558,19 @@ def edit_inventory_profile(tenant_id: str, profile_id: int):
                 else:
                     profile.targeting_template = None
 
+                # The profile supplies its linked products' contract and publisher properties,
+                # so each of them is held to the common-intersection rule as its own save is.
+                # Refused like the product form refuses it: flash and return to the form
+                # without committing, so nothing renders from a rolled-back row.
+                try:
+                    for linked in profile.products:
+                        refuse_outside_common_intersection(linked)
+                except ValueError as e:
+                    flash(str(e), "error")
+                    return redirect(
+                        url_for("inventory_profiles.edit_inventory_profile", tenant_id=tenant_id, profile_id=profile_id)
+                    )
+
                 # Count products using this profile before commit
                 product_count = (
                     session.scalar(
@@ -589,15 +612,17 @@ def edit_inventory_profile(tenant_id: str, profile_id: int):
             select(PropertyTag).where(PropertyTag.tenant_id == tenant_id).order_by(PropertyTag.tag_id)
         ).all()
 
-    return render_template(
-        "edit_inventory_profile.html",
-        tenant_id=tenant_id,
-        tenant=tenant,
-        profile=profile,
-        authorized_properties=authorized_properties,
-        property_tags=property_tags_list,
-        active_tab="inventory_profiles",
-    )
+        # Rendered inside the session: a POST that failed in the handler above rolled back,
+        # which expires ``profile``, and the form reads it back from the stored row.
+        return render_template(
+            "edit_inventory_profile.html",
+            tenant_id=tenant_id,
+            tenant=tenant,
+            profile=profile,
+            authorized_properties=authorized_properties,
+            property_tags=property_tags_list,
+            active_tab="inventory_profiles",
+        )
 
 
 @inventory_profiles_bp.route("/<int:profile_id>/delete", methods=["DELETE", "POST"])
@@ -658,6 +683,7 @@ def get_inventory_profile_api(tenant_id: str, profile_id: int):
                 "targeted_ad_unit_ids": ",".join(profile.inventory_config.get("ad_units", [])),
                 "targeted_placement_ids": ",".join(profile.inventory_config.get("placements", [])),
                 "include_descendants": profile.inventory_config.get("include_descendants", True),
+                "format_options": profile.format_options,
                 "formats": profile.format_ids,
                 "publisher_properties": profile.publisher_properties,
                 "property_mode": "all",  # Default to "all" mode for now (no DB column yet)
@@ -684,8 +710,8 @@ def preview_inventory_profile(tenant_id: str, profile_id: int):
                 "description": profile.description,
                 "ad_unit_count": len(profile.inventory_config.get("ad_units", [])),
                 "placement_count": len(profile.inventory_config.get("placements", [])),
-                "format_count": len(profile.format_ids),
-                "format_summary": _get_format_summary(profile.format_ids, tenant_id),
+                "format_count": len(_profile_format_labels(profile)),
+                "format_summary": _get_format_summary(profile),
                 "property_summary": _get_property_summary(profile.publisher_properties),
             }
         )
@@ -717,7 +743,7 @@ def list_inventory_profiles_api(tenant_id: str):
                     "name": profile.name,
                     "description": profile.description,
                     "inventory_summary": _get_inventory_summary(profile.inventory_config),
-                    "format_summary": _get_format_summary(profile.format_ids, tenant_id),
+                    "format_summary": _get_format_summary(profile),
                     "property_summary": _get_property_summary(profile.publisher_properties),
                     "product_count": product_count,
                     "created_at": profile.created_at.isoformat() if profile.created_at else None,

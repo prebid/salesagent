@@ -1398,19 +1398,28 @@ class TestRegistryIsAFallbackNeverAnOverride:
         """Same registry entry that verifies the request in the class above; the only
         change is that the principal HAS an ``agent_url`` and its walk fails.
 
-        The walk fails for real, not by substitution: the SDK resolves and validates
-        the authority synchronously before opening a socket, so a loopback
-        ``agent_url`` raises ``AgentResolverError`` inside the real
+        The walk fails for real, not by substitution: the SDK resolves the authority
+        before opening a socket, so :data:`UNRESOLVABLE_AGENT_URL`'s RFC 2606
+        ``.invalid`` host raises ``AgentResolverError`` inside the real
         ``_resolution_for``, which returns ``None`` — the identical input the fallback
         branch sees in the passing case. The two tests therefore differ in exactly one
         thing, WHY the resolution is empty, which is precisely the distinction the
         implementation must make.
 
         Correct behavior is a 401 rejection carrying the counterparty walk's OWN
-        discovery-family code (#1291 hksr assigns ``capabilities_unreachable`` its own
-        ``request_signature_capabilities_unreachable`` wire code instead of collapsing
-        every walk failure onto the generic ``key_unknown``) — an unreachable
-        counterparty is a failure to resolve, not a licence to trust a different key.
+        discovery-family code instead of collapsing every walk failure onto the generic
+        ``key_unknown`` (#1291 hksr) — an unresolvable counterparty is a failure to
+        resolve, not a licence to trust a different key.
+
+        WHICH discovery code is a property of the fixture rather than of the claim above,
+        and the fixture is deliberately UNREACHABLE rather than BANNED: a DNS miss is the
+        capabilities hop's own transient row (3.2.1 ``security.mdx`` § "Discovering an
+        agent's signing keys via ``brand_json_url``", step 1, :1358), so the answer is
+        ``request_signature_capabilities_unreachable``. A banned destination would answer
+        the terminal ``request_signature_jwks_untrusted`` instead and would grade a
+        different failure; :data:`UNRESOLVABLE_AGENT_URL`'s comment carries that
+        measurement. This test grades the registry invariant, and the code is only its
+        observable.
         """
         private_key, jwks = counterparty_keypair
         with BareIntegrationEnv(tenant_id=SIGNING_TENANT_ID, principal_id=SIGNING_PRINCIPAL_ID) as env:

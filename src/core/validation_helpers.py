@@ -10,10 +10,16 @@ import json
 import logging
 from collections.abc import Iterator
 from contextlib import contextmanager
+from datetime import datetime
 
+from adcp.types import Catalog, Duration
 from pydantic import ValidationError
 
+from src.core.enum_helpers import enum_value
+from src.core.errors.details import TimeWindowDetails
 from src.core.exceptions import (
+    AdCPInvalidRequestError,
+    AdCPValidationError,
     adcp_error_for,
 )
 from src.core.exceptions import (
@@ -200,6 +206,46 @@ def package_field_path(attr: str, index: int) -> str:
     return f"packages[{index}].{attr}"
 
 
+def refuse_duplicate_catalog_types(catalogs: list[Catalog] | None, index: int) -> None:
+    """Refuse a package whose catalogs repeat a type, pointing at its catalogs array.
+
+    core/package.json and media-buy/package-request.json catalogs (AdCP): "Each catalog
+    MUST have a distinct type ... sellers MUST reject requests containing multiple
+    catalogs of the same type with a validation_error". The package's collection is at
+    fault, not one entry, so the pointer names the array.
+    """
+    catalog_types = [catalog.type for catalog in catalogs or []]
+    if len(catalog_types) != len(set(catalog_types)):
+        raise AdCPValidationError(field=package_field_path("catalogs", index))
+
+
+def campaign_interval_violated(duration: Duration | None) -> bool:
+    """Whether *duration* breaks core/duration.json's "Must be 1 when unit is 'campaign'".
+
+    The pin states the rule in the ``interval`` description only, a relationship between two
+    individually valid fields that its JSON Schema cannot express, so the SDK model accepts
+    ``{"interval": 2, "unit": "campaign"}``. Every tool that takes a Duration asks this one
+    predicate, and refuses with VALIDATION_ERROR ("violates business rules beyond schema
+    validation", enums/error-code.json).
+    """
+    return duration is not None and enum_value(duration.unit) == "campaign" and duration.interval != 1
+
+
+def refuse_inverted_flight(start: datetime, end: datetime) -> None:
+    """Refuse a buy-level flight whose end is not after its start: INVALID_REQUEST on ``end_time``.
+
+    create_media_buy.mdx "Flight date validation": "Out-of-range or inverted dates SHOULD
+    return an ``INVALID_REQUEST`` error". The create path checks the requested window and the
+    update path checks the window the update would leave, and both answer here, so one rule
+    has one code whichever task reached it.
+    """
+    if end <= start:
+        raise AdCPInvalidRequestError(
+            details=TimeWindowDetails(start_time=str(start), end_time=str(end)),
+            field="end_time",
+        )
+
+
 def format_validation_error(validation_error: ValidationError, label: str = "request") -> str:
     """Format Pydantic ValidationError with helpful context for clients.
 
@@ -254,10 +300,20 @@ def format_validation_error(validation_error: ValidationError, label: str = "req
         else:
             error_details.append(f"  • {field_path}: {msg}")
 
+    # The version segment is DERIVED, like the other two sites that emit a schema URL
+    # (``signing/trust_root.py`` _SCHEMA_BASE and the A2A extension uri). This one was
+    # hardcoded `/schemas/v1/` -- a version this project has never pinned -- so a buyer
+    # handed a field-type error was pointed at a path that does not correspond to the
+    # schemas their request was graded against. trust_root's comment says of its own
+    # derivation that "the two cannot drift"; this third site drifted because it never
+    # derived.
+    from adcp import get_adcp_spec_version
+
     error_msg = (
         f"Invalid {label}: The following fields do not match the AdCP specification:\n\n"
         + "\n".join(error_details)
-        + "\n\nPlease check the AdCP spec at https://adcontextprotocol.org/schemas/v1/ for correct field types."
+        + f"\n\nPlease check the AdCP spec at https://adcontextprotocol.org/schemas/{get_adcp_spec_version()}/"
+        + " for correct field types."
     )
 
     return error_msg

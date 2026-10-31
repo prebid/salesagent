@@ -51,6 +51,7 @@ class TenantContext(BaseModel):
     approval_mode: str = "require-human"  # BR-RULE-037: creative approval mode
     account_approval_mode: str | None = None  # BR-RULE-060: account approval mode (auto|credit_review|legal_review)
     gemini_api_key: str | None = None
+    ai_config: dict[str, Any] | None = None  # provider, model, api_key: the tenant's AI configuration
     creative_review_criteria: str | None = None
     brand_manifest_policy: str = "require_auth"
     advertising_policy: dict[str, Any] | None = None
@@ -104,6 +105,24 @@ class TenantContext(BaseModel):
 
         return hostname_of(self.virtual_host)
 
+    @property
+    def auto_approves_creatives(self) -> bool:
+        """Whether a synced creative is approved at sync, with no review before it can serve.
+
+        The ONE predicate over ``approval_mode`` that both readers ask: sync_creatives'
+        routing (``_apply_approval_mode``) approves the row when it holds and leaves it
+        ``pending_review`` otherwise, and ``get_adcp_capabilities`` advertises
+        ``media_buy.creative_approval_mode`` from it. Two readers comparing the string
+        separately could advertise ``auto_approve`` for a mode that holds creatives for review.
+
+        Only ``auto-approve`` holds. ``ai-powered`` does not: the AI reviewer leaves a creative
+        ``pending_review`` for a human on low confidence, a sensitive category or a review
+        failure, which is ``require_human``'s "may require manual review" ceiling
+        (protocol/get-adcp-capabilities-response.json, v3.2.7,
+        ``media_buy.creative_approval_mode``).
+        """
+        return self.approval_mode == "auto-approve"
+
     # --- Construction helpers ---
 
     @classmethod
@@ -146,6 +165,7 @@ class TenantContext(BaseModel):
             approval_mode=tenant.approval_mode or "require-human",
             account_approval_mode=tenant.account_approval_mode,
             gemini_api_key=tenant.gemini_api_key,
+            ai_config=safe_json_loads(tenant.ai_config, None),
             creative_review_criteria=tenant.creative_review_criteria,
             brand_manifest_policy=tenant.brand_manifest_policy or "require_auth",
             advertising_policy=safe_json_loads(tenant.advertising_policy, None),

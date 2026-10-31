@@ -8,8 +8,10 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from src.adapters import AdServerAdapter
+    from src.core.database.models import AdapterConfig as DBAdapterConfig
     from src.core.database.models import Tenant as DBTenant
     from src.core.resolved_identity import ResolvedIdentity
+    from src.core.schemas import Format
     from src.core.tenant_context import TenantContext
     from src.core.utils.mcp_client import SignMcpAttempt
 
@@ -26,6 +28,7 @@ from src.adapters.google_ad_manager import GoogleAdManager
 from src.adapters.kevel import Kevel
 from src.adapters.mock_ad_server import MockAdServer as MockAdServerAdapter
 from src.adapters.triton_digital import TritonDigital
+from src.core.exceptions import AdCPConfigurationError
 
 logger = logging.getLogger(__name__)
 
@@ -108,7 +111,7 @@ def request_signer_for_tenant(*, tenant_id: str | None) -> SignMcpAttempt | None
     * an ACTIVE ``request_signing`` key exists for the tenant at *now*; and
     * the tenant's canonical origin is publishable (``https://``). A signature
       no conformant receiver could ever resolve a key for is worse than sending
-      nothing (security.mdx @ pinned AdCP 3.1.1 :1226) -- the same gate
+      nothing (security.mdx @ pinned :1226) -- the same gate
       :func:`~src.core.signing.posture.webhook_signing_posture` applies in the
       webhook direction (C1). Deliberately parallel to it rather than shared:
       that one answers what posture to ADVERTISE and returns a posture block;
@@ -255,48 +258,89 @@ def get_adapter_class_for_tenant(tenant: TenantLike) -> type[AdServerAdapter]:
     return get_adapter_class(resolve_adapter_context(tenant).adapter_type)
 
 
-#: Resolved adapter type -> the AdapterConfig column backing its manual-approval
-#: requirement. Triton has no such column (not modeled), so it is absent here.
-_MANUAL_APPROVAL_COLUMNS: dict[str, str] = {
-    "google_ad_manager": "gam_manual_approval_required",
-    "kevel": "kevel_manual_approval_required",
-    "mock": "mock_manual_approval_required",
-}
+def adapter_served_creative_formats(tenant_id: str) -> list[Format]:
+    """The creative formats this tenant's ad-server adapter serves itself.
 
+    THE ONE READ of an adapter's own catalogue, and the second half of what the seller
+    serves: ``CreativeAgentRegistry`` answers for the agents it DIALS, this answers for
+    the adapter that serves formats in process. Both consumers of a catalogue add both
+    halves -- ``_list_creative_formats_impl`` (the definitions of the formats a product
+    declares) and ``sync_creatives`` (resolution) -- so a format the compatibility list
+    names is a format a creative may name.
+    Building them in the discovery tool alone is what left the sync path refusing every
+    adapter-format creative (salesagent-zthsk).
 
-def resolve_manual_approval_signal(tenant: IdentityTenant) -> bool:
-    """Whether this tenant's configuration genuinely requires manual approval
-    on new media buys -- the same signal ``_create_media_buy_impl`` enforces
-    (media_buy_create.py), read tenant/DB-side so it works without a live
-    adapter instance (capabilities.py only holds the adapter CLASS, per INV-4 /
-    salesagent-dn2s -- ``manual_approval_required`` is an instance attribute
-    set in ``Adapter.__init__`` and does not exist on the class).
+    ``AdServerAdapter.creative_formats`` is a classmethod precisely so this needs no
+    Principal and no configured connection: a format catalogue is a property of the
+    adapter and the seller, and the discovery paths resolve the adapter CLASS for a
+    tenant.
 
-    ``tenant.human_review_required`` is NOT NULL DEFAULT TRUE at the schema
-    level (a real, always-present tenant setting, not a Python-level default
-    papering over a missing key) -- reading it directly is an honest claim
-    about real enforced behavior, not an invented default (salesagent-rldj/
-    salesagent-y9ld Core Invariant). Falls back to the resolved adapter type's
-    own manual-approval DB column; that column is nullable and this reader
-    applies NO default when it is unset -- deliberately NOT the same
-    True-when-null policy ``get_adapter()``'s live adapter_config assembly
-    uses for enforcement, since that default is exactly the false-conformance
-    risk this reader must avoid (salesagent-becl.72 refine).
+    NOT PUT ON THE REGISTRY, though that would be one insertion point instead of two.
+    Measured: ``CreativeFormatsEnv`` replaces ``list_all_formats_with_errors`` with an
+    ``AsyncMock`` (``tests/harness/creative_formats.py``), so a production step added
+    inside that method does not run for ~20 integration modules and several BDD step
+    modules -- the three ``test_creative_formats_validation_a.py`` Broadstreet rows go red
+    while grading nothing. Putting it on the registry would ALSO have widened
+    ``search_formats`` and the admin product form, which this change does not measure.
+
+    ``AdapterConfig.adapter_type`` alone, NOT ``resolve_tenant_adapter_type``. The
+    ``tenant.ad_server`` fallback that function adds needs the tenant ROW, which the
+    registry does not carry (it is keyed by tenant_id), and consulting it would change
+    which formats an existing tenant is served -- a behaviour this change does not
+    measure. No row means no adapter declared, which for this question means no
+    adapter-served formats. An ``adapter_type`` outside ``ADAPTER_REGISTRY`` is an
+    operator misconfiguration and ``get_adapter_class`` refuses it here as everywhere.
     """
-    if tenant.human_review_required:
-        return True
-
-    ctx = resolve_adapter_context(tenant)
-    column = _MANUAL_APPROVAL_COLUMNS.get(ctx.adapter_type)
-    if not column:
-        return False
-
-    tenant_id = ctx.tenant_id
-
+    from src.adapters import get_adapter_class
     from src.core.database.repositories.adapter_config import read_adapter_config
 
-    row = read_adapter_config(tenant_id)
-    return bool(row and getattr(row, column, None) is True)
+    config_row = read_adapter_config(tenant_id)
+    adapter_type = config_row.adapter_type if config_row else None
+    if not adapter_type:
+        return []
+    return get_adapter_class(adapter_type).creative_formats(tenant_id)
+
+
+def _simulating_adapter_config(config_row: DBAdapterConfig) -> dict[str, object]:
+    """The configuration the SIMULATING adapter runs under.
+
+    Two callers want this, so it has one spelling: the ``mock`` branch of
+    :func:`get_adapter`, where the tenant configured the simulating adapter
+    deliberately, and the sandbox short-circuit, where the account's flag
+    chose it. A second copy would be the duplication the DRY invariant
+    forbids, and the two copies would be free to disagree about the approval
+    default — which is the one decision in here.
+
+    THE ROW IS REQUIRED, and the two defaults that used to stand here are both gone.
+
+    ``mock_manual_approval_required`` IS NEVER UNSET ON A ROW: the column is ``NOT NULL`` with
+    ``server_default false`` (migration ``e38f2f6f395a`` adds it nullable, backfills ``false``,
+    then alters it) and ``models.py`` types it ``Mapped[bool]``. An ``is not None`` test on the
+    column stood here and was DEAD — worse than redundant, because it ADVERTISED a NULL state
+    the schema forbids, and two readers then reasoned at length about what that NULL would
+    mean. There is no such state to have a meaning (salesagent-6d07f).
+
+    AND A MISSING ROW IS NO LONGER GIVEN A DEFAULT EITHER. It used to answer ``True``, which
+    fabricated an approval posture for a tenant that no production path can produce: signup
+    (``admin/blueprints/public.py``), the tenant management API, ``scripts/setup/setup_tenant.py``
+    and ``scripts/setup/init_database.py`` all write the row, and the only
+    ``delete(AdapterConfig)`` drops the tenant in the same transaction. The one thing that
+    reached the default was a TEST fixture seeding a tenant without one, and it reached it
+    asymmetrically — a sandbox account was parked for approval where a non-sandbox account on
+    the same tenant completed, which surfaced as two ``e2e_rest``-only failures
+    (salesagent-8mynh). Inventing a value for impossible state is the defensive-default the
+    repo's no-quiet-failures rule refuses, so the parameter is now non-optional and an absent
+    row is a type error at the call site rather than a silent posture.
+
+    MEASURED BEFORE REMOVING IT, not assumed: with the fixture fixed, this branch raised on
+    zero of 11,979 collected integration and BDD items — the probe's message appears nowhere
+    in the run's JSON report, so nothing reached it and no raise was swallowed into an error
+    response.
+    """
+    return {
+        "enabled": True,
+        "manual_approval_required": config_row.mock_manual_approval_required,
+    }
 
 
 def get_adapter(identity: ResolvedIdentity) -> MockAdServerAdapter | GoogleAdManager | Kevel | TritonDigital:
@@ -305,6 +349,35 @@ def get_adapter(identity: ResolvedIdentity) -> MockAdServerAdapter | GoogleAdMan
     The tenant decides which ad server answers and with what configuration; the
     principal is the buyer inside it. Both come off the one identity, resolved from a
     request or from stored ids, so they cannot be handed over as a mismatched pair.
+
+    THE ACCOUNT DECIDES TOO, and it decides FIRST. A request naming a SANDBOX
+    account is answered by the simulating adapter whatever ad server the tenant
+    configured, and the short-circuit sits above every live branch so a sandbox
+    account cannot reach a live ad server by construction rather than by a check
+    each adapter remembers to make. Pinned AdCP.1
+    ``docs/media-buy/advanced-topics/sandbox.mdx``:
+
+    * :11 "Sandbox is account-level, not per-request. Once a request references a
+      sandbox account, the entire request is treated as sandbox."
+    * :227 "agents MUST NOT persist production state or cause real-world side
+      effects"; :229 "MUST NOT make real ad platform API calls (no real orders,
+      line items, etc.)".
+    * :232 "MUST return realistic response shapes with simulated data" — which is
+      why this ROUTES rather than refuses: :3 and
+      ``L3/comply-test-controller.mdx``:10 both say the real production endpoint
+      accepts sandbox traffic and honours the flag, with no separate test-mode
+      endpoint.
+
+    ``accounts.sandbox`` is the ONLY input, per :221 "Sellers MUST NOT alter
+    behavior based on these headers. Sandbox mode is determined solely by the
+    account reference" — and per critical pattern #11, which forbids a production
+    path branching on ``adcp_testing``. The column is nullable with a FALSE
+    default and ``COALESCE(sandbox, false)`` is its natural-key spelling
+    (models.py), so NULL and False are one answer and the test is truthiness.
+
+    An identity carrying NO account is unchanged: the tenant's configured adapter
+    answers. That is the only honest reading — a sandbox account is a thing the
+    request named, and a request that named none made no such claim.
     """
     principal = identity.principal
     tenant = identity.tenant
@@ -320,17 +393,30 @@ def get_adapter(identity: ResolvedIdentity) -> MockAdServerAdapter | GoogleAdMan
 
     config_row = read_adapter_config(tenant_id)
 
+    # A SANDBOX account never reaches a live ad server. Returned HERE, before the
+    # live config assembly below reads a credential and before any live client is
+    # constructed, so the live branches are unreachable for it rather than guarded.
+    if identity.in_sandbox:
+        logger.info(
+            "[ADAPTER_SELECT] the request names a sandbox account: answering with the "
+            "simulating adapter instead of the tenant's configured %r",
+            selected_adapter,
+        )
+        # LOUDLY, rather than inventing a posture. Every production path that creates a
+        # tenant writes its ``adapter_config`` row, so reaching this with none is a
+        # misconfigured tenant and not a case to accommodate — the ``True`` default that
+        # stood here fabricated an approval posture for impossible state and diverged from
+        # the non-sandbox branch's answer for the same absent row (salesagent-6d07f).
+        if config_row is None:
+            raise AdCPConfigurationError(internal_detail=ValueError(f"tenant {tenant_id} has no adapter_config row"))
+        return MockAdServerAdapter(_simulating_adapter_config(config_row), principal, tenant_id=tenant_id)
+
     adapter_config: dict[str, object] = {"enabled": True}
     if config_row:
         adapter_type = config_row.adapter_type
         logger.info(f"[ADAPTER_SELECT] adapter_type from AdapterConfig: {adapter_type}")
         if adapter_type == "mock":
-            # Default to True (require approval) for safety
-            adapter_config["manual_approval_required"] = (
-                config_row.mock_manual_approval_required
-                if config_row.mock_manual_approval_required is not None
-                else True
-            )
+            adapter_config = _simulating_adapter_config(config_row)
         elif adapter_type == "google_ad_manager":
             adapter_config = AdapterConfigRepository.get_gam_config(config_row)
             targeting_config = AdapterConfigRepository.get_gam_targeting_config(config_row)

@@ -130,7 +130,7 @@ Feature: BR-UC-001 Discover Available Inventory
     # POST-S5: Status is completed
     # POST-S11: Unfinished scopes signaled via incomplete[], not an error
     # INT-006 (MINIMAL guarantee) / INT-013 (SUCCESS): partial completion signaled
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-products-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-products-request.json
 
   @T-UC-001-preferred-delivery-types @alternative @schema-v3.1 @analysis-2026-05-26
   Scenario: preferred_delivery_types orders curation preference without hard-excluding other delivery types
@@ -146,7 +146,7 @@ Feature: BR-UC-001 Discover Available Inventory
     And products with other delivery types should not be excluded from the response
     # Contrast with filters.delivery_type which hard-excludes; preferred_delivery_types is a soft curation preference
     # INT-002: scope via mode/filters/catalog/property_list/preferred_delivery_types
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-products-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-products-request.json
 
   @T-UC-001-required-policies @main-flow @schema-v3.1 @analysis-2026-05-26
   Scenario: required_policies filters products to those complying with every requested registry policy
@@ -160,7 +160,7 @@ Feature: BR-UC-001 Discover Available Inventory
     And the response should contain "products" array
     And every returned product should comply with each requested registry policy id
     # INT-007: policy-compliant inventory only (incl. buyer required_policies)
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-products-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-products-request.json
 
   @T-UC-001-filter-diagnostics @alternative @alt-empty @schema-v3.1 @analysis-2026-05-26
   Scenario: filter_diagnostics distinguishes filter-excluded from no-inventory on an empty result
@@ -212,7 +212,7 @@ Feature: BR-UC-001 Discover Available Inventory
     # POST-S1: Buyer knows what inventory matches (partial)
     # POST-S5: Status is completed
     # POST-S7: Buyer knows more results are available and has cursor
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-products-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-products-request.json
 
   @T-UC-001-alt-paginated-next @alternative @alt-paginated @analysis-2026-03-09 @schema-v3.1
   Scenario: Paginated discovery - subsequent page via cursor
@@ -227,7 +227,7 @@ Feature: BR-UC-001 Discover Available Inventory
     And the response should contain the next page of products
     And the pagination should indicate whether more results exist
     # POST-S7: Buyer knows if more pages available
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-products-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-products-request.json
 
   @T-UC-001-alt-paginated-last @alternative @alt-paginated @analysis-2026-03-09 @schema-v3.1
   Scenario: Paginated discovery - last page with no more results
@@ -307,7 +307,7 @@ Feature: BR-UC-001 Discover Available Inventory
     # POST-F1: System state is unchanged
     # POST-F2: Buyer knows brief violated policy
     # POST-F3: Buyer knows to revise brief
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-products-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-products-request.json
 
   @T-UC-001-ext-a-restricted @extension @ext-a @error @analysis-2026-03-09 @schema-v3.1
   Scenario: Extension *a - brief restricted with manual review required
@@ -324,7 +324,7 @@ Feature: BR-UC-001 Discover Available Inventory
     # POST-F1: System state is unchanged
     # POST-F2: Buyer knows brief was restricted
     # POST-F3: Buyer knows how to revise
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-products-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-products-request.json
 
   @T-UC-001-ext-a-failopen @extension @ext-a @degradation @analysis-2026-03-09 @schema-v3.1
   Scenario: Extension *a - policy service unavailable (fail-open)
@@ -399,7 +399,7 @@ Feature: BR-UC-001 Discover Available Inventory
     When the Buyer Agent sends a valid get_products request
     Then the request should proceed to product discovery
     # INV-1 holds: policy is require_auth and request is authenticated
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-products-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-products-request.json
 
   @T-UC-001-inv-001-v @invariant @BR-RULE-001 @error @analysis-2026-03-09 @schema-v3.1
   Scenario: BR-RULE-001 INV-1 violated - require_auth policy with unauthenticated caller
@@ -411,7 +411,7 @@ Feature: BR-UC-001 Discover Available Inventory
     And the error should indicate authentication is required
     And the error should include "suggestion" field
     # INV-1 violated: policy is require_auth and request is unauthenticated
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-products-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-products-request.json
 
   @T-UC-001-inv-001-2 @invariant @BR-RULE-001 @analysis-2026-03-09 @schema-v3.1
   Scenario: BR-RULE-001 INV-2 holds - require_brand policy with brand provided
@@ -421,7 +421,7 @@ Feature: BR-UC-001 Discover Available Inventory
     When the Buyer Agent sends a valid get_products request
     Then the request should proceed to product discovery
     # INV-2 holds: policy is require_brand and brand is provided
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-products-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-products-request.json
 
   @T-UC-001-inv-001-2v @invariant @BR-RULE-001 @error @analysis-2026-03-09 @schema-v3.1
   Scenario: BR-RULE-001 INV-2 violated - require_brand policy without brand
@@ -434,7 +434,7 @@ Feature: BR-UC-001 Discover Available Inventory
     And the error should indicate brand is required
     And the error should include "suggestion" field
     # INV-2 violated: policy is require_brand and no brand provided
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-products-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-products-request.json
 
   @T-UC-001-inv-001-3 @invariant @BR-RULE-001 @analysis-2026-03-09 @schema-v3.1
   Scenario: BR-RULE-001 INV-3 holds - public policy allows any caller
@@ -452,7 +452,7 @@ Feature: BR-UC-001 Discover Available Inventory
     Then the operation should fail with error code "POLICY_VIOLATION"
     And the error code should be "POLICY_VIOLATION"
     # INV-1 violated: policy enabled and brief content is BLOCKED
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-products-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-products-request.json
 
   @T-UC-001-inv-002-2 @invariant @BR-RULE-002 @analysis-2026-03-09 @schema-v3.1
   Scenario: BR-RULE-002 INV-2 violated - RESTRICTED with manual review required
@@ -462,7 +462,7 @@ Feature: BR-UC-001 Discover Available Inventory
     Then the operation should fail
     And the error code should be "POLICY_VIOLATION"
     # INV-2 violated: policy enabled, RESTRICTED with manual review required
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-products-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-products-request.json
 
   @T-UC-001-inv-002-3 @invariant @BR-RULE-002 @analysis-2026-03-09 @schema-v3.1
   Scenario: BR-RULE-002 INV-3 holds - policy disabled, check skipped
@@ -470,7 +470,7 @@ Feature: BR-UC-001 Discover Available Inventory
     When the Buyer Agent sends a get_products request with any brief content
     Then the request should proceed to product discovery without policy check
     # INV-3 holds: policy disabled, check skipped
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-products-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-products-request.json
 
   @T-UC-001-inv-002-4 @invariant @BR-RULE-002 @analysis-2026-03-09 @schema-v3.1
   Scenario: BR-RULE-002 INV-4 holds - policy service unavailable, fail-open
@@ -479,7 +479,7 @@ Feature: BR-UC-001 Discover Available Inventory
     When the Buyer Agent sends a get_products request
     Then the request should proceed (fail-open behavior)
     # INV-4 holds: policy service unavailable, fail-open
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-products-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-products-request.json
 
   @T-UC-001-inv-002-5 @invariant @BR-RULE-002 @analysis-2026-03-09 @schema-v3.1
   Scenario: BR-RULE-002 INV-5 holds - policy evaluation returns ALLOWED
@@ -488,7 +488,7 @@ Feature: BR-UC-001 Discover Available Inventory
     When the Buyer Agent sends a get_products request with a compliant brief
     Then the request should proceed with full product catalog
     # INV-5 holds: policy evaluation returns ALLOWED
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-products-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-products-request.json
 
   @T-UC-001-inv-002-6 @invariant @BR-RULE-002 @analysis-2026-05-25 @schema-v3.1
   Scenario: BR-RULE-002 INV-6 holds - policy requires human review, plan escalated
@@ -505,7 +505,7 @@ Feature: BR-UC-001 Discover Available Inventory
     When the Buyer Agent sends a get_products request
     Then the product should NOT be visible in results (silently filtered)
     # INV-2 violated: principal is NOT in allow-list (no error, product just hidden)
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-products-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-products-request.json
 
   @T-UC-001-inv-003-3 @invariant @BR-RULE-003 @analysis-2026-03-09 @schema-v3.1 @implementation-only
   Scenario: BR-RULE-003 INV-3 holds - no allowed_principal_ids restriction
@@ -513,7 +513,7 @@ Feature: BR-UC-001 Discover Available Inventory
     When the Buyer Agent sends a get_products request
     Then the product should be visible to all principals
     # INV-3 holds: no restriction, visible to all
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-products-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-products-request.json
 
   @T-UC-001-inv-003-4v @invariant @BR-RULE-003 @analysis-2026-03-09 @schema-v3.1 @implementation-only
   Scenario: BR-RULE-003 INV-4 violated - anonymous request with restricted product
@@ -531,7 +531,7 @@ Feature: BR-UC-001 Discover Available Inventory
     When the Buyer Agent sends a get_products request
     Then every product should have pricing_options as an empty array
     # INV-1 holds: anonymous request, pricing stripped
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-products-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-products-request.json
 
   @T-UC-001-inv-004-2 @invariant @BR-RULE-004 @analysis-2026-03-09 @schema-v3.1
   Scenario: BR-RULE-004 INV-2 holds - authenticated request, full pricing retained
@@ -548,7 +548,7 @@ Feature: BR-UC-001 Discover Available Inventory
     When the system applies AI ranking
     Then the product should be excluded from results
     # INV-1 violated: ranking applied and product scores < 0.1
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-products-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-products-request.json
 
   @T-UC-001-inv-005-2 @invariant @BR-RULE-005 @analysis-2026-03-09 @schema-v3.1
   Scenario: BR-RULE-005 INV-2 holds - product at or above 0.1 threshold included
@@ -558,7 +558,7 @@ Feature: BR-UC-001 Discover Available Inventory
     When the system applies AI ranking
     Then the product should be included in results sorted by score descending
     # INV-2 holds: ranking applied and product scores >= 0.1
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-products-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-products-request.json
 
   @T-UC-001-inv-005-3 @invariant @BR-RULE-005 @analysis-2026-03-09 @schema-v3.1
   Scenario: BR-RULE-005 INV-3 holds - no brief provided, no threshold applied
@@ -567,7 +567,7 @@ Feature: BR-UC-001 Discover Available Inventory
     When the Buyer Agent sends a get_products request
     Then all products should be returned without ranking or threshold filtering
     # INV-3 holds: no brief, no threshold applied
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-products-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-products-request.json
 
   @T-UC-001-inv-005-4 @invariant @BR-RULE-005 @analysis-2026-03-09 @schema-v3.1
   Scenario: BR-RULE-005 INV-4 holds - ranking service fails, products returned unranked
@@ -583,7 +583,7 @@ Feature: BR-UC-001 Discover Available Inventory
     When the system validates the pricing option
     Then the pricing option is valid (fixed pricing model)
     # INV-1 holds: fixed_price set and floor_price null
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-products-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-products-request.json
 
   @T-UC-001-inv-006-2 @invariant @BR-RULE-006 @analysis-2026-03-09 @schema-v3.1
   Scenario: BR-RULE-006 INV-2 holds - floor_price set, fixed_price null (auction pricing)
@@ -591,7 +591,7 @@ Feature: BR-UC-001 Discover Available Inventory
     When the system validates the pricing option
     Then the pricing option is valid (auction pricing model)
     # INV-2 holds: floor_price set and fixed_price null
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-products-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-products-request.json
 
   @T-UC-001-inv-006-3v @invariant @BR-RULE-006 @error @analysis-2026-03-09 @schema-v3.1
   Scenario: BR-RULE-006 INV-3 violated - both fixed_price and floor_price set
@@ -600,7 +600,7 @@ Feature: BR-UC-001 Discover Available Inventory
     Then the pricing option is invalid (ambiguous pricing model)
     And the error should include "suggestion" field
     # INV-3 violated: both set
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-products-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-products-request.json
 
   @T-UC-001-inv-006-4v @invariant @BR-RULE-006 @error @analysis-2026-03-09 @schema-v3.1
   Scenario: BR-RULE-006 INV-4 violated - neither fixed_price nor floor_price set
@@ -612,7 +612,7 @@ Feature: BR-UC-001 Discover Available Inventory
     # NOTE: this scenario captures the salesagent CODE-enforcement facet — code still
     #       rejects neither-set (schema-vs-code gap). The v3.1 SCHEMA-layer facet, where
     #       neither-set is valid, is verified by T-UC-001-inv-006-4s below.
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-products-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-products-request.json
 
   @T-UC-001-inv-006-4s @invariant @BR-RULE-006 @analysis-2026-05-25 @schema-v3.1
   Scenario: BR-RULE-006 INV-4 holds at schema layer - neither set is v3.1 schema-valid auction
@@ -621,7 +621,7 @@ Feature: BR-UC-001 Discover Available Inventory
     Then the pricing option is valid (auction-based, no explicit floor)
     # INV-4 schema layer: v3.1 relaxed neither-set to valid (auction without explicit floor);
     #   salesagent code still rejects it — see T-UC-001-inv-006-4v for the code-enforcement gap
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-products-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-products-request.json
 
   @T-UC-001-inv-006-5 @invariant @BR-RULE-006 @analysis-2026-05-25 @schema-v3.1
   Scenario: BR-RULE-006 INV-5 holds - max_bid=true on bid-based auction model
@@ -636,7 +636,7 @@ Feature: BR-UC-001 Discover Available Inventory
     When the system converts the product to AdCP schema
     Then the conversion should succeed
     # INV-1 holds: all required fields present (v3.1 adds reporting_capabilities; delivery_measurement no longer schema-required)
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-products-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-products-request.json
 
   @T-UC-001-inv-007-6 @invariant @BR-RULE-007 @analysis-2026-05-25 @schema-v3.1
   Scenario: BR-RULE-007 INV-6 holds - missing reporting_capabilities, minimal default applied
@@ -644,7 +644,7 @@ Feature: BR-UC-001 Discover Available Inventory
     When the system converts the product to AdCP schema
     Then the conversion should succeed with a minimal default reporting_capabilities
     # INV-6 holds: minimal default for reporting_capabilities (parallels INV-5 delivery_measurement fallback)
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-products-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-products-request.json
 
   @T-UC-001-inv-007-5 @invariant @BR-RULE-007 @analysis-2026-03-09 @schema-v3.1
   Scenario: BR-RULE-007 INV-5 holds - missing delivery_measurement, adapter provides default
@@ -668,7 +668,7 @@ Feature: BR-UC-001 Discover Available Inventory
     When the Buyer Agent sends a get_products request with catalog and brand
     Then the request should proceed to catalog-driven discovery
     # INV-1 holds: catalog present and brand present
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-products-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-products-request.json
 
   @T-UC-001-inv-084-2v @invariant @BR-RULE-084 @error @analysis-2026-03-09 @schema-v3.1
   Scenario: BR-RULE-084 INV-2 violated - catalog without brand
@@ -679,7 +679,7 @@ Feature: BR-UC-001 Discover Available Inventory
     And the error should indicate brand is required when catalog is provided
     And the error should include "suggestion" field
     # INV-2 violated: catalog present and brand absent
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-products-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-products-request.json
 
   @T-UC-001-inv-084-3 @invariant @BR-RULE-084 @analysis-2026-03-09 @schema-v3.1
   Scenario: BR-RULE-084 INV-3 holds - no catalog, no dependency constraint
@@ -695,7 +695,7 @@ Feature: BR-UC-001 Discover Available Inventory
     When the system returns refinement_applied
     Then refinement_applied should have exactly 3 entries
     # INV-1 holds: length(refinement_applied) = length(request.refine)
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-products-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-products-request.json
 
   @T-UC-001-inv-085-2 @invariant @BR-RULE-085 @analysis-2026-03-09 @schema-v3.1
   Scenario: BR-RULE-085 INV-2 holds - positional correspondence maintained
@@ -705,7 +705,7 @@ Feature: BR-UC-001 Discover Available Inventory
     And refinement_applied[1] should correspond to the product-scope entry
     And refinement_applied[2] should correspond to the proposal-scope entry
     # INV-2 holds: positional correspondence
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-products-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-products-request.json
 
   @T-UC-001-inv-085-3 @invariant @BR-RULE-085 @analysis-2026-03-09 @schema-v3.1
   Scenario: BR-RULE-085 INV-3 holds - each entry has required status field
@@ -713,7 +713,7 @@ Feature: BR-UC-001 Discover Available Inventory
     When the system returns refinement_applied
     Then each entry in refinement_applied should have a "status" field with value "applied", "partial", or "unable"
     # INV-3 holds: entry MUST include status
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-products-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-products-request.json
 
   @T-UC-001-inv-085-6 @invariant @BR-RULE-085 @analysis-2026-05-25 @schema-v3.1
   Scenario: BR-RULE-085 INV-6 holds - scoped entry echoes its id field
@@ -722,7 +722,7 @@ Feature: BR-UC-001 Discover Available Inventory
     Then the product-scoped refinement_applied entry should echo the corresponding product_id
     And the proposal-scoped refinement_applied entry should echo the corresponding proposal_id
     # INV-6 holds: scoped entry MUST echo product_id/proposal_id (v3.1 strengthened to MUST)
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-products-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-products-request.json
 
   @T-UC-001-inv-085-7 @invariant @BR-RULE-085 @analysis-2026-05-25 @schema-v3.1
   Scenario: BR-RULE-085 INV-7 holds - each entry includes scope discriminator
@@ -737,7 +737,7 @@ Feature: BR-UC-001 Discover Available Inventory
     When the system validates the refine entry
     Then the entry should be accepted as valid request-scoped refinement
     # INV-1 holds: scope=request, ask present, no id/action
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-products-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-products-request.json
 
   @T-UC-001-inv-086-8v @invariant @BR-RULE-086 @error @analysis-2026-03-09 @schema-v3.1
   Scenario: BR-RULE-086 INV-8 violated - proposal scope with more_like_this
@@ -746,7 +746,7 @@ Feature: BR-UC-001 Discover Available Inventory
     Then the entry should be rejected: more_like_this not valid for proposal scope
     And the error should include "suggestion" field
     # INV-8 violated: proposal scope with more_like_this
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-products-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-products-request.json
 
   @T-UC-001-inv-086-10 @invariant @BR-RULE-086 @analysis-2026-03-09 @schema-v3.1
   Scenario: BR-RULE-086 INV-10 holds - omit action with ask provided (ask ignored)
@@ -754,7 +754,7 @@ Feature: BR-UC-001 Discover Available Inventory
     When the system validates the refine entry
     Then the entry should be accepted as valid (ask is ignored for omit action)
     # INV-10 holds: ask ignored when action is omit
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-products-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-products-request.json
 
   @T-UC-001-inv-086-11 @invariant @BR-RULE-086 @analysis-2026-05-25 @schema-v3.1
   Scenario: BR-RULE-086 INV-11 holds - product/proposal action omitted defaults to include
@@ -771,7 +771,7 @@ Feature: BR-UC-001 Discover Available Inventory
     # ----------------------------------------------------------
     # brand_manifest_policy partitions
     # ----------------------------------------------------------
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-products-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-products-request.json
 
     Examples: Valid partitions
       | partition         | outcome                          |
@@ -800,7 +800,7 @@ Feature: BR-UC-001 Discover Available Inventory
     # ----------------------------------------------------------
     # brief_policy partitions
     # ----------------------------------------------------------
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-products-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-products-request.json
 
     Examples: Valid partitions
       | partition                      | outcome                                  |
@@ -821,7 +821,7 @@ Feature: BR-UC-001 Discover Available Inventory
     # ----------------------------------------------------------
     # allowed_principal_ids partitions
     # ----------------------------------------------------------
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-products-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-products-request.json
 
     Examples: Valid partitions
       | partition                      | outcome                                  |
@@ -843,7 +843,7 @@ Feature: BR-UC-001 Discover Available Inventory
     # ----------------------------------------------------------
     # anonymous_pricing partitions
     # ----------------------------------------------------------
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-products-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-products-request.json
 
     Examples: Valid partitions
       | partition             | outcome              |
@@ -864,7 +864,7 @@ Feature: BR-UC-001 Discover Available Inventory
     # ----------------------------------------------------------
     # relevance_score partitions
     # ----------------------------------------------------------
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-products-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-products-request.json
 
     Examples: Valid partitions
       | partition                    | outcome                          |
@@ -879,7 +879,7 @@ Feature: BR-UC-001 Discover Available Inventory
     # ----------------------------------------------------------
     # pricing_option_xor partitions
     # ----------------------------------------------------------
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-products-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-products-request.json
 
     Examples: Valid partitions
       | partition              | outcome                     |
@@ -898,7 +898,7 @@ Feature: BR-UC-001 Discover Available Inventory
     # ----------------------------------------------------------
     # product_required_fields partitions
     # ----------------------------------------------------------
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-products-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-products-request.json
 
     Examples: Valid partitions
       | partition           | outcome                |
@@ -924,7 +924,7 @@ Feature: BR-UC-001 Discover Available Inventory
     # ----------------------------------------------------------
     # catalog_brand_dependency partitions
     # ----------------------------------------------------------
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-products-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-products-request.json
 
     Examples: Valid partitions
       | partition                          | outcome                              |
@@ -947,7 +947,7 @@ Feature: BR-UC-001 Discover Available Inventory
     # ----------------------------------------------------------
     # refinement_applied partitions
     # ----------------------------------------------------------
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-products-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-products-request.json
 
     Examples: Valid partitions
       | partition               | outcome                                 |
@@ -967,7 +967,7 @@ Feature: BR-UC-001 Discover Available Inventory
     # ----------------------------------------------------------
     # refine_entry partitions
     # ----------------------------------------------------------
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-products-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-products-request.json
 
     Examples: Valid partitions
       | partition                       | outcome                                  |
@@ -1000,7 +1000,7 @@ Feature: BR-UC-001 Discover Available Inventory
     # ----------------------------------------------------------
     # delivery_type partitions
     # ----------------------------------------------------------
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-products-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-products-request.json
 
     Examples: Valid partitions
       | partition                          | outcome                               |
@@ -1043,7 +1043,7 @@ Feature: BR-UC-001 Discover Available Inventory
     # ----------------------------------------------------------
     # channels partitions
     # ----------------------------------------------------------
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-products-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-products-request.json
 
     Examples: Valid partitions
       | partition          | outcome                              |
@@ -1097,7 +1097,7 @@ Feature: BR-UC-001 Discover Available Inventory
     # ----------------------------------------------------------
     # brand_manifest_policy boundaries
     # ----------------------------------------------------------
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-products-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-products-request.json
 
     Examples: Boundary values
       | boundary_point                                                            | outcome   |
@@ -1123,7 +1123,7 @@ Feature: BR-UC-001 Discover Available Inventory
     # ----------------------------------------------------------
     # brief_policy boundaries
     # ----------------------------------------------------------
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-products-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-products-request.json
 
     Examples: Boundary values
       | boundary_point                   | outcome   |
@@ -1141,7 +1141,7 @@ Feature: BR-UC-001 Discover Available Inventory
     # ----------------------------------------------------------
     # allowed_principal_ids boundaries
     # ----------------------------------------------------------
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-products-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-products-request.json
 
     Examples: Boundary values
       | boundary_point                               | outcome   |
@@ -1159,7 +1159,7 @@ Feature: BR-UC-001 Discover Available Inventory
     # ----------------------------------------------------------
     # anonymous_pricing boundaries
     # ----------------------------------------------------------
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-products-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-products-request.json
 
     Examples: Boundary values
       | boundary_point                     | outcome   |
@@ -1177,7 +1177,7 @@ Feature: BR-UC-001 Discover Available Inventory
     # ----------------------------------------------------------
     # relevance_score boundaries
     # ----------------------------------------------------------
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-products-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-products-request.json
 
     Examples: Boundary values
       | boundary_point                     | outcome   |
@@ -1192,7 +1192,7 @@ Feature: BR-UC-001 Discover Available Inventory
     # ----------------------------------------------------------
     # pricing_option_xor boundaries
     # ----------------------------------------------------------
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-products-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-products-request.json
 
     Examples: Boundary values
       | boundary_point                               | outcome   |
@@ -1212,7 +1212,7 @@ Feature: BR-UC-001 Discover Available Inventory
     # ----------------------------------------------------------
     # product_required_fields boundaries
     # ----------------------------------------------------------
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-products-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-products-request.json
 
     Examples: Boundary values
       | boundary_point                                   | outcome   |
@@ -1233,7 +1233,7 @@ Feature: BR-UC-001 Discover Available Inventory
     # ----------------------------------------------------------
     # catalog_brand_dependency boundaries
     # ----------------------------------------------------------
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-products-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-products-request.json
 
     Examples: Boundary values
       | boundary_point                                                    | outcome   |
@@ -1252,7 +1252,7 @@ Feature: BR-UC-001 Discover Available Inventory
     # ----------------------------------------------------------
     # refinement_applied boundaries
     # ----------------------------------------------------------
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-products-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-products-request.json
 
     Examples: Boundary values
       | boundary_point                                                       | outcome   |
@@ -1271,7 +1271,7 @@ Feature: BR-UC-001 Discover Available Inventory
     # ----------------------------------------------------------
     # refine_entry boundaries
     # ----------------------------------------------------------
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-products-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-products-request.json
 
     Examples: Boundary values
       | boundary_point                                                             | outcome   |
@@ -1306,7 +1306,7 @@ Feature: BR-UC-001 Discover Available Inventory
     # ----------------------------------------------------------
     # delivery_type boundaries
     # ----------------------------------------------------------
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-products-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-products-request.json
 
     Examples: Boundary values
       | boundary_point                                                    | outcome   |
@@ -1345,7 +1345,7 @@ Feature: BR-UC-001 Discover Available Inventory
     # ----------------------------------------------------------
     # channels boundaries
     # ----------------------------------------------------------
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-products-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-products-request.json
 
     Examples: Boundary values
       | boundary_point                           | outcome   |
@@ -1375,7 +1375,7 @@ Feature: BR-UC-001 Discover Available Inventory
     Then the request should be validated against schema before processing
     And authentication should be checked before any data access
     And no internal system details should leak in error responses
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-products-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-products-request.json
 
   @T-UC-001-nfr-002 @nfr @nfr-002 @analysis-2026-03-09 @schema-v3.1
   Scenario: NFR-002 - Prompt injection defense for brief and refine.ask
@@ -1383,7 +1383,7 @@ Feature: BR-UC-001 Discover Available Inventory
     When the Buyer Agent sends a get_products request with a brief containing injection attempts
     Then the brief should be sanitized before passing to the LLM
     And the system should not execute injected instructions
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-products-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-products-request.json
 
   @T-UC-001-nfr-003 @nfr @nfr-003 @analysis-2026-03-09 @schema-v3.1
   Scenario: NFR-003 - Audit logging for product discovery
@@ -1392,7 +1392,7 @@ Feature: BR-UC-001 Discover Available Inventory
     Then the request should be logged with timestamp, principal_id, and request parameters
     And the response should be logged with status and product count
     And policy check results should be logged (operation: policy_check)
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-products-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-products-request.json
 
   @T-UC-001-nfr-004 @nfr @nfr-004 @analysis-2026-03-09 @schema-v3.1
   Scenario: NFR-004 - Response latency SLA for product discovery
@@ -1419,7 +1419,7 @@ Feature: BR-UC-001 Discover Available Inventory
     # BR-RULE-209 INV-2: real ad platform calls suppressed
     # BR-RULE-209 INV-3: real billing suppressed
     # BR-RULE-209 INV-4: response includes sandbox: true
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-products-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-products-request.json
 
   @T-UC-001-sandbox-production @invariant @br-rule-209 @sandbox
   Scenario: Production account response does not include sandbox flag
@@ -1434,7 +1434,7 @@ Feature: BR-UC-001 Discover Available Inventory
     And the response should contain "products" array
     And the response should not include a sandbox field
     # BR-RULE-209 INV-5: production account -> sandbox absent
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-products-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-products-request.json
 
   @T-UC-001-sandbox-validation @invariant @br-rule-209 @sandbox
   Scenario: Sandbox account with invalid input returns real validation error
@@ -1448,7 +1448,7 @@ Feature: BR-UC-001 Discover Available Inventory
     And the error should include a suggestion for how to fix the issue
     # BR-RULE-209 INV-7: sandbox validation errors are real
     # POST-F3: suggestion field present
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-products-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-products-request.json
 
   @T-UC-001-boundary-sandbox-response @boundary @sandbox @schema-v3.1
   Scenario Outline: sandbox response flag boundary validation - <boundary_point>
@@ -1481,7 +1481,7 @@ Feature: BR-UC-001 Discover Available Inventory
     And the resolved collection should have kind "publication"
     And the resolved collection should have cadence "daily"
     # POST-S1, POST-S2: Buyer can evaluate inventory in the context of its recurring container
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-products-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-products-request.json
 
   @T-UC-001-v31-collection-status-ended @v3.1 @collection @collection-status
   Scenario: Collection with status "ended" is surfaced with status indicator
@@ -1495,7 +1495,7 @@ Feature: BR-UC-001 Discover Available Inventory
     Then the response status should be "completed"
     And any product referencing the ended collection should expose collection.status equal to "ended"
     # G36: ended collection visibility behavior is observable to the buyer
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-products-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-products-request.json
 
   @T-UC-001-v31-limited-series @v3.1 @collection @limited-series
   Scenario: Limited-series collection declares total_installments and bounded run
@@ -1512,7 +1512,7 @@ Feature: BR-UC-001 Discover Available Inventory
     And the limited_series.starts should be "2026-09-01T00:00:00Z"
     And the limited_series.ends should be "2026-10-27T00:00:00Z"
     # POST-S1, POST-S2: Buyer can evaluate bounded inventory windows
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-products-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-products-request.json
 
   @T-UC-001-v31-collection-distribution-cross-platform @v3.1 @collection @collection-distribution
   Scenario: Collection distribution carries platform-specific identifiers across publishers
@@ -1527,7 +1527,7 @@ Feature: BR-UC-001 Discover Available Inventory
     And the matched product's collection.distribution should include both publisher_domain entries
     And each distribution entry should carry at least one identifier with a typed value
     # POST-S1, POST-S8: Buyer can correlate the same logical collection across sellers
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-products-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-products-request.json
 
   @T-UC-001-v31-deadline-policy-applied @v3.1 @collection @deadline-policy
   Scenario: Collection deadline policy applies default lead times to installments
@@ -1544,7 +1544,7 @@ Feature: BR-UC-001 Discover Available Inventory
     And each installment should derive its draft_material_deadline from scheduled_at minus 14 days
     And booking_lead_days should be greater than or equal to cancellation_lead_days
     # POST-S1, POST-S2: Buyer can evaluate when material is due relative to airing
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-products-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-products-request.json
 
   @T-UC-001-v31-deadline-policy-business-days @v3.1 @collection @deadline-policy
   Scenario: Deadline policy with business_days_only counts business days only
@@ -1559,7 +1559,7 @@ Feature: BR-UC-001 Discover Available Inventory
     Then the booking_deadline should be calculated using business days (Monday-Friday) only
     And weekends should be excluded from the lead-time computation
     # G41: business-day calendar semantics are exercised
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-products-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-products-request.json
 
   @T-UC-001-v31-installment-override-deadline @v3.1 @collection @deadline-policy
   Scenario: Installment with explicit deadlines overrides the collection deadline policy
@@ -1572,7 +1572,7 @@ Feature: BR-UC-001 Discover Available Inventory
     | brand       | {"domain": "acme.com"}           |
     Then the override installment should use its explicit booking_deadline value
     And other installments without explicit deadlines should fall back to the collection deadline_policy
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-products-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-products-request.json
 
   @T-UC-001-v31-placement-definition-reuse @v3.1 @placement-definition
   Scenario: Product reuses a placement_id registered in adagents.json placement_definitions
@@ -1587,7 +1587,7 @@ Feature: BR-UC-001 Discover Available Inventory
     Then the response status should be "completed"
     And the matched product's placement_id "homepage-banner" should resolve to the registered placement_definition
     And the resolved placement_definition should expose its registered property_tags and format_ids
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-products-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-products-request.json
 
   @T-UC-001-v31-placement-definition-anyof @v3.1 @placement-definition @schema-anyof
   Scenario Outline: placement-definition anyOf(property_ids, property_tags) - <case>
@@ -1595,7 +1595,7 @@ Feature: BR-UC-001 Discover Available Inventory
     And the placement_definition has <scoping_present>
     When the seller validates the adagents.json placement_definition
     Then the placement_definition should be <validity>
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-products-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-products-request.json
 
     Examples:
       | case               | scoping_present                       | validity |
@@ -1617,7 +1617,7 @@ Feature: BR-UC-001 Discover Available Inventory
     And the federated product should expose a seller_agent_ref with agent_url "https://agent.acme.example"
     And the agent_url should use the https scheme
     And the seller_agent_ref should not populate the reserved id slot
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-products-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-products-request.json
 
   @T-UC-001-v31-seller-agent-ref-not-authorized @v3.1 @seller-agent-ref @federation
   Scenario: Seller agent reference not in authorized_agents is rejected as seller_not_authorized
@@ -1628,7 +1628,7 @@ Feature: BR-UC-001 Discover Available Inventory
     Then the seller should reject the seller_agent_ref with error code "seller_not_authorized"
     And the URL comparison should use AdCP canonicalization rules rather than byte equality
     # G40: URL canonicalization and seller_not_authorized error shape are exercised
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-products-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-products-request.json
 
   @T-UC-001-v31-genre-taxonomy-iab @v3.1 @collection @genre-taxonomy
   Scenario: Collection declares iab_content_3.0 genre_taxonomy with taxonomy IDs
@@ -1642,7 +1642,7 @@ Feature: BR-UC-001 Discover Available Inventory
     Then the response status should be "completed"
     And the resolved collection's genre_taxonomy should be "iab_content_3.0"
     And each genre value should be a valid identifier within the declared taxonomy
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-products-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-products-request.json
 
   @T-UC-001-v31-genre-taxonomy-custom @v3.1 @collection @genre-taxonomy
   Scenario: Collection with custom genre_taxonomy uses free-form values
@@ -1656,7 +1656,7 @@ Feature: BR-UC-001 Discover Available Inventory
     And the resolved collection's genre_taxonomy should be "custom"
     And genre values should be passed through verbatim without taxonomy validation
     # G38: taxonomy validation is conditional on the declared taxonomy
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-products-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-products-request.json
 
   @T-UC-001-v31-production-quality-tiers @v3.1 @collection @production-quality
   Scenario Outline: Collection production_quality maps to OpenRTB content.prodq - <quality>
@@ -1664,7 +1664,7 @@ Feature: BR-UC-001 Discover Available Inventory
     When a buyer requests products referencing that collection
     Then the resolved collection.production_quality should equal "<quality>"
     And the OpenRTB content.prodq value should equal <openrtb_prodq>
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-products-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-products-request.json
 
     Examples:
       | quality      | openrtb_prodq |
@@ -1681,14 +1681,14 @@ Feature: BR-UC-001 Discover Available Inventory
     | brand       | {"domain": "acme.com"}           |
     Then the resolved collection.related_collections should include collection_id "main-show" with relationship "spinoff"
     And the relationship value should be one of "spinoff", "companion", "sequel", "prequel", or "crossover"
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-products-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-products-request.json
 
   @T-UC-001-v31-collection-cadence-partition @v3.1 @collection @partition
   Scenario Outline: collection-cadence partition validation - <cadence>
     Given a collection declares cadence "<cadence>"
     When the seller validates the collection schema
     Then the cadence value should be <validity>
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-products-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-products-request.json
 
     Examples:
       | cadence    | validity |
@@ -1706,7 +1706,7 @@ Feature: BR-UC-001 Discover Available Inventory
     Given a collection_distribution entry uses identifier type "<id_type>"
     When the seller validates the collection-distribution schema
     Then the identifier type should be <validity>
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-products-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-products-request.json
 
     Examples:
       | id_type               | validity |
@@ -1753,7 +1753,7 @@ Feature: BR-UC-001 Discover Available Inventory
     # The finalize action is the protocol's commitment trigger -- before this, pricing
     # is indicative; after, the seller holds inventory until expires_at.
     # proposal_finalize: action=finalize is the commitment trigger; pricing transitions from indicative to firm
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/compliance/source/protocols/media-buy/scenarios/proposal_finalize.yaml
+    # @source repo=adcp ref=v3.2.7 path=static/compliance/source/protocols/media-buy/scenarios/proposal_finalize.yaml
 
   @T-UC-001-storyboard-finalize-uses-refine-vocabulary @schema-v3.1 @v3.1 @proposal @refine @finalize-action
   Scenario: Finalize action is encoded as a refine entry with action "finalize" (vocabulary lock)
@@ -1773,7 +1773,7 @@ Feature: BR-UC-001 Discover Available Inventory
     When the system resolves the seller agent reference
     Then the seller agent reference should be accepted as authorized
     # INV-3 holds: canonical agent_url matches authorized_agents entry
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-products-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-products-request.json
 
   @T-UC-001-inv-210-reject @invariant @BR-RULE-210 @error @v3.1 @federation @schema-v3.1
   Scenario Outline: BR-RULE-210 seller-agent-ref rejected - <condition>
@@ -1782,7 +1782,7 @@ Feature: BR-UC-001 Discover Available Inventory
     Then the federation reference should be rejected with "seller_not_authorized"
     And the error should include a "suggestion" field
     # INV-1 (uncanonicalizable), INV-2 (no match), INV-4 (non-https), INV-5 (missing url), INV-6 (id slot) -> seller_not_authorized
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-products-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-products-request.json
 
     Examples: Rejection conditions
       | condition                                                             |

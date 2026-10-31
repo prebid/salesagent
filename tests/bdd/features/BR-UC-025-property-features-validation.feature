@@ -51,7 +51,7 @@ Feature: BR-UC-025 Validate Property Delivery Compliance
     # POST-S3: Buyer knows compliance status
     # POST-S5: Buyer knows per-feature breakdown via features[]
     # POST-S6: Buyer knows validation timestamp
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/property/validate-property-delivery-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/property/validate-property-delivery-request.json
 
   @T-UC-025-delivery-rest @main-flow @rest @post-s3 @post-s6
   Scenario: Delivery validation via REST/A2A -- same semantics as MCP
@@ -63,7 +63,7 @@ Feature: BR-UC-025 Validate Property Delivery Compliance
     And the response includes validated_at timestamp
     # POST-S3: Compliance status via REST
     # POST-S6: Validation timestamp and list resolution
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/property/validate-property-delivery-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/property/validate-property-delivery-request.json
 
   @T-UC-025-delivery-transport @main-flow @post-s3
   Scenario Outline: Delivery validation via <transport> -- equivalent results
@@ -88,7 +88,7 @@ Feature: BR-UC-025 Validate Property Delivery Compliance
     # BR-RULE-192 INV-1: exactly one of four statuses
     # BR-RULE-192 INV-13: not_covered (recognized, no data) vs unidentified (type not resolvable) distinct from non_compliant
     # DEPRECATED: upstream removed -- violations[] removed in v3.1; per-failure detail now surfaced via features[].status="failed" (see T-UC-025-feature-failed-detail, T-UC-025-inv192-reserved-namespace)
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/property/validate-property-delivery-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/property/validate-property-delivery-request.json
 
     Examples:
       | status         | property         | features_state                                                    |
@@ -107,7 +107,7 @@ Feature: BR-UC-025 Validate Property Delivery Compliance
     And the violation entry includes a message
     # POST-S5: Buyer knows specific violations
     # BR-RULE-192 INV-2: non_compliant has violations
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/property/validate-property-delivery-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/property/validate-property-delivery-request.json
 
     Examples:
       | violation_code    |
@@ -139,7 +139,7 @@ Feature: BR-UC-025 Validate Property Delivery Compliance
     # POST-S4: Buyer knows authorization status
     # BR-RULE-191 INV-6: sales_agent_url triggers auth check
     # BR-RULE-192 INV-3: authorization_summary present when auth checks performed
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/property/validate-property-delivery-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/property/validate-property-delivery-request.json
 
   @T-UC-025-auth-statuses @main-flow @invariant @BR-RULE-192 @post-s4
   Scenario Outline: Authorization status classification -- <auth_status>
@@ -148,7 +148,7 @@ Feature: BR-UC-025 Validate Property Delivery Compliance
     When the Buyer Agent validates delivery with that record
     Then the result authorization status is "<auth_status>"
     # BR-RULE-192 INV-3: auth status is three-valued enum [authorized / unauthorized / unknown]
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/property/validate-property-delivery-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/property/validate-property-delivery-request.json
 
     Examples:
       | auth_status  |
@@ -165,7 +165,7 @@ Feature: BR-UC-025 Validate Property Delivery Compliance
     And authorization_summary is absent from the response
     # BR-RULE-191 INV-7: no auth check without sales_agent_url
     # BR-RULE-192 INV-3: authorization_summary absent when no auth records
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/property/validate-property-delivery-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/property/validate-property-delivery-request.json
 
   @T-UC-025-auth-mixed @main-flow @post-s4
   Scenario: Mixed authorization -- some records with sales_agent_url, some without
@@ -178,7 +178,7 @@ Feature: BR-UC-025 Validate Property Delivery Compliance
     And authorization_summary is present with records_checked 1
     # BR-RULE-191 INV-6/7: per-record opt-in authorization
     # BR-RULE-192 INV-3: summary present because at least one record had URL
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/property/validate-property-delivery-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/property/validate-property-delivery-request.json
 
   @T-UC-025-auth-independence @main-flow @invariant @BR-RULE-192 @post-s3 @post-s4
   Scenario: Authorization independent of compliance -- compliant but unauthorized
@@ -199,7 +199,7 @@ Feature: BR-UC-025 Validate Property Delivery Compliance
     And total_impressions equals compliant_impressions + non_compliant_impressions + not_covered_impressions + unidentified_impressions
     # BR-RULE-192 INV-4: total_records consistency
     # BR-RULE-192 INV-5: total_impressions consistency
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/property/validate-property-delivery-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/property/validate-property-delivery-request.json
 
   @T-UC-025-auth-summary-consistency @main-flow @invariant @BR-RULE-192 @post-s4
   Scenario: Authorization summary counters are internally consistent
@@ -217,7 +217,7 @@ Feature: BR-UC-025 Validate Property Delivery Compliance
     Then the results array contains <expected_count> records
     # BR-RULE-191 INV-5: include_compliant default behavior
     # BR-RULE-192 INV-7: results filtering
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/property/validate-property-delivery-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/property/validate-property-delivery-request.json
 
     Examples:
       | flag_state          | expected_count |
@@ -465,7 +465,7 @@ Feature: BR-UC-025 Validate Property Delivery Compliance
     And the error should include "suggestion" field
     And the suggestion should contain "account"
     # BR-RULE-191 INV-8: multi-account agent must disambiguate
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/property/validate-property-delivery-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/property/validate-property-delivery-request.json
 
   @T-UC-025-inv191-account-single @invariant @BR-RULE-191
   Scenario: BR-RULE-191 INV-8 counter -- single-account agent omits account
@@ -491,7 +491,7 @@ Feature: BR-UC-025 Validate Property Delivery Compliance
     And the violations array is present with at least one entry
     # BR-RULE-192 INV-2: violations required for non_compliant
     # DEPRECATED: upstream removed -- BR-RULE-192 INV-2 (violations[]) removed in v3.1
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/property/validate-property-delivery-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/property/validate-property-delivery-request.json
 
   @T-UC-025-inv192-violations-absent-compliant @deprecated @invariant @BR-RULE-192
   Scenario: BR-RULE-192 INV-2 counter-example -- compliant records have no violations
@@ -500,7 +500,7 @@ Feature: BR-UC-025 Validate Property Delivery Compliance
     Then the result has status "compliant"
     And no violations field is present on the result
     # BR-RULE-192 INV-2 counter: compliant = no violations
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/property/validate-property-delivery-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/property/validate-property-delivery-request.json
 
   @T-UC-025-inv192-auth-summary-present @invariant @BR-RULE-192
   Scenario: BR-RULE-192 INV-3 holds -- authorization_summary present when auth checks performed
@@ -560,7 +560,7 @@ Feature: BR-UC-025 Validate Property Delivery Compliance
     When the Buyer Agent validates delivery with that record
     Then the result features[] entry has status "<status>"
     # BR-RULE-192 INV-8: feature-check-status enum is [passed / failed / warning / unevaluated]
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/property/validate-property-delivery-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/property/validate-property-delivery-request.json
 
     Examples:
       | status      |
@@ -577,7 +577,7 @@ Feature: BR-UC-025 Validate Property Delivery Compliance
     Then the features[] entry feature_id is "<feature_id>"
     And the reserved namespace prefix is accepted for structural checks
     # BR-RULE-192 INV-9: record: and delivery: prefixes reserved for structural checks; MUST NOT be used for data features
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/property/validate-property-delivery-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/property/validate-property-delivery-request.json
 
     Examples:
       | feature_id                       |
@@ -594,7 +594,7 @@ Feature: BR-UC-025 Validate Property Delivery Compliance
     Then the features[] entry for "carbon_score" has status "failed"
     And the features[] entry requirement min_value equals 50
     # BR-RULE-192 INV-10: enables fix-and-retry loop without re-fetching list definition
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/property/validate-property-delivery-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/property/validate-property-delivery-request.json
 
   @T-UC-025-inv192-feature-confidence-range @invariant @BR-RULE-192 @v3-1 @boundary
   Scenario Outline: BR-RULE-192 INV-11 -- features[] confidence range [0, 1] -- <case>
@@ -603,7 +603,7 @@ Feature: BR-UC-025 Validate Property Delivery Compliance
     When the Buyer Agent validates delivery with that record
     Then the result is <outcome>
     # BR-RULE-192 INV-11: confidence bounded [0, 1] (migrated from BR-RULE-190 INV-4)
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/property/validate-property-delivery-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/property/validate-property-delivery-request.json
 
     Examples:
       | case             | value | outcome                                              |
@@ -619,7 +619,7 @@ Feature: BR-UC-025 Validate Property Delivery Compliance
     When the Buyer Agent validates delivery yielding summary.non_compliant_records = <non_compliant>
     Then the response root compliant flag is <root_compliant>
     # POST-S7 / BR-RULE-192 INV-12: compliant=true iff non_compliant_records===0
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/property/validate-property-delivery-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/property/validate-property-delivery-request.json
 
     Examples:
       | case                          | non_compliant | root_compliant                                                                |
@@ -636,7 +636,7 @@ Feature: BR-UC-025 Validate Property Delivery Compliance
     Then the result has status "<status>"
     And the status is distinct from non_compliant
     # BR-RULE-192 INV-13: not_covered = identifier recognized but no data; unidentified = identifier type not resolvable
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/property/validate-property-delivery-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/property/validate-property-delivery-request.json
 
     Examples:
       | case                                | identifier_state                                              | status        |
@@ -653,7 +653,7 @@ Feature: BR-UC-025 Validate Property Delivery Compliance
     And the summary object contains not_covered_records and not_covered_impressions
     And the summary object contains unidentified_records and unidentified_impressions
     # BR-RULE-192 INV-14: all ten counters are required
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/property/validate-property-delivery-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/property/validate-property-delivery-request.json
 
   @T-UC-025-features-absent-allowed @main-flow @v3-1 @post-s5
   Scenario: features[] is optional -- record may omit features[] when no features evaluated

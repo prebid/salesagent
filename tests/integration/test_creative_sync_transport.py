@@ -16,16 +16,22 @@ Covers: UC-006-ASYNC-LIFECYCLE-{01,02,03} (gap tests — not yet implemented)
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 import pytest
 from sqlalchemy import select
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Creative as DBCreative
-from tests.factories.creative_asset import build_assets, image_spec, text_spec
+from src.core.database.repositories.uow import CreativeUoW
+from tests.factories.core import set_adapter_type
+from tests.factories.creative_asset import build_assets, image_spec, named_format_assets, prompt_assets, text_spec
 from tests.harness import CreativeSyncEnv, Transport, assert_envelope
-from tests.helpers.creative_test_helpers import assert_stored_creative_assets, creative_payload
+from tests.helpers.creative_test_helpers import (
+    DEFAULT_FORMAT_REFERENCE,
+    assert_stored_creative_assets,
+    creative_payload,
+)
 
 
 def _error_codes(errors: list | None) -> list[str]:
@@ -156,17 +162,32 @@ class TestSyncCreativeCreateTransport:
             assert db_creative is None, "Dry-run creative should NOT be in the database"
 
 
-DEFAULT_AGENT_URL = "https://example.com/agent"
-DEFAULT_FORMAT_ID = {"id": "display_300x250", "agent_url": DEFAULT_AGENT_URL}
+def _assert_refused_for_its_manifest(result, transport) -> None:
+    """The sync completed and its one entry failed CREATIVE_VALIDATION_FAILED_GENERIC.
+
+    The code the seller gives a creative whose manifest lacks what its named format requires.
+    """
+    assert result.is_success, f"[{transport.value}] a per-creative refusal must not fail the sync"
+    assert_envelope(result, transport)
+    creative_result = result.payload.creatives[0]
+    assert creative_result.action == "failed"
+    assert _error_codes(creative_result.errors) == ["CREATIVE_VALIDATION_FAILED_GENERIC"]
 
 
 def _creative(creative_id: str = "c1", name: str = "Test", **overrides) -> dict:
-    """Build a minimal creative dict for transport tests."""
+    """Build a minimal creative dict for transport tests.
+
+    The format reference is ``creative_payload``'s own default, which is the committed
+    capture's identity. The ``DEFAULT_AGENT_URL = "https://example.com/agent"`` /
+    ``DEFAULT_FORMAT_ID = {"id": "display_300x250", ...}`` pair that stood here named a
+    format no agent serves at an agent no capture carries, so ``find_format`` resolved it
+    to nothing and ``get_format`` would have dialled ``https://example.com/agent/mcp``
+    once the registry stopped being mocked (salesagent-6xtxb).
+    """
     return creative_payload(
         **{
             "creative_id": creative_id,
             "name": name,
-            "format_id": DEFAULT_FORMAT_ID,
             **overrides,
         }
     )
@@ -333,9 +354,13 @@ class TestSyncFormatValidationTransport:
             registry_mock = env.mock["registry"].return_value
             registry_mock.get_format = AsyncMock(return_value=None)
 
+            # An id that exists NOWHERE. The default reference-agent id is one the canonical
+            # mapping registry projects, which makes it a real format whatever the agent's
+            # deprecated catalogue lists (template-format-ids.mdx § Compatibility).
+            unknown = {"agent_url": "https://creative.adcontextprotocol.org", "id": "nonexistent_format"}
             result = env.call_via(
                 transport,
-                creatives=[_creative(creative_id="c_bad_fmt", name="Bad Format")],
+                creatives=[_creative(creative_id="c_bad_fmt", name="Bad Format", format_id=unknown)],
             )
 
         assert result.is_success  # sync itself succeeds, individual creative fails
@@ -370,9 +395,13 @@ class TestSyncRegistryCachingTransport:
 
             assert result.is_success
             assert_envelope(result, transport)
-            # list_all_formats called once per sync, not per creative
-            registry = env.mock["registry"].return_value
-            assert registry.list_all_formats.call_count == 1
+            # Read off the real registry's own counter: production's list_all_formats
+            # ran, and it ran once for three creatives. A call_count on a stand-in
+            # would have said the same thing about a method that never executed.
+            assert env.catalogue_reads == 1, (
+                f"the catalogue must be fetched once per sync, not once per creative; "
+                f"3 creatives produced {env.catalogue_reads} catalogue read(s)"
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -401,7 +430,7 @@ class TestGenerativeBuildClassification:
                         "creative_id": "c_gen_01",
                         "name": "Generative Banner",
                         "format_id": fmt,
-                        "assets": build_assets(text_spec("message", content="Build me a banner")),
+                        "assets": prompt_assets("Build me a banner", text_spec("message", content="Build me a banner")),
                     }
                 ],
             )
@@ -446,7 +475,9 @@ class TestGenerativeBuildPromptMessage:
                         "creative_id": "c_gen_02",
                         "name": "Message Test",
                         "format_id": fmt,
-                        "assets": build_assets(text_spec("message", content="Create a holiday banner")),
+                        "assets": prompt_assets(
+                            "Create a holiday banner", text_spec("message", content="Create a holiday banner")
+                        ),
                     }
                 ],
             )
@@ -480,7 +511,9 @@ class TestGenerativeBuildPromptBrief:
                         "creative_id": "c_gen_03",
                         "name": "Brief Test",
                         "format_id": fmt,
-                        "assets": build_assets(text_spec("brief", content="Promote summer sale")),
+                        "assets": prompt_assets(
+                            "Promote summer sale", text_spec("brief", content="Promote summer sale")
+                        ),
                     }
                 ],
             )
@@ -514,7 +547,9 @@ class TestGenerativeBuildPromptRole:
                         "creative_id": "c_gen_04",
                         "name": "Prompt Role Test",
                         "format_id": fmt,
-                        "assets": build_assets(text_spec("prompt", content="Design a Q4 campaign banner")),
+                        "assets": prompt_assets(
+                            "Design a Q4 campaign banner", text_spec("prompt", content="Design a Q4 campaign banner")
+                        ),
                     }
                 ],
             )
@@ -529,13 +564,15 @@ class TestGenerativeBuildPromptRole:
 
 @pytest.mark.requires_db
 class TestGenerativeBuildPromptInputs:
-    """Prompt from inputs[0].context_description."""
+    """A generative creative with only inputs[0].context_description and no prompt asset."""
 
     @pytest.mark.parametrize("transport", ALL_TRANSPORTS, ids=lambda t: t.value)
-    def test_inputs_context_description_as_prompt(self, integration_db, transport):
-        """Covers: UC-006-GENERATIVE-CREATIVE-BUILD-05
+    def test_inputs_without_prompt_asset_is_refused(self, integration_db, transport):
+        """Covers: UC-006 @T-UC-006-rule-036-inv3
 
-        When no message/brief/prompt assets, inputs[0].context_description is used.
+        The captured generative format REQUIRES its ``generation_prompt`` asset, and the seller holds a
+        creative to its named format's required assets (core/format.json: "Required assets must be
+        provided for a valid creative"), so it is refused per item before any build.
         """
         with CreativeSyncEnv() as env:
             env.setup_default_data()
@@ -552,23 +589,21 @@ class TestGenerativeBuildPromptInputs:
             )
             result = env.call_via(transport, creatives=[creative])
 
-            assert result.is_success
-            assert_envelope(result, transport)
-
-            call_args = env.mock["registry"].return_value.build_creative.call_args
-            assert call_args is not None
-            assert call_args[1]["message"] == "Design for Q4 campaign"
+            _assert_refused_for_its_manifest(result, transport)
+            assert not env.mock["registry"].return_value.build_creative.called
 
 
 @pytest.mark.requires_db
 class TestGenerativeBuildNameFallback:
-    """Creative name as fallback prompt on CREATE."""
+    """A new generative creative with no prompt asset is refused, not built from its name."""
 
     @pytest.mark.parametrize("transport", ALL_TRANSPORTS, ids=lambda t: t.value)
-    def test_name_used_as_fallback_prompt(self, integration_db, transport):
-        """Covers: UC-006-GENERATIVE-CREATIVE-BUILD-06
+    def test_create_without_prompt_asset_is_refused(self, integration_db, transport):
+        """Covers: UC-006 @T-UC-006-rule-036-inv4
 
-        When no assets and no inputs, 'Create a creative for: {name}' is used.
+        The captured generative format REQUIRES its ``generation_prompt`` asset, and the seller holds a
+        creative to its named format's required assets (core/format.json: "Required assets must be
+        provided for a valid creative"), so it is refused per item before any build.
         """
         with CreativeSyncEnv() as env:
             env.setup_default_data()
@@ -584,24 +619,21 @@ class TestGenerativeBuildNameFallback:
             )
             result = env.call_via(transport, creatives=[creative])
 
-            assert result.is_success
-            assert_envelope(result, transport)
-
-            call_args = env.mock["registry"].return_value.build_creative.call_args
-            assert call_args is not None
-            assert call_args[1]["message"] == "Create a creative for: Holiday Sale Banner"
+            _assert_refused_for_its_manifest(result, transport)
+            assert not env.mock["registry"].return_value.build_creative.called
 
 
 @pytest.mark.requires_db
 class TestGenerativeBuildUpdatePreserve:
-    """Update without prompt preserves existing data."""
+    """An update without a prompt asset is refused and the existing data kept."""
 
     @pytest.mark.parametrize("transport", ALL_TRANSPORTS, ids=lambda t: t.value)
-    def test_update_without_prompt_skips_build(self, integration_db, transport):
-        """Covers: UC-006-GENERATIVE-CREATIVE-BUILD-07
+    def test_update_without_prompt_asset_is_refused(self, integration_db, transport):
+        """Covers: UC-006 @T-UC-006-rule-036-inv5
 
-        An UPDATE with no prompt in assets/inputs skips build_creative
-        and preserves existing generative data.
+        The captured generative format REQUIRES its ``generation_prompt`` asset, and the seller holds a
+        creative to its named format's required assets (core/format.json: "Required assets must be
+        provided for a valid creative"), so it is refused per item before any build. The stored creative keeps its generative data.
         """
         with CreativeSyncEnv() as env:
             env.setup_default_data()
@@ -615,7 +647,7 @@ class TestGenerativeBuildUpdatePreserve:
                         "creative_id": "c_gen_07",
                         "name": "Preserve Test",
                         "format_id": fmt,
-                        "assets": build_assets(text_spec("message", content="Initial prompt")),
+                        "assets": prompt_assets("Initial prompt", text_spec("message", content="Initial prompt")),
                     }
                 ],
             )
@@ -636,19 +668,14 @@ class TestGenerativeBuildUpdatePreserve:
             )
             result2 = env.call_via(transport, creatives=[creative2])
 
-            assert result2.is_success
-            assert_envelope(result2, transport)
-
-            # build_creative should NOT be called again (no prompt → skip build)
+            _assert_refused_for_its_manifest(result2, transport)
             assert registry.build_creative.call_count == build_calls_after_create, (
-                "build_creative should not be called on update without prompt"
+                "build_creative should not be called on a refused update"
             )
 
         # Verify existing generative data is preserved in DB
-        with get_db_session() as session:
-            db_creative = session.scalars(
-                select(DBCreative).filter_by(creative_id="c_gen_07", tenant_id="test_tenant")
-            ).first()
+        with CreativeUoW("test_tenant") as uow:
+            db_creative = uow.creatives.get_by_id("c_gen_07", "test_principal")
             assert db_creative is not None
             assert db_creative.data.get("generative_status") == "draft"
             assert db_creative.data.get("generative_context_id") == "ctx-test-123"
@@ -695,7 +722,8 @@ class TestGenerativeBuildUserAssetPriority:
                         # still derives the stored data["url"] from the assets block
                         # (_assets.py _extract_url_from_assets), so the assertion below is
                         # unchanged; only the retired spelling goes.
-                        "assets": build_assets(
+                        "assets": prompt_assets(
+                            "Build me a banner",
                             text_spec("message", content="Build me a banner"),
                             user_headline,
                             image_spec("image", url="https://user.example.com/image.png"),
@@ -737,9 +765,18 @@ class TestFormatValidationAdapter:
 
     @pytest.mark.parametrize("transport", ALL_TRANSPORTS, ids=lambda t: t.value)
     def test_adapter_format_skips_registry(self, integration_db, transport):
-        """Non-HTTP agent_url (adapter://) bypasses registry.get_format check."""
+        """A format the ADAPTER serves is resolved in process and never dialled.
+
+        The reference is one ``BroadstreetAdapter.creative_formats`` answers, and the
+        tenant's ``AdapterConfig`` says Broadstreet, so ``adapter_served_creative_formats``
+        puts it in the catalogue ``sync_creatives`` resolves against. It used to name
+        ``billboard`` at ``broadstreet://default`` -- neither a Broadstreet template id nor
+        this tenant's pseudo-URL -- so the only thing it could grade was the skipped dial,
+        and the creative itself was unresolvable (salesagent-zthsk).
+        """
         with CreativeSyncEnv() as env:
-            env.setup_default_data()
+            tenant, _principal = env.setup_default_data()
+            set_adapter_type(env, tenant.tenant_id, "broadstreet")
 
             result = env.call_via(
                 transport,
@@ -747,7 +784,10 @@ class TestFormatValidationAdapter:
                     {
                         "creative_id": "c_adapter_fmt",
                         "name": "Adapter Format Creative",
-                        "format_id": {"id": "billboard", "agent_url": "broadstreet://default"},
+                        "format_id": {
+                            "id": "broadstreet_static",
+                            "agent_url": f"broadstreet://{tenant.tenant_id}",
+                        },
                         "assets": build_assets(image_spec("banner")),
                     }
                 ],
@@ -758,9 +798,18 @@ class TestFormatValidationAdapter:
             assert len(result.payload.creatives) == 1
             assert result.payload.creatives[0].action == "created"
 
-            # registry.get_format should NOT be called for adapter formats
-            registry = env.mock["registry"].return_value
-            assert not registry.get_format.called, "get_format should not be called for adapter-provided formats"
+            # _validation.py skips the fetch entirely for a non-HTTP agent_url, so the
+            # real registry's own counter must still read zero.
+            #
+            # This reads `format_fetches` rather than a mock's await_count: the counter is
+            # production's own method with a count around it (salesagent-6xtxb removed the
+            # stand-in registry, 53ab31b94 added the counters). The sibling defect -- the
+            # agent-backed branch DIALLING a pseudo-URL -- is salesagent-zufx8 and is graded
+            # by tests/integration/test_media_buy_adapter_format_dial_guard.py, not here.
+            assert env.format_fetches == 0, (
+                f"an adapter-provided format must not be looked up with the creative "
+                f"agent, but get_format ran {env.format_fetches} time(s)"
+            )
 
 
 @pytest.mark.requires_db
@@ -795,10 +844,10 @@ class TestFormatValidationUnreachable:
         with CreativeSyncEnv() as env:
             env.setup_default_data()
 
-            # Override: get_format raises the typed error the registry actually
-            # raises for network failures (side_effect on the env's existing
-            # AsyncMock — mock-cap guard).
-            env.mock["registry"].return_value.get_format.side_effect = AdCPServiceUnavailableError()
+            # The fault goes on production's own get_format: it raises the typed error
+            # the registry raises for a connect failure or timeout, rather than a
+            # stand-in answering in its place.
+            env.fail_format_fetch(AdCPServiceUnavailableError())
 
             result = env.call_via(
                 transport,
@@ -857,7 +906,7 @@ class TestTypedTransientSurvivesCreativeBuild:
                         "creative_id": "c_rate_limited",
                         "name": "Rate Limited Build",
                         "format_id": fmt,
-                        "assets": build_assets(text_spec("message", content="Build me a banner")),
+                        "assets": prompt_assets("Build me a banner", text_spec("message", content="Build me a banner")),
                     }
                 ],
             )
@@ -982,7 +1031,14 @@ class TestAssignmentFormatCompatibility:
         assert creative_result.assignment_errors is not None
         assert pkg_id in creative_result.assignment_errors
         error_msg = creative_result.assignment_errors[pkg_id]
-        assert "not supported" in error_msg
+        # The two FORMAT IDENTITIES, not the sentence. This asserted the substring "not
+        # supported", which pinned the wording of a diagnostic record rather than anything a
+        # buyer can act on -- and it broke on a reword while every fact it meant to check
+        # still held. The values are what the record exists to carry: which format was
+        # refused and which the product accepts. Same reasoning as ``assert_wire_error``
+        # having deliberately no ``message_substr``.
+        assert "display_300x250" in error_msg, f"the record does not name the refused format: {error_msg}"
+        assert "video_30s" in error_msg, f"the record does not name what the product accepts: {error_msg}"
 
 
 @pytest.mark.requires_db
@@ -1013,7 +1069,7 @@ class TestAssignmentResultFields:
             product = ProductFactory(
                 tenant=tenant,
                 product_id="prod_assign",
-                format_ids=[DEFAULT_FORMAT_ID],
+                format_ids=[DEFAULT_FORMAT_REFERENCE],
             )
             mb = MediaBuyFactory(tenant=tenant, principal=principal, media_buy_id="mb_assign")
             MediaPackageFactory(
@@ -1144,25 +1200,36 @@ class TestStaticPreviewFailed:
 
     @pytest.mark.parametrize("transport", ALL_TRANSPORTS, ids=lambda t: t.value)
     def test_no_preview_no_url_fails(self, integration_db, transport):
-        """Static format with empty preview_creative result and no url → failed."""
-        from adcp.types import FormatId as LibraryFormatId
+        """Static format with empty preview_creative result and no url → failed.
 
+        RE-GROUNDED ON ITS OWN SUBJECT (salesagent-6xtxb). It used to hand-roll a
+        ``MagicMock()`` format whose ``canonical`` answered a fresh child mock, so
+        ``canonical_kind_for``'s first step read
+        ``"<MagicMock name='mock.canonical.kind' id=...>"`` and the pinned vocabulary
+        refused it. The creative came back ``action='failed'`` BEFORE the preview branch
+        was ever reached, so the test was green on an unresolvable format rather than on
+        the no-preview rejection it names -- and it would have asserted the same thing
+        with ``preview_creative`` returning a full set of previews.
+
+        Now the format is the capture's own ``display_generative``: a real static ``Format``
+        with ``canonical.kind = "image"`` whose only required asset is text, which RESOLVES,
+        so production reaches the static branch, calls ``preview_creative``, gets nothing
+        back, finds no media_url on the manifest, and rejects for the stated reason. A
+        display format would not do: the seller holds a creative to its named format's
+        required assets, and ``display_300x250_image`` requires an image, which is a url.
+        """
         with CreativeSyncEnv() as env:
             env.setup_default_data()
 
-            # Set up a static format (no output_format_ids) in the all_formats list
-            mock_format = MagicMock()
-            mock_format.format_id = LibraryFormatId(
-                agent_url=DEFAULT_AGENT_URL,
-                id="display_300x250",
-            )
-            mock_format.agent_url = DEFAULT_AGENT_URL
-            mock_format.output_format_ids = None  # Static, not generative
-            env.set_run_async_result([mock_format])
+            # The capture's own static format: resolvable, so the preview branch is
+            # reached. The catalogue is not narrowed -- it is the whole capture, which is
+            # what the e2e server serves.
+            env.served_format("display_generative", generative=False)
 
-            # preview_creative returns empty dict (no previews)
-            registry = env.mock["registry"].return_value
-            registry.preview_creative = AsyncMock(return_value={})
+            # The one thing this test configures: the agent answers the preview request
+            # with no previews. (A recorder because preview_creative has no capture --
+            # salesagent-1bc7l.)
+            env.mock["registry"].return_value.preview_creative = AsyncMock(return_value={})
 
             # Creative with format_id but no assets — tests the "no previews" path.
             # Uses dict because the test exercises the dict→CreativeAsset coercion
@@ -1174,15 +1241,14 @@ class TestStaticPreviewFailed:
                     {
                         "creative_id": "c_no_preview",
                         "name": "No Preview Creative",
-                        "format_id": DEFAULT_FORMAT_ID,
+                        "format_id": {"agent_url": DEFAULT_FORMAT_REFERENCE["agent_url"], "id": "display_generative"},
                         # `assets` is spec-REQUIRED (core/creative-asset.json
                         # required=[creative_id,name,assets]). Omitting it made this scenario
                         # depend on a transport accident: a2a hit an impl-side
                         # setdefault("assets", {}) and reached the no-preview logic, while
                         # mcp/rest failed earlier with a mid-pipeline VALIDATION_ERROR. An
-                        # empty map is spec-legal (no minProperties) and lets all three
-                        # transports grade the obligation this test is actually about.
-                        "assets": {},
+                        # map with the format's one required text asset carries no url.
+                        "assets": named_format_assets("display_generative", prompt="No media here"),
                     }
                 ],
                 validation_mode="lenient",
@@ -1225,7 +1291,7 @@ class TestGeminiKeyMissing:
                         "creative_id": "c_no_gemini",
                         "name": "No Gemini Key",
                         "format_id": fmt,
-                        "assets": build_assets(text_spec("message", content="Build a banner")),
+                        "assets": prompt_assets("Build a banner", text_spec("message", content="Build a banner")),
                     }
                 ],
                 validation_mode="lenient",
@@ -1411,7 +1477,7 @@ class TestAsyncLifecycleSubmitted:
     )
     def test_queued_sync_returns_submitted(self, integration_db):
         """Queued sync operation returns SyncCreativesSubmitted with context."""
-        from adcp.types.generated_poc.creative.sync_creatives_async_response_submitted import (  # TODO: no stable alias in adcp.types
+        from adcp.types.domains.creative.sync_creatives_async_response_submitted import (  # TODO: no stable alias in adcp.types
             SyncCreativesSubmitted,
         )
 
@@ -1447,7 +1513,7 @@ class TestAsyncLifecycleWorking:
     )
     def test_in_progress_returns_working_with_progress(self, integration_db):
         """Status check on in-progress async op returns SyncCreativesWorking."""
-        from adcp.types.generated_poc.creative.sync_creatives_async_response_working import (  # TODO: no stable alias in adcp.types
+        from adcp.types.domains.creative.sync_creatives_async_response_working import (  # TODO: no stable alias in adcp.types
             SyncCreativesWorking,
         )
 
@@ -1495,7 +1561,7 @@ class TestAsyncLifecycleInputRequired:
     )
     def test_approval_needed_returns_input_required(self, integration_db):
         """Async op needing approval returns SyncCreativesInputRequired."""
-        from adcp.types.generated_poc.creative.sync_creatives_async_response_input_required import (  # TODO: no stable alias in adcp.types
+        from adcp.types.domains.creative.sync_creatives_async_response_input_required import (  # TODO: no stable alias in adcp.types
             Reason,
             SyncCreativesInputRequired,
         )

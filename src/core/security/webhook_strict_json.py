@@ -6,7 +6,7 @@ primitive, built on the stdlib ``object_pairs_hook`` the spec itself
 prescribes, never a hand-rolled recursive walker, and never re-decided at a
 call site.
 
-Spec grounding: pinned AdCP 3.1.1, ``docs/building/by-layer/L1/security.mdx``
+Spec grounding: pinned ``docs/building/by-layer/L1/security.mdx``
 §Duplicate object keys — the legacy HMAC-SHA256 fallback's signer and verifier
 MUSTs, and step 14a: *"stdlib ``json.loads(..., object_pairs_hook=...)`` —
 detect duplicates inside the hook and raise. Satisfies the check."* The
@@ -94,7 +94,7 @@ def sanitize_key_names(names: Sequence[str]) -> tuple[str, ...]:
 class DuplicateKeyInput(Exception):
     """A JSON object in the parsed input repeats a key at some depth.
 
-    ``code`` is the spec's error identifier (AdCP 3.1.1 L1/security.mdx
+    ``code`` is the spec's error identifier (L1/security.mdx
     §Duplicate object keys) -- byte-exact, case-sensitive, never renamed to
     match a refactor. It is a plain class attribute, deliberately never
     surfaced as ``AdCPSalesAgentError.error_code``: ``duplicate_key_input`` is a

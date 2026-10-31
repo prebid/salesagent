@@ -12,10 +12,11 @@ The convergence removed one entry (``when_request._call_via`` folded into
 ``AccountListDispatchMixin.is_list_request`` discriminates on
 ``isinstance(kwargs["req"], ListAccountsRequest)``, so a raw list payload sent
 through ``env.call_via`` is misrouted to ``sync_accounts`` — so it is gated in
-place. Two read-back sites reach a transport directly and must not route through
+place. One read-back site reaches a transport directly and must not route through
 either ctx-writing entry, because ``ctx["result"]`` has exactly one producer and a
-read-back must not clobber the result the scenario is grading; they call
-``gate_and_record`` themselves.
+read-back must not clobber the result the scenario is grading; it calls
+``gate_and_record`` itself. A read-back that can hand ``dispatch_via_client`` a ctx
+of its own does that instead and is not listed.
 
 That is the complete set, and it may only shrink. A new direct site fails here.
 """
@@ -49,7 +50,6 @@ _ENTRY_MODULE = "steps/generic/_dispatch.py"
 #: this list buys the right to dispatch directly, never the right to skip the gate.
 #: ALLOWLISTS ONLY SHRINK. A new entry here is a design decision, not a fix.
 _DIRECT_DISPATCH_SITES = {
-    ("steps/domain/uc006_storyboard_creative_sync.py", "then_format_id_roundtrips_verbatim"),
     ("steps/domain/uc011_accounts.py", "_persisted_subscribers"),
 }
 

@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 from unittest.mock import ANY, MagicMock, Mock, patch
 
 import pytest
-from adcp.types.generated_poc.protocol.list_tasks_request import Filters as ListTasksFilters
+from adcp.types.domains.protocol.list_tasks_request import Filters as ListTasksFilters
 
 from src.core.database.models import WorkflowStep
 from src.core.exceptions import AdCPTaskNotFoundError
@@ -97,7 +97,6 @@ class TestListTasksTool:
 
         mock_workflow_repo.count_by_tenant.return_value = 1
         mock_workflow_repo.list_by_tenant.return_value = [sample_workflow_step]
-        mock_workflow_repo.get_mappings_for_steps.return_value = {"step_123": []}
 
         identity = self._make_identity(sample_tenant)
 
@@ -111,6 +110,21 @@ class TestListTasksTool:
         assert result.query_summary.total_matching == 1
         assert result.query_summary.returned == 1
 
+        # The six non-spec item fields are gone (salesagent-gweku), so the ROW a buyer
+        # receives carries only what ``protocol/list-tasks-response.json``'s tasks[] item
+        # declares. Asserted on the DUMP rather than the model, because the pinned parent
+        # is extra="allow": a stale construction site passing one of the six would put the
+        # value back on the wire as an extra, and only the dump can see that.
+        item = result.tasks[0].model_dump(mode="json")
+        for deleted in ("context_id", "tool_name", "owner", "associated_objects", "error_message", "summary"):
+            assert deleted not in item, f"non-spec '{deleted}' reached the list_tasks wire"
+        # The pinned members DO travel, so the absences above are a deletion, not an empty dump.
+        assert item["task_id"] == "step_123"
+        assert item["domain"] == "media-buy"
+
+        # No mapping read: ``associated_objects`` was that query's only consumer.
+        mock_workflow_repo.get_mappings_for_steps.assert_not_called()
+
     async def test_list_tasks_filters_by_status(
         self, mock_uow, mock_workflow_repo, sample_tenant, sample_workflow_step
     ):
@@ -119,7 +133,6 @@ class TestListTasksTool:
 
         mock_workflow_repo.count_by_tenant.return_value = 1
         mock_workflow_repo.list_by_tenant.return_value = [sample_workflow_step]
-        mock_workflow_repo.get_mappings_for_steps.return_value = {"step_123": []}
 
         identity = self._make_identity(sample_tenant)
 
@@ -131,7 +144,9 @@ class TestListTasksTool:
 
         assert result.tasks is not None
         mock_workflow_repo.count_by_tenant.assert_called_once_with(
-            status="requires_approval",
+            statuses=["requires_approval"],
+            tool_names=None,
+            step_ids=None,
             object_type=None,
             object_id=None,
             # list_tasks scopes to the caller now (#1808); it listed the
@@ -328,10 +343,15 @@ class TestGetTaskSpecFlags:
 
         result = await self._call(mock_uow, self._identity(), task_id="step_done", include_result=True)
 
-        # Validated into the pinned async-result union, so the concrete member carries its own
-        # envelope defaults; what this asserts is that the STORED payload survived into it.
-        assert result.result.root.media_buy_id == "mb_1"
-        assert result.result.root.packages == []
+        # VALIDATED against the pinned async-result union and then SHIPPED AS THE DOCUMENT.
+        # ``get-task-status-response.json`` types ``result`` as ``dict[str, Any]``, and adcp
+        # 9 ships ``AdcpAsyncResponseData`` as an ``Annotated[Union[...]]`` alias rather than
+        # a RootModel -- so there is no ``.root`` and nothing to unwrap. The validation still
+        # happens (a payload that is none of the union's members raises); it runs for its
+        # REFUSAL, and what reaches the wire is the stored document, which is what these two
+        # assertions read.
+        assert result.result["media_buy_id"] == "mb_1"
+        assert result.result["packages"] == []
 
     async def test_result_withheld_while_not_completed(self, mock_uow, mock_workflow_repo, completed_step):
         """Asking for the result of an unfinished task returns none — "when status is completed".
@@ -369,17 +389,14 @@ class TestGetTaskSpecFlags:
 
         result = await self._call(mock_uow, self._identity(), task_id="step_done", include_history=True)
 
-        assert [entry.model_dump(mode="json") for entry in result.history] == [
-            {
-                "timestamp": "2026-03-01T09:00:00Z",
-                "type": "request",
-                "data": {"packages": [{"product_id": "prod_1"}]},
-            },
-            {
-                "timestamp": "2026-03-01T09:05:00Z",
-                "type": "response",
-                "data": {"media_buy_id": "mb_1", "packages": []},
-            },
+        # The instant is compared, not its spelling: "Z" and "+00:00" are the same RFC 3339
+        # date-time, and the SDK's serializer chooses between them.
+        entries = [entry.model_dump(mode="json") for entry in result.history]
+        stamps = [datetime.fromisoformat(entry.pop("timestamp")) for entry in entries]
+        assert stamps == [datetime(2026, 3, 1, 9, 0, tzinfo=UTC), datetime(2026, 3, 1, 9, 5, tzinfo=UTC)]
+        assert entries == [
+            {"type": "request", "data": {"packages": [{"product_id": "prod_1"}]}},
+            {"type": "response", "data": {"media_buy_id": "mb_1", "packages": []}},
         ]
 
     async def test_history_omits_an_exchange_that_has_not_happened(self, mock_uow, mock_workflow_repo, completed_step):

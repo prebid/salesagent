@@ -1,6 +1,6 @@
 """Helpers for normalizing publisher_properties to AdCP discriminated union format.
 
-AdCP 2.13.0+ requires PublisherPropertySelector dicts to have a selection_type
+The spec requires PublisherPropertySelector dicts to have a selection_type
 discriminator ("all", "by_id", or "by_tag"). Legacy data and inventory profiles
 created via the admin UI "full JSON" mode may lack this field.
 

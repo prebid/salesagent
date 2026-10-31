@@ -12,7 +12,7 @@ _extract_text_from_asset_value handle:
 
 """
 
-from adcp.types import CreativeAsset
+from adcp.types import LegacyCreativeAsset as CreativeAsset
 
 from src.core.tools.creatives._assets import _extract_text_from_asset_value, _extract_url_from_asset_value
 from tests.factories.creative_asset import build_assets, image_spec, text_spec, video_spec

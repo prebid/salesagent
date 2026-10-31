@@ -55,6 +55,7 @@ import pytest
 from adcp.types import CreativeStatus
 
 from src.core.database.repositories.uow import CreativeUoW
+from tests.factories import seeded_format_identity
 from tests.harness import CreativeListEnv
 from tests.harness.transport import Transport
 from tests.helpers.log_capture import capture_logs
@@ -88,8 +89,7 @@ def _seed_creative(env: CreativeListEnv, *, name: str, status: Any = _REPOSITORY
         assert uow.creatives is not None
         db_creative = uow.creatives.create(
             name=name,
-            agent_url="https://creative.adcontextprotocol.org",
-            format="display_300x250",
+            identity=seeded_format_identity(format_id="display_300x250"),
             principal_id=principal.principal_id,
             data={"assets": {}},
             **status_kwargs,

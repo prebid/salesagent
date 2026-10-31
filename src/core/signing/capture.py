@@ -149,7 +149,7 @@ class HttpExchange:
         only the third is a question the SDK can be asked. Exactly one present is a REFUSAL
         the SDK raises (``request_signature_header_malformed``): the two headers are a bound
         pair, and one without the other is a downgrade vector where a proxy strips
-        ``Signature-Input`` and leaves ``Signature`` (security.mdx @ v3.1.1 :1225). So this
+        ``Signature-Input`` and leaves ``Signature`` (security.mdx :1225). So this
         answers "either", and the verifier sorts out which.
 
         A METHOD on the capture rather than a helper beside each caller, because it has two

@@ -2,7 +2,8 @@
 
 Factories: TenantFactory, CurrencyLimitFactory, PropertyTagFactory, PublisherPartnerFactory
 Helpers: set_adapter_test_behavior (persist adapter test-behavior to AdapterConfig),
-get_or_create (idempotent factory seeding for shared-DB e2e_rest scenarios)
+get_or_create (idempotent factory seeding for shared-DB e2e_rest scenarios),
+seed_property_tag_selection (the property-tag rows the admin product form requires)
 """
 
 from __future__ import annotations
@@ -235,6 +236,28 @@ class PropertyTagFactory(factory.alchemy.SQLAlchemyModelFactory):
     tag_id = Sequence(lambda n: f"tag_{n:04d}")
     name = LazyAttribute(lambda o: f"Tag {o.tag_id}")
     description = LazyAttribute(lambda o: f"Description for {o.name}")
+
+
+def seed_property_tag_selection(tenant: Tenant, env: Any = None) -> str:
+    """Seed what the admin product form's property picker requires, and return its value.
+
+    The product-create handler refuses a ``selected_property_tags`` entry that no
+    authorized property of that publisher carries, so posting the form needs two rows:
+    the tenant's ``all_inventory`` tag and an authorized property tagged with it. The
+    return value is the ``"<publisher_domain>:all_inventory"`` string the picker submits.
+
+    ``env`` is a BDD harness env, so the tag is reused when a prior scenario left it in the
+    shared e2e_rest database (:func:`get_or_create`). A test with its own rolled-back
+    database passes none, and the tag is created.
+    """
+    get_or_create(
+        env,
+        PropertyTag,
+        {"tenant_id": tenant.tenant_id, "tag_id": "all_inventory"},
+        lambda: PropertyTagFactory(tenant=tenant, tag_id="all_inventory", name="All Inventory"),
+    )
+    authorized = AuthorizedPropertyFactory(tenant=tenant, tags=["all_inventory"])
+    return f"{authorized.publisher_domain}:all_inventory"
 
 
 class CreativeAgentFactory(factory.alchemy.SQLAlchemyModelFactory):

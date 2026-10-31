@@ -10,11 +10,12 @@ from __future__ import annotations
 import logging
 import uuid
 from datetime import UTC, datetime
-from typing import Any, NamedTuple, cast
+from typing import Any, NamedTuple
 
-from sqlalchemy import SQLColumnExpression, and_, case, func, or_, select
+from sqlalchemy import SQLColumnExpression, case, func, or_, select
 from sqlalchemy.orm import Session, attributes
 
+from src.core.database.mapping.creative import CREATIVE_MAPPER
 from src.core.database.models import (
     Creative,
     CreativeAssignment,
@@ -25,7 +26,11 @@ from src.core.database.models import (
     Product,
 )
 from src.core.database.repositories.effects import SessionEffectsMixin
-from src.core.schemas import CreativeStatus
+from src.core.schemas import (
+    CreativeFormatIdentity,
+    CreativeStatus,
+    FormatKey,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -34,12 +39,25 @@ logger = logging.getLogger(__name__)
 #: enums/creative-status.json is where the value lives.
 ARCHIVED_STATUS = CreativeStatus.archived.value
 
+#: The stored creative statuses that clear a creative to serve. ``active`` is what a
+#: creative already serving reads as, so it counts alongside ``approved``.
+CLEARED_CREATIVE_STATUSES = frozenset({"approved", "active"})
+
 
 class CreativeListResult(NamedTuple):
     """Result of a paginated creative listing query."""
 
     creatives: list[Creative]
     total_count: int
+
+
+#: THE ONE mapping from a format identity to the four columns that store it, under the name
+#: this module's callers already know it by. The implementation moved onto the creative
+#: mapper, which is the layer that owns the translation between a creative asset and its row
+#: and which cannot be defined while a column of that row is unaccounted for --
+#: :meth:`CreativeMapper.identity_columns` carries the reasoning. Nothing about the mapping
+#: changed; this is the same function reached through its new owner.
+_identity_columns = CREATIVE_MAPPER.identity_columns
 
 
 def _assignment_count_of(creative: type[Creative]) -> SQLColumnExpression[int]:
@@ -125,12 +143,12 @@ class CreativeRepository(SessionEffectsMixin):
         principal_id: str,
         *,
         statuses: list[str] | None = None,
-        format: str | None = None,
         tags: list[str] | None = None,
         tags_any: list[str] | None = None,
         has_variables: bool | None = None,
         creative_ids: list[str] | None = None,
-        format_ids: list[tuple[str, str]] | None = None,
+        format_ids: list[FormatKey] | None = None,
+        format_kinds: list[str] | None = None,
         created_after: datetime | None = None,
         created_before: datetime | None = None,
         search: str | None = None,
@@ -145,13 +163,18 @@ class CreativeRepository(SessionEffectsMixin):
 
         Returns a CreativeListResult with the matching creatives and total count.
 
-        ``statuses`` is a LIST because that is what the filter is: AdCP 3.1.1
+        ``statuses`` is a LIST because that is what the filter is: AdCP.1
         core/creative-filters.json declares ``statuses`` (an array, minItems 1) and no
         singular sibling. It used to be a single ``status`` string, which silently
         answered a two-status request with a one-status query.
 
-        ``format_ids`` carries (agent_url, id) pairs — the pin's format_id is an object,
-        so matching one member alone would return another agent's like-named format.
+        ``format_ids`` carries ``FormatKey`` values — the pin's format_id is an object, so
+        matching one member alone would return another agent's like-named format, and the key
+        is what carries the canonicalization the comparison requires.
+
+        ``format_kinds`` carries bare canonical kinds and is matched against the
+        ``format_kind`` COLUMN, which is the identity — see the where-clause note below for
+        why that is not the same thing as "the creatives that were synced canonically".
         """
         # Build base query - filter by tenant AND principal for security
         stmt = select(Creative).filter_by(
@@ -169,7 +192,7 @@ class CreativeRepository(SessionEffectsMixin):
                 Creative.creative_id == CreativeAssignment.creative_id,
             ).where(CreativeAssignment.media_buy_id.in_(media_buy_ids))
 
-        # AdCP 3.1.1 core/creative-filters.json, on the filter object itself: "By default,
+        # core/creative-filters.json, on the filter object itself: "By default,
         # archived creatives are excluded from results. To include archived creatives,
         # explicitly filter by status='archived' or include 'archived' in the statuses
         # array." So an explicit list is honoured verbatim (naming `archived` is how a
@@ -180,34 +203,40 @@ class CreativeRepository(SessionEffectsMixin):
         else:
             stmt = stmt.where(Creative.status != ARCHIVED_STATUS)
 
-        if format:
-            stmt = stmt.where(Creative.format == format)
-
         if creative_ids:
             stmt = stmt.where(Creative.creative_id.in_(creative_ids))
 
-        if format_ids:
-            # format_id is an OBJECT in v3.1 (core/format-id.json: agent_url + id), and the
-            # two columns that store it are independent — so each pair must match together.
+        if format_ids is not None:
+            # One indexed IN over the stored comparison key. The caller hands the keys of the
+            # stored references its filter names (``legacy_format_references``), each built by
+            # the ONE key builder (``format_id_identity``), so an agent differing only in host
+            # case, a default port, an IDN form or a trailing slash is the same agent here.
+            # ``is not None`` and not truthiness: an EMPTY list is a filter that named no stored
+            # reference, which matches nothing -- read as "no filter" it returned the library.
+            stmt = stmt.where(Creative.legacy_format_key.in_(format_ids))
+
+        if format_kinds:
+            # The canonical kind is a COLUMN, so this is one IN over the stored identity --
+            # not a projection repeated per row at read time. core/creative-filters.json:
+            # "Filter by canonical format kinds. Returns creatives matching any supplied
+            # kind", with ``format_ids`` beside it marked deprecated and pointing here.
             #
-            # CEILING: the pairs arrive with agent_url in the spec's canonical form, but the
-            # column holds whatever the write path stored, so the comparison accepts the
-            # canonical spelling and the same URL without its trailing slash. Two agent_urls
-            # differing in anything else the canonicalization normalizes (case, a default
-            # port, an IDN host) read as different agents here, where format_id_identity
-            # would treat them as one. Closing that means storing the canonical form on the
-            # write path; a column comparison cannot canonicalize.
-            stmt = stmt.where(
-                or_(
-                    *[
-                        and_(
-                            Creative.agent_url.in_([agent_url, agent_url.rstrip("/")]),
-                            Creative.format == format_id,
-                        )
-                        for agent_url, format_id in format_ids
-                    ]
-                )
-            )
+            # IT MATCHES BOTH ARMS, which is the whole point and is easy to get wrong. A
+            # creative synced by a legacy ``format_id`` carries the kind that reference
+            # PROJECTS to (``creative_identity_of`` runs the normative v1 -> v2 order and
+            # ``_identity_columns`` stores the result), so a ``display_300x250`` creative
+            # matches ``image`` even though its wire entry carries ``format_id`` and no
+            # ``format_kind`` -- the wire picks one arm (``wire_format_kind``) and the
+            # IDENTITY is what a filter keys on. Narrowing this to canonically-synced rows
+            # would make ``format_kind`` an arm marker, which is the inversion this column
+            # exists to remove.
+            #
+            # A row whose projection did not resolve holds NULL here and therefore matches
+            # nothing, which is the sixth normative step's fail-closed behaviour arriving
+            # for free: ``IN`` is NULL for a NULL left side, and a creative with no
+            # canonical identity is not KNOWN to be any kind. Do not coalesce it to a
+            # default -- that would answer with a fabricated identity.
+            stmt = stmt.where(Creative.format_kind.in_(format_kinds))
 
         # v3.1 concept_ids filter: concepts group related creatives across sizes
         # and formats (e.g. Flashtalking concepts, Celtra campaign folders). The
@@ -312,6 +341,22 @@ class CreativeRepository(SessionEffectsMixin):
             grouped.setdefault(row.creative_id, []).append(row)
         return grouped
 
+    def legacy_format_references(self, principal_id: str) -> list[tuple[FormatKey, dict[str, Any]]]:
+        """Each distinct legacy reference the principal's creatives retain, with its comparison key.
+
+        The deprecated ``format_ids`` filter of ``list_creatives`` matches a creative by the
+        canonical shape its reference normalizes to, which is not a column. The caller
+        decides which of these references a filter names and hands their keys back to
+        :meth:`get_by_principal`, so the page query stays one indexed ``IN``.
+        """
+        rows = self._session.execute(
+            select(Creative.legacy_format_key, Creative.legacy_format_id)
+            .filter_by(tenant_id=self._tenant_id, principal_id=principal_id)
+            .where(Creative.legacy_format_key.isnot(None), Creative.legacy_format_id.isnot(None))
+            .distinct()
+        ).all()
+        return [(FormatKey(key), document) for key, document in rows]
+
     def list_by_principal(self, principal_id: str) -> list[Creative]:
         """Get all creatives for a principal within the tenant (no pagination)."""
         return list(
@@ -332,9 +377,7 @@ class CreativeRepository(SessionEffectsMixin):
         *,
         creative_id: str | None = None,
         name: str,
-        agent_url: str,
-        format: str,
-        format_parameters: dict | None = None,
+        identity: CreativeFormatIdentity,
         principal_id: str,
         # Must stay a member of the AdCP CreativeStatus enum: list_creatives parses this
         # value through the closed spec enum, so a non-member default (this was "pending")
@@ -352,9 +395,7 @@ class CreativeRepository(SessionEffectsMixin):
             tenant_id=self._tenant_id,
             creative_id=creative_id or str(uuid.uuid4()),
             name=name,
-            agent_url=agent_url,
-            format=format,
-            format_parameters=cast(dict | None, format_parameters),
+            **_identity_columns(identity),
             principal_id=principal_id,
             status=status,
             created_at=datetime.now(UTC),
@@ -363,6 +404,16 @@ class CreativeRepository(SessionEffectsMixin):
         self._session.add(db_creative)
         self._session.flush()
         return db_creative
+
+    def set_identity(self, creative: Creative, identity: CreativeFormatIdentity) -> None:
+        """Replace a creative's stored format identity, all four columns together.
+
+        The same mapping ``create`` uses, so an update cannot write a combination a create
+        never would — which is what happened while the identity was three partial columns and
+        each path assigned them itself.
+        """
+        for column, value in _identity_columns(identity).items():
+            setattr(creative, column, value)
 
     def update_data(self, creative: Creative, data: dict) -> None:
         """Update the JSONB data field on a creative and flag it as modified."""
@@ -532,7 +583,7 @@ class CreativeAssignmentRepository:
         creatives = CreativeRepository(self._session, self._tenant_id).admin_get_by_ids(
             [a.creative_id for a in assignments]
         )
-        return [c.creative_id for c in creatives if c.status not in ("approved", "active")]
+        return [c.creative_id for c in creatives if c.status not in CLEARED_CREATIVE_STATUSES]
 
     def get_by_package(self, package_id: str) -> list[CreativeAssignment]:
         """Get all assignments for a package within the tenant."""
@@ -563,6 +614,33 @@ class CreativeAssignmentRepository:
                 )
             ).all()
         )
+
+    def package_creative_set(self, media_buy_id: str, package_id: str) -> list[tuple[Creative, list[str] | None]]:
+        """The creatives assigned to one package of one media buy, each with its ``placement_ids``.
+
+        The package's whole creative set as the session holds it, pending writes included,
+        which is what the placement-coverage rule grades once a request's assignments are in
+        place. The flush is explicit: an assignment the caller added and has not flushed is
+        invisible to the select on a session that does not autoflush, and the rule would
+        then grade the set without it. Joined on the assignment's composite FK, so each
+        creative is the assigning principal's own row.
+        """
+        self._session.flush()
+        rows = self._session.execute(
+            select(Creative, CreativeAssignment.placement_ids)
+            .join(
+                CreativeAssignment,
+                (CreativeAssignment.creative_id == Creative.creative_id)
+                & (CreativeAssignment.tenant_id == Creative.tenant_id)
+                & (CreativeAssignment.principal_id == Creative.principal_id),
+            )
+            .where(
+                CreativeAssignment.tenant_id == self._tenant_id,
+                CreativeAssignment.media_buy_id == media_buy_id,
+                CreativeAssignment.package_id == package_id,
+            )
+        ).all()
+        return [(creative, placement_ids) for creative, placement_ids in rows]
 
     def get_existing(
         self,
@@ -600,6 +678,7 @@ class CreativeAssignmentRepository:
         principal_id: str,
         weight: int = 100,
         placement_ids: list[str] | None = None,
+        inline: bool = False,
     ) -> CreativeAssignment:
         """Create a new assignment within this tenant.
 
@@ -610,6 +689,9 @@ class CreativeAssignmentRepository:
         ``placement_ids`` is placement-specific targeting (adcp#208), carried for
         the ``creative_assignments`` branch of ``update_media_buy``; None leaves the
         column as the model defaults it, which is what every other caller wants.
+
+        ``inline`` marks an assignment made from a package's inline ``creatives``, the set
+        ``update_media_buy``'s inline replacement owns (``CreativeAssignment.inline``).
 
         The assignment id is minted HERE and nowhere else. ``create_media_buy`` and
         ``update_media_buy`` each generated their own ``assign_<hex>``, so the table
@@ -626,6 +708,7 @@ class CreativeAssignmentRepository:
             principal_id=principal_id,
             weight=weight,
             placement_ids=placement_ids,
+            inline=inline,
             created_at=datetime.now(UTC),
         )
         if placement_ids is not None:

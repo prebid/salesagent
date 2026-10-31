@@ -27,6 +27,8 @@ import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal
 
+from src.core.exceptions import AdCPInvalidRequestError
+
 if TYPE_CHECKING:
     from adcp.types import McpWebhookPayload
     from adcp.webhooks import GeneratedTaskStatus
@@ -178,7 +180,7 @@ def build_webhook_envelope(
 ) -> McpWebhookPayload:
     """THE shape of every AdCP webhook this seller POSTs.
 
-    One builder for both senders. AdCP 3.1.1 ``L3/webhooks.mdx`` :217 separates the wire
+    One builder for both senders. ``L3/webhooks.mdx`` :217 separates the wire
     ENVELOPE from the task-specific ``result`` and says the result "is not valid as the
     top-level POST body by itself"; :308 makes the envelope a function of the registration
     CHANNEL, and every registration this seller accepts arrives through the AdCP one. So
@@ -204,6 +206,32 @@ def build_webhook_envelope(
     from adcp import create_mcp_webhook_payload
 
     from src.core.webhook_validator import validate_webhook_task_type
+
+    if operation_id is None:
+        # Refused HERE, where the one envelope shape is decided, rather than passed on as
+        # ``None``. core/push-notification-config.json leaves ``operation_id`` optional on
+        # the REGISTRATION while core/mcp-webhook-payload.json makes it required on the
+        # ENVELOPE, and the spec forbids recovering it by parsing the receiver URL -- so a
+        # registration without one names no deliverable webhook. the pinned SDK typed the
+        # parameter ``str | None`` and built a schema-invalid body; the pinned SDK types it ``str``
+        # and refuses. This is the same refusal, raised by the seller with the reason.
+        #
+        # TYPED, not ``ValueError``. It used to be a bare ``ValueError`` carrying the
+        # reason as a sentence, and the two senders then could not tell it apart from
+        # an arbitrary runtime fault: both held an ``except Exception`` whose job was to
+        # keep a transport failure from breaking the work around it, so a DELIBERATE
+        # refusal with a buyer-correctable cause went into the same log-and-continue as
+        # a dropped socket. ``AdCPInvalidRequestError`` is the code AdCP.1
+        # ``L3/webhooks.mdx`` :141 names for this condition, and being a typed refusal
+        # is what lets each sender give it the shape its own route is owed: the
+        # registration gate answers the buyer, the scheduler suppresses the stream.
+        #
+        # No text is authored here. ``message``/``recovery``/``suggestion`` are
+        # read-only over CODE_TABLE (ADR-010); ``field`` is the one locatable fact, and
+        # it names ``operation_id`` without a container prefix because this builder
+        # serves both registration shapes -- a ``push_notification_config`` and a
+        # ``reporting_webhook``. Each sender's own refusal names the prefixed field.
+        raise AdCPInvalidRequestError(field="operation_id")
 
     return create_mcp_webhook_payload(
         task_id=task.task_id,

@@ -6,16 +6,20 @@ shared implementation pattern from CLAUDE.md.
 
 import logging
 import time
+from collections.abc import Iterator
 from typing import Any, cast
 
-# FIXME(#1388): FormatId, ProductFilters have local subclasses; import from src.core.schemas (Pattern #7/#4).
-from adcp import FormatId
-from adcp import Product as LibraryProduct
 from adcp.types import PropertyListReference
+from adcp.types.legacy import LegacyProduct as LibraryProduct
 
+# The FIXME(#1388) import of FormatReferenceStructuredObject that stood here is gone with
+# its only use: standard_formats_only's isinstance(str | dict | FormatId) chain, which was
+# guarding against shapes a converted product cannot hold. One fewer library type imported
+# past its local subclass, which is what that FIXME asked for.
 from src.adapters import get_adapter_default_channels
 from src.core.audit_logger import get_audit_logger
-from src.core.errors.details import PolicyViolationDetails
+from src.core.errors.codes import ErrorCode
+from src.core.errors.details import ErrorDetails, PolicyViolationDetails
 from src.core.exceptions import (
     AdCPAuthorizationError,
     AdCPInternalError,
@@ -23,12 +27,25 @@ from src.core.exceptions import (
     AdCPSalesAgentError,
     AdCPValidationError,
 )
+from src.core.format_resolver import (
+    bundled_extension_definitions,
+    declaration_platform_extensions,
+    format_declaration_divergence,
+    platform_extension_collisions,
+    product_format_kinds,
+    product_format_option_identities,
+    seller_format_catalogue,
+)
+from src.core.format_satisfaction import accepts_legacy_reference
 from src.core.helpers import enum_value
 from src.core.helpers.channel_helpers import effective_channel_names
 from src.core.resolved_identity import PublicIdentity
 from src.core.schemas import (
+    Error,
+    FormatOptionIdentity,
     GetProductsRequest,  # OURS, extending the SDK's — the accepted shape
     GetProductsResponse,
+    LibraryErrorSource,
     Product,  # Extends library Product
 )
 from src.core.validation_helpers import safe_parse_json_field
@@ -49,7 +66,9 @@ def get_recommended_cpm(product: Product) -> float | None:
         Recommended CPM value (p75) from price_guidance, or None if not available
     """
     for option in product.pricing_options:
-        inner = option.root
+        # The element IS the member: Product.pricing_options holds the arms, not the
+        # RootModel wrapper the pinned SDK deleted.
+        inner = option
         price_guidance = getattr(inner, "price_guidance", None)
         if inner.pricing_model.upper() == "CPM" and price_guidance:
             p75 = price_guidance.p75
@@ -79,13 +98,17 @@ def extract_product_property_ids(
 
     property_ids: set[str] = set()
     for selector in publisher_properties:
-        inner = selector.root
-        if inner.selection_type == "all":
+        # No ``.root``: the pinned SDK ships PublisherPropertySelector as the union of its three
+        # arms rather than a RootModel over them, so the selector IS the arm.
+        if selector.selection_type == "all":
             # Product covers ALL properties for this domain
             return None
-        elif inner.selection_type == "by_id":
-            for pid in inner.property_ids:
-                property_ids.add(pid.root)
+        elif selector.selection_type == "by_id":
+            for pid in selector.property_ids:
+                # ``PropertyId`` is a ``ScalarStr`` -- a plain ``str`` subclass -- from
+                # the pinned SDK on, and it keeps ``.root`` as a compatibility accessor returning
+                # the same string. Read it as the string it is.
+                property_ids.add(str(pid))
         # by_tag: we don't resolve tags to IDs here; tags are excluded from matching
 
     return property_ids
@@ -166,6 +189,24 @@ def _products_message(count: int, *, anonymous: bool) -> str:
     return base
 
 
+def _format_declaration_findings(products: list[Product]) -> Iterator[tuple[int, ErrorDetails]]:
+    """Each product's ``FORMAT_DECLARATION_DIVERGENT`` details, keyed by its response index.
+
+    A product's v1_format_ref divergence comes first, then each platform-extension collision
+    on its declarations, so every advisory for the code is built in one place.
+    """
+    for index, product in enumerate(products):
+        divergence = format_declaration_divergence(product.product_id, product.format_options)
+        if divergence is not None:
+            yield index, divergence
+    for index, product in enumerate(products):
+        for declaration in product.format_options or ():
+            for collision in platform_extension_collisions(
+                declaration_platform_extensions(declaration), bundled_extension_definitions()
+            ):
+                yield index, collision
+
+
 async def _get_products_impl(req: GetProductsRequest, identity: PublicIdentity) -> GetProductsResponse:
     """Shared implementation for get_products.
 
@@ -190,7 +231,7 @@ async def _get_products_impl(req: GetProductsRequest, identity: PublicIdentity) 
     # resolver, so there is no empty-catalog answer for one.
     tenant = identity.tenant
 
-    # Extract offering text from brand (adcp 3.6.0: brand replaces brand_manifest).
+    # Extract offering text from brand (the pinned SDK: brand replaces brand_manifest).
     # req.brand is BrandReference | None (Pydantic model with .domain attribute).
     offering = None
     if req.brand:
@@ -249,7 +290,7 @@ async def _get_products_impl(req: GetProductsRequest, identity: PublicIdentity) 
                 policy_result = await policy_service.check_brief_compliance(
                     brief=brief_text,
                     promoted_offering=offering,  # Use extracted offering from brand
-                    brand_manifest=None,  # adcp 3.6.0: brand_manifest replaced by brand; policy service still accepts None
+                    brand_manifest=None,  # the pinned SDK: brand_manifest replaced by brand; policy service still accepts None
                     tenant_policies=tenant_policies if tenant_policies else None,
                 )
 
@@ -271,7 +312,7 @@ async def _get_products_impl(req: GetProductsRequest, identity: PublicIdentity) 
                 )
 
             except Exception as e:
-                # structural-guard: fail-open is conformant at AdCP 3.1.1.
+                # structural-guard: fail-open is conformant at AdCP.
                 # `errors` is required on get-products-response.json only in its
                 # `if status == "failed"` branch; this path completes and returns
                 # products, so no emission condition applies. There is also no
@@ -431,7 +472,7 @@ async def _get_products_impl(req: GetProductsRequest, identity: PublicIdentity) 
         from src.services.dynamic_products import generate_variants_for_brief
 
         # A signals agent records its deployments against a ``destination.agent_url``, which
-        # AdCP 3.1.1 declares "format": "uri" (core/destination.json), and
+        # declares "format": "uri" (core/destination.json), and
         # ``extract_activation_key`` picks ours by comparing that string to this one. So it
         # is the URL the agent card publishes — the one accessor, so the two cannot name
         # different agents — never the bare host, which carries no scheme and may carry a
@@ -455,11 +496,11 @@ async def _get_products_impl(req: GetProductsRequest, identity: PublicIdentity) 
 
             logger.info(f"[GET_PRODUCTS] Added {len(dynamic_variants)} dynamic product variants")
     except (ImportError, RuntimeError, OSError) as e:
-        # structural-guard: fail-open is conformant at AdCP 3.1.1.
+        # structural-guard: fail-open is conformant at AdCP.
         # get-products-response.json requires `errors` ONLY in its `if status ==
         # "failed"` branch; on a completed response the field carries no emission
         # condition. The nearest grading obligation is
-        # dist/compliance/3.1.1/universal/stale-response-advisory.yaml (required_tools:
+        # dist/compliance/<pin>/universal/stale-response-advisory.yaml (required_tools:
         # [get_products]), which puts STALE_RESPONSE in errors[] on a populated success
         # — but it requires details.served_from_cache + cache_age_seconds and scopes
         # itself to serving CACHE past its freshness target, which this path does not
@@ -490,7 +531,7 @@ async def _get_products_impl(req: GetProductsRequest, identity: PublicIdentity) 
                 min_exposures=getattr(req.filters, "min_exposures", None) if req.filters else None,
             )
     except (ImportError, RuntimeError, OSError) as e:
-        # structural-guard: fail-open is conformant at AdCP 3.1.1 —
+        # structural-guard: fail-open is conformant at —
         # same reasoning as the dynamic-variants handler above (errors[] is required
         # only on status=="failed"; stale-response-advisory.yaml does not reach a path
         # that serves no cache). If surfaced later, the correct field is `incomplete[]`
@@ -500,6 +541,10 @@ async def _get_products_impl(req: GetProductsRequest, identity: PublicIdentity) 
 
     # Apply AdCP filters if provided
     if req.filters:
+        # The served catalogue a legacy reference is projected against, read once and only
+        # when the deprecated format_ids filter asks: the projection's step 2 reads a served
+        # format's own canonical annotation (registries/v1-canonical-mapping.json).
+        format_catalogue = seller_format_catalogue(tenant.tenant_id) if req.filters.format_ids else []
         filtered_products = []
         for product in products:
             # Filter by delivery_type
@@ -511,68 +556,111 @@ async def _get_products_impl(req: GetProductsRequest, identity: PublicIdentity) 
             #        false = at least one option without fixed_price.
             #        Products with both fixed and auction options match both.
             if req.filters.is_fixed_price is not None:
-                # PricingOption is a Pydantic RootModel — unwrap via .root
-                # to access inner variant fields (fixed_price lives on the variant)
+                # ``fixed_price`` is read off the element directly: Product.pricing_options
+                # holds the union MEMBERS and all nine declare the field. The comment here
+                # used to say the element was a RootModel to unwrap via ``.root``, which was
+                # never true of this list.
                 if req.filters.is_fixed_price:
-                    has_matching_pricing = any(
-                        getattr(po.root, "fixed_price", None) is not None for po in product.pricing_options
-                    )
+                    has_matching_pricing = any(po.fixed_price is not None for po in product.pricing_options)
                 else:
-                    has_matching_pricing = any(
-                        getattr(po.root, "fixed_price", None) is None for po in product.pricing_options
-                    )
+                    has_matching_pricing = any(po.fixed_price is None for po in product.pricing_options)
                 if not has_matching_pricing:
                     continue
 
-            # Filter by format_ids (format_types removed in adcp 3.12)
+            # Filter by format_ids (format_types removed in the pinned SDK)
             if req.filters.format_ids:
-                # Product.format_ids is list[str] or list[dict] (format IDs)
-                product_format_ids: set[str] = set()
-                for format_id in product.format_ids or []:  # adcp 6.6: Product.format_ids is now Optional (spec 3.1.1)
-                    if isinstance(format_id, str):
-                        product_format_ids.add(format_id)
-                    elif isinstance(format_id, dict):
-                        # Dict with 'id' key (from database)
-                        dict_id = format_id.get("id")
-                        if dict_id is not None:
-                            product_format_ids.add(dict_id)
-                    elif isinstance(format_id, FormatId):
-                        product_format_ids.add(format_id.id)
-
-                # req.filters.format_ids contains FormatId objects, extract .id from them
-                request_format_ids: set[str] = set()
-                for fmt_id in req.filters.format_ids:
-                    if isinstance(fmt_id, str):
-                        request_format_ids.add(fmt_id)
-                    elif isinstance(fmt_id, FormatId):
-                        request_format_ids.add(fmt_id.id)
-                    elif isinstance(fmt_id, dict):
-                        dict_id = fmt_id.get("id")
-                        if dict_id is not None:
-                            request_format_ids.add(dict_id)
-
-                if not any(fmt_id in product_format_ids for fmt_id in request_format_ids):
+                # The deprecated filter names legacy references, and a legacy reference is
+                # NORMALIZED before it is compared: docs/creative/template-format-ids.mdx
+                # § Compatibility (v3.2.7), "Normalize them to canonical declarations
+                # immediately and do all matching on the canonical shape", and
+                # core/product-format-declaration.json, "do not exact-match raw
+                # (agent_url, id) pairs once a format_id has been projected". So a product
+                # matches when it would accept a package naming the reference
+                # (`accepts_legacy_reference`), which is the create path's own answer: a
+                # filter naming display_300x250 selects a product declaring
+                # display_300x250_image, or declaring only an image fixed at 300x250. The raw
+                # pair intersection this replaced answered both with "no match".
+                #
+                # The agent still takes part in the identity, canonicalized
+                # (core/format-id.json makes that a MUST): a reference to ANOTHER agent's
+                # format never selects a product declaring the same slug under this one.
+                if not any(
+                    accepts_legacy_reference(
+                        reference, product.format_options, product.format_ids, catalogue=format_catalogue
+                    )
+                    for reference in req.filters.format_ids
+                ):
                     continue
 
-            # Filter by standard_formats_only
+            # Filter by format_kinds -- the CANONICAL half of the question the format_ids
+            # filter above asks of the legacy half. core/product-filters.json: "Filter to
+            # products accepting any of these canonical format kinds", with items a $ref to
+            # canonical-format-kind.json. So membership is OR over the kind, and the
+            # comparison is between closed-vocabulary values rather than the human-chosen
+            # slugs the legacy filter has to canonicalize first.
+            #
+            # The field was DECLARED on the request and read by nothing: measured before
+            # this, `git grep format_kinds -- src/` hit one docstring. An ignored filter is
+            # not a capability gap the way an unsupported operation is -- the root of
+            # product-filters.json says filters "decide which products MAY BE RETURNED", so
+            # ignoring one returns products the buyer EXCLUDED and the buyer cannot tell.
+            if req.filters.format_kinds:
+                requested_kinds = {str(kind) for kind in req.filters.format_kinds}
+                if not (product_format_kinds(product.format_options) & requested_kinds):
+                    continue
+
+            # Filter by format_option_refs -- the same question at the OPTION level, and the
+            # finest-grained of the three. core/product-filters.json: "Filter to products
+            # accepting any of these EXACT publisher- or product-scoped canonical format
+            # options". EXACT, so whole identities are compared and never their parts: the
+            # two arms of core/format-option-ref.json make publisher_domain required on one
+            # and forbidden on the other, so a publisher-catalog option and a product-local
+            # option sharing one format_option_id are DIFFERENT options. Matching on the id
+            # alone would answer a reference to a publisher's catalogue with a product-local
+            # option -- the same false positive, in the same direction, that the legacy
+            # format_ids filter's bare-id comparison used to produce.
+            #
+            # Also declared on the request and read by nothing before this.
+            # FormatOptionIdentity.of_reference is THE reader of a reference's scope, so the
+            # request side goes through it rather than reading the two members directly.
+            if req.filters.format_option_refs:
+                requested_options = {FormatOptionIdentity.of_reference(ref) for ref in req.filters.format_option_refs}
+                if not (product_format_option_identities(product.format_options) & requested_options):
+                    continue
+
+            # Filter by standard_formats_only: "Only return products accepting IAB standard
+            # formats" (core/product-filters.json).
+            #
+            # RE-KEYED, because the previous reading had a hole that salesagent-8qela.3.2
+            # made reachable. It looped `product.format_ids or []` and prefix-guessed
+            # "standard" from the legacy slug -- startswith(("display_", "video_", "audio_",
+            # "native_")) -- so a product with NO legacy arm ran an EMPTY loop, left
+            # `has_only_standard` True, and passed this filter UNCONDITIONALLY whatever its
+            # canonical declarations said. Canonical-only products were unrepresentable when
+            # that was written, so the hole was latent; .3.2 dropped the NOT NULL and made
+            # it a live false positive, in the direction that matters (the buyer is handed a
+            # product it asked to exclude).
+            #
+            # A product must now DECLARE something for this filter to select it, through
+            # either arm, and a product declaring nothing is not "standard by default".
             if req.filters.standard_formats_only:
-                # Check if all formats are IAB standard formats
-                # IAB standard formats typically follow patterns like "display_", "video_", "audio_", "native_"
-                has_only_standard = True
-                for format_id in product.format_ids or []:  # adcp 6.6: Product.format_ids is now Optional (spec 3.1.1)
-                    format_id_str: str | None = None
-                    if isinstance(format_id, str):
-                        format_id_str = format_id
-                    elif isinstance(format_id, dict):
-                        format_id_str = format_id.get("id")
-                    elif isinstance(format_id, FormatId):
-                        format_id_str = format_id.id
-
-                    if format_id_str and not format_id_str.startswith(("display_", "video_", "audio_", "native_")):
-                        has_only_standard = False
-                        break
-
-                if not has_only_standard:
+                # ``entry.id`` directly: on a converted product this list is
+                # list[FormatReferenceStructuredObject], so every entry is a reference
+                # OBJECT. The three-way isinstance(str | dict | FormatId) this replaced was
+                # guarding against shapes the model cannot produce.
+                legacy_slugs = {entry.id for entry in product.format_ids or []}
+                canonical_kinds = product_format_kinds(product.format_options)
+                if not legacy_slugs and not canonical_kinds:
+                    # Declares no format at all: it accepts no IAB standard format either.
+                    continue
+                # The legacy half keeps the prefix heuristic, which is all a human-chosen
+                # slug supports -- it is explicitly "typically follow patterns like", not a
+                # registry lookup. The canonical half needs no heuristic: the sixteen kinds
+                # ARE the standard vocabulary, and `custom` is the one member that names a
+                # format outside it.
+                if any(not slug.startswith(("display_", "video_", "audio_", "native_")) for slug in legacy_slugs):
+                    continue
+                if any(kind == "custom" for kind in canonical_kinds):
                     continue
 
             # Filter by countries
@@ -590,7 +678,13 @@ async def _get_products_impl(req: GetProductsRequest, identity: PublicIdentity) 
                     # Product has no country restrictions, matches any country filter
                     pass
                 else:
-                    # Extract country codes from filter (Country is RootModel[str])
+                    # Extract country codes from filter. ``Country`` is NOT a RootModel --
+                    # at the pinned SDK it is ``ScalarStr``, a ``str`` subclass, so the value IS the
+                    # string and ``.upper()`` can be called on it directly. ``.root`` still
+                    # answers behind a deprecation shim ("Country.root is deprecated; the
+                    # value IS a str"), which is what the read below is still using; the
+                    # per-type cleanup for that and its eleven siblings is
+                    # https://github.com/prebid/salesagent/issues/2339.
                     request_countries: set[str] = set()
                     for country in req.filters.countries:
                         request_countries.add(country.root.upper())
@@ -721,7 +815,7 @@ async def _get_products_impl(req: GetProductsRequest, identity: PublicIdentity) 
             # structural-guard: no spec surface covers ranking.
             # This degrades ORDER only — and the set returned is a SUPERSET, because
             # the <0.1 relevance filter stops running too, so the buyer loses nothing
-            # they were entitled to. AdCP 3.1.1 defines no ordering guarantee for
+            # they were entitled to. The spec defines no ordering guarantee for
             # get_products and no `incomplete[]` scope for ranking.
             logger.warning(f"Failed to apply AI product ranking: {e}. Returning unranked products.")
 
@@ -733,17 +827,52 @@ async def _get_products_impl(req: GetProductsRequest, identity: PublicIdentity) 
         for product in eligible_products:
             product.pricing_options = []
 
+    # FORMAT_DECLARATION_DIVERGENT, on a POPULATED SUCCESS. The pinned enum calls the code a
+    # "Non-fatal advisory", says "Hard-failing the entire get_products response is
+    # discouraged", and makes errors[] the single surface; `source` is producer because the
+    # SELLER self-detects on emit, and `field` is built from the RESPONSE order so it names
+    # the product the buyer sees.
+    #
+    # Two divergences, one advisory each. A declaration asserting a v1_format_ref its params
+    # or kind do not narrow (core/product-format-declaration.json: "The v2 declaration's
+    # `params` MUST narrow ... each referenced v1 format's `requirements`"): the reference is
+    # already left out of the derived format_ids (`CanonicalFormats`), as the producer rule
+    # "MUST omit the legacy compatibility projection" requires, and the declaration still
+    # names it on the wire, so the advisory says why the two shapes differ.
+    #
+    # `formats/canonical/_base.json` asks for the same code when "a producer-self-emitted
+    # overlap on a single declaration" happens, with
+    # `details: { collision_kind, target, overlapping_fields, winning_extension_uri }` --
+    # PlatformExtensionCollisionDetails is exactly those four.
+    #
+    # QUIET TODAY, AND NOT DEAD: the overlap is undecidable from a declaration, because
+    # `core/platform-extension-ref.json` carries `uri` + `digest` only while the target and
+    # field names are the DEFINITION's. The definitions arrive in the response's bundled
+    # `extensions` map, which nothing populates yet -- so every reference resolves to no
+    # definition and is left alone rather than guessed at. `bundled_extension_definitions` is
+    # the one seam the deferred half of salesagent-hff54 fills; feeding it is what makes this
+    # emit, and nothing else about this call site changes then.
+    format_declaration_advisories = [
+        Error.of(  # structural-guard: advisory per-product divergence in GetProductsResponse.errors[]
+            ErrorCode.FORMAT_DECLARATION_DIVERGENT,
+            field=f"products[{index}]",
+            details=details,
+            source=LibraryErrorSource.producer,
+        )
+        for index, details in _format_declaration_findings(eligible_products)
+    ]
+
     # Our Product extends LibraryProduct - cast for type safety since list is invariant
     # When serialized, Pydantic automatically uses library Product fields
     # Internal-only fields (implementation_config) excluded by model_dump()
     # Note: We use eligible_products (Product objects), not response_data (dicts)
     # because Product objects have typed pricing_options (CpmFixedRatePricingOption, etc.)
     # while dicts lose this type information during serialization
-    # adcp 2.16.0+ accepts subclass lists at runtime via BeforeValidator coercion,
+    # the pinned SDK+ accepts subclass lists at runtime via BeforeValidator coercion,
     # but mypy still needs cast() due to list invariance in static typing
     resp = GetProductsResponse(
         products=cast(list[LibraryProduct], eligible_products),
-        errors=None,
+        errors=format_declaration_advisories or None,
         message=_products_message(len(eligible_products), anonymous=principal_id is None),
     )
 

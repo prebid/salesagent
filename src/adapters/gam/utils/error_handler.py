@@ -5,7 +5,7 @@ This module classifies GAM API faults and retries the ones worth retrying.
 
 It defines NO exception classes. A GAM fault is an AdCP error like any other:
 ``map_gam_exception`` sorts an upstream fault into the ``AdCP*Error`` the buyer
-should receive, which is what AdCP 3.1.1 mandates --
+should receive, which is what mandates --
 ``building/operating/transport-errors.mdx`` Rule 1: "Translate upstream errors
 into AdCP error codes. Do not pass through raw upstream errors ... The buyer
 should never see error formats from systems it has no relationship with."
@@ -67,7 +67,7 @@ def map_gam_exception(exception: Exception) -> AdCPSalesAgentError:
     ``AdCPSalesAgentError`` untouched, so this decision is the one the buyer receives.
 
     Carries NO upstream text into the error. A SOAP fault's string is a third
-    party's, and AdCP 3.1.1 transport-errors.mdx forbids putting it on the wire
+    party's, and transport-errors.mdx forbids putting it on the wire
     (Security Considerations; restated for CONFIGURATION_ERROR as "MUST NOT
     include credentials, connection strings, full file paths, or stack traces").
     The fault travels in ``internal_detail``, which is non-wire by construction,

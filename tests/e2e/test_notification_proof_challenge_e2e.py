@@ -140,7 +140,7 @@ import httpx
 import pytest
 from a2a.utils import constants as a2a_constants
 from adcp.signing.webhook_signer import WEBHOOK_TAG
-from adcp.types.generated_poc.core.webhook_challenge import WebhookChallenge
+from adcp.types.domains.core.webhook_challenge import WebhookChallenge
 
 from tests.e2e._signing_e2e import (
     a2a_data_part,

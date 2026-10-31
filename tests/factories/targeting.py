@@ -24,9 +24,38 @@ from __future__ import annotations
 import factory
 from adcp.types import PropertyListReference
 
-from src.core.schemas import CollectionListReference, Targeting
+from src.core.schemas import CollectionListReference, FrequencyCap, Targeting
 
 GOVERNANCE_URL = "https://gov.example"
+
+
+class FrequencyCapFactory(factory.Factory):
+    """Factory for a frequency cap the pinned schema accepts.
+
+    ``core/frequency-cap.json`` states two constraints outside its properties, and
+    the rebuilt SDK compiles both onto the exported class:
+
+    * ``anyOf`` — at least one of ``suppress``, ``suppress_minutes``, ``max_impressions``
+    * ``dependencies`` — ``max_impressions`` requires ``per`` AND ``window``, and each of
+      those requires ``max_impressions``
+
+    The defaults below satisfy both, which is the whole reason this factory exists:
+    thirteen tests hand-wrote ``{"max_impressions": N, "suppress_minutes": M}``, a
+    document the pin has always forbidden and the previous SDK's exported class
+    happened to accept. One home for the legal shape means the next test that needs
+    a cap cannot reintroduce the illegal one (salesagent-8qela.120).
+
+    Override ``max_impressions`` alone; ``per`` and ``window`` travel with it. For a
+    cooldown-only cap, build ``FrequencyCap(suppress_minutes=...)`` directly — it
+    needs none of these three and the factory would only add noise.
+    """
+
+    class Meta:
+        model = FrequencyCap
+
+    max_impressions = 5
+    per = "devices"
+    window = {"interval": 1, "unit": "days"}
 
 
 class PropertyListReferenceFactory(factory.Factory):
@@ -43,7 +72,7 @@ class CollectionListReferenceFactory(factory.Factory):
     """Factory for CollectionListReference.
 
     Re-exported from ``src.core.schemas`` (the underlying type is sourced from
-    ``adcp.types.generated_poc.core.collection_list_ref`` because the adcp SDK
+    ``adcp.types.domains.core.collection_list_ref`` because the adcp SDK
     didn't surface it on the public ``adcp.types`` namespace, though the type
     is generated and used by TargetingOverlay). Shape mirrors
     PropertyListReference exactly.

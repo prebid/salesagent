@@ -1,9 +1,10 @@
 """The signing value-sets, with exactly one source of truth each.
 
-THE LAYER'S DEPENDENCY-FREE LEAF. Everything here imports only ``adcp.signing.*`` and
-the error vocabulary, so a module BELOW the signing layer — ``src.core.database.models``,
-``src.core.config``, ``alembic/versions/e7a2c40b91d5_add_signing_keys_table.py`` — can
-reach it by dotted path without dragging the layer in behind it.
+THE LAYER'S DEPENDENCY-FREE LEAF. Everything here imports only ``adcp.signing.*``, the
+packaged spec version, and the error vocabulary, so a module BELOW the signing layer —
+``src.core.database.models``, ``src.core.config``,
+``alembic/versions/e7a2c40b91d5_add_signing_keys_table.py`` — can reach it by dotted path
+without dragging the layer in behind it.
 
 There is no forwarding shim and no separate ``signing_contract`` package any more. Both
 existed to break one cycle: Python runs a package's ``__init__`` before any submodule, so
@@ -20,11 +21,16 @@ purpose:
   hand-copied literal: migration ``e381618812f1`` exists because a hand-written
   CHECK froze while a spec enum grew and a spec-valid value then IntegrityError'd
   on INSERT (#1521). ``tests/unit/test_signing_alg_parity.py`` pins the constant
-  against the AdCP 3.1.1 algorithms enum, so an SDK bump that gains or loses a
+  against the algorithms enum, so an SDK bump that gains or loses a
   value fails loudly instead of drifting.
 
 * ``MINTABLE_PURPOSES`` — a deliberate NARROWING below the SDK's accepted set,
   so it cannot be derived. See its own comment.
+
+A third value is sourced the same way and for a sharper reason:
+:func:`request_signing_profile` is the ONE place this seller decides which
+request-signing profile it speaks, read by the outbound signer and the inbound verifier
+alike. See its own docstring for what went wrong when there were two places.
 
 Three ``alg`` namespaces exist and they do not agree with each other. Every
 mis-mapping is a signature every conformant verifier rejects, so the mapping
@@ -52,8 +58,11 @@ from __future__ import annotations
 
 import secrets
 from datetime import datetime
+from functools import lru_cache
 from typing import Literal, NoReturn, cast
 
+from adcp import get_adcp_spec_version
+from adcp.signing.autosign import SigningProfileVersion, signing_profile_for_adcp_version
 from adcp.signing.crypto import ALG_ED25519, ALG_ES256, ALLOWED_ALGS
 from adcp.signing.provider import SigningAlgorithm
 
@@ -81,6 +90,54 @@ MINTABLE_PURPOSES: tuple[str, ...] = ("request-signing",)
 REQUEST_SIGNING = "request-signing"
 
 
+@lru_cache(maxsize=1)
+def request_signing_profile() -> SigningProfileVersion:
+    """The ``adcp/request-signing/v1`` profile version BOTH halves of this seller speak.
+
+    One function, two readers — :class:`src.core.signing.request_signer.RequestSignerStrategy`
+    on the way out and the ``VerifyOptions`` the inbound checklist runs on
+    (:mod:`src.core.signing.verifier`) — because the halves disagreeing is the defect this
+    exists to make unconstructible. They did disagree: the signer derived 3.2 from the pin
+    while the verifier passed nothing and took the SDK's ``VerifyOptions`` default of
+    ``"3.1"``, so this seller SIGNED under the RFC 8941 alphabet and VERIFIED with the
+    legacy Base64URL fallback still enabled — accepting on the way in exactly the spelling
+    it refuses to emit on the way out (``salesagent-8qela.1``). A profile literal at either
+    call site, or a second derivation beside this one, re-opens that gap; there is no
+    literal and no second derivation.
+
+    DERIVED from the pin, never declared. ``get_adcp_spec_version()`` is the installed wheel
+    reporting the spec version it implements — the most trusted source this process has, and
+    the one that moves by itself at the next pin bump. The SDK helper's own docstring
+    requires exactly that: callers "must derive this from trusted endpoint configuration,
+    never an unbound request-body field." At the 3.2.1 pin this answers ``"3.2"``.
+
+    Spec grounding — ``docs/building/by-layer/L1/security.mdx``
+    §"Request-profile binary value encoding": "Base64URL characters (``-`` and ``_``) are
+    not valid inside 3.2 request ``sf-binary`` and MUST be rejected as
+    ``request_signature_header_malformed``", and "A 3.2 request verifier MUST NOT
+    reinterpret a Base64URL token as ``sf-binary`` or retry it through a legacy decoder" —
+    graded at step 1 of §"Verifier checklist (requests)" ("Parse ``Signature-Input`` and
+    ``Signature`` headers per RFC 9421 §4. Reject if malformed") by the ``signed_requests``
+    storyboard's ``profile-3.2/negative/001-base64url-sf-binary`` vector.
+
+    REQUEST signing only, and the name says so. The same spec § routes
+    ``adcp/webhook-signing/v1`` to its legacy unpadded Base64URL encoding "throughout 3.x"
+    and adds that webhook parser selection "MUST NOT enable a fallback in the 3.2 request
+    parser". Those are two profiles, not one version this function could widen to cover;
+    the SDK pins the webhook half at ``"3.1"`` itself.
+
+    A FUNCTION, cached — not the module-level constant the two value-sets above are.
+    ``get_adcp_spec_version()`` reads a file packaged with the wheel, so evaluating this at
+    module level would do filesystem I/O while the module is being imported, which is the
+    shape ``tests/unit/test_architecture_no_import_time_fs_io.py`` was written against
+    ("open on demand, not on import"); that detector matches attribute names at module
+    level and would NOT see a read this far inside a call, so the function form is the
+    guard's reasoning applied rather than its letter obeyed. ``lru_cache`` then pays for the
+    deferral: both readers run per request, and the pin cannot change inside a process.
+    """
+    return signing_profile_for_adcp_version(get_adcp_spec_version())
+
+
 def _refuse_alg(alg: str) -> NoReturn:
     """Refuse an ``alg`` outside the AdCP profile.
 
@@ -96,7 +153,7 @@ def _refuse_alg(alg: str) -> NoReturn:
             capability="signing_alg",
             rejected_value=alg,
             accepted_values=list(SIGNING_ALG_VALUES),
-            tracked_by="the AdCP 3.1.1 signing algorithm profile (adcp.signing.crypto.ALLOWED_ALGS)",
+            tracked_by="the signing algorithm profile (adcp.signing.crypto.ALLOWED_ALGS)",
         ),
     ) from None
 
@@ -165,7 +222,7 @@ def mint_kid(tenant_id: str, now: datetime) -> str:
     ONE generator, here with the other signing value-sets, so the admin route and
     the ops script cannot grow two kid shapes.
 
-    security.mdx @ v3.1.1 (Agent key publication) requires a ``kid`` "Unique
+    security.mdx (Agent key publication) requires a ``kid`` "Unique
     within the JWKS. MUST NOT collide with any other entry's kid regardless of
     ``adcp_use``". ``UNIQUE(tenant_id, kid)`` is the backstop for that, not the
     generator — and the SDK's own default kid documents itself as

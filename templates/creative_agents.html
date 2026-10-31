@@ -12,7 +12,7 @@
         </div>
     </div>
 
-    <!-- Default Creative Agent (Always Available) -->
+    <!-- Default Creative Agent (listed unless the seller turns it off) -->
     <div style="margin-bottom: 2rem;">
         <h3 style="margin-bottom: 1rem;">Default Creative Agent</h3>
         <div style="border: 2px solid #34d399; border-radius: 8px; padding: 1rem; background: #d1fae5;">
@@ -23,11 +23,18 @@
                         https://creative.adcontextprotocol.org/mcp
                     </p>
                     <p style="margin: 0; color: #065f46; font-size: 0.9rem;">
-                        ✅ Always enabled • Priority: 1 • Provides standard IAB and custom formats
+                        Priority: 1 • Provides standard IAB and custom formats
                     </p>
                 </div>
                 <span class="badge" style="background: #34d399; color: #065f46; font-weight: 600;">DEFAULT</span>
             </div>
+            <form method="POST" action="{{ url_for('creative_agents.update_default_creative_agent', tenant_id=tenant_id) }}" style="margin-top: 1rem; display: flex; gap: 0.75rem; align-items: center;">
+                <label style="color: #065f46; font-size: 0.9rem;">
+                    <input type="checkbox" name="use_default_creative_agent" {% if tenant.use_default_creative_agent %}checked{% endif %}>
+                    List this agent's formats and refer buyers to it
+                </label>
+                <button type="submit" class="btn btn-secondary btn-sm">Save</button>
+            </form>
         </div>
     </div>
 

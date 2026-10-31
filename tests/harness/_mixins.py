@@ -48,7 +48,7 @@ from tests.helpers.local_http_origin import (
     OriginResponse,
     responds,
 )
-from tests.helpers.tls_material import load_gen_test_tls, start_tls_origin
+from tests.helpers.tls_material import start_tls_origin, trust_test_ca
 
 
 def _e2e_capture_url(env: Any) -> str:
@@ -458,9 +458,52 @@ def _attach_reporting_webhook(env: Any, media_buy: Any) -> None:
 
     The URL comes from :func:`_registered_webhook_url`, so what the media buy says and
     what the registration says can never diverge.
+
+    THE REST OF THE DOCUMENT COMES FROM THE FACTORY, for the same reason the URL comes
+    from a resolver: a hand-written literal here diverges from what a real
+    ``create_media_buy`` writes, and the divergence is invisible until production starts
+    reading a field the literal omits. It did. The literal was
+    ``{"url": ..., "frequency": "daily"}`` and
+    ``core/reporting-webhook.json`` requires ``authentication`` and
+    ``reporting_frequency`` alongside ``url`` — so it carried neither the auth block nor
+    the cadence under its real name — while the interim correlation agreement
+    (``webhooks.mdx`` :656-673) wants ``operation_id``. Production writes all of them:
+    :meth:`MediaBuyRepository.create_from_request` stores
+    ``req.model_dump(mode="json")`` and ``adcp.types.ReportingWebhook`` declares no
+    aliases, so a real buyer's document carries every field under its own name.
+
+    Omitting ``operation_id`` is what broke six UC-004 e2e_rest scenarios
+    (salesagent-8qela.170). ``DeliveryWebhookScheduler`` asks
+    :func:`~src.core.webhooks.registration.reporting_stream_id_missing` of THIS document
+    before it gathers anything, and suppresses the whole stream when the id is absent —
+    correctly, per :666, which forbids fabricating one or reading it off the URL. So the
+    seed decided whether any delivery was attempted at all, and the assertion read
+    ``assert []``. It is e2e-only because this function runs only on the live-server
+    branch (:func:`_deliver_via_live_server`) and the gate lives only in the scheduler,
+    which the in-process branch never enters.
+
+    The factory's ``authentication`` default does NOT decide the signing mode here, and
+    that is worth stating because it looks as though it should. The scheduler prefers a
+    stored ``PushNotificationConfig`` row whenever one matches the URL —
+    "a stored row still wins: a real registration outranks whatever the request carried
+    inline" (``delivery_webhook_scheduler.py``) — and consults this document's
+    ``authentication`` only when no row exists. Every scenario here registers a row, so
+    ``the reporting_webhook registers no authentication block`` keeps selecting RFC 9421
+    off the row it asserts on, and this document cannot flip it to legacy HMAC.
+
+    MEASURED, in process against a real origin through this very function: 0 POSTs
+    and a ``False`` verdict on the literal, 1 POST and ``True`` on the factory
+    payload. ``tests/integration/test_delivery_webhooks_integration.py`` seeds the
+    same document through the same factory for the same reason. (Carried over from
+    this line's own independent fix of the same defect, salesagent-8qela.173 -- the
+    rest of that write-up said what the paragraphs above already say.)
     """
+    from tests.factories.webhook import ReportingWebhookRequestFactory
+
     raw_request = dict(media_buy.raw_request or {})
-    raw_request["reporting_webhook"] = {"url": _registered_webhook_url(env), "frequency": "daily"}
+    raw_request["reporting_webhook"] = ReportingWebhookRequestFactory.payload(
+        url=_registered_webhook_url(env),
+    )
     media_buy.raw_request = raw_request
     env._commit_factory_data()
 
@@ -799,12 +842,23 @@ class DeliveryPollMixin:
         packages: list[dict[str, Any]] | None,
         conversions: float | None = None,
         conversion_value: float | None = None,
+        by_placement: list[dict[str, Any]] | None = None,
     ) -> AdapterGetMediaBuyDeliveryResponse:
         """Normalize set_adapter_response params into the delivery intent.
 
         Shared by both transports: the in-process branch injects this object on
         the MagicMock; the e2e branch persists its wire dump. Single source of
         the packages-list-vs-scalars + totals-auto-sum logic.
+
+        ``by_placement`` carries per-placement metrics the seller reports. It is
+        threaded here rather than injected by a step because the e2e branch gets
+        it for free: ``_persist_simulation_config`` dumps this whole response into
+        the ``delivery_simulation_configs`` row the live server's MockAdServer
+        reads back verbatim, so a scenario that names placement metrics grades the
+        same data on every transport. Without it ``_build_placement_breakdown``
+        synthesizes a split from ONE weight vector, which is rank-identical across
+        spend / impressions / clicks — so every sort_by request produces the same
+        order and no sort assertion can fail (GH #2059).
         """
         if packages is not None:
             by_package = [
@@ -812,6 +866,7 @@ class DeliveryPollMixin:
                     package_id=p["package_id"],
                     impressions=p.get("impressions", 0),
                     spend=p.get("spend", 0.0),
+                    by_placement=by_placement,
                 )
                 for p in packages
             ]
@@ -819,7 +874,9 @@ class DeliveryPollMixin:
             total_spend = float(sum(p.get("spend", 0.0) for p in packages))
             totals = DeliveryTotals(impressions=total_impressions, spend=total_spend)
         else:
-            simulated_geo, simulated_device_type = simulate_breakdowns(float(impressions), float(spend))
+            simulated_geo, simulated_device_type, simulated_placement = simulate_breakdowns(
+                float(impressions), float(spend)
+            )
             by_package = [
                 AdapterPackageDelivery(
                     package_id=package_id,
@@ -827,6 +884,13 @@ class DeliveryPollMixin:
                     spend=spend,
                     by_geo=simulated_geo,
                     by_device_type=simulated_device_type,
+                    # ``is not None`` rather than ``or``: a scenario passing ``[]`` is
+                    # saying the adapter reported zero placements, which must not be
+                    # overwritten by the simulated split. Only an unsupplied value falls
+                    # back. The fallback keeps the rows a scenario that never named any
+                    # placements used to receive from the delivery tool's own synthesis,
+                    # which production no longer does.
+                    by_placement=by_placement if by_placement is not None else simulated_placement,
                 )
             ]
             totals = DeliveryTotals(impressions=float(impressions), spend=spend)
@@ -859,6 +923,7 @@ class DeliveryPollMixin:
         packages: list[dict[str, Any]] | None = None,
         conversions: float | None = None,
         conversion_value: float | None = None,
+        by_placement: list[dict[str, Any]] | None = None,
     ) -> None:
         """Configure adapter to return specific delivery data for a media buy.
 
@@ -867,12 +932,22 @@ class DeliveryPollMixin:
         ``package_id``, ``impressions``, and ``spend`` keys. Totals are auto-computed
         as the sum of per-package values. ``conversions`` / ``conversion_value``
         are totals-level (spec-optional metrics; omitted when None).
+        ``by_placement`` sets the per-placement metrics the seller reports, for a
+        scenario that grades which metric the breakdown was sorted by.
 
         In-process: injects the response on the adapter MagicMock. E2E: persists
         a ``DeliverySimulationConfig`` row the live server's Mock adapter reads.
         """
         resp = self._build_adapter_delivery(
-            media_buy_id, impressions, spend, package_id, clicks, packages, conversions, conversion_value
+            media_buy_id,
+            impressions,
+            spend,
+            package_id,
+            clicks,
+            packages,
+            conversions,
+            conversion_value,
+            by_placement,
         )
         self._realize_adapter_response(resp)
 
@@ -1028,10 +1103,7 @@ class LocalOriginMixin:
             return
 
         # The bundle's path, trusted before the origin starts; start_tls_origin writes it.
-        combined_cert = load_gen_test_tls().COMBINED_CERT
-        self._ssl_cert_file = patch.dict(os.environ, {"SSL_CERT_FILE": str(combined_cert)})
-        self._ssl_cert_file.start()
-        self._guard("ssl_cert_file", self._ssl_cert_file.stop)
+        trust_test_ca(self._guard)
 
         self._origin = start_tls_origin(self._guard, "local_origin")
 
@@ -2026,7 +2098,7 @@ class AccountListDispatchMixin:
 
     def _parse_list_rest_response(self, data: dict[str, Any]) -> Any:
         # revive, not the constructor: a served document carries the context the boundary
-        # stamped and AdcpResponse refuses that field on construction.
+        # stamped and SalesAgentAdcpResponse refuses that field on construction.
         from src.core.schemas.account import ListAccountsResponse
 
         return ListAccountsResponse.revive(data)

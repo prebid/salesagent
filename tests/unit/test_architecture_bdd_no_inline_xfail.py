@@ -161,11 +161,15 @@ _ALLOWLIST: set[XfailSite] = {
     ("domain/uc011_accounts.py", "then_push_sent", 1),
     ("domain/uc011_accounts.py", "then_response_includes_context", 1),
     ("domain/uc011_accounts.py", "then_webhook_registered", 1),
-    ("domain/uc019_query_media_buys.py", "given_creative_status_extra", 1),
-    ("domain/uc019_query_media_buys.py", "given_creative_status_simple", 1),
-    ("domain/uc019_query_media_buys.py", "given_creative_status_with_reason", 1),
-    ("domain/uc019_query_media_buys.py", "given_no_creative_exists", 1),
-    ("domain/uc019_query_media_buys.py", "given_package_creative_assignment", 1),
+    # REMOVED: the five UC-019 creative-approval Givens. All five cited "No
+    # CreativeAssignmentFactory", which was false -- the factory is imported at the top of
+    # that module and used by the two Givens immediately above them -- and only the first,
+    # given_package_creative_assignment, was ever reached, because pytest.xfail() aborts the
+    # scenario. The other four were dead code behind it, which is this guard's own argument
+    # for why route 4 is the worst of the four: nothing could see that they never ran. They
+    # now seed and move real rows; the one genuinely unreachable precondition
+    # (BR-RULE-152 INV-4, forbidden by a composite FK) is routed by scenario tag in the BDD
+    # conftest, which is the one sanctioned way to register a known gap.
     ("generic/given_media_buy.py", "given_product_minimum_spend", 1),
     ("generic/given_media_buy.py", "given_proposal_budget_guidance_min", 1),
     ("generic/given_media_buy.py", "given_proposal_not_exists", 1),

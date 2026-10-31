@@ -11,14 +11,17 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from adcp import Property
+from adcp.types import LegacyCreativeAsset as CreativeAsset
+
 # Import types from adcp library - use public API when available
-from adcp import Format, Property
-from adcp.types import CreativeAsset, FormatId
-from adcp.types.generated_poc.brand import Brand  # TODO: no stable alias in adcp.types
+from adcp.types import LegacyFormat as Format
+from adcp.types.domains.brand_discovery import Brand  # TODO: no stable alias in adcp.types
+from adcp.types.domains.core.format_id import FormatReferenceStructuredObject as FormatId
 
 # Import Package and PackageRequest from our schemas (they extend adcp library)
 from src.core.product_conversion import default_reporting_capabilities
-from src.core.schemas import Package, PackageRequest, url
+from src.core.schemas import Package, PackageRequest
 from src.core.schemas.product import Product
 from tests.factories import PricingOptionFactory
 from tests.factories.creative_asset import build_assets, image_spec
@@ -164,7 +167,7 @@ def create_test_format_id(
     Example:
         format_id = create_test_format_id("video_1920x1080")
     """
-    return FormatId(agent_url=url(agent_url), id=format_id)
+    return FormatId(agent_url=agent_url, id=format_id)
 
 
 def create_test_format(
@@ -188,7 +191,9 @@ def create_test_format(
             Defaults to a single image asset for display, video asset for video.
             Use 'required: True/False' to indicate if the asset is mandatory.
         assets_required: DEPRECATED - use 'assets' instead. Kept for backward compatibility.
-        **kwargs: Additional optional fields (requirements, iab_specification, etc.)
+        **kwargs: Additional optional fields (requirements, platform_config, etc.).
+            ``Format`` is ``extra="ignore"``, so a name it does not declare is DROPPED
+            rather than stored -- ``iab_specification`` used to be listed here and is gone.
 
     Returns:
         AdCP-compliant Format object (adcp 2.6.0+)

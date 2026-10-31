@@ -496,7 +496,7 @@ def _parse_pinned_response(tool_name: str, raw: dict[str, Any]) -> Any | None:
     if model is None:
         return None
     # Through ``revive`` when the model has one: a SERVED document carries the context
-    # ``_boundary._served`` stamped, and ``AdcpResponse`` refuses that field on construction
+    # ``_boundary._served`` stamped, and ``SalesAgentAdcpResponse`` refuses that field on construction
     # so that the boundary is the only thing which can put one there. ``model(**raw)`` made
     # every REST success of a context-carrying request raise in the TEST process, which the
     # scenario then reported as "no response arrived" for a request the seller answered.

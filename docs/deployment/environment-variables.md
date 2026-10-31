@@ -216,6 +216,8 @@ says otherwise) checking a publisher partner's adagents.json.
 |----------|---------|-------------|
 | `APPROXIMATED_API_KEY` | - | Approximated proxy service API key |
 | `APPROXIMATED_BACKEND_URL` | `adcp-sales-agent.fly.dev` | Backend address that Approximated proxies custom domains to |
+| `CREATIVE_AGENT_URL` | - | The MCP endpoint of the operator's creative agent, the URL the app dials and nothing else. Give the endpoint itself: MCP has no path convention, and the AdCP reference creative agent serves MCP only at `<base>/api/creative-agent/mcp`. Unset, the app dials the public agent's endpoint, `https://creative.adcontextprotocol.org/api/creative-agent/mcp`; an agent's identity is never dialled, so setting `CREATIVE_AGENT_ORIGIN` without this variable leaves the app nothing to dial, and every dial to that agent fails as a configuration error. |
+| `CREATIVE_AGENT_ORIGIN` | `https://creative.adcontextprotocol.org` | The operator creative agent's identity: an origin, `scheme://host[:port]`. A format reference whose `agent_url` has this origin, whatever its path, is the operator's agent, and the app connects to it through `CREATIVE_AGENT_URL`. The app refuses to start when the value carries a path, query, fragment or userinfo. |
 
 ---
 

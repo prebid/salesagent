@@ -188,10 +188,12 @@ def generate_tenant_landing_page(tenant_row: dict) -> str:
     # Every endpoint, and the admin, on the one origin. A tenant is served at the host it
     # declares whether the deployment carries one tenant or many, so there is no second
     # origin for a deployment mode to choose between (#1845).
-    # The paths come from AGENT_ENDPOINT_PATHS, which is what src/app.py mounts and what the
-    # agent card publishes. A machine client reads the card, so a path spelled here is copy
-    # for a human -- and a human copying "/mcp" where FastMCP mounts "/mcp/", or the bare
-    # origin where A2A answers at "/a2a", gets sent somewhere that is not the endpoint.
+    # The paths come from AGENT_ENDPOINT_PATHS, the one table the agent card and brand.json
+    # also publish from, so the copy a human reads here and the identity a machine matches on
+    # cannot be spelled differently. A machine client reads the card, so a path spelled here
+    # is copy for a human -- and a human copying the bare origin, where both endpoints answer
+    # under a path, gets sent somewhere that is not the endpoint. "/mcp" is reached through
+    # the mount's own 307 to "/mcp/", which every HTTP client and browser follows.
     mcp_url = f"{base_url}{AGENT_ENDPOINT_PATHS['mcp']}"
     a2a_url = f"{base_url}{AGENT_ENDPOINT_PATHS['a2a']}"
     agent_card_url = f"{base_url}{AGENT_CARD_PATH}"

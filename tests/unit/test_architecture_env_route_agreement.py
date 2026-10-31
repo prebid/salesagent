@@ -46,11 +46,6 @@ scenario. See ``test_uc004_catch_all_is_unreachable_so_all_of_it_resolves_wired`
 from __future__ import annotations
 
 import json
-import os
-import shutil
-import subprocess
-import sys
-import tempfile
 from collections import defaultdict
 from functools import lru_cache
 from pathlib import Path
@@ -58,7 +53,11 @@ from typing import Any
 
 import pytest
 
-from tests.unit._architecture_helpers import assert_violations_match_allowlist, repo_root
+from tests.unit._architecture_helpers import (
+    assert_violations_match_allowlist,
+    collect_bdd_items_with_markers,
+    repo_root,
+)
 from tests.unit._liveness_contract_pins import (
     DERIVATION_ACCESSOR,
     FIX_HINT,
@@ -71,14 +70,30 @@ from tests.unit._liveness_contract_pins import (
 pytestmark = pytest.mark.arch_guard
 
 _BDD_DIR = Path("tests/bdd")
+
+# BDD modules whose scenarios carry NO ``T-`` identity tag. They are outside the
+# join by construction — ``scenario_liveness._scenario_identifier`` returns None,
+# so no artifact record is ever written for them and no verdict is ever
+# published. Pinned as an exact set rather than skipped silently: a module
+# sliding into this bucket is a scenario losing its identity, which is a
+# regression, not a shrug.
+_MODULES_WITHOUT_SCENARIO_IDENTITY = frozenset(
+    {
+        "tests/bdd/test_get_products_inventory_profile.py",
+    }
+)
 _OWNER_MODULE = ".".join(OWNER.with_suffix("").parts)
 
 # One catch-all scenario per branch UC, by EXACT tag, each verified in-tree to
 # fall through to its branch's `else: pytest.xfail(...)` today. UC-004 is
 # handled separately — see the module docstring.
 _CATCH_ALL_SCENARIOS = (
-    ("UC-002", "T-UC-002-alt-asap", "conftest.py:3475"),
-    ("UC-003", "T-UC-003-alt-budget", "conftest.py:3586"),
+    # UC-002 and UC-003 have no specimen any more: their catch-alls (uc002-not-wired,
+    # uc003-not-wired) lost their xfail_reason and build the real env, so a scenario that
+    # falls through to them is WIRED; what fails there is named in the BDD conftest's
+    # _UC002_UC003_LEDGER. The specimens they carried (T-UC-002-alt-asap,
+    # T-UC-003-alt-budget) are replaced by one from the catch-all that still parks.
+    ("UC-010", "T-UC-010-v31-build-version", "uc010-not-wired"),
     # UC-006 has no specimen: its catch-all was replaced by rows that each named a
     # measured blocker, and every one of those rows is empty now -- each scenario they
     # parked was corrected to the pin and wired, or deleted as ungrounded in the sync
@@ -94,109 +109,6 @@ _CATCH_ALL_SCENARIOS = (
 )
 
 _UC004_TAG_PREFIX = "T-UC-004-"
-
-# The nested collection yields ~7.2k items today (7223 at authoring time).
-_MINIMUM_COLLECTED_ITEMS = 6000
-
-# BDD modules whose scenarios carry NO ``T-`` identity tag. They are outside the
-# join by construction — ``scenario_liveness._scenario_identifier`` returns None,
-# so no artifact record is ever written for them and no verdict is ever
-# published. Pinned as an exact set rather than skipped silently: a module
-# sliding into this bucket is a scenario losing its identity, which is a
-# regression, not a shrug.
-_MODULES_WITHOUT_SCENARIO_IDENTITY = frozenset(
-    {
-        "tests/bdd/test_get_products_inventory_profile.py",
-    }
-)
-
-# A pytest plugin, written to a tmp dir and loaded with -p, that dumps every
-# collected item's marker set — and, once the pinned accessor exists, the set
-# that accessor derives for the same node. `pytest_collection_finish` runs after
-# every `pytest_collection_modifyitems`, so the auto-applied entity markers
-# (tests/conftest.py) and conftest's own deselection are already reflected.
-_COLLECTOR_PLUGIN = """
-import importlib
-import json
-import os
-
-
-def pytest_collection_finish(session):
-    dotted = os.environ.get("LANE_F_ACCESSOR_MODULE") or ""
-    accessor = getattr(importlib.import_module(dotted), os.environ["LANE_F_ACCESSOR_NAME"]) if dotted else None
-    rows = []
-    for item in session.items:
-        rows.append(
-            {
-                "nodeid": item.nodeid,
-                "markers": sorted({m.name for m in item.iter_markers()}),
-                "derived": None if accessor is None else sorted(accessor(item)),
-            }
-        )
-    with open(os.environ["LANE_F_DUMP"], "w", encoding="utf-8") as handle:
-        json.dump(rows, handle)
-"""
-
-
-@lru_cache(maxsize=1)
-def _collected_items() -> tuple[dict[str, Any], ...]:
-    """Every collected ``tests/bdd`` item with its marker set, from a real run."""
-    repo = repo_root()
-    # A private dir per invocation: under xdist each worker runs its own nested
-    # collection, and two workers sharing one dump would race.
-    plugin_dir = Path(tempfile.mkdtemp(prefix="lane_f_collect_"))
-    (plugin_dir / "lane_f_collector.py").write_text(_COLLECTOR_PLUGIN, encoding="utf-8")
-    dump = plugin_dir / "collected.json"
-
-    env = dict(os.environ)
-    # The nested collection must not inherit the outer suite's e2e switch: with
-    # it on, scenarios additionally parametrize over e2e_rest and the collected
-    # marker sets stop being the in-process ones this grader reasons about.
-    env.pop("BDD_E2E_ENABLED", None)
-    env["PYTHONPATH"] = os.pathsep.join(filter(None, [str(plugin_dir), env.get("PYTHONPATH", "")]))
-    env["LANE_F_DUMP"] = str(dump)
-    env["LANE_F_ACCESSOR_NAME"] = DERIVATION_ACCESSOR
-    dotted = accessor_dotted_module()
-    if dotted is not None:
-        env["LANE_F_ACCESSOR_MODULE"] = dotted
-    env.setdefault("ADCP_TESTING", "true")
-
-    result = subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "pytest",
-            str(_BDD_DIR),
-            "--collect-only",
-            "-q",
-            "-p",
-            "no:cacheprovider",
-            "-p",
-            "no:randomly",
-            "-p",
-            "lane_f_collector",
-        ],
-        cwd=repo,
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=600,
-    )
-    context = f"stdout:\n{result.stdout[-4000:]}\nstderr:\n{result.stderr[-4000:]}"
-    assert result.returncode == 0, (
-        f"the nested `pytest --collect-only {_BDD_DIR}` exited {result.returncode}. A partial collection would "
-        f"silently shrink this grader's input.\n{context}"
-    )
-    assert dump.is_file(), f"the nested `pytest --collect-only {_BDD_DIR}` did not write {dump}.\n{context}"
-    rows = json.loads(dump.read_text(encoding="utf-8"))
-    shutil.rmtree(plugin_dir, ignore_errors=True)
-    # The suite collects ~7.2k items today. A floor well under that still catches
-    # a truncated collection, which would make every verdict below vacuous.
-    assert len(rows) > _MINIMUM_COLLECTED_ITEMS, (
-        f"the nested collection produced only {len(rows)} items (expected > {_MINIMUM_COLLECTED_ITEMS}) — "
-        f"the grader would be reasoning about a truncated suite.\n{context}"
-    )
-    return tuple(rows)
 
 
 def _scenario_id(markers: list[str]) -> str | None:
@@ -216,7 +128,7 @@ def _scenario_id(markers: list[str]) -> str | None:
 def _scenarios_by_module() -> dict[str, dict[str, frozenset[frozenset[str]]]]:
     """``module -> scenario id -> the distinct marker sets its items carry``."""
     grouped: dict[str, dict[str, set[frozenset[str]]]] = defaultdict(lambda: defaultdict(set))
-    for row in _collected_items():
+    for row in collect_bdd_items_with_markers():
         scenario_id = _scenario_id(row["markers"])
         if scenario_id is None:
             continue
@@ -425,7 +337,7 @@ def test_pinned_derivation_accessor_reproduces_iter_markers_for_every_collected_
     reproduces this lane's disease one layer out, where the agreement test above
     cannot see it — same function, same argument supplied by the test.
     """
-    rows = _collected_items()
+    rows = collect_bdd_items_with_markers()
     assert accessor_dotted_module() is not None, (
         f"{DERIVATION_ACCESSOR}()'s home is not pinned yet (binding input G2: the implement atom records the "
         f"chosen module in the task and pins it in tests/unit/_liveness_contract_pins.py).\n{FIX_HINT}"

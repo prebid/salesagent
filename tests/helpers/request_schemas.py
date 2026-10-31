@@ -45,11 +45,11 @@ from __future__ import annotations
 from pydantic import BaseModel
 
 #: The package every generated SDK request/response type lives under, one module per
-#: pinned schema file. ``adcp.types.generated_poc.media_buy.create_media_buy_request``
+#: pinned schema file. ``adcp.types.domains.media_buy.create_media_buy_request``
 #: is ``media-buy/create-media-buy-request.json``: the two components after this marker
 #: are the schema's category directory and its file stem, with ``_`` for the ``-`` a
 #: Python module name cannot carry.
-_GENERATED_PACKAGE = "generated_poc."
+_GENERATED_PACKAGE = "domains."
 
 
 def _ref_from_generated_module(module: str) -> str | None:

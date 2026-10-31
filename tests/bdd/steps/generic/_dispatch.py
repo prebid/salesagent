@@ -6,10 +6,12 @@ used across UC-004, UC-011, and future domain step files.
 
 from __future__ import annotations
 
+import uuid
 from typing import TYPE_CHECKING, Any, TypedDict, cast
 
 from tests.bdd.payload_capture import record_dispatched_request
 from tests.factories.malformed import assert_declared_malformations
+from tests.factories.mint import mint
 from tests.harness.transport import NO_IDENTITY_OVERRIDE, Transport
 
 if TYPE_CHECKING:
@@ -295,6 +297,24 @@ def dispatch_request(ctx: dict, *, credential: Any = NO_IDENTITY_OVERRIDE, **kwa
     # the vacuity :func:`_record_credential_registrations` exists to prevent, and
     # the same one :func:`dispatch_via_client` raises over.
     _record_credential_registrations(ctx, transport, result, kwargs)
+
+
+def dispatch_package_update(ctx: dict, *, media_buy_id: str, package_id: str, **package_members: Any) -> None:
+    """One update_media_buy against *package_id* of *media_buy_id*, carrying *package_members*.
+
+    A RAW flat body: ``media_buy_id`` is what ``MediaBuyDualEnv._is_update_request`` routes
+    on, and the transport validates, so a malformed member reaches production's boundary.
+    ``account`` is the seeded default the update must resolve (update-media-buy-request.json
+    lists it in ``/required``), and the idempotency key is fresh, so the update is never a
+    replay of an earlier request.
+    """
+    dispatch_request(
+        ctx,
+        media_buy_id=media_buy_id,
+        account={"account_id": ctx["env"].setup_default_account().account_id},
+        idempotency_key=mint(f"package-update-{uuid.uuid4().hex}"),
+        packages=[{"package_id": package_id, **package_members}],
+    )
 
 
 def _record_credential_registrations(

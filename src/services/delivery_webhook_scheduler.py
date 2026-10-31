@@ -11,7 +11,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from adcp.types import GeneratedTaskStatus as AdcpTaskStatus
-from adcp.types.generated_poc.media_buy.get_media_buy_delivery_response import (
+from adcp.types.domains.media_buy.get_media_buy_delivery_response import (
     NotificationType,
 )  # TODO: no stable alias — response-level NotificationType differs from top-level
 from sqlalchemy import func, select
@@ -21,12 +21,17 @@ from src.core.database.database_session import get_db_session
 from src.core.database.models import PersistedMediaBuyStatus, WebhookDeliveryLog
 from src.core.database.models import PushNotificationConfig as DBPushNotificationConfig
 from src.core.database.repositories import MediaBuyRepository
-from src.core.exceptions import AdCPValidationError
+from src.core.exceptions import AdCPSalesAgentError, AdCPValidationError
 from src.core.schemas import GetMediaBuyDeliveryResponse
 from src.core.tools.media_buy_delivery import delivery_for_media_buy
 from src.core.utils import utc_flight_start
 from src.core.webhooks.delivery import WebhookTaskContext
-from src.core.webhooks.registration import accept_push_notification_config
+from src.core.webhooks.registration import (
+    REPORTING_STREAM_ID_FIELD,
+    accept_push_notification_config,
+    reporting_stream_id_missing,
+    stored_registration_fields,
+)
 from src.services.protocol_webhook_service import get_protocol_webhook_service
 
 logger = logging.getLogger(__name__)
@@ -117,6 +122,29 @@ class DeliveryWebhookScheduler:
                         else:
                             errors += 1
 
+                    except AdCPSalesAgentError as refusal:
+                        # A SELLER'S REFUSAL, told apart from a failure to send. This arm
+                        # is what narrows the ``except Exception`` below to the thing it
+                        # was written for — keeping ONE buy's transport or infrastructure
+                        # fault from killing the batch — because until it existed that
+                        # handler also absorbed every deliberate refusal raised anywhere
+                        # under the send, including the envelope builder's missing-
+                        # ``operation_id`` refusal, under the same "Error sending report"
+                        # sentence and with the same traceback.
+                        #
+                        # Logged with the refusal's CODE and FIELD, which are the two
+                        # facts that make the affected streams enumerable; no text is
+                        # read off it, because ``message`` is a read-only property over
+                        # CODE_TABLE and reads the same for every raise of the code
+                        # (ADR-010). Still counted as an error and still not re-raised:
+                        # the batch owes the other buys their reports.
+                        logger.error(
+                            "Refusing to send delivery report for media buy %s: %s on %s",
+                            media_buy.media_buy_id,
+                            refusal.error_code,
+                            refusal.field or "the registration",
+                        )
+                        errors += 1
                     except Exception as e:
                         logger.error(f"Error sending report for media buy {media_buy.media_buy_id}: {e}", exc_info=True)
                         errors += 1
@@ -182,7 +210,9 @@ class DeliveryWebhookScheduler:
             media_buy: MediaBuy database model
             reporting_webhook: Webhook configuration dict
             session: Database session
-            force: If True, bypass frequency checks and duplicate checks
+            force: If True, bypass the duplicate-send check. It no longer bypasses a
+                cadence check, because there is none here to bypass -- see the note
+                below where one used to stand (salesagent-8qela.171).
 
         Returns:
             bool: True only if the sender reported the delivery as made.
@@ -192,17 +222,60 @@ class DeliveryWebhookScheduler:
         # would silently re-open a transaction just to format a log line.
         media_buy_id = media_buy.media_buy_id
         try:
-            # Determine reporting frequency from AdCP config (hourly, daily, monthly)
-            raw_freq = str(reporting_webhook.get("frequency") or "daily").lower()
-
-            if not force and raw_freq != "daily":
-                logger.warning(
-                    "Skipping reporting webhook with frequency '%s' for media buy %s – "
-                    "only 'daily' frequency is supported for delivery webhooks at this time",
-                    raw_freq,
-                    media_buy.media_buy_id,
+            # SUPPRESS THE STREAM, which is this route's sanctioned shape. AdCP.1
+            # L3/webhooks.mdx :666 — "A registration without a buyer-supplied ID cannot
+            # enable this interim delivery path. Flag the missing value for the buyer
+            # and suppress scheduled sends; do not fabricate an ID or extract one from
+            # the URL."
+            #
+            # FIRST, before the frequency check and before any delivery is gathered.
+            # The one envelope builder refuses this registration either way
+            # (``operation_id`` is REQUIRED on ``core/mcp-webhook-payload.json`` and :143
+            # forbids reading one off the URL), but that refusal arrived here as an
+            # exception AFTER the adapter had been queried and the whole report
+            # assembled, and the batch loop's ``except Exception`` then logged it as a
+            # send error and moved on — so a buyer whose registration predates the
+            # correlation agreement got silence, counted as a failure to deliver rather
+            # than named as a suppressed stream. Asking at the top turns that into a
+            # stated verdict and spends no adapter call on a stream that cannot send.
+            #
+            # The buyer's half of :666 — the flag — is not this log line and cannot be:
+            # this runs in a background batch with no request to answer. It is carried
+            # by ``get_media_buy_delivery``, which reads the same registration and
+            # reports the same code as an advisory, on the read :667 points the buyer at
+            # while they arrange support.
+            if reporting_stream_id_missing(reporting_webhook):
+                logger.error(
+                    "Suppressing scheduled delivery report for media buy %s: its %s is absent, "
+                    "so there is no correlation id to echo and L3/webhooks.mdx :666 "
+                    "forbids fabricating one or reading it off the URL. The buyer must re-register "
+                    "with an id before reports resume (tenant=%s, principal=%s)",
+                    media_buy_id,
+                    REPORTING_STREAM_ID_FIELD,
+                    media_buy.tenant_id,
+                    media_buy.principal_id,
                 )
                 return False
+
+            # NO CADENCE CHECK HERE, deliberately. One stood here and was DEAD: it read
+            # ``reporting_webhook["frequency"]`` while the stored document carries
+            # ``reporting_frequency`` -- the key the pinned type declares, written by
+            # ``req.model_dump(mode="json")`` at
+            # ``MediaBuyRepository.create_from_request`` -- so ``raw_freq`` was
+            # unconditionally "daily" and the skip could never fire. A non-daily
+            # registration was therefore DELIVERED DAILY rather than refused or honoured
+            # (salesagent-8qela.171). After that was measured, nothing anywhere wrote
+            # "frequency": not this repo's source, not its fixtures.
+            #
+            # DELETED rather than repaired. ``create_media_buy`` now REFUSES a cadence the
+            # buy's products do not advertise, so a non-daily registration cannot reach
+            # this scheduler at all and a repaired skip here would guard nothing -- two
+            # mechanisms for one obligation, the second at a layer where the buyer cannot
+            # be told. Repairing it would also have converted an existing buyer's daily
+            # reports into silence, which is a delivered -> never-delivered change this
+            # repo requires an owner sign-off for; the refusal is prospective and takes
+            # nothing from anyone. Pre-existing non-daily rows keep their current daily
+            # delivery, which salesagent-8qela.177 records.
 
             # Calculate reporting period for daily frequency: yesterday (full day)
             start_date_obj = datetime.now(UTC).date() - timedelta(days=1)
@@ -303,15 +376,21 @@ class DeliveryWebhookScheduler:
                 # solely request. The gate owns that rule — re-checking len(schemes)
                 # here would be a second vocabulary for it.
                 #
-                # The authentication block is forwarded only when TRUTHY, preserving
-                # the previous `if auth_config:` exactly: an empty dict keeps meaning
-                # "no authentication" and keeps delivering unsigned. The gate refuses
-                # an empty block, and turning today's unsigned delivery into a refusal
-                # is a delivered -> never-delivered change that needs an owner sign-off
-                # (#1802 made one for a legacy scheme); it is not a refactor's to make.
-                registration_config = {"url": webhook_url}
-                if reporting_webhook.get("authentication"):
-                    registration_config["authentication"] = reporting_webhook["authentication"]
+                # The field set is DERIVED from the pinned config by
+                # stored_registration_fields, which also owns the truthy-only rule
+                # this site used to spell inline (an empty authentication block
+                # keeps meaning "no authentication" and keeps delivering unsigned).
+                #
+                # It used to list `url` and `authentication` and nothing else, so a
+                # reporting registration's `operation_id` was dropped on every read
+                # and build_webhook_envelope then refused the delivery: the seller
+                # MUST echo it into mcp-webhook-payload.operation_id, where it is
+                # REQUIRED, and webhooks.mdx :143 forbids recovering it from the URL.
+                # `reporting_webhook.operation_id` is the interim
+                # correlation agreement (webhooks.mdx :656-673), carried as an
+                # additive field under core/reporting-webhook.json's
+                # `additionalProperties: true`; from 3.3 the field is standardized.
+                registration_config = stored_registration_fields(reporting_webhook)
 
                 try:
                     push_notification_config = accept_push_notification_config(

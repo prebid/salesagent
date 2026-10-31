@@ -9,7 +9,7 @@ on whose URL it is and what the caller is doing with it. The guarded MCP seam
 (``src.core.utils.mcp_client.call_mcp_tool``) has its own failure surface —
 ``MCPConnectionError`` / ``MCPCompatibilityError`` — for the same underlying
 reason: closing the SSRF gap ``adcp.ADCPMultiAgentClient`` left (no transport
-injection point in adcp 6.6.0 — upstream adcp-client-python#1004) meant routing
+injection point in the pinned SDK — upstream adcp-client-python#1004) meant routing
 through a different transport with a different exception vocabulary.
 
 The translation still has to live in ONE place per DECISION, or every migrating
@@ -50,8 +50,8 @@ a counterparty-supplied ``agent_url`` never reaches ``raise_mapped_mcp_error``
 on the raw egress seam's own ``OutboundError`` taxonomy, unchanged by this
 migration).
 
-Spec grounding for the classification (AdCP 3.1.1,
-``dist/schemas/3.1.1/enums/error-code.json`` enumMetadata):
+Spec grounding for the classification (AdCP,
+``dist/schemas/<pin>/enums/error-code.json`` enumMetadata):
 
 * ``CONFIGURATION_ERROR`` — recovery ``terminal``, "surface to a human at the
   seller — the buyer cannot resolve a seller-side deployment misconfiguration and
@@ -119,13 +119,13 @@ def adcp_error_for_status(
     if not isinstance(provenance, OperatorEndpoint):
         raise AssertionError(f"adcp_error_for_status classifies operator-endpoint failures only; got {provenance!r}")
 
-    # The endpoint's name stays out of the error: it is on the AdCP 3.1.1
+    # The endpoint's name stays out of the error: it is on the AdCP.1
     # transport-errors.mdx Security Considerations MUST-NOT list for buyer-facing
     # text ("internal service names, hostnames, or IP addresses"), and buyer-facing
     # text is a function of the code, resolved from CODE_TABLE (ADR-010). The
     # caller logs the name at the call site, where the original exception is.
     if status == 429:
-        return AdCPRateLimitError(retry_after=clamp_retry_after(retry_after) if retry_after is not None else None)
+        return AdCPRateLimitError(retry_after=clamp_retry_after(retry_after))
     if status is not None and 400 <= status < 500:
         return AdCPConfigurationError()
     return AdCPServiceUnavailableError()

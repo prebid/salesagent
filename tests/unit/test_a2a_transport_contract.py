@@ -21,6 +21,7 @@ from src.app import app
 from src.core.tools.registry import TOOLS
 from tests.factories.principal import PrincipalFactory
 from tests.helpers.credentials import credential_headers
+from tests.utils.derived_population import assert_derived_population
 
 # ``protocol="a2a"`` and the redundant ``tenant={...}`` are gone: the identity names no
 # transport since commit a1b79d22d took the testing-hook channel and the protocol off it,
@@ -51,6 +52,22 @@ def _advertised_skills() -> list[str]:
 
 
 ALL_SKILLS = _advertised_skills()
+
+
+def test_the_advertised_skill_set_is_not_empty() -> None:
+    """Its own item, because the checks below are parametrized over it.
+
+    ``_derived_skills()`` derives from the registry, so a registry or card change
+    that this reader can no longer see empties the list — and an empty parametrize
+    deletes its cases as a skip rather than failing (salesagent-8qela.176).
+    """
+    assert_derived_population(
+        ALL_SKILLS,
+        name="ALL_SKILLS",
+        derived_from="src.a2a_server.adcp_a2a_server._derived_skills(), itself derived from TOOLS",
+        minimum=14,
+    )
+
 
 # Derived, not hand-kept. ``ToolSpec.requires_credential()`` is the one place a tool says
 # whether it needs a caller, and the boundary asks the same method -- so a list written here

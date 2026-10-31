@@ -26,6 +26,16 @@ DELTA AGAINST A BASELINE
     ``scripts/audit/compare_runs.py`` remains the strict regression GATE; this is
     the readable account of the same data, and it never issues a verdict.
 
+    IT STILL MAKES A CROSS-TREE CLAIM, which is why it takes the same identity
+    refusals the gate does (``scripts/audit/run_identity.py``): a baseline that
+    carries no ``meta.json``, or one whose sha has no ancestry relationship with
+    this run's, is refused per baseline and named. Not issuing a verdict is no
+    protection -- the 36 "regressions" that started this were read off THIS
+    section's shape, and a labelled table of nodeids is exactly as quotable as a
+    verdict. ``--allow-unidentified`` proceeds past the missing-identity half
+    for the retained runs that predate the field, and labels the section.
+    The identity of the run itself is printed unconditionally, baseline or not.
+
 Usage::
 
     python3 -m scripts.audit.run_report test-results/innet_120926_1917 \
@@ -45,11 +55,15 @@ import sys
 from pathlib import Path
 
 from scripts.audit.compare_runs import outcomes
+from scripts.audit.run_identity import IDENTITY_FILE, describe, read, refusals, report_refusals
 
 #: Where ``run_all_tests.sh`` keeps the runner's per-protocol summaries inside a run.
 #: A subdirectory, not ``<run>/*.json``: ``compare_runs.py`` globs that level as pytest
 #: reports and would read a summary (no ``tests`` key) as an empty suite.
 STORYBOARD_SUBDIR = "storyboard"
+#: This repository, for the ancestry question. Any worktree answers it -- they share
+#: one object database -- so the tool's own location is a steadier root than the cwd.
+REPO = Path(__file__).resolve().parents[2]
 PROTOCOLS = ("mcp", "a2a")
 OUTCOMES = ("passed", "failed", "error", "xfailed", "xpassed", "skipped")
 NOT_PASSING = ("failed", "error", "xfailed", "skipped")
@@ -63,6 +77,8 @@ def read_run(run: Path) -> Run:
         raise FileNotFoundError(f"run directory does not exist: {run}")
     suites: Run = {}
     for report in sorted(run.glob("*.json")):
+        if report.name == IDENTITY_FILE:
+            continue  # beside the reports, not one of them — see present_suites()
         suites[report.stem] = outcomes(report)
     if not suites:
         raise FileNotFoundError(f"{run}: no per-suite reports")
@@ -173,6 +189,106 @@ def suite_table(run: Run, out) -> None:
     print(f"  {'total':16}{sum(totals.values()):>7}" + "".join(f"{totals[o]:>8}" for o in OUTCOMES), file=out)
 
 
+def _skip_cause(reason: str) -> str:
+    """What pytest recorded as the cause of a skip, or a STATED absence.
+
+    ``outcomes()`` hands over the longrepr of the phase that did not pass, which for
+    a skip is the ``(file, lineno, "Skipped: <cause>")`` triple -- behind the xdist
+    worker banner, which is why the cause is searched for rather than read off the
+    first line. Grouping on the banner instead produces a histogram by WORKER, which
+    is a meaningless answer that looks like an answer.
+
+    A skip with no recorded cause returns a named bucket rather than an empty string,
+    so it is counted and shown instead of disappearing into a blank row.
+    """
+    marker = "Skipped: "
+    at = reason.find(marker)
+    if at < 0:
+        return "(no cause recorded)"
+    return reason[at + len(marker) :].strip().splitlines()[0].rstrip("'\")").strip()[:104] or "(no cause recorded)"
+
+
+def skips_section(run: Run, out) -> None:
+    """Every skip in the run, grouped by cause, per suite.
+
+    WHY THIS EXISTS, and it is not tidiness. ``suite_table`` above prints a
+    ``skipped`` COLUMN, and a column is a number without its cause -- so
+    ``unit 6646 passed / 3 failed / 40 skipped`` was read as holding steady against
+    another run's ``6677 / 3 / 9`` when the two differ by THIRTY-ONE guards that did
+    not ask their question. The pinned AdCP bundle was absent in one tree, so
+    ``requires_pinned_bundle`` skipped them, and the smaller graded set reported the
+    better-looking number (salesagent-13wao).
+
+    The skip itself is correct and stays: a guard with no valid input must refuse,
+    never pass. What failed was the AGGREGATE, which is why this is a reporting fix
+    and not a change to any guard. ``compare_runs`` already catches this ACROSS runs
+    -- pass -> skip is a regression there, and it names all thirty-one -- so this
+    covers the case with no baseline to compare against, where nothing else looks.
+
+    Three outcomes, deliberately distinguishable, because "no skips" and "skips whose
+    cause was not recorded" and "skips with causes" must not render the same:
+    a cause breakdown, a counted ``(no cause recorded)`` bucket, or an explicit
+    statement that the run recorded none.
+    """
+    print("\nSKIPS (a skip is not a pass: these items did not ask their question)", file=out)
+    seen = False
+    for suite, tests in run.items():
+        causes = collections.Counter(_skip_cause(reason) for outcome, reason in tests.values() if outcome == "skipped")
+        if not causes:
+            continue
+        seen = True
+        print(f"  {suite}: {sum(causes.values())} skipped", file=out)
+        for cause, count in causes.most_common():
+            print(f"      {count:>5}  {cause}", file=out)
+    if not seen:
+        print("  no suite in this run recorded a skip", file=out)
+
+
+#: A creative-agent response the seller's HTTP client logged as 429, in a test's captured
+#: output, and the same response in the TLS front's access log.
+_AGENT_429_IN_OUTPUT = re.compile(r"/api/creative-agent/\S*\s+\"HTTP/1\.1 429")
+_AGENT_429_IN_PROXY_LOG = re.compile(r"\"POST /api/creative-agent/\S* HTTP/1\.1\" 429 ")
+
+
+def rate_limit_section(run_dir: Path, limit: int, out) -> None:
+    """Count the creative agent's 429s, and the non-passing tests that saw one.
+
+    The reference creative agent rate-limits per client IP, and behind the TLS front every
+    test process shares one IP. When the budget runs out the seller correctly answers
+    RATE_LIMITED or SERVICE_UNAVAILABLE, so the tests that hit it fail as if a scenario
+    were wrong (innet_291026_2322: ten failures across three suites, one cause). Naming
+    the 429s here lets a reader see an environment limit before chasing ten scenarios.
+    """
+    print("\nCREATIVE AGENT RATE LIMITS (an environment limit, not a scenario result)", file=out)
+    proxy = sum(
+        len(_AGENT_429_IN_PROXY_LOG.findall(log.read_text(errors="replace")))
+        for log in sorted((run_dir / "containers").glob("*tls-proxy*.log"))
+    )
+    hit: list[tuple[str, str, str]] = []
+    for report_path in sorted(run_dir.glob("*.json")):
+        if report_path.name == IDENTITY_FILE:
+            continue
+        for test in json.loads(report_path.read_text()).get("tests", []):
+            if test.get("outcome") == "passed":
+                continue
+            captured = " ".join(
+                str(test.get(phase, {}).get(stream, ""))
+                for phase in ("setup", "call", "teardown")
+                for stream in ("stdout", "stderr", "log")
+            )
+            if _AGENT_429_IN_OUTPUT.search(captured):
+                hit.append((report_path.stem, test["outcome"], test["nodeid"]))
+    if not proxy and not hit:
+        print("  none recorded", file=out)
+        return
+    print(f"  429s in the TLS front's access log: {proxy}", file=out)
+    print(f"  non-passing tests whose captured output carries one: {len(hit)}", file=out)
+    for suite, outcome, nodeid in hit[:limit]:
+        print(f"    {outcome:8} {suite}::{nodeid}", file=out)
+    if len(hit) > limit:
+        print(f"    ... {len(hit) - limit} more", file=out)
+
+
 def storyboard_section(summaries: dict[str, dict], out) -> None:
     print("\nSTORYBOARD (runner summaries)", file=out)
     if not summaries:
@@ -235,9 +351,17 @@ def _flat(run: Run) -> dict[tuple[str, str], str]:
 
 
 def baseline_section(
-    label: str, base: Run, base_sb: dict[str, dict], run: Run, run_sb: dict[str, dict], limit: int, out
+    label: str,
+    base: Run,
+    base_sb: dict[str, dict],
+    run: Run,
+    run_sb: dict[str, dict],
+    limit: int,
+    out,
+    unattributed: bool = False,
 ) -> None:
-    print(f"\nAGAINST BASELINE {label}", file=out)
+    if unattributed:
+        print("  (UNATTRIBUTED: no tree is named for one of these runs)", file=out)
     before, now = _flat(base), _flat(run)
     fixed = sorted(k for k, o in before.items() if o in ("failed", "error") and now.get(k) == "passed")
     regressed = sorted(k for k, o in before.items() if o == "passed" and k in now and now[k] in NOT_PASSING)
@@ -273,12 +397,28 @@ def baseline_section(
 
 
 def report(
-    run_dir: Path, baselines: dict[str, Path], limit: int, out=sys.stdout, groups_json: Path | None = None
-) -> None:
+    run_dir: Path,
+    baselines: dict[str, Path],
+    limit: int,
+    out=sys.stdout,
+    groups_json: Path | None = None,
+    allow_unidentified: bool = False,
+) -> int:
+    """Print the report; return how many requested baselines were refused.
+
+    The body is printed either way -- a run's own suite table, skips and
+    failures make no cross-tree claim and are worth reading regardless. The
+    RETURN is what stops a refused ``--baseline`` from exiting 0: this tool
+    issues no verdict, but a section somebody asked for and did not get is the
+    same class of event as an unreadable run directory, which already exits 2.
+    """
     run = read_run(run_dir)
     run_sb = read_storyboard(run_dir)
     print(f"RUN {run_dir}", file=out)
+    print(f"  tree {describe(read(run_dir))}", file=out)
     suite_table(run, out)
+    skips_section(run, out)
+    rate_limit_section(run_dir, limit, out)
     storyboard_section(run_sb, out)
     groups = failure_groups(run, run_sb)
     groups_section(groups, limit, out)
@@ -286,8 +426,18 @@ def report(
         groups_json.write_text(json.dumps(groups, indent=1))
         print(f"\n  groups written to {groups_json}", file=out)
     failure_details(run, limit, out)
+    refused = 0
     for label, path in baselines.items():
-        baseline_section(label, read_run(path), read_storyboard(path), run, run_sb, limit, out)
+        # Per baseline, not once for the batch: one unattributable baseline must
+        # not suppress a second that is perfectly comparable, and the refusal has
+        # to name which of several it is about.
+        print(f"\nAGAINST BASELINE {label}", file=out)
+        hard, waivable, identities = refusals(path, run_dir, REPO, (label, "run"))
+        if not report_refusals(hard, waivable, identities, allow_unidentified, out):
+            refused += 1
+            continue
+        baseline_section(label, read_run(path), read_storyboard(path), run, run_sb, limit, out, bool(waivable))
+    return refused
 
 
 def _parse_baseline(value: str) -> tuple[str, Path]:
@@ -303,13 +453,24 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--baseline", action="append", type=_parse_baseline, default=[], metavar="LABEL=DIR")
     parser.add_argument("--details", type=int, default=60, help="rows listed per section (default 60)")
     parser.add_argument("--groups-json", type=Path, default=None, help="also write the failure groups as JSON here")
+    parser.add_argument(
+        "--allow-unidentified",
+        action="store_true",
+        help="compare against a baseline that records no tree (runs retained from before meta.json existed)",
+    )
     args = parser.parse_args(argv)
     try:
-        report(args.run, dict(args.baseline), args.details, groups_json=args.groups_json)
+        refused = report(
+            args.run,
+            dict(args.baseline),
+            args.details,
+            groups_json=args.groups_json,
+            allow_unidentified=args.allow_unidentified,
+        )
     except FileNotFoundError as exc:
         print(f"NOT MEASURED: {exc}", file=sys.stderr)
         return 2
-    return 0
+    return 2 if refused else 0
 
 
 if __name__ == "__main__":

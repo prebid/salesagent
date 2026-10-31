@@ -33,7 +33,7 @@ from src.core.agent_identity import AGENT_CARD_PATH
 from src.core.auth_middleware import AuthChallengeResponder
 from src.core.config import load_settings
 from src.core.domain_routing import route_landing_page
-from src.core.errors.issues import issues_from_validation_error
+from src.core.errors.issues import issues_from_validation_error, pointer_for_pydantic_error
 from src.core.exceptions import AdCPInvalidRequestError, AdCPSalesAgentError
 from src.core.http_utils import path_from_asgi_scope
 from src.core.lifecycle import run_all_shutdown_callbacks
@@ -206,22 +206,6 @@ async def value_error_handler(request: Request, exc: ValueError) -> JSONResponse
     return _envelope_response(request, exc)
 
 
-def _jsonpath_lite(loc: list[str]) -> str:
-    """Join a pydantic ``loc`` into the JSONPath-lite form ``field`` is specified in.
-
-    core/error.json: "Field path ... in JSONPath-lite format (e.g., 'packages[0].targeting')".
-    Numeric segments are array indices and are bracketed onto the preceding segment; every
-    other segment is dot-joined.
-    """
-    out: list[str] = []
-    for seg in loc:
-        if seg.isdigit() and out:
-            out[-1] = f"{out[-1]}[{seg}]"
-        else:
-            out.append(seg)
-    return ".".join(out)
-
-
 @app.exception_handler(RequestValidationError)
 async def request_validation_error_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
     """Translate FastAPI request-body schema failures into the AdCP envelope.
@@ -248,18 +232,21 @@ async def request_validation_error_handler(request: Request, exc: RequestValidat
         else e
         for e in exc.errors()
     ]
-    first = errors[0] if errors else {}
-    # Drop ONLY the leading "body"/"query"/"path" location segment (the FastAPI
-    # location prefix); join the rest into the JSONPath-lite ``field`` the envelope
-    # already uses (e.g. attribution_window.post_click.interval). Stripping at any
-    # position would erase a body field literally named "query"/"body"/"path".
-    raw_loc = [str(p) for p in first.get("loc", ())]
-    loc = raw_loc[1:] if raw_loc and raw_loc[0] in ("body", "query", "path") else raw_loc
-    # JSONPath-lite, so an ARRAY INDEX is bracketed: core/error.json's own example is
-    # 'packages[0].targeting', and that is what mcp and a2a emit for the same rejection.
-    # Dot-joining every segment would give 'packages.0.package_id' here -- one
-    # buyer-facing pointer per transport, from a formatting detail.
-    field = _jsonpath_lite(loc) or None
+    # The parsed body is what the stripped locs are rooted at, and resolving each segment
+    # against it is what keeps pydantic's own synthesized union segments out of the
+    # pointers (``JsonPointer.from_pydantic_loc``). A body that never parsed is not a
+    # container, and the loc passes through as before.
+    issues = issues_from_validation_error(errors, exc.body)
+    # ``field`` is a FUNCTION of issues[0].pointer -- core/error.json MUST-requires
+    # "issues[0].pointer translated from RFC 6901 to JSONPath-lite" -- and
+    # ``AdCPInvalidRequestError`` derives exactly that from the issues it is handed. So
+    # nothing is computed here while there is an issues[0] to be a function of; computing
+    # it independently is what let REST answer a path no issue carried, and it is also
+    # where the artifact survived a fixed pointer. The fallback covers a rejection whose
+    # every entry was unattributable, which produces no issues at all -- and it renders
+    # through ``JsonPointer.field``, the one renderer MCP and A2A also reach, so no
+    # transport can spell the bracketed index its own way.
+    field = None if issues or not errors else (pointer_for_pydantic_error(errors[0], exc.body).field or None)
     # A rejection raised by request-schema validation is, by construction, a
     # SCHEMA-constraint violation: FastAPI only ever raises it for what the
     # pinned JSON Schema declares (3.1/core/duration.json gives interval
@@ -272,10 +259,7 @@ async def request_validation_error_handler(request: Request, exc: RequestValidat
     # Cross-field rules JSON Schema cannot express (a "campaign"-unit Duration
     # must have interval == 1) are NOT reached here: they are enforced after
     # the model validates, and correctly raise AdCPValidationError there.
-    adcp_exc = AdCPInvalidRequestError(
-        field=field,
-        issues=issues_from_validation_error(errors),
-    )
+    adcp_exc = AdCPInvalidRequestError(field=field, issues=issues)
     return _envelope_response(request, adcp_exc)
 
 

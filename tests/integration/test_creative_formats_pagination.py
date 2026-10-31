@@ -23,13 +23,11 @@ pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 def _make_format(
     format_id: str,
     name: str,
-    type: str | None = "display",
 ) -> Format:
     """Helper to create a Format object with minimal boilerplate."""
     return Format(
         format_id=FormatId(agent_url=DEFAULT_AGENT_URL, id=format_id),
         name=name,
-        type=type,
         is_standard=True,
     )
 

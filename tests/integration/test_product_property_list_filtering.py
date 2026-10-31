@@ -24,7 +24,7 @@ from decimal import Decimal
 
 import pytest
 from adcp.types import PropertyId
-from adcp.types.generated_poc.core.publisher_property_selector import (  # TODO: no stable alias in adcp.types
+from adcp.types.domains.core.publisher_property_selector import (  # TODO: no stable alias in adcp.types
     PublisherPropertySelector,
     PublisherPropertySelector1,
     PublisherPropertySelector2,
@@ -43,22 +43,18 @@ pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
 def _make_selector_all(domain: str = "example.com") -> PublisherPropertySelector:
     """Create a 'select all' publisher property selector."""
-    return PublisherPropertySelector(
-        root=PublisherPropertySelector1(
-            publisher_domain=domain,
-            selection_type="all",
-        )
+    return PublisherPropertySelector1(
+        publisher_domain=domain,
+        selection_type="all",
     )
 
 
 def _make_selector_by_id(property_ids: list[str], domain: str = "example.com") -> PublisherPropertySelector:
     """Create a 'by_id' publisher property selector."""
-    return PublisherPropertySelector(
-        root=PublisherPropertySelector2(
-            publisher_domain=domain,
-            selection_type="by_id",
-            property_ids=[PropertyId(root=pid) for pid in property_ids],
-        )
+    return PublisherPropertySelector2(
+        publisher_domain=domain,
+        selection_type="by_id",
+        property_ids=[PropertyId(root=pid) for pid in property_ids],
     )
 
 

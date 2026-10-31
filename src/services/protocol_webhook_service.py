@@ -3,7 +3,7 @@
 Every notification this service delivers is one ``mcp-webhook-payload`` envelope,
 because every registration it delivers against arrived through the AdCP channel --
 ``push_notification_config`` in the task arguments, or ``reporting_webhook`` on
-``create_media_buy``. AdCP 3.1.1 ``L3/webhooks.mdx`` § "Registration channel
+``create_media_buy``. ``L3/webhooks.mdx`` § "Registration channel
 determines envelope shape" (:308) makes that the rule: the envelope follows the
 registration mechanism, and the page names keying on the sync transport as the
 model it is NOT ("Why this is the model, not 'match inbound transport'", :328).
@@ -75,7 +75,7 @@ class ProtocolWebhookService:
     selection is made by ``src.core.security.webhook_egress``'s one three-arm
     match: legacy HMAC-SHA256, Bearer, or — selected by the ABSENCE of an
     ``authentication`` block, which is the pinned schema's own selector for the
-    profile (AdCP 3.1.1 ``L1/security.mdx`` :1424) — RFC 9421 request signing.
+    profile (``L1/security.mdx`` :1424) — RFC 9421 request signing.
     :1425 forbids answering a legacy registration with a 9421 signature, so the
     arms are exclusive by construction rather than by a rule kept here. The key
     that arm signs with comes from the one signing seam, reached through
@@ -365,7 +365,7 @@ class ProtocolWebhookService:
                 # row does not tell its reader which arm it selects, so the seam's one
                 # ``_headers_for`` match decides: with an ``authentication`` block
                 # present the block selects a legacy arm and the signer is IGNORED
-                # (security.mdx @ v3.1.1 :1424, :1425); with the block absent the
+                # (security.mdx :1424, :1425); with the block absent the
                 # signer signs. Re-deriving that here would put arm selection in a
                 # second place.
                 #

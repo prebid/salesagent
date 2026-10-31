@@ -24,10 +24,10 @@
 # Reconcile upstream in adcp-req (a "seller enforces inbound request signatures"
 # storyboard), then retire this file in favor of the regenerated one.
 #
-# @source repo=adcp ref=v3.1.1 path=docs/building/by-layer/L1/security.mdx pointer=L1268-L1269
-# @source repo=adcp ref=v3.1.1 path=docs/building/by-layer/L1/security.mdx pointer=L1375
-# @source repo=adcp ref=v3.1.1 path=docs/building/by-layer/L1/security.mdx pointer=L1462-L1465
-# @source repo=adcp ref=v3.1.1 path=dist/compliance/3.1.1/test-vectors/request-signing/negative/027-webhook-registration-authentication-unsigned.json pointer=/expected_outcome
+# @source repo=adcp ref=v3.2.7 path=docs/building/by-layer/L1/security.mdx pointer=L1509-L1510
+# @source repo=adcp ref=v3.2.7 path=docs/building/by-layer/L1/security.mdx pointer=L1620
+# @source repo=adcp ref=v3.2.7 path=docs/building/by-layer/L1/security.mdx pointer=L1709-L1712
+# @source repo=adcp ref=v3.2.7 path=dist/compliance/3.2.7/test-vectors/request-signing/negative/027-webhook-registration-authentication-unsigned.json pointer=/expected_outcome
 Feature: Inbound request-signature enforcement on an AdCP operation (local)
 
   @T-UC-006-local-signing-required-unsigned @request-signing @error-path @invariant
@@ -62,6 +62,39 @@ Feature: Inbound request-signature enforcement on an AdCP operation (local)
     # bucket collapsed to `none`. The seller's own record of WHICH key it verified —
     # matching the key this buyer published, under a kid unique to this run — is what
     # separates "verified" from "waved through".
+
+  @T-UC-006-local-signing-untrusted-destination @request-signing @error-path @invariant @boundary
+  Scenario: a signed request from a counterparty whose trust root is an unreachable destination is refused as untrusted
+    Given a creative with a known format_id
+    And the Buyer Agent has published a signing key the seller can resolve
+    And the Buyer Agent's published agent_url points at a cloud-metadata address
+    And the seller requires a request signature for "sync_creatives"
+    And the Buyer Agent signs the request
+    When the Buyer Agent syncs the creative
+    Then the seller answers with the request-signature challenge "request_signature_jwks_untrusted" and recovery "terminal"
+    # ONE variable from the verified scenario above: the same counterparty, the same
+    # keypair, the same real signature, the same posture. Only the agent_url on its
+    # Principal row moves — and that row is the ONLY legitimate source of a
+    # counterparty's identity (security.mdx forbids a header or a body field), so the
+    # seller must walk to a destination its own SSRF gate refuses.
+    #
+    # WHY THIS CODE, where the discovery-chain table offers no row. The table names
+    # `request_signature_capabilities_unreachable` for a capabilities fetch that
+    # "failed (DNS, TCP, TLS, timeout, non-2xx)" and classes it TRANSIENT. Nothing is
+    # fetched here: the destination is refused before a socket opens, and no retry can
+    # change that. The pinned enum scopes `request_signature_jwks_untrusted` to "the
+    # JWKS URL or resolved network destination failed SSRF and trust-boundary
+    # validation" with recovery `terminal`, and a capabilities destination IS such a
+    # destination. RECOVERY IS THE SUBSTANCE, not the spelling: answering the transient
+    # code here tells a buyer to retry a probe of the metadata service on a jittered
+    # backoff, which is what this seller did until the verifier read the
+    # `signature_code` the resolver attaches to the refusal.
+    #
+    # Graded on all four transports BECAUSE the metadata range is refused ahead of the
+    # `allow_private` hatch the e2e stack holds open — a private-range address would
+    # grade the opposite behavior there. See the Given's docstring.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/request-signing-error-code.json pointer=/enumMetadata/request_signature_jwks_untrusted
+    # @source repo=adcp ref=v3.2.7 path=docs/building/by-layer/L1/security.mdx pointer=L1357
 
   @T-UC-006-local-signing-webhook-credentials @request-signing @error-path @invariant @boundary
   Scenario: a registration carrying webhook authentication is refused unless signed

@@ -7,29 +7,42 @@
 import copy
 import re
 import warnings
-from collections.abc import Mapping
-from dataclasses import dataclass
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field
 from datetime import date, datetime
 from decimal import Decimal
 
 # --- V2.3 Pydantic Models (Bearer Auth, Restored & Complete) ---
 # --- MCP Status System (AdCP PR #77) ---
-from enum import StrEnum
+from enum import Enum, StrEnum
 from functools import cache
-from typing import TYPE_CHECKING, Annotated, Any, ClassVar, Literal, Self, TypeAlias, cast, get_args
+from typing import (
+    TYPE_CHECKING,
+    Annotated,
+    Any,
+    ClassVar,
+    Literal,
+    NewType,
+    Self,
+    TypeAlias,
+    cast,
+    get_args,
+    get_origin,
+)
 
 from src.core.enum_helpers import enum_value
 
 if TYPE_CHECKING:
+    from adcp.types import DevicePlatform
     from pydantic.fields import FieldInfo
 
     from src.core.schemas.creative import CreativeAssetRequest
 
 from adcp import Error as _LibraryError
 from adcp.types import AccountReference as LibraryAccountReference
-from adcp.types import BrandReference as LibraryBrandReference
 from adcp.types import (
-    CanonicalFormatKind,
+    # ``CanonicalFormatKind`` was imported here for the deleted ProductFormatDeclaration
+    # subclass (see the note where that class used to be) and has no reader left.
     ContextObject,
     # DeliveryStatus / MediaBuyStatus are no longer referenced by a declaration in
     # this module — Snapshot and GetMediaBuysMediaBuy inherit them from their library
@@ -43,51 +56,51 @@ from adcp.types import (
     PricingModel,  # Replaces local PricingModel enum (lowercase members: .cpm, .cpc, etc.)
     ProtocolEnvelope,
 )
-from adcp.types import CreateMediaBuyRequest as LibraryCreateMediaBuyRequest
-
-# Import main request/response types from stable API
-from adcp.types import Format as LibraryFormat
-
-# Import types from stable API (per adcp 2.7.0+)
-from adcp.types import FormatId as LibraryFormatId
+from adcp.types import GeneratedTaskStatus as LibraryTaskStatus
 from adcp.types import GetAdcpCapabilitiesRequest as LibraryGetAdcpCapabilitiesRequest
 from adcp.types import GetAdcpCapabilitiesResponse as LibraryGetAdcpCapabilitiesResponse
 from adcp.types import GetMediaBuysRequest as LibraryGetMediaBuysRequest
-from adcp.types import GetMediaBuysResponse as LibraryGetMediaBuysResponse
 from adcp.types import GetTaskStatusResponse as LibraryGetTaskStatusResponse
 from adcp.types import ListTasksRequest as LibraryListTasksRequest
 from adcp.types import ListTasksResponse as LibraryListTasksResponse
-from adcp.types import PackageRequest as LibraryPackageRequest
 
-# Import types from stable API (per adcp 2.9.0+ - all types now in stable)
-# Note: AffectedPackage was removed in 2.9.0, use Package instead
-from adcp.types import PackageUpdate as LibraryPackageUpdate
-from adcp.types import UpdateMediaBuyRequest as LibraryUpdateMediaBuyRequest
+# The six media-buy response ARMS, and why three of them are reached at a generated path
+# while two are reached by a public Legacy* name.
+#
+# the pinned SDK repoints the unprefixed ``adcp.types.aliases`` names at the 3.2 canonical response
+# models (``adcp.types.canonical_creative.*``) and publishes ``Legacy*`` names for the 3.1.1
+# generated arms. That set is INCOMPLETE: it carries LegacyUpdateMediaBuyErrorResponse and
+# LegacyUpdateMediaBuySuccessResponse, and NO LegacyCreateMediaBuy*Response and no
+# LegacyUpdateMediaBuySubmittedResponse. For the four arms with no legacy name the generated
+# module is the only way to name the class 6.6.0 gave, so that is what these import.
+#
+# This one stays at ``adcp.types.aliases`` because ``adcp.types.legacy`` does not export it —
+# the same incompleteness, measured: of the 22 Legacy* names this repo imports, 21 are present
+# in ``adcp.types.legacy`` and this is the one that is not.
 from adcp.types.aliases import (
-    CreateMediaBuyErrorResponse as AdCPCreateMediaBuyError,
-)
-from adcp.types.aliases import (
-    CreateMediaBuySubmittedResponse as AdCPCreateMediaBuySubmitted,
-)
-from adcp.types.aliases import (
-    CreateMediaBuySuccessResponse as AdCPCreateMediaBuySuccess,
-)
-from adcp.types.aliases import Package as AdCPPackage
-from adcp.types.aliases import (
-    UpdateMediaBuyErrorResponse as AdCPUpdateMediaBuyError,
-)
-from adcp.types.aliases import (
-    UpdateMediaBuySubmittedResponse as AdCPUpdateMediaBuySubmitted,
-)
-from adcp.types.aliases import (
-    UpdateMediaBuySuccessResponse as AdCPUpdateMediaBuySuccess,
+    LegacyUpdateMediaBuyErrorResponse as AdCPUpdateMediaBuyError,
 )
 from adcp.types.base import AdCPBaseModel as LibraryAdCPBaseModel
-from adcp.types.generated_poc.core.product_format_declaration import (
-    ProductFormatDeclaration as LibraryProductFormatDeclaration,
-)
-from adcp.types.generated_poc.core.version_envelope import AdcpVersionEnvelope
-from adcp.types.generated_poc.enums.creative_approval_status import (
+from adcp.types.base import AdcpRequest as LibraryAdcpRequest
+from adcp.types.canonical_creative import CanonicalFormatKindStr
+from adcp.types.domains.core.creative_asset import CreativeAsset as LibraryCreativeAsset
+from adcp.types.domains.core.error import Source as LibraryErrorSource
+
+# The GENERATED format reference, reached at its generated path because the pinned SDK gives it no
+# public name. ``adcp.types.FormatId`` is gone and both candidate public names --
+# ``LegacyFormatId`` and ``LegacyFormatReferenceStructuredObject`` -- resolve to
+# ``adcp.types.legacy.LegacyFormatId``, a SUBCLASS that narrows ``duration_ms`` from float
+# to int. Binding to that subclass is not equivalent: every SDK model field is annotated
+# with the generated class, so the narrowed type is not what the models produce, and this
+# repo's own helpers would demand it. This import is the 6.6.0 class exactly
+# (``adcp.types.generated_poc.core.format_id.FormatReferenceStructuredObject``, same
+# qualname, now under ``domains``) plus the ``pixel_ratio`` the spec added.
+from adcp.types.domains.core.format_id import FormatReferenceStructuredObject as LibraryFormatId
+from adcp.types.domains.core.format_option_ref import FormatOptionReference as LibraryFormatOptionReference
+from adcp.types.domains.core.package_format_snapshot import PackageFormatSnapshot as LibraryPackageFormatSnapshot
+from adcp.types.domains.core.targeting_input import GeoProximityItem as LibraryGeoProximityItem
+from adcp.types.domains.core.version_envelope import AdcpVersionEnvelope
+from adcp.types.domains.enums.creative_approval_status import (
     # Aliased to OUR name for this concept, not to the library's. Two reasons, both
     # load-bearing: src.core.schemas already exports an unrelated
     # ``CreativeApprovalStatus`` (creative.py:252, a per-creative result model), so an
@@ -98,26 +111,88 @@ from adcp.types.generated_poc.enums.creative_approval_status import (
     # the library type behind our ``ApprovalStatus``.
     CreativeApprovalStatus as LibraryApprovalStatus,
 )
-from adcp.types.generated_poc.enums.media_buy_valid_action import (
+from adcp.types.domains.enums.media_buy_valid_action import (
     MediaBuyValidAction,  # noqa: F401 — re-exported via src.core.schemas
 )
-from adcp.types.generated_poc.enums.snapshot_unavailable_reason import (
+from adcp.types.domains.enums.snapshot_unavailable_reason import (
     SnapshotUnavailableReason as LibrarySnapshotUnavailableReason,
 )
-from adcp.types.generated_poc.enums.task_status import TaskStatus as LibraryTaskStatus
-from adcp.types.generated_poc.media_buy.get_media_buys_response import (
+from adcp.types.domains.media_buy.create_media_buy_response import (
+    CreateMediaBuyResponse1 as AdCPCreateMediaBuySuccess,
+)
+from adcp.types.domains.media_buy.create_media_buy_response import (
+    CreateMediaBuyResponse2 as AdCPCreateMediaBuyError,
+)
+from adcp.types.domains.media_buy.create_media_buy_response import (
+    CreateMediaBuyResponse3 as AdCPCreateMediaBuySubmitted,
+)
+from adcp.types.domains.media_buy.get_media_buys_response import (
     MediaBuy as LibraryGetMediaBuysMediaBuy,
 )
-from adcp.types.generated_poc.media_buy.get_media_buys_response import (
+from adcp.types.domains.media_buy.get_media_buys_response import (
     Package as LibraryGetMediaBuysPackage,
 )
-from adcp.types.generated_poc.media_buy.get_media_buys_response import (
+from adcp.types.domains.media_buy.get_media_buys_response import (
     Snapshot as LibraryGetMediaBuysSnapshot,
 )
-from adcp.types.generated_poc.protocol.get_task_status_request import (
+from adcp.types.domains.media_buy.update_media_buy_response import (
+    # The concrete class, NOT adcp.types.aliases.LegacyUpdateMediaBuySuccessResponse.
+    # That alias is declared `X: TypeAlias = UpdateMediaBuyResponse1`, and mypy refuses
+    # an explicit TypeAlias as a base class ("Invalid base class") even though it is a
+    # plain class at runtime. UpdateMediaBuySuccess below subclasses it, so the import
+    # has to name the class the alias points at.
+    UpdateMediaBuyResponse1 as AdCPUpdateMediaBuySuccess,
+)
+from adcp.types.domains.media_buy.update_media_buy_response import (
+    UpdateMediaBuyResponse3 as AdCPUpdateMediaBuySubmitted,
+)
+from adcp.types.domains.protocol.get_task_status_request import (
     GetTaskStatusRequest as LibraryGetTaskStatusRequest,
 )
-from adcp.types.generated_poc.protocol.list_tasks_response import Task as LibraryTaskSummary
+from adcp.types.domains.protocol.list_tasks_response import Task as LibraryTaskSummary
+
+# THE LEGACY ARM IS IMPORTED FROM ``adcp.types.legacy``, NOT FROM THE ``adcp.types`` FACADE,
+# and that is the whole mechanism keeping these bases right.
+#
+# the pinned SDK (AdCP) repoints the unprefixed public names at the CANONICAL models and publishes
+# ``Legacy*`` for the 3.1.1 generated ones. Both arms are reachable from ``adcp.types``, so
+# there the arm is carried by the ``Legacy`` prefix — ``Format`` is the canonical format
+# DECLARATION (eleven fields: format_kind, params, format_option_id, …) while ``LegacyFormat``
+# is the named-format model this seller extends (format_id, assets, renders,
+# canonical_parameters — twenty fields). Two different models with one name between them, and
+# a one-word edit swaps which one this seller serves.
+#
+# ``adcp.types.legacy`` contains only the legacy arm: 63 public names, of which the only
+# unprefixed four are ``FormatReferenceStructuredObject`` and three asset-coercion helpers.
+# No canonical model name resolves there AT ALL. So dropping the prefix at one of these import
+# sites is an ImportError at import time rather than a silently rebound base, and naming a
+# canonical model instead means naming a different MODULE
+# (``adcp.types.canonical_creative``) — a visible edit, not a prefix slip. Every name below is
+# the same class object the facade returns, verified per name; this is a change of address, not
+# of binding.
+#
+# Measured, for the three names imported here whose canonical twin is not field-identical:
+# Format loses 20 declared fields, Package loses 3 (format_ids, format_ids_pending,
+# format_ids_to_provide) and PackageRequest loses format_ids. The other twins keep their own
+# field set and repoint nested item types instead. Moving onto the canonical models is the
+# creative migration (salesagent-3xcdk), not the bump.
+from adcp.types.legacy import LegacyCreateMediaBuyRequest as LibraryCreateMediaBuyRequest
+from adcp.types.legacy import LegacyFormat as LibraryFormat
+from adcp.types.legacy import LegacyGetMediaBuysResponse as LibraryGetMediaBuysResponse
+
+# ``LegacyPackage``, and the rename is the point. This used to read
+# ``from adcp.types.aliases import Package as AdCPPackage``, where the arm was carried by the
+# word ``aliases`` and nothing else: ``adcp.types.aliases.Package`` is the GENERATED package
+# (format_ids, format_ids_pending, format_ids_to_provide) while ``adcp.types.Package`` is the
+# canonical one without them. An unprefixed name whose meaning depends on which module you
+# took it from is worse than a prefixed one, because there is no prefix to notice — and
+# ``LibraryPackage`` below is used as a base class.
+from adcp.types.legacy import LegacyPackage as AdCPPackage
+from adcp.types.legacy import LegacyPackageRequest as LibraryPackageRequest
+
+# Note: AffectedPackage was removed in 2.9.0, use Package instead
+from adcp.types.legacy import LegacyPackageUpdate as LibraryPackageUpdate
+from adcp.types.legacy import LegacyUpdateMediaBuyRequest as LibraryUpdateMediaBuyRequest
 
 from src.core.config import get_pydantic_extra_mode
 from src.core.errors.codes import CODE_TABLE, ErrorCodeT
@@ -128,6 +203,7 @@ from src.core.exceptions import (
     AdCPSalesAgentError,
     _details_to_wire,
 )
+from src.core.schemas._dependencies import SchemaDependencies, as_local, narrowed_from
 from src.core.schemas.notification import PushNotificationConfig
 
 # For backward compatibility, alias AdCPPackage as LibraryPackage
@@ -146,7 +222,7 @@ from adcp.types import PlatformDeployment as LibraryPlatformDeployment
 from adcp.types import Property as LibraryProperty
 from adcp.types import Signal as LibrarySignal
 from adcp.types import SignalFilters as LibrarySignalFilters
-from adcp.types import TargetingOverlay
+from adcp.types import TargetingOverlay, TargetingOverlayInput
 
 # The adcp SDK generates CollectionListReference and uses it on TargetingOverlay.collection_list /
 # collection_list_exclude, but does not re-export the type from the public adcp.types namespace
@@ -155,37 +231,36 @@ from adcp.types import TargetingOverlay
 # the library's TargetingOverlay field types exactly. Track upstream:
 # https://github.com/adcontextprotocol/adcp-client-python — when CollectionListReference is added
 # to adcp.types, switch this import to the public path.
-from adcp.types.generated_poc.core.collection_list_ref import (
+from adcp.types.domains.core.collection_list_ref import (
     CollectionListReference,  # noqa: F401 — re-exported via src.core.schemas; used by callers and TargetingOverlay.collection_list type
 )
+from adcp.types.domains.core.media_buy_frequency_cap import MediaBuyFrequencyCap as LibraryMediaBuyFrequencyCap
 from annotated_types import MaxLen, MinLen
 from pydantic import (
-    AnyUrl,
-    AwareDatetime,
     BaseModel,
     ConfigDict,
     Discriminator,
     Field,
+    FieldSerializationInfo,
     Tag,
     TypeAdapter,
+    field_serializer,
     model_serializer,
     model_validator,
 )
+from pydantic.dataclasses import dataclass as pydantic_dataclass
 from pydantic_core import InitErrorDetails, PydanticCustomError
 from pydantic_core import ValidationError as PydanticCoreValidationError
 
-# The pricing option types (nine local member subclasses, the AdCPPricingOption
-# union, and the PricingOption wrapper) live in src.core.schemas.pricing; the
-# package __init__ star-exports the members and the union from there.
-
-
-# Helper function for creating AnyUrl instances (eliminates mypy warnings)
+# The pricing option types (nine local member subclasses and the AdCPPricingOption
+# union over them) live in src.core.schemas.pricing; the package __init__
+# star-exports the members and the union from there.
 
 
 class Error(_LibraryError):
     """Advisory error whose graded fields are FUNCTIONS OF ``code``, not inputs.
 
-    The SDK types ``code`` as ``str`` — correctly, because AdCP 3.1.1 makes the
+    The SDK types ``code`` as ``str`` — correctly, because makes the
     error-code vocabulary open. That openness is a wire contract, not a licence
     for this seller to emit a code it never defined. Narrowing the field here
     makes an out-of-vocabulary advisory unconstructible, at every site, whatever
@@ -260,6 +335,7 @@ class Error(_LibraryError):
         field: str | None = None,
         details: ErrorDetails | None = None,
         retry_after: int | None = None,
+        source: LibraryErrorSource | None = None,
     ) -> "Error":
         """Build an advisory. THE construction surface for one.
 
@@ -267,13 +343,25 @@ class Error(_LibraryError):
         cannot author one -- not "should not", cannot: the name does not exist to pass.
         Those three are resolved from ``code`` by the validator below.
 
+        ``source`` IS a parameter, and deliberately not derived. It says WHO DETECTED the
+        condition -- this seller on emit (``producer``), or a consuming SDK on receipt
+        (``sdk``) -- which is a fact about the emission and not about the code: the pin has
+        several codes "either side MAY emit". ``FORMAT_DECLARATION_DIVERGENT`` is one, and
+        the storyboard grades this seller's own emission of it as ``source: "producer"``
+        (``compliance/.../canonical_formats.yaml``, step ``get_seeded_divergent_product``).
+        Typed to the library enum so a call site cannot spell the value.
+
+        There is no ``sdk_id`` parameter: the pin pairs that field with an ``sdk``-source
+        entry, and this seller emits none. When it does, that is when to add one.
+
         This exists instead of giving ``message`` a default on this subclass. A default
         would have worked at runtime (the before-validator injects the field anyway) and
         was only needed to stop mypy demanding the argument -- but redeclaring an
         inherited field to make it optional is exactly what
-        ``test_architecture_schema_inheritance`` forbids, and it is right to: "widening a
-        type, making a required field optional, or substituting an unrelated model are
-        all retypes that this guard must keep flagging." A narrower constructor removes
+        critical pattern #1 forbids: widening a type, making a required field optional, or
+        substituting an unrelated model are all retypes of the pinned declaration. (The guard
+        that used to flag them was deleted 2026-10-17; the rule stands, graded by behaviour.)
+        A narrower constructor removes
         the parameter without touching the inherited declaration.
         """
         payload: dict[str, Any] = {"code": code}
@@ -283,6 +371,8 @@ class Error(_LibraryError):
             payload["details"] = details.to_wire()
         if retry_after is not None:
             payload["retry_after"] = retry_after
+        if source is not None:
+            payload["source"] = source
         return cls.model_validate(payload)
 
     @classmethod
@@ -331,24 +421,6 @@ class Error(_LibraryError):
         return cls.model_validate(values)
 
 
-def url(value: str) -> AnyUrl:
-    """Convert string to AnyUrl for type-safe URL construction.
-
-    This helper eliminates mypy warnings when passing strings to AnyUrl fields.
-    Pydantic's AnyUrl accepts strings at runtime and validates/converts them automatically.
-
-    Usage:
-        FormatId(agent_url=url("https://example.com"), id="test")
-
-    Args:
-        value: URL string to convert
-
-    Returns:
-        AnyUrl instance (auto-validated by Pydantic)
-    """
-    return AnyUrl(value)  # Pydantic handles string -> AnyUrl conversion
-
-
 def canonical_agent_url(agent_url: object) -> str:
     """Canonicalize an agent_url for identity comparison (spec MUST canonicalization).
 
@@ -362,25 +434,25 @@ def canonical_agent_url(agent_url: object) -> str:
     ``format_id_identity``) and to key the creative-agent format cache
     (``CreativeAgentRegistry._cache_key``).
 
-    The algorithm is not reimplemented here. It comes from ``src.vendor.adcp_canonical``
-    — adcp 7.0.2's implementation, copied verbatim, which passes all 37 published
-    conformance vectors — reached through ``src.core.signing.canonical``, the ONE seam
-    over that package. The version this repo pins (6.6.0) fails 14 of them and is
-    terminal on its line; that package's docstring has the detail, and salesagent-3xcdk
-    deletes it by migrating.
+    The algorithm is not reimplemented here. It comes from the PINNED SDK
+    (``adcp.signing.canonical``), reached through ``src.core.signing.canonical``, the ONE
+    seam over it. The SDK is measured at 37/37 against the published conformance vectors.
+    A verbatim copy of the pinned SDK used to stand in that position, because the then-pinned
+    6.6.0 failed 14 of those vectors; the 9.0.0b1 pin retired it.
 
     ``producer_target_uri`` and not the seam's ``canonical_target_uri``: they differ on
     url-canonicalization.mdx step 2, and this is the PRODUCER side. A raw non-ASCII host is
     converted to its A-label here, where a verifier comparing a signature base must refuse
     one rather than pick a UTS-46 outcome the signer may not have picked.
 
-    **Spec step 5 is applied here, not there.** "If the path is empty AND an
-    authority is present, substitute ``/``." 7.0.2 does this only when a query is
-    present (``https://h.com?x=1`` -> ``https://h.com/?x=1``) and leaves
-    ``https://h.com`` with an empty path; no conformance vector covers the no-query
-    case, so it passes 37/37 while still diverging. Applying it makes
-    ``https://x.org`` and ``https://x.org/`` one agent, which is the spelling
-    difference a human actually produces.
+    There is ONE conversion and this function performs none of it itself. Spec step 5
+    ("if the path is empty AND an authority is present, substitute ``/``") used to be
+    applied here, on top of the delegation, because the SDK gated it on the query being
+    present and so left ``https://host`` with an empty path where RFC 3986 §6.2.3 requires
+    ``https://host/``. No published vector covered the empty-path-no-query case, which is
+    how it passed 37/37 while diverging. adcp-client-python#1456 fixed it; the pin carries
+    the fix, so ``https://host`` and ``https://host/`` are one spelling by the time the
+    string leaves the SDK, and the local patch is gone.
 
     What this deliberately does NOT do is ``.rstrip("/")``, which it used to. That
     is an "additional transformation before comparison", which the algorithm's
@@ -403,71 +475,516 @@ def canonical_agent_url(agent_url: object) -> str:
     """
     from src.core.signing.canonical import producer_target_uri
 
-    canonical = producer_target_uri(str(agent_url))
-    # Step 5, the half the vendored implementation applies only when a query is present.
-    scheme, _, rest = canonical.partition("://")
-    if rest and "/" not in rest and "?" not in rest:
-        canonical = f"{scheme}://{rest}/"
-    return canonical
+    return producer_target_uri(str(agent_url))
 
 
-@dataclass(frozen=True, slots=True, order=True)
-class FormatIdentity:
-    """The federation identity of a ``format_id``: its canonical ``agent_url`` and its ``id``.
+#: Separates the two halves of a :data:`FormatKey`. The ASCII unit separator cannot occur
+#: in a URL or in an ``id``, so no pair can collide with another by spelling.
+_FORMAT_KEY_SEPARATOR = "\x1f"
 
-    A DISTINCT TYPE rather than a ``tuple[str, str]``, and that is the whole point of
-    the class. The canonicalization in ``canonical_agent_url`` is a spec MUST, so a
-    comparison key built any other way is wrong -- but when the key was a bare tuple
-    nothing could say so, because a hand-built tuple has the identical static type and
-    differs only in VALUE. ``mypy.ini`` already sets ``strict_equality = True`` and it
-    does not help there: comparing a raw ``tuple[str, str]`` against a
-    ``set[tuple[str, str]]`` type-checks clean.
-
-    It does help here. Against a ``set[FormatIdentity]`` the same mistake is
-    ``Non-overlapping container check ... [comparison-overlap]`` at type-check time,
-    so the rule is REFUSED rather than merely documented.
-
-    This is not hypothetical. A UC-005 BDD scenario compared
-    ``(SELLER_AGENT_URL, fid.id)`` -- the raw constant, un-canonicalized -- against a
-    set of identities, and that assertion was the only one separating ``(agent_url,
-    id)`` matching from ``id``-alone matching. Canonicalization appends the spec's
-    step-5 trailing slash, so the two could never be equal and the assertion held
-    whatever the seller returned. An id-only filter regression would have passed on
-    every transport.
-
-    Frozen and slotted so it hashes, lives in a set, and cannot be mutated after the
-    canonical form is computed.
-    """
-
-    agent_url: str
-    id: str
+#: The federation identity of a ``format_id``, as one indexable string: its canonical
+#: ``agent_url`` and its ``id``, joined by :data:`_FORMAT_KEY_SEPARATOR`. Built ONLY by
+#: :func:`format_id_identity` / :attr:`FormatId.storage_key`, which is where the spec's
+#: canonicalization is applied.
+#:
+#: A persisted ``format_id`` has to serve two obligations that a single value cannot: the
+#: bytes the buyer sent are echoed back verbatim (the sync storyboard grades "seller must
+#: accept its own format_id", and canonicalizing on the write path broke that round-trip --
+#: measured), while a COMPARISON must canonicalize first, because ``core/format-id.json``
+#: makes that a MUST. So a row keeps the assertion verbatim and this key beside it. That is
+#: also why a column comparison on the stored spelling could not be correct: the filter held
+#: canonical values and the column held whatever arrived, so the same agent differing in host
+#: case, a default port or an IDN form read as two agents. One string, so it indexes.
+#:
+#: ``NewType`` and not a bare ``str`` so the intent is at least declared at every boundary --
+#: but MEASURED, it buys no enforcement: a ``NewType`` is a SUBTYPE of ``str``, so the types
+#: overlap and ``--strict-equality`` stays silent on a hand-built key compared against a
+#: ``set[FormatKey]``. The frozen dataclass this replaced did refuse that at type-check time.
+#: See :func:`format_id_identity` for what is therefore no longer caught by the type system.
+FormatKey = NewType("FormatKey", str)
 
 
-def format_id_identity(format_id: LibraryFormatId) -> FormatIdentity:
+def format_id_identity(format_id: LibraryFormatId) -> FormatKey:
     """Return the federation identity of a FormatId: its canonical ``agent_url`` and ``id``.
 
-    AdCP v3.1 makes ``format_id`` an object whose identity is BOTH ``agent_url`` and
+    makes ``format_id`` an object whose identity is BOTH ``agent_url`` and
     ``id`` (``core/format-id.json`` requires ``[agent_url, id]``; the ``list_formats``
     storyboard step matches product/format references with ``match_keys: [agent_url,
     id]``, ``scope.equals: $agent_url``, ``on_out_of_scope: warn``). Comparing on
     ``id`` alone would mis-resolve a
     third-party reference (foreign ``agent_url``) to a local format that merely
     shares an ``id`` — fabricating a local entry for a format the seller does not
-    host. Works on both the library ``FormatId`` and our subclass (duck-typed on
-    ``agent_url``/``id``).
+    host.
 
-    THE ONLY way to build a comparison key. ``FormatIdentity`` is constructible
-    directly, but every caller should come through here: this is where the spec's
-    canonicalization is applied, and a key that skipped it is the bug the type exists
-    to refuse.
+    Identity is the PAIR and nothing else. ``core/format-id.json`` declares four more
+    parameters on the reference object (width, height, pixel_ratio, duration_ms) and none
+    of them is part of which format a reference names, so the key cannot be the model
+    itself: pydantic equality would fold them in, and two references differing only in
+    ``pixel_ratio`` would stop matching.
+
+    THE ONE place the spec's canonicalization is applied, and the ONE builder of a
+    :data:`FormatKey`. It takes the LIBRARY type rather than our :class:`FormatId` because
+    most callers never hold the subclass -- a reference arrives as a bare id, as a JSON
+    document off a column, or as a library model on a pinned request field -- so coercing
+    each of those into the subclass just to read an attribute would be a validation pass
+    bought for nothing. A caller that DOES hold a :class:`FormatId` reads
+    :attr:`FormatId.storage_key`, which is this function.
+
+    WHAT THE TYPE NO LONGER REFUSES. This returned a frozen dataclass, and the point of
+    that class was that ``--strict-equality`` rejected a hand-built ``tuple[str, str]``
+    compared against a ``set`` of them ("Non-overlapping container check
+    ... [comparison-overlap]"). That was not hypothetical: a UC-005 BDD scenario compared
+    ``(SELLER_AGENT_URL, fid.id)`` -- the raw constant, un-canonicalized -- against a set of
+    identities, and that assertion was the only one separating ``(agent_url, id)`` matching
+    from ``id``-alone matching. Canonicalization appends the spec's step-5 trailing slash, so
+    the two could never be equal and the assertion held whatever the seller returned; an
+    id-only filter regression would have passed on every transport.
+
+    A ``str`` key cannot carry that refusal in ANY spelling -- ``NewType`` was tried and
+    measured silent, because it is a ``str`` subtype and so overlaps. What stands in its
+    place is weaker and worth naming: the separator. A key is only forgeable by writing
+    ``\\x1f`` deliberately, so the specific mistake that happened -- assembling the parts by
+    hand and comparing -- no longer type-checks as a tuple would, it simply cannot be written
+    by accident. Grading that rule is now the BDD scenario's job, not mypy's.
 
     Args:
         format_id: Any FormatId-like object exposing ``agent_url`` and ``id``.
 
     Returns:
-        The ``FormatIdentity`` comparison key for federation identity.
+        The :data:`FormatKey` comparison key for federation identity.
     """
-    return FormatIdentity(canonical_agent_url(format_id.agent_url), format_id.id)
+    return FormatKey(f"{canonical_agent_url(format_id.agent_url)}{_FORMAT_KEY_SEPARATOR}{format_id.id}")
+
+
+def format_key_parts(key: FormatKey) -> tuple[str, str]:
+    """The canonical ``agent_url`` and the ``id`` a :data:`FormatKey` was built from.
+
+    The inverse of :func:`format_id_identity`, here rather than at its one caller so the
+    separator has a single owner. FOR DISPLAY ONLY -- a key is compared whole, and splitting
+    one to compare the halves is how ``id``-alone matching gets reintroduced.
+    """
+    agent_url, _, format_id = key.partition(_FORMAT_KEY_SEPARATOR)
+    return agent_url, format_id
+
+
+#: ``core/format-option-ref.json``'s oneOf, as the pinned SDK renders it: a union
+#: discriminated on ``scope``. An adapter rather than a model because the pinned type IS the
+#: union and there is nothing local to add -- validating through it is how the stored
+#: document's arm gets decided by the pin instead of by a reader's guess.
+_FORMAT_OPTION_REF_ADAPTER: TypeAdapter[LibraryFormatOptionReference] = TypeAdapter(LibraryFormatOptionReference)
+
+
+@dataclass(frozen=True, slots=True, order=True)
+class FormatOptionIdentity:
+    """A ``format_option_ref``'s identity. ``publisher_domain`` is ``None`` for product scope.
+
+    ``core/format-option-ref.json`` is itself a oneOf: publisher scope requires
+    ``publisher_domain`` and ``format_option_id``; product scope requires only the option id.
+    Flattening the two arms to one optional domain keeps the identity comparable while
+    preserving the distinction, because a publisher-catalog option and a product-local option
+    that happen to share an id are different options.
+
+    THE SCOPE IS DERIVED, not stored. The pin makes the two members interdependent -- the
+    publisher arm lists ``publisher_domain`` in ``required``, and the product arm declares
+    ``"publisher_domain": false``, forbidding the member outright -- so the domain's presence
+    IS the discriminator and a stored ``scope`` beside it could only ever contradict it.
+    """
+
+    publisher_domain: str | None
+    format_option_id: str
+
+    @property
+    def scope(self) -> Literal["publisher", "product"]:
+        """Which arm of the pinned oneOf this reference names."""
+        return "product" if self.publisher_domain is None else "publisher"
+
+    @property
+    def document(self) -> dict[str, str]:
+        """This option ref as the ``core/format-option-ref.json`` document a column stores.
+
+        ``scope`` is REQUIRED in both arms, and the file declares
+        ``discriminator: {propertyName: "scope"}`` -- so a document without it names no arm
+        of the union. Omitting it is what made a canonical creative unreadable: the stored
+        document went back onto the response model, and pydantic refused the whole listing
+        with ``union_tag_not_found`` rather than answering the buyer.
+
+        ``publisher_domain`` is OMITTED rather than written as ``None`` on the product arm,
+        because that arm declares ``"publisher_domain": false``: the member may not be
+        present at all, and ``null`` is present. Writing it also made the document fail the
+        pinned schema in the arm that permits it least.
+        """
+        return {
+            "scope": self.scope,
+            **({} if self.publisher_domain is None else {"publisher_domain": self.publisher_domain}),
+            "format_option_id": self.format_option_id,
+        }
+
+    @classmethod
+    def of_document(cls, document: Mapping[str, Any]) -> "FormatOptionIdentity":
+        """The identity a stored ``core/format-option-ref.json`` document names.
+
+        The inverse of :attr:`document`, and the ONE reader of one -- so the two members and
+        the discriminator between them have a single owner on each side.
+
+        The document is VALIDATED through the pinned union rather than indexed, and the arm
+        pydantic picks is what decides which members are read. The reader this replaces took
+        both members POSITIONALLY out of the raw dict, which is how the missing discriminator
+        stayed invisible here: a document with no ``scope`` produced a perfectly ordinary
+        identity, and the loss surfaced three layers later as a refused response.
+        """
+        return cls.of_reference(_FORMAT_OPTION_REF_ADAPTER.validate_python(document))
+
+    @classmethod
+    def of_reference(cls, reference: LibraryFormatOptionReference) -> "FormatOptionIdentity":
+        """The identity a pinned ``format_option_ref`` names -- THE ONE reader of the scope.
+
+        The arm the discriminator names decides which members are read, which is not the same
+        as reading both members and seeing what is there. The SDK's two generated arms carry
+        IDENTICAL field sets -- codegen renders ``"publisher_domain": false`` as
+        ``publisher_domain: Any | None = None`` rather than as a prohibition -- so a
+        product-scope reference that carries a domain anyway parses, and reading the member
+        without the scope would silently reclassify it as publisher scope. That is a
+        different option: the two namespaces are distinct even for one ``format_option_id``.
+        """
+        return cls(
+            publisher_domain=reference.publisher_domain if reference.scope == "publisher" else None,
+            format_option_id=reference.format_option_id,
+        )
+
+
+#: Every parameter ``core/format-id.json`` declares beyond the identity pair, read OFF the
+#: model. A hand-written list here is the defect that dropped ``pixel_ratio``: three of the
+#: four parameters were copied by name, so a creative synced with a pixel ratio came back as
+#: a different format than the buyer sent.
+_FORMAT_ID_PARAMETERS: frozenset[str] = frozenset(LibraryFormatId.model_fields) - {"agent_url", "id"}
+
+
+@pydantic_dataclass(frozen=True, slots=True)
+class FormatSelector:
+    """What a PACKAGE names when it addresses a format, which may name no kind at all.
+
+    THE OTHER POPULATION, split out of :class:`CreativeFormatIdentity` under the user's
+    ruling that a creative's kind is "always NOT NULL ... if it cannot be derived, something
+    is wrong with the premise". That ruling is true of a CREATIVE and not of a SELECTOR, and
+    one type served both: ``media-buy/package-request.json`` gives a package three
+    independent ways to name a format, and two of them legitimately carry no kind --
+
+    * an ``format_option_refs`` entry names a declaration outright, so the route has an
+      ``option`` and no kind until the declaration is resolved;
+    * a ``format_ids`` entry whose legacy reference projects to nothing is the
+      ``LEGACY_UNPROJECTABLE`` refusal, which is a GRADED product-side outcome rather than a
+      creative being stored -- ``satisfies`` answers it, and answering it requires being able
+      to hold the unprojected state long enough to report it.
+
+    So the optional ``kind`` lives here, where it is a real state, and is gone from the
+    creative identity, where it was the hole this epic was about. A creative identity is
+    always a valid selector and converts with :meth:`CreativeFormatIdentity.as_selector`;
+    the reverse does not hold, which is the asymmetry the two types now state.
+    """
+
+    kind: CanonicalFormatKindStr | None = None
+    option: FormatOptionIdentity | None = None
+    legacy: FormatKey | None = None
+    legacy_parameters: tuple[tuple[str, Any], ...] = ()
+    assertion: LibraryFormatId | None = field(default=None, compare=False)
+
+    @classmethod
+    def of_legacy(cls, format_id: LibraryFormatId, *, kind: str | None = None) -> "FormatSelector":
+        """A selector naming a legacy reference, with the kind it projects to IF it does.
+
+        ``kind=None`` is the unprojectable selector, which is a state this type exists to
+        hold: ``satisfies`` turns it into ``FormatRefusal.LEGACY_UNPROJECTABLE`` and reports
+        it to the buyer. The creative-side constructor of the same name REQUIRES a kind,
+        because a creative in that state is refused at the door instead.
+
+        ``legacy=None`` when the canonicalizer refuses the reference's ``agent_url`` (two
+        trailing dots, for example, which ``AnyUrl`` accepts). docs/reference/url-canonicalization
+        says comparers MUST reject such an authority, so the reference has no identity to
+        compare and names no format: the routes then refuse it with the product's own code,
+        where computing the key here raised past them as INTERNAL_ERROR.
+        """
+        from src.core.signing.canonical import TargetUriMalformedError
+
+        try:
+            legacy: FormatKey | None = format_id_identity(format_id)
+        except TargetUriMalformedError:
+            legacy = None
+        return cls(
+            kind=kind,
+            legacy=legacy,
+            legacy_parameters=_legacy_parameters_of(format_id),
+            assertion=format_id,
+        )
+
+
+def _legacy_parameters_of(format_id: LibraryFormatId) -> tuple[tuple[str, Any], ...]:
+    """A reference's declared parameters, sorted, as the comparison form.
+
+    ``getattr`` with NO default, deliberately: the names are read off the model's own field
+    set, so every one resolves, and a default would guard against a name the derivation
+    cannot produce. Shared by both identity types so the comparison form cannot diverge
+    between what a package names and what a creative carries.
+    """
+    return tuple(
+        sorted((name, value) for name in _FORMAT_ID_PARAMETERS if (value := getattr(format_id, name)) is not None)
+    )
+
+
+@pydantic_dataclass(frozen=True, slots=True)
+class CreativeFormatIdentity:
+    """A creative's format identity: the canonical kind, plus the legacy assertion it retains.
+
+    ONE type, not a two-arm union, because the projection between the two identities runs one
+    way only. ``registries/v1-canonical-mapping.json`` is "authoritative for v1 -> v2
+    projection only" and a seller MUST NOT synthesize a v1 ``format_id`` by inverting a
+    structural match -- so the canonical kind is the only representation every layer can
+    share, and a union of co-equal arms made every consumer branch on which one arrived.
+
+    The members have different jobs and are not interchangeable:
+
+    * ``kind`` is THE identity -- what logic keys on and what is compared, and it is NEVER
+      absent. The user's ruling: "it is always possible to derive the kind. If it is not
+      possible, something is wrong with the premise, not with the rule." A reference that
+      projects to nothing is refused at the creation edge (``creative_identity_of``), so a
+      creative in that state never becomes a value here. What a PACKAGE names, which may
+      genuinely name no kind, is :class:`FormatSelector`.
+    * ``option`` narrows the kind to one of the enclosing product's concrete options.
+    * ``legacy`` and ``legacy_parameters`` are the assertion's COMPARISON form, canonical per
+      ``core/format-id.json``'s MUST. A parameter is part of which format a reference names --
+      a parameterized template pinned to 300x250 is not the one pinned to 728x90 -- so the
+      parameters are compared alongside the pair.
+    * ``assertion`` is the reference VERBATIM, as the buyer sent it. ``compare=False``: it is
+      echoed to a legacy peer and never compared, because the same agent respelled (host
+      case, a default port, a trailing slash) is the same agent, and comparing raw spellings
+      reported a format change on every such respelling.
+    """
+
+    kind: CanonicalFormatKindStr
+    option: FormatOptionIdentity | None = None
+    legacy: FormatKey | None = None
+    legacy_parameters: tuple[tuple[str, Any], ...] = ()
+    assertion: LibraryFormatId | None = field(default=None, compare=False)
+
+    def as_selector(self) -> FormatSelector:
+        """This identity as the thing a package could have named.
+
+        ONE direction, because only one holds: every creative identity is a valid selector,
+        and a selector may name no kind. ``satisfies`` grades selectors, so a caller with a
+        stored creative converts here rather than the two types being interchangeable.
+        """
+        return FormatSelector(
+            kind=self.kind,
+            option=self.option,
+            legacy=self.legacy,
+            legacy_parameters=self.legacy_parameters,
+            assertion=self.assertion,
+        )
+
+    @classmethod
+    def of_legacy(
+        cls, format_id: LibraryFormatId, *, kind: str, option: FormatOptionIdentity | None = None
+    ) -> "CreativeFormatIdentity":
+        """The identity of a retained legacy assertion and the kind it projects to.
+
+        ``kind`` IS REQUIRED, and that is the ruling applied: a creative whose reference
+        projects to nothing is refused at the creation edge, so there is no caller here with
+        nothing to pass. It used to default to ``None`` and ``from_row`` then set the value
+        afterwards through ``replace`` -- two-step construction of a mandatory member, which
+        is how a kindless identity could exist at all between the two steps.
+
+        THE ONE place the three derived members are built from the one reference, so the
+        comparison form and the verbatim form cannot drift apart -- and the derivation is
+        shared with :class:`FormatSelector` through :func:`_legacy_parameters_of`, so what a
+        package names and what a creative carries cannot compare differently.
+
+        ``option`` is the ``format_option_ref`` the same item carries, when it carries one.
+        ``core/creative-asset.json`` puts ``format_option_ref`` beside the root oneOf rather
+        than inside the canonical arm, so the deprecated arm may route to an exact product
+        option too, and the reference is kept rather than dropped.
+        """
+        return cls(
+            kind=kind,
+            option=option,
+            legacy=format_id_identity(format_id),
+            legacy_parameters=_legacy_parameters_of(format_id),
+            assertion=format_id,
+        )
+
+    @classmethod
+    def from_row(cls, row: Any) -> "CreativeFormatIdentity":
+        """Build from the ``Creative`` ORM row, the one shape a stored identity is loaded from.
+
+        Every site that needs to know what format a stored creative conforms to comes through
+        here. Each used to reassemble a ``FormatId`` out of the partial columns itself, which
+        is how three of the four declared parameters came to be copied by name.
+
+        This IS the boundary, and it is the only one: a stored document is VALIDATED into its
+        model here, and past this point the declared types are the fact. So no consumer
+        re-checks what the columns already guarantee, and nothing downstream reaches for a
+        key with a default -- both documents are written by ``_identity_columns`` and read
+        back whole, exactly as they were written.
+
+        BOTH documents, which was once true of only one of them. The option ref was read
+        POSITIONALLY out of the raw dict, so it alone skipped the validation this docstring
+        promises -- and a stored document missing the ``scope`` discriminator read back as an
+        ordinary identity here and failed three layers later, on the response model, as
+        ``union_tag_not_found``. ``of_document`` validates it against the pinned union, so
+        the arm is decided by the pin and a malformed document fails HERE.
+        """
+        legacy_document = row.legacy_format_id
+        option_document = row.format_option_ref
+        # ONE construction, not a build-then-``replace``. ``format_kind`` is NOT NULL, so the
+        # row always carries the mandatory member and there is no intermediate value with it
+        # missing -- which is what the two-step form created and what let a kindless identity
+        # exist at all.
+        return cls(
+            kind=row.format_kind,
+            option=(FormatOptionIdentity.of_document(option_document) if option_document is not None else None),
+            legacy=(format_id_identity(FormatId.model_validate(legacy_document)) if legacy_document else None),
+            legacy_parameters=(
+                _legacy_parameters_of(FormatId.model_validate(legacy_document)) if legacy_document else ()
+            ),
+            assertion=(FormatId.model_validate(legacy_document) if legacy_document else None),
+        )
+
+    @property
+    def legacy_key(self) -> FormatKey | None:
+        """The retained assertion's indexable comparison key, or ``None`` when there is none.
+
+        ``legacy`` IS that key now, so this is the member under the name the persistence edge
+        knows it by. Kept because ``_identity_columns`` reads it: the column and the member
+        are named differently on purpose, and a repository should not have to know which.
+        """
+        return self.legacy
+
+    @property
+    def wire_format_kind(self) -> str | None:
+        """The ``format_kind`` a RESPONSE carries -- ``None`` whenever a retained assertion is.
+
+        THE ONE place the wire's single arm is chosen, because the wire and the internal model
+        disagree on purpose. Internally a legacy creative carries BOTH: the retained assertion
+        is what the buyer asserted, and ``kind`` is what it projects to, which is the identity
+        logic keys on. On the wire they are a oneOf whose arms forbid each other --
+        ``creative/list-creatives-response.json``'s item schema declares
+        ``required: [format_id], not: {required: [format_kind]}`` and the mirror of it -- and
+        the state mirrors the INPUT: a creative synced by ``format_id`` is listed by
+        ``format_id``.
+
+        Emitting the projected kind beside the assertion is the bug this property exists to
+        make unavailable. It is not a theoretical one: the response model refuses both-arms on
+        construction, so every listing of a legacy creative raised rather than answering, and
+        the BDD readback scenarios are what caught it.
+        """
+        return None if self.assertion is not None else self.kind
+
+    @property
+    def label(self) -> str:
+        """How this identity is spelled to a human -- an operator's UI, a log, a Slack message.
+
+        ONE standard, and it is readability: the MOST INFORMATIVE spelling, which is the id
+        the buyer asserted when there is one and the canonical kind otherwise.
+        ``display_300x250`` tells an operator deciding whether to approve a creative what its
+        dimensions are; ``image``, which is what that same row projects to, tells them
+        almost nothing.
+
+        Identity comparisons use ``kind`` and ``legacy``/``legacy_key``, which exist for
+        exactly that. Nothing parses this string back, and no caller may start: a consumer
+        that branches on its spelling has reached for a display accessor to do an identity's
+        job.
+
+        This used to prefer ``kind`` "because that is the identity" -- a true statement about
+        ``kind`` and the wrong standard for a display accessor. That clause settled
+        kind-versus-id on IDENTITY grounds while the paragraph below settles the ``agent_url``
+        spelling on READABILITY grounds, which is two standards inside one property; for a
+        string whose only job is to be read, the second is the one that applies. The
+        preference is inverted rather than argued with because the first standard produced a
+        real defect: a Slack review notification, and the prompt the AI reviewer is given,
+        both named the canonical kind where the asserted id was what a reader needed. The
+        display sites inherited that preference from the creative-identity collapse; they
+        never wanted it.
+
+        Read off ``assertion`` rather than split back out of ``legacy``: the two are written
+        together by :meth:`of_legacy` and canonicalization touches ``agent_url`` only, so the
+        id is the same value in both, and the verbatim one is the better thing to show a human.
+        """
+        if self.assertion is not None:
+            return self.assertion.id
+        return self.kind if self.kind is not None else ""
+
+
+def creative_format_identity(
+    creative: LibraryCreativeAsset,
+    *,
+    kind: str,
+) -> CreativeFormatIdentity:
+    """Which format this creative names, read off whichever arm it carries.
+
+    THE ONE reader of a creative's format identity. Every caller that needs to know what
+    format a creative conforms to comes through here rather than reaching for ``format_id``,
+    because reaching for ``format_id`` is what silently assumes the deprecated arm: a
+    canonical creative has no ``format_id`` at all, and a seller that reads the attribute
+    directly sees ``None`` and reports a missing field the buyer was never required to send.
+
+    Typed with the PINNED sync input, which declares all three members this reads, so they
+    are plain attribute access and mypy holds the callers to it. The parameter was ``object``
+    and the reads were ``getattr(..., None)``, which looked like three types needing a duck
+    and was not: the local DTO is a SUBCLASS of this one, and the listing response model --
+    the apparent third -- never reaches here at all, because the sync gate calls this on the
+    REQUEST while building the response separately and the listing path goes through
+    ``CreativeFormatIdentity.from_row``. The only caller the ducks were serving was a test
+    shim, which now builds a real DTO.
+
+    This reads the arms; it does not PROJECT. ``kind`` is supplied by the caller that holds
+    the projection -- ``src.core.format_resolver.creative_identity_of``, the one edge that
+    runs the normative v1 -> v2 order -- because the registry and the fetched format
+    declaration are protocol inputs a schema module has no business reaching for.
+
+    THE VOCABULARY CHECK IS NO LONGER HERE, and a seam went with it. This function used to
+    call ``is_canonical_format_kind(kind, supported_kinds)`` on both arms and raise, with
+    ``supported_kinds`` a parameter defaulting to the pin's sixteen so a seller could later
+    thread its own narrower set (a tenant column, an adapter capability) through one call.
+    :class:`CreativeFormatIdentity` now refuses an out-of-vocabulary kind on CONSTRUCTION, so
+    the checks here were a second answer to a question the type already settles -- and the
+    type covers the one case a check in this function never could: a direct
+    ``CreativeFormatIdentity(kind=...)`` built somewhere that does not come through here.
+
+    The parameter is therefore GONE, which is a real loss and a deliberate one. The annotation
+    fixes the vocabulary at class-definition time, so a per-tenant set cannot be honoured by
+    it. The trade was taken because the seam was UNUSED -- measured, ``supported_format_kinds``
+    appears nowhere in ``src/`` -- and unconstructability beats a hypothetical. If a
+    seller-owned vocabulary ever arrives, it needs a different mechanism than an
+    ``Annotated`` default: a validator reading the tenant, or a per-tenant model.
+
+    Raises:
+        ValueError: if the creative carries neither arm or both arms. The model's own oneOf
+            validator refuses both on construction, so reaching here means an object that did
+            not come through a DTO. An out-of-vocabulary ``format_kind`` also surfaces as a
+            ``ValueError`` -- pydantic's ``ValidationError`` is one -- raised by
+            :class:`CreativeFormatIdentity` rather than by this function, so the callers that
+            map it to ``AdCPValidationError(field="format_kind")`` keep working unchanged.
+    """
+    format_id = creative.format_id
+    declared_kind = creative.format_kind
+    if (format_id is None) == (declared_kind is None):
+        raise ValueError("a creative carries exactly one of format_id and format_kind")
+    # The reference arrives already validated into one arm of core/format-option-ref.json's
+    # oneOf, so the only variance here is whether the creative carries one at all. WHICH arm
+    # it is still has to be read, and ``of_reference`` is the one place that reads it: the
+    # two generated arms carry identical field sets, so taking the members positionally --
+    # which this did -- loses the product/publisher distinction the discriminator exists for.
+    #
+    # Read for BOTH arms. core/creative-asset.json declares ``format_option_ref`` at the top
+    # level and forbids it in neither oneOf arm, so a legacy item may carry one; reading it
+    # on the canonical arm only dropped it without a word.
+    option_ref = creative.format_option_ref
+    option = FormatOptionIdentity.of_reference(option_ref) if option_ref is not None else None
+    if format_id is not None:
+        # The legacy arm. Its projected kind is refused by CreativeFormatIdentity itself if
+        # it lands outside the vocabulary -- a projection this seller cannot key on is not an
+        # identity, and the type says so. ``kind`` is REQUIRED now: the caller holding the
+        # projection either resolved one or raised before reaching here.
+        return CreativeFormatIdentity.of_legacy(format_id, kind=kind, option=option)
+    return CreativeFormatIdentity(kind=str(declared_kind), option=option)
 
 
 class WireSerializerMixin:
@@ -572,13 +1089,13 @@ class WireSerializerMixin:
         """
         excluded = info.exclude or ()
         included = info.include
-        for field in self._always_include_null_fields():
-            if field in data or field in excluded:
+        for name in self._always_include_null_fields():
+            if name in data or name in excluded:
                 continue
-            if included is not None and field not in included:
+            if included is not None and name not in included:
                 continue
-            if getattr(self, field, None) is None:
-                data[field] = None
+            if getattr(self, name, None) is None:
+                data[name] = None
         return data
 
 
@@ -719,7 +1236,7 @@ class BuyerRequest:
         # a deployment needed the forward-compatible boundary WITHOUT claiming production (the
         # storyboard conformance agent, docker-compose.e2e.yml): the top-level ``extra``
         # relaxed and this validator did not, so the five read tools rejected the
-        # ``idempotency_key`` AdCP 3.1 puts on every task request — measured as three
+        # ``idempotency_key`` puts on every task request — measured as three
         # ``read_tool_idempotency`` checks regressing with the wire mode reading ``ignore``.
         if rejected and get_pydantic_extra_mode() == "forbid":
             raise AdCPInvalidRequestError(
@@ -773,12 +1290,12 @@ class SalesAgentBaseModel(LibraryAdCPBaseModel):
 def _mirror_media_buy_status(model: Any) -> Any:
     """Backfill the deprecated body-level ``status`` from the domain ``media_buy_status``.
 
-    AdCP 3.1 create-/update-media-buy-response adds ``media_buy_status`` as the
+    create-/update-media-buy-response adds ``media_buy_status`` as the
     PREFERRED domain-status field on the RESPONSE BODY (a ``MediaBuyStatus`` value)
     and DEPRECATES the body-level ``status`` (removed in 3.2). This validator only
     backfills whichever of the two BODY fields is set onto the other, so the
     deprecated body ``status`` still carries the domain value during the deprecation
-    window. Both body fields are typed ``MediaBuyStatus | None`` on the adcp 5.7
+    window. Both body fields are typed ``MediaBuyStatus | None`` on the the pinned SDK
     library base (``CreateMediaBuySuccessResponse`` / ``UpdateMediaBuySuccessResponse``).
 
     This does NOT govern the WIRE top-level ``status``. On the flattened envelope,
@@ -803,12 +1320,12 @@ def _mirror_media_buy_status(model: Any) -> Any:
 
 
 #: ``union root -> TypeAdapter`` for the tools whose response schema is a ``oneOf``. Populated
-#: beside the branches, which is the only place that knows them; :meth:`AdcpResponse.revive`
+#: beside the branches, which is the only place that knows them; :meth:`SalesAgentAdcpResponse.revive`
 #: is the only reader. A root absent from here has a single shape and validates as itself.
 _BRANCH_ADAPTERS: dict[type, TypeAdapter] = {}
 
 
-class AdcpResponse(AdcpVersionEnvelope, ProtocolEnvelope):
+class SalesAgentAdcpResponse(AdcpVersionEnvelope, ProtocolEnvelope):
     """What every AdCP response IS: the two envelopes its schema composes at the root.
 
     Declares NO fields of its own. It exists to name a TYPE, and a field added here would put
@@ -837,7 +1354,7 @@ class AdcpResponse(AdcpVersionEnvelope, ProtocolEnvelope):
     """
 
     @model_validator(mode="after")
-    def _context_is_the_boundarys(self) -> "AdcpResponse":
+    def _context_is_the_boundarys(self) -> "SalesAgentAdcpResponse":
         if self.__dict__.get("context") is not None:
             raise ValueError(
                 "context is stamped by the boundary (src/core/tools/_boundary._served); a response is constructed without one"
@@ -852,7 +1369,7 @@ class AdcpResponse(AdcpVersionEnvelope, ProtocolEnvelope):
         super().__setattr__(name, value)
 
     @classmethod
-    def revive(cls, data: dict[str, Any]) -> "AdcpResponse":
+    def revive(cls, data: dict[str, Any]) -> "SalesAgentAdcpResponse":
         """Rebuild a response of this type from a document, resolving a ``oneOf`` to its branch.
 
         A response whose schema is a single shape validates as itself. A union root resolves
@@ -885,7 +1402,7 @@ class AdcpResponse(AdcpVersionEnvelope, ProtocolEnvelope):
         return revived
 
 
-class AdcpErrorResponse(AdcpResponse):
+class AdcpErrorResponse(SalesAgentAdcpResponse):
     """What a FAILED tool call is: the response envelope, carrying the error.
 
     AdCP models a failure as a response, not as a separate document.
@@ -893,7 +1410,7 @@ class AdcpErrorResponse(AdcpResponse):
     every response envelope and lists ``status`` as required, so an error body is a response
     body with the error fields filled in. This class is that body, declared once.
 
-    ``errors`` is declared HERE rather than on ``AdcpResponse`` because the pin puts it on
+    ``errors`` is declared HERE rather than on ``SalesAgentAdcpResponse`` because the pin puts it on
     each tool's own schema (``media-buy/*-response.json``) and not on the envelope. One
     subclass is the only place it can live without a per-tool copy, and a failure has no tool
     payload to carry besides the error.
@@ -965,7 +1482,7 @@ class AdcpErrorResponse(AdcpResponse):
         return cls(status=LibraryTaskStatus.failed, adcp_error=error, errors=[error])
 
 
-class CreateMediaBuyResult(AdcpResponse):
+class CreateMediaBuyResult(SalesAgentAdcpResponse):
     """The three shapes a create_media_buy response can take, as one nameable type.
 
     ``media-buy/create-media-buy-response.json`` is a root ``oneOf`` over Success, Error and
@@ -980,7 +1497,7 @@ class CreateMediaBuyResult(AdcpResponse):
     """
 
 
-class UpdateMediaBuyResult(AdcpResponse):
+class UpdateMediaBuyResult(SalesAgentAdcpResponse):
     """The three shapes an update_media_buy response can take. See ``CreateMediaBuyResult``."""
 
 
@@ -996,7 +1513,7 @@ class CreateMediaBuySuccess(AlwaysIncludeFieldsMixin, AdCPCreateMediaBuySuccess,
     ``ProtocolEnvelope`` is a base, and ``status``, ``task_id``, ``message``, ``context_id``
     and the rest are declared rather than attached by whichever transport happens to run.
 
-    AdCP spec 3.0.0 ``error-handling.mdx`` allows non-fatal errors on the
+    ``error-handling.mdx`` allows non-fatal errors on the
     success envelope ("populate only the payload... MUST NOT populate
     ``adcp_error``"). The ``errors`` field below carries per-package
     advisories like ``UNSUPPORTED_FEATURE`` for fields the seller persists but
@@ -1015,7 +1532,7 @@ class CreateMediaBuySuccess(AlwaysIncludeFieldsMixin, AdCPCreateMediaBuySuccess,
     # reason to retain a sender's unknown keys and no reason to refuse them either.
     model_config = ConfigDict(extra="ignore")
 
-    # adcp 6.6 (spec 3.1.1) made these required on the success envelope. ``status`` is
+    # the pinned SDK made these required on the success envelope. ``status`` is
     # REQUIRED and typed ``Literal["completed"]`` by the SDK parent, because this is the
     # success branch and the branch's schema makes the value a const. A local
     # ``CompletedTaskStatusMixin`` used to declare that field and supply its default; it is
@@ -1024,50 +1541,26 @@ class CreateMediaBuySuccess(AlwaysIncludeFieldsMixin, AdCPCreateMediaBuySuccess,
     # omits the field. Listing ``ProtocolEnvelope`` AFTER the parent is deliberate: the
     # parent's narrower ``Literal`` wins, so ``status="failed"`` on a success branch stays a
     # type error rather than becoming an eight-member enum.
-    # ``confirmed_at`` and ``revision`` are NOT invariant: they are columns the repository
-    # owns, so they carry NO default here and every construction site states where its
-    # value came from. A default made this model a second producer of persisted state —
-    # and an invisible one, because the write-seam guard scans assignments and a
-    # ``default_factory`` is not an assignment.
+    # ``confirmed_at`` is INHERITED. It was redeclared here as ``AwareDatetime | None``
+    # with no default -- which is, field for field, what the regenerated SDK parent
+    # already declares: same annotation, required, no default, no metadata. The only thing
+    # the local line still carried was the ABSENCE of the parent's description, so the
+    # redeclaration's one remaining effect was to drop documentation from the published
+    # schema. The properties the construction sites rely on come from the pin:
     #
-    # What the default asserted: ``confirmed_at=datetime.now(UTC)`` on EVERY success,
-    # including a ``pending_creatives`` buy whose column is NULL precisely because the
-    # seller has not committed. The docstring of ``CreateMediaBuySubmitted`` below
-    # already rejects that reasoning in so many words ("would falsely assert the seller
-    # confirmed a buy that is not yet committed"); the Success branch was doing it.
-    #
-    # Both keep the parent's REQUIRED types and lose only their local defaults, so
-    # omitting either is a construction error instead of a fabricated value.
-    #
-    # WIDENED to ``| None``, and the whole stack already agreed except this line:
-    #
-    #   pin  create-media-buy-response.json @ 3.1.1 branch0 (CreateMediaBuySuccess)
+    #   pin  create-media-buy-response.json branch0 (CreateMediaBuySuccess)
     #        type ["string", "null"], and IN ``required`` -> present, may be null
     #   ORM  MediaBuy.confirmed_at  Mapped[datetime | None], nullable=True
     #   DB   media_buys.confirmed_at  is_nullable = YES
     #
-    # So this annotation was the only layer narrower than the contract, and the
-    # narrowing was never mandated. ``required`` + nullable is exactly "the key must
-    # be present, its value may be null" -- no default, and AlwaysIncludeFieldsMixin
-    # emits the explicit null rather than dropping the key.
-    #
-    # It previously said "deliberately NOT widened", on the premise that "this seller
-    # never [sends null]: ... a create that is NOT committed (manual approval pending)
-    # returns the ``CreateMediaBuySubmitted`` branch instead." That premise was false for
-    # one path, and review found it: a ``pending_creatives`` create returns the
-    # SUCCESS branch, not Submitted. While PENDING_CREATIVES sat in
-    # ``_SELLER_COMMITTED_STATUSES`` the buy got stamped and the non-null type held --
-    # but the stamp itself was the defect, a write-once buyer-visible commitment minted
-    # at the moment of a HOLD, before the ad server was contacted. Removing that
-    # membership is the fix; this widening is what makes the correct state expressible.
-    #
-    # The suppression records an SDK/SPEC DIVERGENCE, not our convenience: we extend the
-    # SDK's class, and that class does not account for the null case its own pinned
-    # schema permits. Suppressing here is how we keep inheriting the SDK type while
-    # honouring the contract it under-specifies. Cost stated rather than buried -- the
-    # type-ignore ratchet moves 56 -> 57, and the ratchet is shrink-only by default, so
-    # this is an approved exception rather than a silent increase.
-    confirmed_at: AwareDatetime | None  # type: ignore[assignment]
+    # It is a column the repository owns, so it carries NO default and every construction
+    # site states where its value came from -- a default here made this model a second
+    # producer of persisted state, and an invisible one, because the write-seam guard
+    # scans assignments and a ``default_factory`` is not an assignment. That default
+    # asserted ``confirmed_at=datetime.now(UTC)`` on EVERY success, including a
+    # ``pending_creatives`` buy whose column is NULL precisely because the seller has not
+    # committed. The parent carries no default either, so omitting it is still a
+    # construction error rather than a fabricated value.
 
     # Names the branch this model IS, so the retained-field set is DERIVED from the pin
     # rather than listed here. branch0 is CreateMediaBuySuccess; the bare ref is
@@ -1115,16 +1608,6 @@ class CreateMediaBuySuccess(AlwaysIncludeFieldsMixin, AdCPCreateMediaBuySuccess,
     # serializes, so every construction of THIS class is the buyer's envelope and must
     # pass the row's values.
 
-    # account/sandbox/creative_deadline/valid_actions/context: inherited from the
-    # adcp 6.6 parent, which re-added all five typed (Account, AwareDatetime,
-    # list[MediaBuyValidAction], ContextObject) — the SDK-5.7-era local
-    # redeclarations were deleted as stale (PR #1567 round-3; same cleanup
-    # Product/SyncCreativeResult got, exemplar 5a8953a46). Pinned by
-    # test_adcp_contract.py::test_create_media_buy_success_inherits_parent_typed_annotations.
-    # buyer_ref: the SDK-5.7 parent wrongly declared it (removed from AdCP 3.1
-    # create-media-buy-response; SDK bug adcontextprotocol/adcp-client-python#950,
-    # excluded here by #1417); adcp 6.6 no longer declares it, so no override needed.
-
     # Non-fatal advisories — see class docstring for the spec basis.
     errors: list[Error] | None = Field(
         default=None,
@@ -1134,12 +1617,12 @@ class CreateMediaBuySuccess(AlwaysIncludeFieldsMixin, AdCPCreateMediaBuySuccess,
 
     @model_validator(mode="after")
     def _dual_emit_media_buy_status(self):
-        """AdCP 3.1: backfill the deprecated BODY ``status`` from the domain ``media_buy_status``.
+        """AdCP: backfill the deprecated BODY ``status`` from the domain ``media_buy_status``.
 
         Deprecation-window compat only. The WIRE top-level ``status`` is a PROTOCOL
         ``TaskStatus`` (``submitted`` / ``completed``) set by ``TaskResultEnvelope._serialize``
         — a different namespace from ``media_buy_status`` (GA 3.1.0 model, divergent).
-        NOTE: adcp 5.7 types this body ``status`` as ``MediaBuyStatus | None``; the wire
+        NOTE: the pinned SDK types this body ``status`` as ``MediaBuyStatus | None``; the wire
         top-level protocol value never lands on this body field (the envelope owns it), so no
         enum widening is needed here — the SDK type is not authoritative for the wire status.
         See ``_mirror_media_buy_status`` and docs/adcp-spec-version.md "`status` vs `media_buy_status` on media-buy responses".
@@ -1199,25 +1682,44 @@ class AffectedPackage(LibraryPackage):
     """Affected package in UpdateMediaBuySuccess response.
 
     Extends adcp library Package with internal tracking fields.
-    Note: In AdCP 2.12.0+, affected_packages uses the full Package type.
+    Note: affected_packages uses the full Package type.
 
-    Library Package required fields (adcp 2.12.0):
+    Library Package required fields:
     - package_id: Publisher's package identifier
     - paused: Boolean indicating whether package is paused (replaces old status enum)
+
+    TWO INTERNAL FIELDS ARE GONE, ``changes_applied`` and ``buyer_package_ref``. Neither
+    is declared by ``core/package.json`` -- measured on the node: the pinned ``Package``
+    declares 37 properties and neither name is among them, and neither appears anywhere in
+    the pinned bundle at 3.0, 3.1, 3.1.15 or 3.2.
+
+    Both were write-only. ``changes_applied`` already HAS its carrier: ``_PackageChanges``
+    in ``src/core/tools/media_buy_update.py`` is a plain dataclass that accumulates the
+    per-package record, and every mutation and every read in ``src/`` is against THAT
+    object. Copying it onto the response model produced a second representation nothing
+    consulted. ``buyer_package_ref`` was passed ``None`` at all nine adapter construction
+    sites and the package id at the one tool site, and read at zero sites in ``src/``,
+    ``scripts/`` or ``tests/``.
+
+    Adding nothing is the correct shape for this class: it exists so the response's
+    ``affected_packages`` names a type this seller owns, which is ownership rather than
+    content (see ``GetAdcpCapabilitiesRequest``).
     """
 
-    # Internal fields for tracking what changed (not in AdCP spec)
-    changes_applied: dict[str, Any] | None = Field(
-        None,
-        description="Internal: Detailed changes applied to package (creative_ids added/removed, etc.)",
-        exclude=True,
-    )
-    buyer_package_ref: str | None = Field(
-        None, description="Internal: Buyer's package reference (legacy compatibility)", exclude=True
-    )
+    # A RESPONSE model keeps nothing it was not declared. The SDK parent sets
+    # extra="allow", so deleting the two fields above was NOT enough on its own: the
+    # moment a construction site still passed one, the value came back as an EXTRA and
+    # serialized to the buyer. That is not a hypothetical here -- it is what
+    # test_response_shapes.py::TestUpdateMediaBuyResponseShape::test_internal_fields_excluded
+    # caught the instant the declarations were removed, with both names present in the
+    # dumped package. Same trap, same fix, as ``workflow_step_id`` on
+    # ``CreateMediaBuySuccess``. "ignore" rather than "forbid" for the reason given there:
+    # a response has no forward-compatibility reason to retain a sender's unknown keys and
+    # no reason to refuse them either.
+    model_config = ConfigDict(extra="ignore")
 
 
-class UpdateMediaBuySuccess(NestedModelSerializerMixin, AdCPUpdateMediaBuySuccess, UpdateMediaBuyResult):  # type: ignore[misc]
+class UpdateMediaBuySuccess(NestedModelSerializerMixin, AdCPUpdateMediaBuySuccess, UpdateMediaBuyResult):
     """Successful update_media_buy response, extending the SDK success branch.
 
     Extends the official adcp UpdateMediaBuySuccess type.
@@ -1227,7 +1729,7 @@ class UpdateMediaBuySuccess(NestedModelSerializerMixin, AdCPUpdateMediaBuySucces
     envelope fields alongside its branch fields. See ``CreateMediaBuySuccess``.
 
     Carries an optional ``errors`` field for non-fatal advisories on the
-    same basis as ``CreateMediaBuySuccess`` (AdCP 3.0.0 error-handling
+    same basis as ``CreateMediaBuySuccess`` (error-handling
     "non-fatal in payload" rule). Used today for per-package
     ``UNSUPPORTED_FEATURE`` notices when ``property_list`` is persisted but
     not yet compiled by the adapter.
@@ -1238,7 +1740,7 @@ class UpdateMediaBuySuccess(NestedModelSerializerMixin, AdCPUpdateMediaBuySucces
     # ``workflow_step_id`` into an extra that serialized to the buyer.
     model_config = ConfigDict(extra="ignore")
 
-    # adcp 6.6 (spec 3.1.1) made status/revision required on the update success envelope.
+    # the pinned SDK made status/revision required on the update success envelope.
     # status is REQUIRED and typed Literal["completed"] by the SDK parent, because this is the
     # success branch and the branch's schema makes the value a const. A local
     # CompletedTaskStatusMixin used to declare the field and supply its default; it is
@@ -1276,16 +1778,10 @@ class UpdateMediaBuySuccess(NestedModelSerializerMixin, AdCPUpdateMediaBuySucces
         """
         return cls(**kwargs)
 
-    # Override affected_packages to use our extended AffectedPackage type
-    # This allows us to include internal tracking fields (changes_applied, buyer_package_ref)
-    # while still being AdCP-compliant (those fields are excluded via exclude=True)
-    # Pydantic allows subclass override at runtime but mypy doesn't recognize this
+    # Narrowed to the local AffectedPackage. It used to carry the two internal tracking
+    # fields that are now deleted, so what the narrowing buys today is that the response
+    # names a type this seller owns and can narrow later; it adds no field.
     affected_packages: list[AffectedPackage] | None = None
-
-    # buyer_ref: the SDK-5.7 parent wrongly declared it (removed from AdCP 3.1
-    # update-media-buy-response; SDK bug adcontextprotocol/adcp-client-python#950,
-    # excluded here by #1417); adcp 6.6 no longer declares it, so no override needed
-    # — the create side lost its twin in the 6.6 bump and this one was missed.
 
     # Non-fatal advisories — see class docstring for the spec basis.
     errors: list[Error] | None = Field(
@@ -1296,12 +1792,12 @@ class UpdateMediaBuySuccess(NestedModelSerializerMixin, AdCPUpdateMediaBuySucces
 
     @model_validator(mode="after")
     def _dual_emit_media_buy_status(self):
-        """AdCP 3.1: backfill the deprecated BODY ``status`` from the domain ``media_buy_status``.
+        """AdCP: backfill the deprecated BODY ``status`` from the domain ``media_buy_status``.
 
         Deprecation-window compat only. The WIRE top-level ``status`` is a PROTOCOL
         ``TaskStatus`` (``submitted`` / ``completed``) set by ``TaskResultEnvelope._serialize``
         — a different namespace from ``media_buy_status`` (GA 3.1.0 model, divergent).
-        NOTE: adcp 5.7 types this body ``status`` as ``MediaBuyStatus | None``; the wire
+        NOTE: the pinned SDK types this body ``status`` as ``MediaBuyStatus | None``; the wire
         top-level protocol value never lands on this body field (the envelope owns it), so no
         enum widening is needed here — the SDK type is not authoritative for the wire status.
         See ``_mirror_media_buy_status`` and docs/adcp-spec-version.md "`status` vs `media_buy_status` on media-buy responses".
@@ -1327,7 +1823,7 @@ class UpdateMediaBuyError(AdCPUpdateMediaBuyError, UpdateMediaBuyResult):  # typ
     """
 
 
-class UpdateMediaBuySubmitted(AdCPUpdateMediaBuySubmitted, UpdateMediaBuyResult):  # type: ignore[misc]
+class UpdateMediaBuySubmitted(AdCPUpdateMediaBuySubmitted, UpdateMediaBuyResult):
     """Async/pending update_media_buy response, extending the SDK submitted branch.
 
     Spec 3.1.1 ``update-media-buy-response.json`` models a not-yet-applied update
@@ -1438,7 +1934,7 @@ class TaskStatus(StrEnum):
 # PricingModel is now imported from adcp.types (adcp library)
 # Library uses lowercase member names: .cpm, .vcpm, .cpc, .cpcv, .cpv, .cpp, .flat_rate
 
-# PriceGuidance is now imported from adcp.types.stable (adcp 2.7.0+)
+# PriceGuidance is now imported from adcp.types.stable (the pinned SDK+)
 # The library version has the same fields and behavior as our previous local class
 
 
@@ -1487,7 +1983,7 @@ class PricingOption(SalesAgentBaseModel):
 
     Production pricing options are the discriminated-union subclasses in
     ``src.core.schemas.pricing`` (``Product.pricing_options`` is typed with
-    that module's RootModel wrapper). This flat model is retained only because
+    that module's union over them). This flat model is retained only because
     ledgered schema-validation tests (T-UC-001-boundary-pricing-xor in
     tests/integration/test_get_products_behavioral.py and
     tests/unit/test_null_field_exclusion.py) still grade its XOR validator;
@@ -1572,21 +2068,16 @@ class FormatReference(SalesAgentBaseModel):
     format_id: str = Field(..., serialization_alias="id", description="Format ID within that agent's format catalog")
 
 
-class ProductFormatDeclaration(LibraryProductFormatDeclaration):
-    """Format.canonical_parameters, with the two fields the generated class lacks.
-
-    3.1.1 core/product-format-declaration.json is a oneOf over format kinds, and every
-    branch requires ``format_kind`` and ``params``. adcp 6.6.0 generated only the shared
-    base properties and ignores extras, so parsing a creative agent's catalog dropped
-    both and served ``{"canonical_formats_only": false, "experimental": false}``, which
-    the pinned schema rejects. ``params`` is per-kind in the schema; it is carried as a
-    dict, as the SDK's own hand-written declaration (adcp.types.canonical_decl) does.
-    7.0.3 has the same gap; 8.0 (AdCP 3.2) generates the union. Delete this class when
-    the SDK pin carries the fix (adcontextprotocol/adcp-client-python#1275).
-    """
-
-    format_kind: CanonicalFormatKind
-    params: dict[str, Any]
+# ``ProductFormatDeclaration`` was declared here: a narrowing subclass that added
+# ``format_kind`` and ``params``, because the pinned SDK generated only the shared base
+# properties of the ``oneOf`` and dropped both when parsing a creative agent's catalog.
+# Its docstring named its own deletion condition -- "8.0 (AdCP) generates the union.
+# Delete this class when the SDK pin carries the fix
+# (adcontextprotocol/adcp-client-python#1275)". the pinned SDK carries it:
+# ``LegacyFormat.canonical_parameters`` is a ``CanonicalParameters`` RootModel over the
+# generated per-kind arms, each with its own required ``format_kind`` and typed ``params``,
+# which is strictly more than the two hand-added fields expressed. So the class is gone and
+# ``Format`` inherits the field rather than redeclaring it.
 
 
 class Format(LibraryFormat):
@@ -1600,10 +2091,25 @@ class Format(LibraryFormat):
     We only add internal fields here marked with exclude=True.
     """
 
-    # Narrowed to the local subclass above: the library type loses format_kind and params.
-    canonical_parameters: ProductFormatDeclaration | None = Field(
-        default=None, deprecated=True, description=LibraryFormat.model_fields["canonical_parameters"].description
-    )
+    # The generated parent sets ``extra="allow"``, which STORES an unknown key and then
+    # SERIALIZES it -- and this class is built from a COUNTERPARTY's payload
+    # (``creative_agent_registry._fetch_formats_raw_mcp`` validates a creative agent's reply
+    # into it) and then serialized to buyers by ``list_creative_formats``. Under "allow", any
+    # key an agent invented travelled through this seller onto a buyer's wire under the
+    # pinned ``Format`` name, where no buyer could validate it.
+    #
+    # "ignore" is also what makes DELETING an internal field here mean what it says. Two were
+    # just deleted (see below); with the parent's "allow" in force, an agent that still sends
+    # one would have had it promoted from a field that could never reach the wire
+    # (``exclude=True``) to an extra that always does. :class:`Package` records the same trap
+    # for the same reason -- a response has no forward-compatibility claim on a sender's
+    # unknown keys, so there is nothing to retain and no reason to refuse either.
+    model_config = ConfigDict(extra="ignore")
+
+    # ``canonical_parameters`` is INHERITED. It was redeclared here only to narrow it to
+    # the local ProductFormatDeclaration subclass, which existed only because the pinned SDK's
+    # generated type lost format_kind and params. the pinned SDK generates the per-kind union, so
+    # the narrowing has nothing left to narrow and the redeclaration is the parent's.
 
     # Internal fields for backward compatibility and convenience
     # These are NOT part of the AdCP spec and are excluded from serialization
@@ -1611,9 +2117,6 @@ class Format(LibraryFormat):
         None,
         exclude=True,
         description="Internal: Platform-specific configuration (e.g., gam, kevel) for creative mapping",
-    )
-    category: Literal["standard", "custom", "generative"] | None = Field(
-        None, exclude=True, description="Internal: Format category (not in AdCP spec)"
     )
     is_standard: bool | None = Field(
         None, exclude=True, description="Internal: Whether this follows IAB specifications (not in AdCP spec)"
@@ -1623,12 +2126,25 @@ class Format(LibraryFormat):
         exclude=True,
         description="Internal: Legacy technical specifications (not in AdCP spec, use renders instead)",
     )
-    iab_specification: str | None = Field(
-        None, exclude=True, description="Internal: Name of IAB specification (not in AdCP spec)"
-    )
-    accepts_3p_tags: bool | None = Field(
-        None, exclude=True, description="Internal: Whether format accepts third-party tags (not in AdCP spec)"
-    )
+    # ``iab_specification``, ``accepts_3p_tags`` and ``category`` are DELETED. All three were
+    # write-only: the one site that named any of them (``src/core/tools/creative_formats.py``)
+    # passed ``None``.
+    #
+    # THE SWEEP THAT SAID "no site reads one back" WAS WRONG, and it cost two admin endpoints.
+    # ``src/admin/blueprints/format_search.py`` read ``fmt.category`` into the JSON of both
+    # ``/format-search/search`` and ``/format-search/list``, so after the deletion both raised
+    # ``AttributeError`` and answered 500 -- and the admin suite stayed green, because nothing
+    # grades either endpoint. The value was always ``None``, and the three JS consumers all
+    # spell it ``fmt.category || <fallback>``, so dropping the key is outcome-identical for
+    # them; the Python reads are gone. Next deletion here: grep ``src/admin`` and the
+    # templates, not just ``src/core``.
+    #
+    # The pinned ``core/format.json`` declares 20 properties and no node in the bundle
+    # declares any of the three -- 3836 pinned nodes walked by ``__annotations__``, zero hits
+    # for ``category`` on ``core.format`` or anywhere else -- so there was no spec reading to
+    # preserve and no value to route to a carrier: CLAUDE.md pattern #4's "delete if genuinely
+    # unused" arm. ``category`` was additionally redundant with ``is_standard``, which the
+    # format readers actually use ("standard" vs "custom" is what that boolean says).
 
     @property
     def agent_url(self) -> str | None:
@@ -1646,14 +2162,14 @@ class Format(LibraryFormat):
         """Extract primary dimensions from renders array or format_id parameters.
 
         Checks in order:
-        1. Parameterized format_id (AdCP 2.5) - width/height on FormatId
+        1. Parameterized format_id  - width/height on FormatId
         2. Renders array - first render's dimensions
         3. Requirements field (legacy, internal)
 
         Returns:
             Tuple of (width, height) in pixels, or None if not available.
         """
-        # Try format_id parameters first (AdCP 2.5 parameterized formats)
+        # Try format_id parameters first (parameterized formats)
         # Access width/height directly — works with both library FormatId and our subclass
         if self.format_id.width is not None and self.format_id.height is not None:
             return (self.format_id.width, self.format_id.height)
@@ -1692,6 +2208,79 @@ class Format(LibraryFormat):
             'https://creative.adcontextprotocol.org/|display_300x250'
         """
         return f"{self.format_id.agent_url}|{self.format_id.id}"
+
+
+def _closed_enum_list_fields(model: type[BaseModel]) -> dict[str, type[Enum]]:
+    """Every top-level field of *model* typed ``list[<Enum>]`` (optionally ``| None``), with its enum.
+
+    Derived from the pinned model rather than listed, so an enum list the next pin adds is
+    covered the day it lands and one the pin opens up (``UniversalMacro | str``) drops out.
+    """
+    fields: dict[str, type[Enum]] = {}
+    for name, info in model.model_fields.items():
+        annotation = info.annotation
+        for arm in (annotation,) if get_origin(annotation) is list else get_args(annotation):
+            if get_origin(arm) is list:
+                (item,) = get_args(arm)
+                if isinstance(item, type) and issubclass(item, Enum):
+                    fields[name] = item
+    return fields
+
+
+#: The closed-enum list fields of the pinned ``Format``, each with the enum it is closed over.
+_PEER_FORMAT_ENUM_LISTS = _closed_enum_list_fields(LibraryFormat)
+
+
+class PeerFormat(Format):
+    """A :class:`Format` as a PEER creative agent publishes it.
+
+    The pin makes every enum additive and tells a reader to tolerate a value it does not
+    know (``docs/reference/versioning.mdx``, the Enums row: "Clients must tolerate unknown
+    values"). A creative agent on a newer release can therefore publish a closed-enum list
+    member this pin does not model, and strict :class:`Format` would refuse the whole entry
+    for it. This class is the reader the pin asks for, and ``Format`` stays strict for the
+    formats this seller authors.
+
+    Tolerance is declared HERE, on the type, as a ``mode="before"`` validator, so every
+    caller that ingests a peer payload gets it and there is no call site to forget. The
+    validator partitions each closed-enum list into the members the pin models, which
+    validate as usual, and the rest, which go to :attr:`unmodeled_values`. The serializer
+    re-emits the union, so the peer's value reaches the buyer as the peer sent it: an
+    ``accepts_parameters`` holding only an unmodeled member must not be republished as
+    ``[]``, which ``core/format.json`` reads as "a concrete format with fixed parameters".
+
+    Only string members are diverted. A non-string member is a type error, not an unknown
+    enum value, and still fails validation.
+    """
+
+    unmodeled_values: dict[str, list[str]] = Field(
+        default_factory=dict,
+        exclude=True,
+        description="Internal: closed-enum list members the pin does not model, keyed by field name",
+    )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _divert_unmodeled_enum_members(cls, data: Any) -> Any:
+        if not isinstance(data, Mapping):
+            return data
+        accepted = dict(data)
+        unmodeled: dict[str, list[str]] = {}
+        for name, enum_cls in _PEER_FORMAT_ENUM_LISTS.items():
+            values = data.get(name)
+            if not isinstance(values, list):
+                continue
+            modeled = {member.value for member in enum_cls}
+            accepted[name] = [v for v in values if not isinstance(v, str) or v in modeled]
+            if diverted := [v for v in values if isinstance(v, str) and v not in modeled]:
+                unmodeled[name] = diverted
+        accepted["unmodeled_values"] = unmodeled
+        return accepted
+
+    @field_serializer(*_PEER_FORMAT_ENUM_LISTS)
+    def _reemit_unmodeled_enum_members(self, value: list[Any] | None, info: FieldSerializationInfo) -> list[Any] | None:
+        diverted = self.unmodeled_values.get(info.field_name, [])
+        return [*(value or []), *diverted] if diverted else value
 
 
 # FORMAT_REGISTRY removed - now using dynamic format discovery via CreativeAgentRegistry
@@ -1750,33 +2339,88 @@ def convert_format_ids_to_formats(format_ids: list[str], tenant_id: str | None =
             # For unknown format IDs, create a minimal Format object with FormatId
             formats.append(
                 Format(
-                    format_id=FormatId(agent_url=url("https://creative.adcontextprotocol.org"), id=format_id),
+                    format_id=FormatId(agent_url="https://creative.adcontextprotocol.org", id=format_id),
                     name=format_id.replace("_", " ").title(),
                 )
             )
     return formats
 
 
-class FrequencyCap(LibraryFrequencyCap):
-    """Frequency capping extending AdCP library type with scope.
+# ``FrequencyCap`` IS the pinned type. The local subclass is deleted, and with it its one
+# field, ``scope: Literal["media_buy", "package"] = "media_buy"``.
+#
+# THE LEVEL IS POSITIONAL IN THE PIN, not a property. ``core/frequency-cap.json`` declares
+# five properties -- suppress, suppress_minutes, max_impressions, per, window -- and no
+# ``scope``; what decides the level is WHERE the cap hangs, stated in the pin's own
+# ``max_impressions`` text: "campaign applies across the owning field's full flight: the
+# package flight FOR A TARGETING OVERLAY, or the MediaBuy flight FOR A ROOT CAP". The pin
+# carries both places as different fields of different types: ``TargetingOverlay[Input]
+# .frequency_cap`` is this schema, and ``CreateMediaBuyRequest.frequency_cap`` is
+# ``core/media-buy-frequency-cap.json`` (this schema plus a required ``max_impressions`` and
+# no suppress). So a cap reachable through an overlay is package-scoped by construction and
+# there is nothing for a field to say.
+#
+# ``enums/frequency-cap-scope.json`` does exist in the pin, and reading it is what settles
+# the field rather than the absence alone: its SOLE member is "package", and it is
+# referenced by no schema in the bundle except the registry index. So the vocabulary this
+# field claimed to express (a) never admitted "media_buy" and (b) is bound to no wire field.
+# The local declaration therefore defaulted every cap to a value the pin's own enum does not
+# contain -- which is what made ``_check_unsupported_features`` in src/adapters/kevel.py
+# refuse EVERY frequency cap a buyer sent as "media buy level not supported", and left that
+# adapter's package-level branch reachable only by a buyer who sent a non-spec field.
+#
+# NOT AN ALIAS, and the reason is the one :class:`Package` records: the generated parent sets
+# ``extra="allow"``, which STORES an unknown key and then serializes it. Aliasing this name
+# to the parent would have turned ``scope`` from a field that could never reach the wire
+# (declared, constrained to two values) into an extra that ALWAYS does, carrying any value a
+# caller passed -- the opposite of deleting it, and invisible, because nothing refuses the
+# construction. Every targeting overlay persisted before this change holds
+# ``"scope": "media_buy"`` (it had a default), so the readback would have put it straight
+# back on the wire for every stored buy.
+#
+# So the subclass survives with no field, for its ``model_config`` alone. That config IS the
+# content: "ignore" drops an undeclared key rather than retaining it, which is what a
+# response wants (a stored document's stale key is not forward compatibility), and
+# ``from_attributes`` lets a parent-class instance -- what ``adcp.types.FrequencyCap`` builds,
+# and what adapters and the discovery readers hand over -- fill a slot typed with this
+# subclass, by reading the five declared fields off it. Without that, pydantic refuses a
+# parent instance in a subclass slot by identity.
+class FrequencyCap(SchemaDependencies, LibraryFrequencyCap):
+    """The pinned ``core/frequency-cap.json``, declaring no field of its own.
 
-    Inherits suppress_minutes: float from library.
-    Adds scope field for media buy vs package level capping.
+    See the note above for why this is a subclass rather than an alias, and why its one
+    ``model_config`` is the reason it exists. It also carries the schema's ``dependencies``,
+    which the generated parent does not compile: ``max_impressions`` needs ``per`` and
+    ``window``, and each of those needs ``max_impressions``.
     """
 
-    scope: Literal["media_buy", "package"] = Field("media_buy", description="Apply at media buy or package level")
+    model_config = ConfigDict(extra="ignore", from_attributes=True)
+
+    _SCHEMA_DEPENDENCIES = {
+        "max_impressions": ("per", "window"),
+        "per": ("max_impressions",),
+        "window": ("max_impressions",),
+    }
 
 
-class TargetingCapability(SalesAgentBaseModel):
-    """Defines targeting dimension capabilities and restrictions."""
+class MediaBuyFrequencyCap(LibraryMediaBuyFrequencyCap, FrequencyCap):
+    """The pinned ``core/media-buy-frequency-cap.json``: ``allOf`` frequency-cap.json plus a
+    required ``max_impressions``. The SDK generates that ``allOf`` as inheritance from its
+    ``FrequencyCap``; inheriting the local one as well is what brings frequency-cap.json's
+    ``dependencies`` to the MediaBuy-level cap."""
 
-    dimension: str  # e.g., "geo_country"
-    # No "managed_only" and no "removed": the pinned targeting overlay declares no managed-only
-    # dimension, and the rows that carried either value described fields nothing declares
-    # (salesagent-3cs7o.22; the city-level refusal went with salesagent-3cs7o.15).
-    access: Literal["overlay", "both"] = "overlay"
-    description: str | None = None
-    allowed_values: list[str] | None = None  # For restricted value sets
+
+#: The element of a slot the pin types with a frequency cap, built as the local class (see
+#: ``src/core/schemas/_dependencies.py`` on narrowing a slot).
+FrequencyCapSlot = Annotated[LibraryFrequencyCap, as_local(FrequencyCap)]
+MediaBuyFrequencyCapSlot = Annotated[LibraryMediaBuyFrequencyCap, as_local(MediaBuyFrequencyCap)]
+
+
+# ``TargetingCapability`` is DELETED. Its only constructor anywhere was the
+# ``TARGETING_CAPABILITIES`` table in src/services/targeting_capabilities.py, whose single
+# reader was a function with no callers; all three went together. See that module's
+# docstring for the measurement, and salesagent-lh23b for why the table's claim about
+# which dimensions adapters support mattered.
 
 
 # Mapping from device_platform (OS-level, AdCP TargetingOverlay) to the form factors
@@ -1798,37 +2442,27 @@ _PLATFORM_TO_FORM_FACTORS: dict[str, list[str]] = {
 }
 
 
-class Targeting(TargetingOverlay):
-    """Targeting extending AdCP TargetingOverlay with internal dimensions.
+class _InternalTargetingDimensions(SalesAgentBaseModel):
+    """The dimensions this seller adds to the pin's targeting overlay, declared ONCE.
 
-    Inherits v3 structured geo fields from library:
-    - geo_countries, geo_regions, geo_metros, geo_postal_areas
-    - frequency_cap, axe_include_segment, axe_exclude_segment
+    A mixin rather than a base, because splits the overlay into TWO pinned
+    schemas and this seller needs a local subclass of each: ``core/targeting.json``
+    (``TargetingOverlay``, what a package READBACK carries) and
+    ``core/targeting_input.json`` (``TargetingOverlayInput``, what a request sends).
+    They are not the same model -- nine of the thirty-seven fields differ in element
+    type, each schema generating its own ``GeoCountry`` / ``GeoRegion`` /
+    ``KeywordTarget`` / ``StoreCatchment``, and the exclusion lists are ``Sequence``
+    on one side and ``list`` on the other -- so neither can stand in for the other.
 
-    Adds exclusion extensions and internal dimensions. It reshapes nothing on the way in:
-    the accepted shape is what the fields declare, and a stored document that does not fit
-    is a repository or migration problem, not a validator's.
+    Restating these twenty-odd fields on both subclasses is the duplication
+    ``check_code_duplication`` exists to refuse, so they live here and both inherit.
     """
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
 
-    # --- Inherited from TargetingOverlay (7 fields): ---
-    # geo_countries: list[GeoCountry] | None
-    # geo_regions: list[GeoRegion] | None
-    # geo_metros: list[GeoMetro] | None
-    # geo_postal_areas: list[GeoPostalArea] | None
-    # frequency_cap: FrequencyCap | None  (overridden below)
-    # axe_include_segment: str | None
-    # axe_exclude_segment: str | None
-
-    # Override frequency_cap to use our extended FrequencyCap with scope
-    frequency_cap: FrequencyCap | None = None
-
-    # NOTE: property_list, collection_list, and collection_list_exclude are inherited from
-    # TargetingOverlay (native in the adcp SDK). CollectionListReference is re-exported
-    # from src.core.schemas (see import above) so callers can use a single import path.
-
-    # --- Internal dimensions (unchanged) ---
+    # Nothing from the pinned overlay is restated here -- the two subclasses below inherit
+    # it, each from its own schema's generated type. CollectionListReference is re-exported
+    # from src.core.schemas (see import above) so callers use a single import path.
 
     # Device and platform targeting
     device_type_any_of: list[str] | None = None  # ["mobile", "desktop", "tablet", "ctv", "audio", "dooh"]
@@ -1872,6 +2506,15 @@ class Targeting(TargetingOverlay):
     # persist belongs on a repository-owned carrier, not on a wire model (CLAUDE.md pattern
     # 4; salesagent-3cs7o.22).
 
+    if TYPE_CHECKING:  # pragma: no cover - typing only
+        # DECLARED, not inherited: ``device_platform`` is the PINNED overlay's field, and
+        # both subclasses get it from their own schema's generated type (identically --
+        # ``list[DevicePlatform] | None`` on both, checked). The mixin reads it in
+        # ``device_form_factors`` below, so it names the dependency here rather than
+        # having the property restated on each subclass, which is the duplication the
+        # mixin exists to remove.
+        device_platform: list[DevicePlatform] | None
+
     @property
     def device_form_factors(self) -> list[str] | None:
         """The form factors adapters target, DERIVED on read.
@@ -1889,6 +2532,130 @@ class Targeting(TargetingOverlay):
         for platform in self.device_platform:
             form_factors.update(_PLATFORM_TO_FORM_FACTORS.get(enum_value(platform), []))
         return sorted(form_factors) or None
+
+
+class PinnedTargeting(TargetingOverlay):
+    """``core/targeting.json`` exactly, with its ``frequency_cap`` slot narrowed.
+
+    Building the cap as the local :class:`FrequencyCap` is the whole class: it applies that
+    class's ``extra="ignore"`` (a stored overlay persisted before ``scope`` was deleted carries
+    one, and the generated parent's ``extra="allow"`` would keep it and emit it on the readback
+    wire) and the schema's ``dependencies``. ``get_products`` builds its ``targeting_overlay``
+    as this class, because the pin gives that request core/targeting.json and nothing more;
+    :class:`Targeting` adds this seller's internal dimensions for packages.
+    """
+
+    frequency_cap: FrequencyCapSlot | None = narrowed_from(TargetingOverlay, "frequency_cap")
+
+
+class Targeting(PinnedTargeting, _InternalTargetingDimensions):
+    """``core/targeting.json`` plus this seller's internal dimensions.
+
+    The READBACK side. Inherits the pinned overlay's v3 structured geo fields
+    (geo_countries, geo_regions, geo_metros, geo_postal_areas, frequency_cap,
+    axe_include_segment, axe_exclude_segment, property_list, collection_list,
+    collection_list_exclude) and the internal dimensions from the mixin. It reshapes
+    nothing on the way in: the accepted shape is what the fields declare, and a stored
+    document that does not fit is a repository or migration problem, not a validator's.
+
+    Base order puts the library type FIRST so its field definitions win, and the mixin
+    LAST so its ``extra`` policy does (pydantic merges base configs in ``__bases__``
+    order, last one wins) -- the same ordering rule the pricing members follow.
+
+    ``frequency_cap`` is narrowed on :class:`PinnedTargeting`, for the reasons it records.
+    """
+
+
+class GeoProximityItem(LibraryGeoProximityItem):
+    """One ``core/targeting.json`` geo_proximity entry, with the item ``oneOf`` the SDK drops.
+
+    The pinned item is exactly one proximity method: travel time from a point (with a transport
+    mode), a radius from a point, or a pre-computed geometry, each arm forbidding the other two.
+    The generated parent makes every member optional, so an entry carrying two methods was
+    accepted, stored and echoed back as targeting no ad server can apply. The arms are read from
+    the pin (:func:`~src.core.schemas._pinned_fields.geo_proximity_one_of_arms`), not restated.
+
+    ``mode="before"`` and keyed on PRESENCE, as JSON Schema's ``required`` is, for the reasons
+    ``CreativeAssetRequest`` records for its format-identity ``oneOf``; the keyword the buyer
+    reads in ``issues[]`` is ``oneOf`` (see ``SELLER_RAISED_KEYWORDS``). Request side only: a
+    stored readback is not refused for a shape it was accepted in.
+    """
+
+    @model_validator(mode="before")
+    @classmethod
+    def _exactly_one_method(cls, data: Any) -> Any:
+        from src.core.schemas._pinned_fields import geo_proximity_one_of_arms
+
+        if isinstance(data, Mapping):
+            present = set(data)
+        elif isinstance(data, BaseModel):
+            present = set(data.model_fields_set)
+        else:
+            return data
+        matched = [
+            required
+            for required, forbidden in geo_proximity_one_of_arms()
+            if required <= present and not forbidden & present
+        ]
+        if len(matched) != 1:
+            raise PydanticCustomError("oneOf", "provide exactly one of travel_time, radius or geometry")
+        return data
+
+
+class PinnedTargetingInput(TargetingOverlayInput):
+    """``core/targeting_input.json`` exactly, with its ``frequency_cap`` and ``geo_proximity`` items
+    built as the local classes, for the reasons :class:`PinnedTargeting` and
+    :class:`GeoProximityItem` record. :class:`TargetingInput` adds this seller's internal
+    dimensions; a package added by an update (:class:`PinnedPackageRequest`) takes this one, which
+    advertises and accepts the pinned overlay and nothing more."""
+
+    frequency_cap: FrequencyCapSlot | None = narrowed_from(TargetingOverlayInput, "frequency_cap")
+    geo_proximity: list[Annotated[LibraryGeoProximityItem, as_local(GeoProximityItem)]] | None = narrowed_from(
+        TargetingOverlayInput, "geo_proximity"
+    )
+
+
+class TargetingInput(PinnedTargetingInput, _InternalTargetingDimensions):
+    """``core/targeting_input.json`` plus this seller's internal dimensions.
+
+    The REQUEST side. ``PackageRequest.targeting_overlay`` and
+    ``PackageUpdate.targeting_overlay`` are typed with the INPUT schema from on,
+    and its nested element types are its own, so :class:`Targeting` is not a substitute
+    even though the runtime union still accepts one through a ``SkipJsonSchema`` arm.
+    Declaring both is what keeps the request DTOs statically honest about what they take.
+
+    ``frequency_cap`` is narrowed on :class:`PinnedTargetingInput`.
+    """
+
+
+#: Either local targeting overlay, for the business rules that read the PINNED dimensions.
+#:
+#: splits the overlay into a readback schema and an input schema, so this seller
+#: has two local subclasses (above). A rule that only reads fields both declare --
+#: ``property_list``, the geo include/exclude pairs -- takes either, and saying so is what
+#: keeps one implementation of the rule instead of one per side.
+AnyTargeting = Targeting | TargetingInput
+
+
+def _adopt_sibling(value: Any, annotation: Any) -> Any:
+    """Re-validate *value* into the model its target field declares.
+
+    splits several shapes into an input schema and a readback schema, and the
+    two are SIBLINGS -- identical field sets, neither a subclass of the other. So a
+    name-keyed echo hands the input arm to a field typed as the readback arm and pydantic
+    refuses it. Adopt by reading attributes, never by dumping in the caller.
+
+    Known limitation: only a directly-annotated model is adopted, not one inside a
+    ``list[...]``.
+    """
+    if not isinstance(value, BaseModel):
+        return value
+    for candidate in (annotation, *getattr(annotation, "__args__", ())):
+        if isinstance(candidate, type) and issubclass(candidate, BaseModel):
+            if isinstance(value, candidate):
+                return value
+            return candidate.model_validate(value, from_attributes=True)
+    return value
 
 
 class Budget(SalesAgentBaseModel):
@@ -2021,11 +2788,14 @@ class Principal(SalesAgentBaseModel):
     platform_mappings: dict[str, Any]
     #: The counterparty's own AdCP agent URL, from onboarding, or None when none was
     #: recorded. It is the key-resolution input for RFC 9421 verification: security.mdx
-    #: @ v3.1.1 § "agent_url derivation" makes the publication coordinate the verifier
+    #: § "agent_url derivation" makes the publication coordinate the verifier
     #: already controls the ONLY legitimate source, so a signer cannot assert its own and
     #: choose which key set it is checked against. None means no key can be resolved for
     #: this counterparty, not that it is trusted.
     agent_url: str | None = None
+    #: Onboarded as passthrough-only: no payments relationship, so only the operator can be
+    #: invoiced. The per-buyer-agent billing gate reads it (BILLING_NOT_PERMITTED_FOR_AGENT).
+    billing_passthrough_only: bool = False
 
     @classmethod
     def from_row(cls, row: Any) -> "Principal":
@@ -2035,6 +2805,7 @@ class Principal(SalesAgentBaseModel):
             name=row.name,
             platform_mappings=row.platform_mappings,
             agent_url=row.agent_url,
+            billing_passthrough_only=row.billing_passthrough_only,
         )
 
     def get_adapter_id(self, adapter_name: str) -> str | None:
@@ -2054,15 +2825,23 @@ class ProductPerformance(SalesAgentBaseModel):
 # --- Discovery ---
 
 
-class FormatId(LibraryFormatId):
+class FormatId(SchemaDependencies, LibraryFormatId):
     """AdCP format identifier - extends library FormatId with convenience methods.
 
-    Note: The inherited agent_url field has type AnyUrl, but Pydantic accepts strings
-    at runtime and automatically validates/converts them. This causes mypy warnings
-    (str vs AnyUrl) which are safe to ignore - the code works correctly at runtime.
+    Carries ``core/format-id.json``'s ``dependencies``, which the generated parent does not
+    compile: ``width`` and ``height`` come together, and ``pixel_ratio`` needs both.
 
-    AdCP 2.5+ supports parameterized format IDs with width/height/duration_ms fields.
+    Note: the inherited ``agent_url`` is the WIRE STRING. the pinned SDK (#1396, "keep the
+    format-reference agent_url as the wire string") types it ``StrictStr`` behind an
+    absolute-URL validator, so an ``AnyUrl`` is REFUSED rather than coerced, and the
+    normalisation ``AnyUrl`` used to apply (a trailing slash on a bare origin) is no
+    longer applied on this field. Pass the string through; comparing two references
+    still goes through :func:`canonical_agent_url`, which the spec makes a MUST.
+
+    The spec supports parameterized format IDs with width/height/duration_ms fields.
     """
+
+    _SCHEMA_DEPENDENCIES = {"width": ("height",), "height": ("width",), "pixel_ratio": ("width", "height")}
 
     def __str__(self) -> str:
         """Return human-readable format identifier for display in UIs."""
@@ -2072,8 +2851,26 @@ class FormatId(LibraryFormatId):
         """Return representation for debugging."""
         return f"FormatId(id='{self.id}', agent_url='{self.agent_url}')"
 
+    @property
+    def storage_key(self) -> FormatKey:
+        """This reference's federation identity: :func:`format_id_identity` of itself.
+
+        The identity of a ``format_id`` is the ``(canonical agent_url, id)`` pair and NOT
+        this model, which is why the key is derived rather than the instance being used
+        directly as a dict key or set member. ``core/format-id.json`` puts four more
+        parameters on the reference object -- width, height, pixel_ratio, duration_ms -- and
+        pydantic equality would fold every one of them into matching, so two references
+        differing only in ``pixel_ratio`` would stop being the same format.
+
+        A thin read, deliberately: :func:`format_id_identity` is the ONE implementation
+        because it also has to serve a reference that arrives as a bare id, as a JSON
+        document off a column, or as the library model on a pinned request field -- none of
+        which is an instance of this class.
+        """
+        return format_id_identity(self)
+
     def get_dimensions(self) -> tuple[int, int] | None:
-        """Get dimensions from parameterized FormatId (AdCP 2.5).
+        """Get dimensions from parameterized FormatId .
 
         Returns:
             Tuple of (width, height) in pixels, or None if not specified.
@@ -2083,12 +2880,17 @@ class FormatId(LibraryFormatId):
         return None
 
     def get_duration_ms(self) -> float | None:
-        """Get duration from parameterized FormatId (AdCP 2.5).
+        """Get duration from parameterized FormatId .
 
         Returns:
             Duration in milliseconds, or None if not specified.
         """
         return self.duration_ms
+
+
+#: The element of a slot the pin types with a format-id, built as the local :class:`FormatId`
+#: (see ``src/core/schemas/_dependencies.py`` on narrowing a slot).
+FormatIdSlot = Annotated[LibraryFormatId, as_local(FormatId)]
 
 
 # --- Brand Manifest Models (AdCP v1.8.0) ---
@@ -2135,7 +2937,32 @@ class BrandAsset(SalesAgentBaseModel):
 # --- Package Schemas (Extend adcp library for proper request/response separation) ---
 
 
-class PackageRequest(LibraryPackageRequest):
+class PinnedPackageRequest(SchemaDependencies, LibraryPackageRequest):
+    """``media-buy/package-request.json`` exactly, with its ``dependencies`` and with each nested
+    model that carries ``dependencies`` built as the local class.
+
+    What ``UpdateMediaBuyRequest.new_packages`` builds. It declares no field the pin lacks, so
+    that slot accepts and advertises the pinned package and nothing more;
+    :class:`PackageRequest` adds this seller's internal fields for create_media_buy.
+    """
+
+    # The generated parent already refuses ``params`` without ``format_kind`` in a hand-written
+    # validator, which runs first; the map is stated so every request-reachable class carries
+    # its schema's map, which tests/unit/test_schema_dependencies_match_pin.py checks.
+    _SCHEMA_DEPENDENCIES = {"params": ("format_kind",)}
+
+    format_ids: list[FormatIdSlot] | None = narrowed_from(LibraryPackageRequest, "format_ids")
+    targeting_overlay: Annotated[TargetingOverlayInput, as_local(PinnedTargetingInput)] | None = narrowed_from(
+        LibraryPackageRequest, "targeting_overlay"
+    )
+    # Quoted: CreativeAssetRequest is defined in creative.py, which imports this module, so the
+    # annotation resolves at the model_rebuild in src/core/schemas/__init__.py.
+    creatives: "Sequence[Annotated[LibraryCreativeAsset, as_local(CreativeAssetRequest)]] | None" = narrowed_from(
+        LibraryPackageRequest, "creatives"
+    )
+
+
+class PackageRequest(PinnedPackageRequest):
     """Package request schema (for CreateMediaBuyRequest).
 
     Extends adcp library PackageRequest with internal fields.
@@ -2149,7 +2976,7 @@ class PackageRequest(LibraryPackageRequest):
 
     # DELETED, not moved: tenant_id, media_buy_id, platform_line_item_id, created_at,
     # updated_at, metadata and a deprecated pricing_model. media-buy/package-request.json
-    # (AdCP 3.1.1, the pinned version) declares none of the seven, and the persisted
+    # (the pinned version) declares none of the seven, and the persisted
     # MediaPackage row already owns each one -- media_buy_id and package_id are its primary
     # key, platform_line_item_id is written into its package_config, and the timestamps
     # belong to the parent media buy. Every read of those names on a package in src/ reaches
@@ -2189,12 +3016,11 @@ class PackageRequest(LibraryPackageRequest):
     #
     # ``type: ignore[assignment]`` survives the correction and is not the same silence it was.
     # ``adcp.types.CreativeAsset`` is a RootModel UNION over the two codegen branches of a
-    # oneOf; ``CreativeAssetRequest`` extends one branch (see its docstring for why the union
-    # cannot be extended: a failing branch puts ``CreativeAsset1`` -- a name absent from AdCP --
-    # into the buyer's error pointer). A branch subclass is not a static subtype of the union,
-    # so mypy reports the mismatch for any correct spelling of this field. Same ignore, same
-    # reason, on SyncCreativesRequest.creatives.
-    creatives: list["CreativeAssetRequest"] | None = Field(  # type: ignore[assignment]
+    # oneOf; ``CreativeAssetRequest`` extends one branch. The ignore this carried is GONE:
+    # the pinned SDK retired the numeric arm name and the branch IS ``CreativeAsset``, so the field's
+    # declared element type is a class the local subclass statically extends and mypy no
+    # longer reports a mismatch. Same removal on SyncCreativesRequest.creatives.
+    creatives: list["CreativeAssetRequest"] | None = Field(
         None,
         min_length=1,
         max_length=100,
@@ -2202,7 +3028,7 @@ class PackageRequest(LibraryPackageRequest):
     )
     # The one field this DTO declares beyond the pin, and it survives on a reader census
     # rather than on "backward compatibility". media-buy/package-request.json declared
-    # creative_ids up to AdCP 2.5 and dropped it at 3.0 in favour of `creatives` (full
+    # creative_ids up to and dropped it at 3.0 in favour of `creatives` (full
     # objects), but the create flow still routes ids, not objects, through it: the inline
     # creative upload writes the merged ids back onto the package
     # (src/core/helpers/creative_helpers.py, model_copy), and _get_creative_ids
@@ -2214,8 +3040,10 @@ class PackageRequest(LibraryPackageRequest):
         description="Internal: List of creative IDs to assign (alternative to full creatives objects)",
         exclude=True,
     )
-    # Override library TargetingOverlay -> our Targeting with internal fields
-    targeting_overlay: Targeting | None = None
+    # Override library TargetingOverlayInput -> our TargetingInput with internal fields.
+    # The INPUT twin: from on, the request schema $refs core/targeting_input.json
+    # and the readback core/targeting.json, and their nested element types are distinct.
+    targeting_overlay: TargetingInput | None = None
 
 
 class Package(LibraryPackage):
@@ -2241,7 +3069,7 @@ class Package(LibraryPackage):
 
     # DELETED, not moved, and for the same reason as on PackageRequest above: tenant_id,
     # media_buy_id, platform_line_item_id, created_at, updated_at, metadata and a
-    # deprecated pricing_model. core/package.json (AdCP 3.1.1, the pinned version) declares
+    # deprecated pricing_model. core/package.json (the pinned version) declares
     # 29 properties and requires only package_id; none of the seven is among them. On this
     # class they were deader than on the request: no site under src/ or scripts/ ever
     # CONSTRUCTED a Package with one of them, and no site read one back. The four surviving
@@ -2260,7 +3088,7 @@ class Package(LibraryPackage):
     #: The fields this response and ``PackageRequest`` both declare that the SELLER decides,
     #: so :meth:`echoing` leaves them to its caller. Everything else the two models share is
     #: the BUYER's and is echoed. That default is the pin's, stated field by field in
-    #: core/package.json (AdCP 3.1.1): "Echoed from the buyer's request"
+    #: core/package.json (AdCP): "Echoed from the buyer's request"
     #: (``agency_estimate_number``, ``catalogs``), "Sellers SHOULD echo this field whenever
     #: the request included it" (``format_ids``, ``format_kind``, ``format_option_refs``),
     #: "echoed unchanged in responses" (``context``), "echoed from the create_media_buy
@@ -2276,8 +3104,12 @@ class Package(LibraryPackage):
     #: * ``measurement_terms`` -- "Reflects what was negotiated -- may differ from the
     #:   buyer's proposal or the product's defaults".
     #: * ``performance_standards`` -- "Agreed performance standards", negotiated the same way.
+    #: * ``creative_assignments`` -- "Creative assets assigned to this package": the
+    #:   assignment record, which the inline ``creatives`` write as well as this array. An
+    #:   echo reported none for a package whose creatives arrived inline, and reported the
+    #:   buyer's array whether or not it was applied.
     SELLER_DECIDED: ClassVar[frozenset[str]] = frozenset(
-        {"paused", "committed_metrics", "measurement_terms", "performance_standards"}
+        {"paused", "committed_metrics", "measurement_terms", "performance_standards", "creative_assignments"}
     )
 
     @classmethod
@@ -2291,8 +3123,24 @@ class Package(LibraryPackage):
         nothing, and a *decided* key that IS a shared buyer field raises rather than
         silently winning.
         """
+        # ORDERING CONSTRAINT for whoever builds effective-targeting resolution (GH #2345):
+        # the resolver MUST run BEFORE this adoption, not after.
+        #
+        # ``_adopt_sibling`` re-validates through ``from_attributes=True``, and the adopted
+        # model reports ALL of its fields as ``model_fields_set`` -- so once a value has been
+        # adopted, "the buyer omitted this dimension" and "the buyer explicitly nulled it"
+        # are indistinguishable. The WIRE is unaffected either way (both serialize absent
+        # under exclude_none, which is what core/targeting-input.json's "Null is a command
+        # and MUST NOT appear in ... package readback" and core/targeting.json's "MUST NOT
+        # contain null" both require), so nothing is wrong today.
+        #
+        # But the distinction is exactly what a resolver needs: core/package.json calls this
+        # field "Complete effective targeting accepted for this package, including targeting
+        # bound through configured product selection", so an OMITTED dimension should inherit
+        # the product's bound value while a NULLED one should stay cleared. A resolver placed
+        # after this line would have nothing left to read.
         echoed = {
-            name: getattr(request_package, name)
+            name: _adopt_sibling(getattr(request_package, name), cls.model_fields[name].annotation)
             for name in cls.model_fields.keys() & type(request_package).model_fields.keys()
             if name not in cls.SELLER_DECIDED
         }
@@ -2300,7 +3148,7 @@ class Package(LibraryPackage):
 
 
 # --- Media Buy Lifecycle ---
-class CreateMediaBuyRequest(BuyerRequest, LibraryCreateMediaBuyRequest):
+class CreateMediaBuyRequest(SchemaDependencies, BuyerRequest, LibraryCreateMediaBuyRequest):
     """Extends library CreateMediaBuyRequest from AdCP spec.
 
     Per AdCP spec, the required fields are:
@@ -2314,6 +3162,33 @@ class CreateMediaBuyRequest(BuyerRequest, LibraryCreateMediaBuyRequest):
     - ext: dict (extension object for custom fields)
     - po_number: str (purchase order number)
     - reporting_webhook: dict (webhook configuration)
+
+    THIS CLASS AND THE LIBRARY ROOT EMIT A DIFFERENT ``error.field`` FOR THE SAME
+    DOCUMENT, and both are correct. Do not "fix" the difference.
+
+    ``core/media-buy/create-media-buy-request.json`` is a branch-split root, and the
+    SDK's dispatch gate is a ``"_branch_models" in cls.__dict__`` test. This subclass
+    INHERITS ``_branch_models`` rather than declaring it, so it does not dispatch and
+    validates through the merged base. Measured on ``{"packages": 1}`` at
+    ``adcp==9.0.0b3+sa.8qela.2aeef29c2``:
+
+        this class     6 issues, all located, issues[0].loc == "idempotency_key"
+        library root   6 issues, issues[0].loc == "account", plus a trailing
+                       unlocated "anyOf" (the combinator's whole-document refusal,
+                       which has no field and sorts last)
+
+    ``error.field`` is projected from ``issues[0]``, so the seller answers
+    ``idempotency_key`` where the bare library root answers ``account``. Both are
+    located, so both satisfy ``core/error.json``'s MUST that ``field`` be populated
+    from ``issues[0]`` whenever ``issues`` is present — the MUST constrains that the
+    locator EXISTS, not which of several genuinely-missing root-required fields is
+    named first.
+
+    Anyone diffing this seller's envelope against the SDK's for one document will see
+    the divergence and is likely to read it as a defect here. It is not, and chasing it
+    means either making this class dispatch — which reintroduces the unlocated-root
+    refusal ``salesagent-8qela.116`` fixed, see ``salesagent-8qela.140`` for why .108
+    must not land without .116 — or pinning an issue ORDER the pin does not specify.
     """
 
     TAGS: ClassVar[tuple[str, ...]] = (
@@ -2323,12 +3198,12 @@ class CreateMediaBuyRequest(BuyerRequest, LibraryCreateMediaBuyRequest):
         "adcp",
     )
 
-    # The spec's type, matching the library parent. REQUIRED, as the library declares it (create-media-buy-request.json /required lists
-    # brand). Narrowing the TYPE back to the parent's must not touch the requiredness --
-    # redeclaring it optional would relax a spec constraint, which is the weakening the
-    # inheritance guard exists to catch and which broke
-    # test_brand_field_is_required_on_create_media_buy_request.
-    brand: LibraryBrandReference = Field(..., description="Brand reference")
+    # ``brand`` is INHERITED. The redeclaration restated the parent's own type
+    # (``BrandReference``) and its own requiredness (create-media-buy-request.json
+    # /required lists brand), so the only axis it changed was the description: it replaced
+    # the pin's text with "Brand reference" in the published schema. Requiredness comes
+    # from the pin, which is what
+    # test_brand_field_is_required_on_create_media_buy_request grades.
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
 
@@ -2337,7 +3212,7 @@ class CreateMediaBuyRequest(BuyerRequest, LibraryCreateMediaBuyRequest):
     # nullability and default as the parent.
     push_notification_config: PushNotificationConfig | None = None
 
-    # account and idempotency_key are REQUIRED by AdCP 3.1.1
+    # account and idempotency_key are REQUIRED by AdCP.1
     # (media-buy/create-media-buy-request.json /required = [account, brand, end_time,
     # idempotency_key, start_time]) and are inherited as required from the library type.
     # ``account`` was overridden to optional here on the grounds that "our impl resolves
@@ -2357,6 +3232,12 @@ class CreateMediaBuyRequest(BuyerRequest, LibraryCreateMediaBuyRequest):
     # declaration would change the element type as well as the bound.
     packages: list[PackageRequest] | None = Field(None, min_length=1)
 
+    frequency_cap: MediaBuyFrequencyCapSlot | None = narrowed_from(LibraryCreateMediaBuyRequest, "frequency_cap")
+
+    # media-buy/create-media-buy-request.json's own ``dependencies``. The accepted-shape check
+    # below already refuses a proposal_id without total_budget, as matching no branch.
+    _SCHEMA_DEPENDENCIES = {"proposal_id": ("total_budget",)}
+
     @model_validator(mode="after")
     def _check_idempotency_key(self):
         """Reject a malformed idempotency_key with VALIDATION_ERROR (AdCP 16-255).
@@ -2366,6 +3247,87 @@ class CreateMediaBuyRequest(BuyerRequest, LibraryCreateMediaBuyRequest):
         """
         validate_idempotency_key_shape(self.idempotency_key)
         return self
+
+    @model_validator(mode="after")
+    def _check_anyof_branch_conditions(self):
+        """Enforce the 3.2 ``anyOf`` branch conditions the generated validator drops.
+
+        ``media-buy/create-media-buy-request.json`` @ 3.2.1 carries a three-branch
+        ``anyOf``. The pinned SDK's generated ``_require_schema_required_group`` tests
+        only the branches' TOP-LEVEL field presence::
+
+            for group in (('packages',), ('packages','total_budget','budget_allocation'),
+                          ('proposal_id','total_budget')):
+                if all(name in self.model_fields_set for name in group):
+                    return self
+
+        Every nested condition is discarded by the generator, so a request carrying
+        ``packages`` matched group one and was ACCEPTED however malformed. Measured: a
+        package with no ``budget``, no ``total_budget`` and no ``budget_allocation``
+        satisfies no branch of the schema and was waved through, after which
+        ``get_total_budget()`` summed ``None`` to 0 and the budget FLOOR answered
+        ``BUDGET_TOO_LOW`` -- a business code for a schema violation. The floor check is
+        correct; it was answering a question it should never have been asked.
+
+        This re-states the three branches in full. ``model_fields_set`` is the
+        requiredness test, matching the generated validator's convention: a supplied
+        field counts even when explicitly null, and a default the caller never sent does
+        not (``PackageRequest.budget`` defaults to ``None`` and stays out of the set).
+
+        Omission of ``budget_allocation`` means fixed allocation, per the field's own
+        description, which is why branch 0 constrains it only when present -- JSON Schema
+        ``properties`` does not imply presence, and reading it as a requirement would
+        refuse the legacy-compatible shape the spec preserves.
+
+        The refusal is a ``ValueError``, which the boundary translates to
+        ``INVALID_REQUEST`` -- the code whose published condition is "Request is
+        malformed, missing required fields, or violates schema constraints"
+        (``enums/error-code.json``).
+
+        See also ``L.1`` in the triage: the generator flattens EVERY ``anyOf`` this way
+        and emits ``_require_schema_required_group`` for 45 models in this pin, so this
+        is one instance of an upstream codegen defect, not a quirk of create_media_buy.
+        """
+        sent = self.model_fields_set
+        allocation_mode = getattr(self.budget_allocation, "mode", None) if "budget_allocation" in sent else None
+
+        # Branch 0 -- "Explicit packages with fixed allocation".
+        # packages; no proposal_id; every package carries budget and NOT min_spend_target;
+        # budget_allocation, if sent, is mode=fixed.
+        #
+        # ``or []`` rather than narrowing ``self.packages``: the field is optional, and a
+        # ``bool(...) and all(... for pkg in self.packages)`` does not carry the narrowing
+        # into the generator's own scope, so mypy reads the iteration as possibly-None
+        # under --check-untyped-defs. An empty list is false for packages_ok exactly as
+        # None is, so the branch condition is unchanged.
+        packages = self.packages or []
+        packages_ok = bool(packages) and all(
+            "budget" in pkg.model_fields_set and "min_spend_target" not in pkg.model_fields_set for pkg in packages
+        )
+        if "packages" in sent and "proposal_id" not in sent and packages_ok and allocation_mode in (None, "fixed"):
+            return self
+
+        # Branch 1 -- "Explicit packages with seller-optimized allocation".
+        # packages + total_budget + budget_allocation(mode=seller_optimized); no proposal_id.
+        # No per-package budget requirement: the seller allocates across the total.
+        if (
+            {"packages", "total_budget", "budget_allocation"} <= sent
+            and "proposal_id" not in sent
+            and allocation_mode == "seller_optimized"
+        ):
+            return self
+
+        # Branch 2 -- "Committed proposal execution".
+        # proposal_id + total_budget; none of packages / budget_allocation / frequency_cap.
+        if {"proposal_id", "total_budget"} <= sent and not ({"packages", "budget_allocation", "frequency_cap"} & sent):
+            return self
+
+        raise ValueError(
+            "CreateMediaBuyRequest matches no accepted shape. One of: "
+            "packages, each with budget and without min_spend_target (fixed allocation); "
+            "packages + total_budget + budget_allocation.mode='seller_optimized'; "
+            "proposal_id + total_budget with no packages, budget_allocation or frequency_cap"
+        )
 
     @model_validator(mode="after")
     def validate_timezone_aware(self):
@@ -2386,10 +3348,12 @@ class CreateMediaBuyRequest(BuyerRequest, LibraryCreateMediaBuyRequest):
     @property
     def flight_start_date(self) -> date | None:
         """Extract date from start_time for display purposes."""
-        # start_time is StartTiming (RootModel[datetime | 'asap']); unwrap via .root
-        inner = self.start_time.root if self.start_time else None
-        if isinstance(inner, datetime):
-            return inner.date()
+        # ``start_time`` is declared on this model as ``datetime | Literal["asap"] | None``,
+        # so the value IS the union member. This read used to go through ``.root``, which
+        # was the shape of the SDK's ``StartTiming`` RootModel wrapper; the pinned SDK has no such
+        # wrapper (and no ``StartTiming`` name at all), so the unwrap is gone.
+        if isinstance(self.start_time, datetime):
+            return self.start_time.date()
         return None
 
     @property
@@ -2453,10 +3417,46 @@ class MediaPackage(SalesAgentBaseModel):
     # Accept library FormatId (not our extended FormatId) to avoid validation errors
     # when Product from library returns LibraryFormatId instances
     format_ids: list[LibraryFormatId]  # FormatId objects per AdCP spec
-    targeting_overlay: Targeting | None = None
+    # THE CANONICAL CONTRACT, carried to the adapter as the snapshots themselves.
+    #
+    # ``core/package.json`` makes ``formats_to_provide`` the package's "immutable canonical
+    # creative contracts established for this package", and says "the live Product is never
+    # substituted for the package snapshot". An adapter translating a package into a vendor
+    # payload needs the SELECTED declaration's ``params`` -- width, height and duration are
+    # first-class there -- and until this field existed it could only be handed the
+    # deprecated ``format_ids`` above, so the snapshots had to be projected onto those
+    # references with their dimensions merged on (the deleted
+    # ``format_resolver.snapshot_adapter_format_ids``).
+    #
+    # That projection had a stated ceiling and this field is its upgrade path: a
+    # canonical-only declaration asserting no ``v1_format_ref`` cannot be NAMED in
+    # ``format_ids`` at all, so such a package reached every adapter with an empty legacy arm
+    # and fell back to the product-level seeded config -- the live product's, which is the
+    # substitution the snapshot exists to prevent (salesagent-ol033.8, E1).
+    #
+    # The PINNED union, not a local subclass: this is a carrier read by adapters, nothing
+    # reshapes a snapshot on the way through, and the one function that reads it
+    # (``gam_product_config_service.declared_gam_slots``) reads attributes.
+    formats_to_provide: list[LibraryPackageFormatSnapshot] | None = None
+    # Either arm: this carrier is built from a REQUEST package, whose overlay is the
+    # input subclass, and read by adapters that only touch dimensions both declare.
+    targeting_overlay: AnyTargeting | None = None
     product_id: str | None = None  # Product ID for this package
     budget: float | None = None  # Budget allocation in the currency specified by the pricing option
     creative_ids: list[str] | None = None  # Creative IDs to assign to this package
+    # The create-time pause the buyer asked for, carried to the ad server.
+    # media-buy/package-request.json (AdCP): "Whether this package should be created
+    # in a paused state. Paused packages do not deliver impressions. Defaults to false."
+    #
+    # It has to travel on the CARRIER rather than be answered from the request, because
+    # ``Package.SELLER_DECIDED`` names ``paused``: the response reports the state the ad
+    # server created the line item in. With nothing on this carrier the adapters had no
+    # way to be told, so every create answered False no matter what was asked --
+    # a package asked for paused delivered, and said it was active.
+    #
+    # ``bool`` and not ``bool | None``: the pin types the request field boolean with
+    # ``default: false``, so absent means active and there is no third state.
+    paused: bool = False
 
 
 class AssetStatus(SalesAgentBaseModel):
@@ -2528,33 +3528,39 @@ class AdCPPackageUpdate(LibraryPackageUpdate):
     creative_ids: list[str] | None = None
     # Override library targeting_overlay so local extensions (collection_list)
     # are coerced to typed CollectionListReference at the boundary, not dicts.
-    targeting_overlay: Targeting | None = None
+    # The INPUT twin, for the reason PackageRequest.targeting_overlay gives.
+    targeting_overlay: TargetingInput | None = None
+    # The item type PackageRequest.creatives names, which carries core/format-id.json's
+    # ``dependencies`` on its format_id.
+    # Quoted: CreativeAssetRequest is defined in creative.py, which imports this module, so
+    # the annotation resolves at the model_rebuild in src/core/schemas/__init__.py.
+    creatives: "list[Annotated[LibraryCreativeAsset, as_local(CreativeAssetRequest)]] | None" = narrowed_from(
+        LibraryPackageUpdate, "creatives"
+    )
 
-    # Fields that are immutable once a package is created (BR-RULE-198). They are
-    # not valid update fields, so the AdCP package-update schema rejects them via a
-    # root `not` constraint. We surface that as INVALID_REQUEST (a known, named
-    # business-rule rejection) rather than letting them fall through to the generic
-    # extra="forbid" VALIDATION_ERROR — and, because this runs before extra-mode
-    # handling, it also closes the production (extra="ignore") silent-drop gap.
-    _IMMUTABLE_PACKAGE_FIELDS: ClassVar[frozenset[str]] = frozenset({"product_id", "format_ids", "pricing_option_id"})
+    # The shapes a package update may not take -- the six fully-immutable fields
+    # (BR-RULE-198), the pre-GA capability_ids, budget_cap_timezone, and bidding beside
+    # bid_price -- are media-buy/package-update.json's root `not`, read off the pin by
+    # ``_pinned_fields.package_update_forbidden_shapes``. Refused by the REQUEST, not by this
+    # model: see ``UpdateMediaBuyRequest._refuse_forbidden_package_shapes`` for why it has to
+    # run there.
+
+    #: The one forbidden shape the pin answers with its own code rather than the schema
+    #: keyword's: a non-null ``bidding`` object beside ``bid_price``. enums/error-code.json
+    #: AMBIGUOUS_BIDDING_POLICY: "The same effective package combines the canonical bidding
+    #: block with legacy bid_price ... Sellers MUST reject rather than choosing a winner."
+    #: ``_refuse_forbidden_package_shapes`` leaves it to ``update_media_buy``, which raises
+    #: ``AdCPAmbiguousBiddingPolicyError``.
+    AMBIGUOUS_BIDDING_MEMBERS: ClassVar[tuple[str, ...]] = ("bidding", "bid_price")
 
     @model_validator(mode="before")
     @classmethod
     def _validate_package_update_shape(cls, data: Any) -> Any:
-        """Enforce the package-update request shape with INVALID_REQUEST.
+        """Refuse a package update with no package_id as INVALID_REQUEST.
 
-        Two structural ("which package, and is this field allowed?") rules,
-        both graded INVALID_REQUEST by the spec rather than the generic
-        VALIDATION_ERROR:
-        - package_id identifies the package being updated; it is required
-          (BR-UC-003 ext-h). Raising here (mode="before") surfaces a helpful
-          INVALID_REQUEST + suggestion instead of Pydantic's bare
-          "Field required" VALIDATION_ERROR.
-        - immutable fields (BR-RULE-198) cannot be changed post-create; the
-          AdCP package-update schema rejects them via a root ``not`` constraint.
-          Running before extra-mode handling means dev (extra="forbid") and
-          prod (extra="ignore") both reject them as INVALID_REQUEST rather than
-          a generic VALIDATION_ERROR / silent drop.
+        package_id identifies the package being updated; it is required (BR-UC-003 ext-h).
+        Raising here (mode="before") surfaces a helpful INVALID_REQUEST + suggestion instead
+        of Pydantic's bare "Field required" VALIDATION_ERROR.
         """
         if isinstance(data, dict):
             # Raised as a PYDANTIC error, not a typed AdCPInvalidRequestError, and the
@@ -2584,24 +3590,6 @@ class AdCPPackageUpdate(LibraryPackageUpdate):
                             loc=("package_id",),
                             input=data,
                         )
-                    ],
-                )
-            present = sorted(f for f in cls._IMMUTABLE_PACKAGE_FIELDS if f in data)
-            if present:
-                # One entry per immutable field, each carrying its own loc, so `issues[]`
-                # names every offender and `field` derives from issues[0] as the pin's
-                # "populate field from issues[0]" MUST requires.
-                raise PydanticCoreValidationError.from_exception_data(
-                    "UpdateMediaBuyPackage",
-                    [
-                        InitErrorDetails(
-                            type=PydanticCustomError(
-                                "readOnly", "{name} is immutable on a package update", {"name": name}
-                            ),
-                            loc=(name,),
-                            input=data,
-                        )
-                        for name in present
                     ],
                 )
         return data
@@ -2656,7 +3644,7 @@ class UpdateMediaBuyRequest(BuyerRequest, LibraryUpdateMediaBuyRequest):
 
     Inherits all AdCP fields from library (paused, start_time, end_time,
     packages, push_notification_config, context, reporting_webhook, ext).
-    In adcp 3.9 all fields are optional (consolidated from oneOf variants).
+    In the pinned SDK all fields are optional (consolidated from oneOf variants).
 
     Overrides:
     - start_time: accept Literal["asap"] (backward compat with A2A path)
@@ -2683,7 +3671,7 @@ class UpdateMediaBuyRequest(BuyerRequest, LibraryUpdateMediaBuyRequest):
     # Narrowed to the local class; see CreateMediaBuyRequest.
     push_notification_config: PushNotificationConfig | None = None
 
-    # account and idempotency_key are REQUIRED by AdCP 3.1.1
+    # account and idempotency_key are REQUIRED by AdCP.1
     # (media-buy/update-media-buy-request.json /required = [idempotency_key, account,
     # media_buy_id]) and are inherited as required from the library type. They were
     # overridden to optional here, with the override itself noting it should go away "when
@@ -2693,18 +3681,26 @@ class UpdateMediaBuyRequest(BuyerRequest, LibraryUpdateMediaBuyRequest):
     # provide -- a retried update executes twice. Our job on a required field is compliance,
     # not judgement, so the overrides are gone.
 
-    # Override datetime fields to accept raw strings (A2A path sends ISO strings)
-    start_time: datetime | Literal["asap"] | None = None  # type: ignore[assignment]
+    # Override datetime fields to accept raw strings (A2A path sends ISO strings).
+    # No suppression: the pinned SDK's parent field accepts the same union, so this is a narrowing.
+    start_time: datetime | Literal["asap"] | None = None
     end_time: datetime | None = None
     # Override packages to use our extended type with creative_ids
     # RE-STATED, same reason as the create side: the local element type is
     # AdCPPackageUpdate, so the declaration must stay and the parent's MinLen(1) has to be
     # restored on it rather than inherited.
     packages: list[AdCPPackageUpdate] | None = Field(None, min_length=1)
+    # Built as the local classes, which carry their schemas' ``dependencies``. new_packages
+    # builds the PINNED package, not PackageRequest: the slot must not take this seller's
+    # internal package fields.
+    new_packages: list[Annotated[LibraryPackageRequest, as_local(PinnedPackageRequest)]] | None = narrowed_from(
+        LibraryUpdateMediaBuyRequest, "new_packages"
+    )
+    frequency_cap: MediaBuyFrequencyCapSlot | None = narrowed_from(LibraryUpdateMediaBuyRequest, "frequency_cap")
     # Campaign-level budget (not in library spec — convenience field)
     # Bare float is accepted so transport wrappers can preserve existing DB currency
     # when the caller updates only the amount.
-    # `budget` is NOT declared here on purpose. AdCP 3.1.1
+    # `budget` is NOT declared here on purpose. AdCP.1
     # media-buy/update-media-buy-request.json lists 16 properties and budget is not among
     # them -- budget is PACKAGE-level (media-buy/package-update.json /properties/budget), and
     # adcp.types.UpdateMediaBuyRequest declares none either. The schema and the SDK are the
@@ -2715,6 +3711,69 @@ class UpdateMediaBuyRequest(BuyerRequest, LibraryUpdateMediaBuyRequest):
     # scenario (BR-UC-003 @T-UC-003-alt-budget). That does not license a field the schema does
     # not define: we do not support anything the schema rejects. The disagreement is upstream
     # and is filed for reconciliation there, not accommodated here.
+
+    @model_validator(mode="before")
+    @classmethod
+    def _refuse_forbidden_package_shapes(cls, data: Any) -> Any:
+        """Refuse every shape package-update.json's root ``not`` forbids, in every extra mode.
+
+        The shapes are the pin's, read by ``_pinned_fields.package_update_forbidden_shapes``:
+        at the pin the six "Fully-immutable fields (product_id, format_ids,
+        format_option_refs, format_kind, params, pricing_option_id)", the pre-GA
+        ``capability_ids`` ("rejected rather than accepted as an extension"),
+        ``budget_cap_timezone``, and a non-null ``bidding`` object beside ``bid_price`` (whose
+        own description: "A package update MUST NOT supply both a non-null bidding object and
+        bid_price"). The six were a hand-kept list, and the other three were accepted.
+
+        EXCEPT the bidding/bid_price pair. The pin gives that one its own code,
+        ``AMBIGUOUS_BIDDING_POLICY`` (enums/error-code.json; package-request.json's
+        ``bidding``: "Sellers MUST reject ... with AMBIGUOUS_BIDDING_POLICY"), and the owner's
+        rule is the specific code where one applies. Both members are declared properties, so
+        the strip cannot drop them and ``update_media_buy`` refuses the pair, above the UoW and
+        ahead of the capability refusal of either member alone.
+
+        HERE, on the request, because it has to run BEFORE the accepted-shape strip
+        (``BuyerRequest._accept_only_declared_fields``). Most of these members are not
+        declared properties of package-update.json, so the strip removes them first: in dev
+        the buyer got the generic ``additionalProperties`` refusal, and in production the
+        field was dropped and the update answered success with nothing changed. The pin does
+        not leave that to the extra mode. A subclass's before-validator runs ahead of the
+        mixin's, which is the ordering this relies on.
+
+        Raised as a PYDANTIC error with a request-rooted loc, for the reason
+        ``AdCPPackageUpdate._validate_package_update_shape`` gives: FastMCP drives this model
+        through a TypeAdapter before the tool body, and a pydantic error is the one shape
+        every boundary converts. One entry per forbidden shape, so ``issues[]`` names every
+        offender and ``field`` derives from ``issues[0]``, as core/error.json requires. The
+        keyword is ``not``, the one in package-update.json that rejects them, because
+        core/error.json's ``issues[].keyword`` is "the validator's native keyword name". The
+        pointer is the one member a single-member shape names; a shape of several members has
+        no one member at fault, so it names the package, which is where a JSON Schema
+        validator reports a failed ``not``.
+        """
+        from src.core.schemas._pinned_fields import package_update_forbidden_shapes
+
+        packages = data.get("packages") if isinstance(data, dict) else None
+        if not isinstance(packages, list):
+            return data
+        errors = [
+            InitErrorDetails(
+                type=PydanticCustomError(
+                    "not", "{name} is forbidden on a package update", {"name": " with ".join(required)}
+                ),
+                loc=("packages", index, required[0]) if len(required) == 1 else ("packages", index),
+                input=package,
+            )
+            for index, package in enumerate(packages)
+            if isinstance(package, dict)
+            for required, objects in package_update_forbidden_shapes()
+            if required != AdCPPackageUpdate.AMBIGUOUS_BIDDING_MEMBERS
+            and all(name in package for name in required)
+            and all(isinstance(package[name], dict) for name in objects if name in package)
+        ]
+        if errors:
+            raise PydanticCoreValidationError.from_exception_data("UpdateMediaBuyRequest", errors)
+        return data
 
     @model_validator(mode="after")
     def _check_idempotency_key(self):
@@ -2730,7 +3789,19 @@ class UpdateMediaBuyRequest(BuyerRequest, LibraryUpdateMediaBuyRequest):
         This validator ensures all datetime fields have timezone info.
         The literal string 'asap' is also valid per AdCP v1.7.0.
         """
-        if self.start_time and self.start_time != "asap" and self.start_time.tzinfo is None:
+        # ``isinstance`` rather than ``!= "asap"``, which is how the sibling validator on
+        # CreateMediaBuyRequest already spells it. Behaviour-neutral -- a ``datetime`` is
+        # never equal to the string, so the literal test is subsumed -- and it narrows the
+        # union for the type checker, which could not rule the ``Literal`` out of
+        # ``datetime | Literal['asap'] | None`` on a ``!=`` comparison.
+        #
+        # The check STAYS. On this class ``start_time`` and ``end_time`` are plain
+        # ``datetime``, not ``AwareDatetime`` as they are on CreateMediaBuyRequest, so
+        # pydantic accepts a naive value at the field level and this validator is the only
+        # thing that refuses one (measured: the refusal a naive datetime gets is this
+        # function's own message). Deleting it as "duplicating the declared type" would make
+        # update_media_buy accept naive flight times.
+        if isinstance(self.start_time, datetime) and self.start_time.tzinfo is None:
             raise ValueError("start_time must be timezone-aware (ISO 8601 with timezone) or 'asap'")
         if self.end_time and self.end_time.tzinfo is None:
             raise ValueError("end_time must be timezone-aware (ISO 8601 with timezone)")
@@ -2941,24 +4012,26 @@ class CheckAXERequirementsResponse(SalesAgentBaseModel):
 
 # --- Signal Discovery ---
 class SignalDeployment(LibraryPlatformDeployment):
-    """Extends library PlatformDeployment with internal signal deployment fields.
+    """Extends library PlatformDeployment. Adds nothing; the statement is ownership.
 
     Library provides: platform, account, is_live, type, activation_key,
     deployed_at, estimated_activation_duration_minutes.
 
-    Local additions (internal-only, excluded from responses):
-    - scope: Derived from deployment type for internal routing
-    - decisioning_platform_segment_id: Platform-specific segment ID after activation
+    TWO INTERNAL FIELDS ARE GONE, ``scope`` and ``decisioning_platform_segment_id``.
+    Neither had a pinned home -- ``core/deployment.json`` declares the seven fields
+    above and neither of those two, measured on the node rather than by grepping the
+    bundle (``scope`` is declared on 58 OTHER pinned nodes, which is exactly the
+    substring hit that makes a name-wide search useless here).
+
+    They had no reader and no writer either. No site under ``src/`` or ``scripts/``
+    constructed this model at all: the only constructions were three test bodies, and
+    the only reads were the assertions in those same tests, so the fields existed to be
+    asserted. ``Field(exclude=True)`` meant the attribute was the only way to observe
+    them, which is what let them persist with nothing behind them. Same deletion, same
+    reason, as ``Signal``'s own four internal fields one release earlier.
     """
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
-
-    scope: Literal["platform-wide", "account-specific"] = Field(
-        default="platform-wide", description="Deployment scope (internal)", exclude=True
-    )
-    decisioning_platform_segment_id: str | None = Field(
-        default=None, description="Platform-specific segment ID (internal)", exclude=True
-    )
 
 
 class Signal(LibrarySignal):
@@ -2968,26 +4041,33 @@ class Signal(LibrarySignal):
     data_provider, coverage_percentage, deployments, pricing_options — all
     inherited from AdCP spec.
 
-    Local overrides:
-    - deployments: local SignalDeployment (has scope, decisioning_platform_segment_id)
-    - Internal fields with Field(exclude=True): tenant_id, created_at, updated_at, metadata
+    Local override: deployments, narrowed to the local SignalDeployment.
+
+    FOUR INTERNAL FIELDS ARE GONE -- ``tenant_id``, ``created_at``, ``updated_at`` and
+    ``metadata`` -- and they were dead in the strongest available sense: NOTHING under
+    ``src/`` or ``scripts/`` constructs this class at all. ``get_signals`` is a tool this
+    seller CALLS rather than serves, and the one module that dials it
+    (``src/core/signals_agent_registry.py``) parses the reply with the library
+    ``GetSignalsResponse``, not this subclass; the local type survives only in
+    ``schema_validation.create_schema_registry`` and a schema hook. With no writer the four
+    could never be anything but ``None``, so no persistence and no read depended on them.
+
+    CLAUDE.md pattern #4 is the rule they broke even so: a field off the wire but needing to
+    persist "belongs on a repository-owned carrier", and ``exclude=True`` strips a value from
+    PERSISTENCE and the idempotency hash as well as the wire -- so a tenant id parked here
+    would have been silently dropped by the very marker that was meant to protect it. The pin
+    confirms the shape independently: ``core/signal-listing.json`` declares none of the four,
+    and none of ``tenant_id``'s 0 occurrences in the bundle is on any node.
     """
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
 
-    # Override types that differ from library
-    deployments: list[SignalDeployment] = Field(  # type: ignore[assignment]
-        ..., min_length=1, description="Array of platform deployments"
-    )
-
-    # Internal fields (not in AdCP spec, excluded from serialization)
-    tenant_id: str | None = Field(None, description="Internal: Tenant ID for multi-tenancy", exclude=True)
-    created_at: datetime | None = Field(None, description="Internal: Creation timestamp", exclude=True)
-    updated_at: datetime | None = Field(None, description="Internal: Last update timestamp", exclude=True)
-    metadata: dict[str, Any] | None = Field(None, description="Internal: Additional metadata", exclude=True)
+    # Override types that differ from library. No suppression: the pinned SDK types the parent
+    # field so the local element subclass is a static subtype.
+    deployments: list[SignalDeployment] = Field(..., min_length=1, description="Array of platform deployments")
 
     # Backward compatibility properties (deprecated)
-    # Note: signal_id is now a library field in adcp 3.6.0 (SignalId | None)
+    # Note: signal_id is now a library field in the pinned SDK (SignalId | None)
     # The old @property signal_id that mapped to signal_agent_segment_id is removed
     # to avoid conflict with the new library field.
 
@@ -2996,11 +4076,15 @@ class Signal(LibrarySignal):
         """Backward compat: return the inner model of the first pricing option.
 
         DEPRECATED: Use pricing_options instead.
-        Provides .cpm, .currency etc. from the first pricing option's root model.
+        Provides .cpm, .currency etc. from the first pricing option.
         Returns None if pricing_options is empty.
+
+        No ``.root``: the pinned SDK types ``Signal.pricing_options`` as a list of the
+        ``VendorPricingOption`` ARMS rather than of a RootModel wrapping them, so the
+        element already IS the inner model this property promises.
         """
         if self.pricing_options:
-            return self.pricing_options[0].root
+            return self.pricing_options[0]
         return None
 
     @property
@@ -3045,10 +4129,16 @@ class GetSignalsResponse(NestedModelSerializerMixin, LibraryGetSignalsResponse):
 
 # --- Signal Activation ---
 class ActivateSignalRequest(LibraryActivateSignalRequest):
-    """Extends library ActivateSignalRequest with local extension fields.
+    """The pinned ``signals/activate-signal-request.json``, declaring nothing of its own.
 
-    Library provides: signal_agent_segment_id, deployments, context, ext.
-    Local extensions: campaign_id, media_buy_id (unused in impl, kept for API compat).
+    ``campaign_id`` and ``media_buy_id`` are DELETED. The pinned node declares neither --
+    measured on the node itself, not by grepping the bundle, which is why ``media_buy_id``
+    existing on 46 other pin nodes was never evidence for this one. Their own docstring said
+    "unused in impl, kept for API compat", and the census agreed: no ``_impl``, no row in
+    ``src.core.tools.registry.TOOLS``, and the single remaining reference to this class
+    anywhere is ``scripts/hooks/validate_mcp_schemas.py``. So nothing read them -- but
+    declaring a field is what ADMITS it (critical pattern #7: the DTO is the accepted shape),
+    so the two were a live door onto a request shape no buyer could validate.
 
     NOTE: ActivateSignalResponse is NOT migrated — library uses RootModel
     discriminated union (success|error) which is fundamentally incompatible
@@ -3056,10 +4146,6 @@ class ActivateSignalRequest(LibraryActivateSignalRequest):
     """
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
-
-    # Extension fields (not in library spec)
-    campaign_id: str | None = Field(None, description="Optional campaign ID to activate signal for")
-    media_buy_id: str | None = Field(None, description="Optional media buy ID to activate signal for")
 
     @property
     def signal_id(self) -> str:
@@ -3077,7 +4163,7 @@ class ActivateSignalResponse(SalesAgentBaseModel):
 
     NOT migrated to library base (evaluated in ):
     1. Historically "library uses RootModel[SuccessVariant | ErrorVariant] — cannot
-       add fields". That reason is STALE at adcp 6.6: ActivateSignalResponse is a
+       add fields". That reason is STALE at the pinned SDK: ActivateSignalResponse is a
        union TypeAlias, not a RootModel, so the SyncAccountsResponse approach
        (subclass the success variant directly — src/core/schemas/account.py:141)
        would work. It is no longer what keeps this model local.
@@ -3172,7 +4258,7 @@ PROPERTY_ERROR_MESSAGES = {
 # --- Authorized Properties (AdCP Spec) ---
 # Use library types directly - all fields inherited from AdCP spec
 # V3: Property uses property-specific Identifier, not generic Identifier
-from adcp.types.generated_poc.core.property import (
+from adcp.types.domains.core.property import (
     Identifier as PropertySpecificIdentifier,
 )  # TODO: no stable alias in adcp.types (different from adcp.types.Identifier)
 
@@ -3254,7 +4340,7 @@ class GetMediaBuysMediaBuy(AlwaysIncludeFieldsMixin, LibraryGetMediaBuysMediaBuy
 
     Grounded on the library type, which makes the pinned item contract enforceable
     at the construction site: ``confirmed_at`` and ``revision`` are REQUIRED on
-    media_buys[] in AdCP 3.1.1, and every caller must now supply them or fail to
+    media_buys[] in and every caller must now supply them or fail to
     typecheck. That is the point — they are populated from the persisted columns
     rather than defaulted (GH #1928).
 
@@ -3264,6 +4350,28 @@ class GetMediaBuysMediaBuy(AlwaysIncludeFieldsMixin, LibraryGetMediaBuysMediaBuy
 
     # Not a library field — this seller carries the buyer's campaign reference back
     # on the item so a buyer can correlate without a second lookup.
+    #
+    # MEASURED AND LEFT IN PLACE, deliberately, under salesagent-gweku. The name is
+    # declared by ZERO pinned nodes and appears in ZERO non-bundled pinned schema files at
+    # 3.0, 3.1, 3.1.15 or 3.2 -- not on this item, and not on the create request a buyer
+    # would have had to send it on. By the adoption rule that would make it deletable. It
+    # is NOT deleted here because it is also APPLIED (echoed out of
+    # ``media_buys.raw_request``) and GRADED: ``BR-UC-019-query-media-buys.feature``
+    # carries a correlation obligation (POST-S6, "each media buy should include
+    # buyer_campaign_ref for correlation") and a dedicated degradation scenario whose own
+    # comment says it exists because nothing else would catch this field's removal.
+    # MEASURED FURTHER, and the answer is that this one goes to a CARRIER: ``exclude`` is
+    # None here, so unlike every other non-pin field in that census family the value is
+    # NOT stripped -- it dumps to the buyer and it is published in this item's
+    # model_json_schema() under a name no pinned node declares. The scenario's e2e_rest arm
+    # is not in ``tests/bdd/e2e_rest_known_failures.txt``, so the correlation
+    # post-condition reads the field after a real HTTP round trip, which only a wire
+    # emission can satisfy; the sibling degradation scenario says "wire field" outright.
+    # So the fix is the one 9094a72d2 established -- the value moves to a repository-owned
+    # carrier and POST-S6 is re-grounded on a PINNED field (``ext`` is the pin's channel
+    # for a seller extension, and being declared is the whole difference). Left in place
+    # until that is scheduled, deliberately: deleting it first would drop a buyer-visible
+    # graded field. Filed as salesagent-9zugt with the full measurement.
     buyer_campaign_ref: str | None = Field(default=None, description="Buyer campaign reference")
     packages: list[GetMediaBuysPackage] = Field(..., description="Packages within this media buy")
 
@@ -3283,7 +4391,7 @@ class GetMediaBuysMediaBuy(AlwaysIncludeFieldsMixin, LibraryGetMediaBuysMediaBuy
     _SERIALIZE_NESTED_MODELS: ClassVar[bool] = True
 
 
-class CompleteTaskRequest(BuyerRequest, AdcpVersionEnvelope):
+class CompleteTaskRequest(BuyerRequest, LibraryAdcpRequest, AdcpVersionEnvelope):
     """Request to complete a task.
 
     There used to be TWO models for this one tool: this one, and a legacy
@@ -3300,6 +4408,16 @@ class CompleteTaskRequest(BuyerRequest, AdcpVersionEnvelope):
     under it this request could not carry a protocol version at all. Every other request DTO
     reaches the same envelope through its pinned generated type. Not exported from
     ``adcp.types``; import the full generated path.
+
+    ``AdcpRequest`` is the SECOND base, and it is what makes this DTO registrable.
+    ``src/core/main.py``'s refusal is the CONJUNCTION of ``issubclass(dto, AdcpRequest)``
+    and ``issubclass(dto, AdcpVersionEnvelope)`` -- the two predicates refuse disjoint
+    forgeries, so neither alone is the check. ``AdcpRequest`` is a field-less, non-pydantic
+    marker (``adcp.types.base``) carrying six accessors that answer from the instance dict
+    and return ``None`` for a field the tool does not declare, so naming it adds nothing to
+    the wire and nothing to the field set; it is the request POSITION stated by type.
+    Every SDK-generated request model has both bases, and this is the one DTO the SDK
+    ships no type for, so it names them itself.
     """
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
@@ -3315,7 +4433,7 @@ class CompleteTaskRequest(BuyerRequest, AdcpVersionEnvelope):
     context: ContextObject | None = Field(default=None, description="Application-level context")
 
 
-class CompleteTaskResponse(AdcpResponse):
+class CompleteTaskResponse(SalesAgentAdcpResponse):
     """Response from completing a task.
 
     On the SDK's base envelopes for the same reason the request is: the pin defines no
@@ -3350,7 +4468,7 @@ class GetTaskStatusRequest(BuyerRequest, LibraryGetTaskStatusRequest):
     now, and when the SDK ships one, make it the BASE CLASS rather than maintaining a
     parallel definition". That instruction was already satisfiable when it was written: the
     SDK ships the type under a DIFFERENT NAME, ``GetTaskStatusRequest`` in
-    ``generated_poc.protocol``, because the spec calls the operation ``get-task-status-status``
+    ``domains.protocol``, because the spec calls the operation ``get-task-status-status``
     while the tool is ``get_task_status``. A search for the type by the TOOL's name found nothing
     and a hand-written parallel was declared instead.
 
@@ -3378,19 +4496,33 @@ class TaskSummary(LibraryTaskSummary):
     (``Domain`` is media-buy/signals/creative; ``AdcpProtocol`` adds four more). So the two
     responses below are built from one derivation, not two.
 
-    The extra fields are this seller's own and the pin permits them
-    (``additionalProperties: true`` on both response schemas). They are DECLARED rather than
-    passed through as extras so the shape a buyer receives is written down somewhere.
+    SIX NON-SPEC FIELDS ARE GONE, and they are the SAME SIX :class:`GetTaskStatusResponse`
+    deleted one release earlier -- that fix landed on one surface and not its sibling, so
+    ``list_tasks`` went on emitting them (salesagent-mm3uq). Measured per node rather than
+    by grepping the bundle: ``protocol/list-tasks-response.json``'s ``tasks[]`` item
+    declares exactly eight properties -- task_id, task_type, domain, status, created_at,
+    updated_at, completed_at, has_webhook -- and none of ``context_id``, ``tool_name``,
+    ``owner``, ``associated_objects``, ``error_message`` or ``summary`` is among them.
+    ``additionalProperties: true`` PERMITS an extra; it does not make one discoverable, so
+    a buyer could not validate or even find the six.
+
+    The item is also a POORER home than the get_task_status envelope, which is why four of
+    the six cannot simply move: that response composes ``core/protocol-envelope.json`` and
+    so has ``context_id`` and ``message`` to route ``error_message`` into, while this
+    ITEM composes nothing and declares neither. There is no pinned field here to carry
+    them, and ``ext`` is not on the item either.
+
+    ``associated_objects`` was the only consumer of the per-step mapping query in
+    ``_list_tasks_impl``, exactly as it was in ``_get_task_status_impl``; both are gone.
+
+    ``extra="ignore"`` rather than inheriting the parent's ``extra="allow"``: deleting a
+    field from an allow parent PROMOTES it to an extra the moment any construction site
+    still passes it, and the value reaches the buyer on every dump path -- measured on
+    ``workflow_step_id`` in ``CreateMediaBuySuccess``. Refusing what this model did not
+    declare is what makes the deletion real.
     """
 
-    context_id: str | None = Field(default=None, description="Workflow context this task belongs to")
-    tool_name: str | None = Field(default=None, description="Non-spec: the seller-side tool the step invokes")
-    owner: str | None = Field(default=None, description="Non-spec: principal | publisher | system")
-    associated_objects: list[dict[str, Any]] = Field(
-        default_factory=list, description="Non-spec: objects this task acts on"
-    )
-    error_message: str | None = Field(default=None, description="Non-spec: failure detail when the task failed")
-    summary: dict[str, Any] | None = Field(default=None, description="Non-spec: request highlights")
+    model_config = ConfigDict(extra="ignore")
 
 
 class GetAdcpCapabilitiesRequest(BuyerRequest, LibraryGetAdcpCapabilitiesRequest):
@@ -3410,7 +4542,7 @@ class GetAdcpCapabilitiesRequest(BuyerRequest, LibraryGetAdcpCapabilitiesRequest
     )
 
 
-class GetAdcpCapabilitiesResponse(LibraryGetAdcpCapabilitiesResponse, AdcpResponse):
+class GetAdcpCapabilitiesResponse(LibraryGetAdcpCapabilitiesResponse, SalesAgentAdcpResponse):
     """The get_adcp_capabilities response."""
 
 
@@ -3421,7 +4553,7 @@ class ListTasksRequest(BuyerRequest, LibraryListTasksRequest):
     """
 
 
-class ListTasksResponse(NestedModelSerializerMixin, LibraryListTasksResponse, AdcpResponse):
+class ListTasksResponse(NestedModelSerializerMixin, LibraryListTasksResponse, SalesAgentAdcpResponse):
     """Extends the pinned ListTasksResponse.
 
     Was a raw dict ``{tasks, total, offset, limit, has_more}`` -- six violations of
@@ -3437,37 +4569,59 @@ class ListTasksResponse(NestedModelSerializerMixin, LibraryListTasksResponse, Ad
 
     #: NOT redeclared as ``list[TaskSummary]``. The parent already types this
     #: ``list[Task]`` and ``TaskSummary`` extends ``Task``, so narrowing it would be an
-    #: invariance error for no gain: what reaches the wire is decided by the OBJECTS the
-    #: tool builds and by the nested-model serializer, not by the annotation:
-    #: ``TaskSummary`` carries six non-spec fields the parent's ``Task`` does not
-    #: declare, and serializing by the DECLARED type would drop them silently.
+    #: invariance error for no gain. ``TaskSummary`` now declares nothing the parent does
+    #: not, so there is nothing for a declared-type serialization to drop either.
 
 
-class GetTaskStatusResponse(LibraryGetTaskStatusResponse, AdcpResponse):
+class GetTaskStatusResponse(LibraryGetTaskStatusResponse, SalesAgentAdcpResponse):
     """Extends the pinned GetTaskStatusResponse (the spec names the task ``get-task-status-status``).
 
     Was a raw dict (GH #2202): ``protocol`` and ``task_type`` absent, and ``type`` emitted in
     task_type's place carrying ``step_type``. Same root cause and same fix as
     :class:`ListTasksResponse` -- see that docstring; the two share their derivation.
 
-    The extras mirror :class:`TaskSummary`'s, plus the two only a single-task read returns.
+    FIVE NON-SPEC FIELDS ARE GONE, and every one of them had a pinned home or no reader.
+    ``protocol/get-task-status-response.json`` declares 14 properties and none of
+    ``tool_name``, ``owner``, ``associated_objects``, ``error_message`` or ``request_data``
+    is among them -- measured per-model against the pinned node, not by grepping the bundle
+    for the name. A buyer could not validate any of the five, which is what makes them a
+    defect rather than a convenience:
+
+    * ``error_message`` -> the pin's own ``message``, "Human-readable summary of the task
+      result ... suitable for display to end users or for AI agent comprehension". A free-text
+      failure summary is exactly that field's subject, and routing it there needs no invented
+      error code (which an ``error``/``adcp_error`` object would have, and CLAUDE.md pattern
+      #10 forbids minting one to wrap a stored string).
+    * ``request_data`` -> the pin's ``history``, which :func:`_task_history` already fills with
+      ``{timestamp, type, data}`` for the request and the response alike. The top-level field
+      was a SECOND copy of the same material, and an UNGATED one: ``include_history`` defaults
+      false "for lightweight status-only polls", so the field shipped the opening request on
+      every poll past the flag that exists to withhold it -- the same defect the ``result``
+      comment in ``_get_task_status_impl`` records for ``response_data``.
+    * ``tool_name``, ``owner``, ``associated_objects`` -> deleted. Seller internals with no
+      consumer: nothing under ``src/`` or ``scripts/`` reads one off a response, the admin UI
+      reads the workflow ROW, and the one scenario that asserted ``associated_objects``
+      (``@T-UC-027-ext-a-objects``) lives in ``BR-UC-027-manage-async-tasks.feature``, which
+      is in ``UNBOUND_ALLOWLIST`` (``test_architecture_feature_file_bound.py``) and is
+      executed by no BDD module -- so it graded nothing. ``ext`` is the pin's extension
+      channel and would have been the home for one of these that a buyer needed; none does.
     """
 
-    context_id: str | None = Field(default=None, description="Workflow context this task belongs to")
-    tool_name: str | None = Field(default=None, description="Non-spec: the seller-side tool the step invokes")
-    owner: str | None = Field(default=None, description="Non-spec: principal | publisher | system")
-    associated_objects: list[dict[str, Any]] = Field(
-        default_factory=list, description="Non-spec: objects this task acts on"
-    )
-    error_message: str | None = Field(default=None, description="Non-spec: failure detail when the task failed")
-    request_data: dict[str, Any] | None = Field(default=None, description="Non-spec: the request that opened the task")
+    # ``context_id`` is INHERITED, from ``core/protocol-envelope.json`` via the pinned
+    # parent: same ``str | None``, same ``default=None``. The redeclaration's one remaining
+    # effect was to replace the pin's description -- the transport-managed conversation
+    # identifier -- with "Workflow context this task belongs to", so the published schema
+    # documented a seller-internal subject under a protocol field name. What the seller
+    # WRITES there (``task.context_id``, task_management.py:363) is unchanged by
+    # inheriting; whether that value is the right one for this pinned field is a separate
+    # question, filed as salesagent-2epqt.
 
 
 class GetMediaBuysRequest(BuyerRequest, LibraryGetMediaBuysRequest):
     """Extends the library GetMediaBuysRequest.
 
-    Was hand-defined against SalesAgentBaseModel "because adcp 3.6.0 is not yet required" --
-    a comment that outlived its pin. The SDK (adcp 6.6.0, AdCP 3.1.1) ships this type, and
+    Was hand-defined against SalesAgentBaseModel "because the pinned SDK is not yet required" --
+    a comment that outlived its pin. The SDK (the pinned SDK, AdCP) ships this type, and
     re-declaring the field set NARROWED it: ext, include_history, include_snapshot,
     include_webhook_activity, pagination and webhook_activity_limit are all in
     get-media-buys-request.json and were absent here, so they could not be advertised or
@@ -3497,11 +4651,11 @@ class GetMediaBuysRequest(BuyerRequest, LibraryGetMediaBuysRequest):
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
 
 
-class GetMediaBuysResponse(NestedModelSerializerMixin, LibraryGetMediaBuysResponse, AdcpResponse):
+class GetMediaBuysResponse(NestedModelSerializerMixin, LibraryGetMediaBuysResponse, SalesAgentAdcpResponse):
     """Extends library GetMediaBuysResponse.
 
     Library provides: media_buys, errors, context, pagination, sandbox, ext, and the
-    protocol envelope — including ``status``, which AdCP 3.1.1
+    protocol envelope — including ``status``, which AdCP.1
     (core/protocol-envelope.json, required: ["status"]) marks REQUIRED on every task
     response envelope and which this model carried on no wire at all while it
     extended SalesAgentBaseModel (GH #1900).

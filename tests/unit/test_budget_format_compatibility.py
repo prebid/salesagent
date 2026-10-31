@@ -10,9 +10,6 @@ Tests cover both Package.budget and CreateMediaBuyRequest.budget fields.
 
 from decimal import Decimal
 
-import pytest
-from pydantic import ValidationError
-
 from src.core.schemas import Budget, CreateMediaBuyRequest, PackageRequest
 
 
@@ -118,13 +115,19 @@ class TestBudgetFormatCompatibility:
         assert budget_dict["total"] == 5000.0
         assert budget_dict["currency"] == "USD"
 
-    def test_package_with_none_budget(self):
-        """Test that None budget is rejected (budget is required per adcp library)."""
-        # PackageRequest now extends adcp library PackageRequest where budget is required
-        with pytest.raises(ValidationError) as exc_info:
-            PackageRequest(product_id="prod_1", budget=None, pricing_option_id="test_pricing")
+    def test_package_with_none_budget_is_accepted(self):
+        """A package may omit its own budget: AdCP 3.2 made ``budget`` OPTIONAL.
 
-        # Verify it's a budget validation error
+        It was REQUIRED at 3.1.1 and this test asserted the rejection. 3.2 adds
+        ``total_budget`` + ``budget_allocation`` at the create-request ROOT as an
+        alternative required group, so a package that is funded centrally has no budget of
+        its own to declare -- measured on the pin:
+        ``LegacyPackageRequest.model_fields["budget"].is_required()`` is False at 9.0.0 and
+        True at 6.6.0. Corrected to the new truth rather than deleted.
+        """
+        package = PackageRequest(product_id="prod_1", budget=None, pricing_option_id="test_pricing")
+
+        assert package.budget is None
 
 
 class TestBudgetExtractionHelpers:

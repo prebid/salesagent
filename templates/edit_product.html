@@ -104,26 +104,43 @@
 
         <h3 style="margin-top: 2rem;">Creative Formats</h3>
 
-        <div class="form-group">
-            <label>Select format templates and configure sizes:</label>
-            <p style="color: #666; font-size: 0.9rem; margin-bottom: 1rem;">
-                Choose format templates and specify which sizes this product supports. Creative type (image, JS, HTML5)
-                is auto-detected when advertisers upload creatives.
+        {# format_ids is NOT authored here: deprecated in AdCP 3.2, removed in 4.0, and the
+           pin says "Do not author a new product from format_ids alone". What a legacy buyer
+           receives is shown read-only: derived from the canonical declarations when the
+           product has them, or the legacy-only arm a pre-3.2 product was authored with. #}
+        <div class="form-group" style="background: #f8f9fa; border-left: 3px solid #adb5bd; padding: 0.75rem 1rem;">
+            <label style="font-weight: 600;">Legacy named formats (read-only)</label>
+
+            <p style="color: #666; font-size: 0.9rem; margin: 0.5rem 0;">
+                <strong>Announced to legacy buyers:</strong>
+                {% if announced_legacy_refs %}
+                    {{ announced_legacy_refs | join(', ') }}
+                {% else %}
+                    <em>none</em>
+                {% endif %}
+                <br><em style="color: #888;">
+                {% if legacy_refs_derived %}
+                    Derived from the canonical declarations (their <code>v1_format_ref</code>);
+                    nothing is stored as a second catalog.
+                {% else %}
+                    A legacy-only arm authored before canonical declarations. Author
+                    format_options below and it is no longer served.
+                {% endif %}
+                </em>
             </p>
 
-            <!-- Format Template Picker Container -->
-            <div id="format-template-picker-container">
-                <div style="text-align: center; padding: 2rem; color: #666;">
-                    Loading format templates...
-                </div>
-            </div>
+            {% if inventory_profile_name %}
+            <p style="color: #666; font-size: 0.9rem; margin: 0.5rem 0;">
+                <strong>Supplied through inventory profile
+                &ldquo;{{ inventory_profile_name }}&rdquo;.</strong>
+                <br><em style="color: #888;">When the profile carries canonical declarations they
+                replace this product's own. The profile is SHARED &mdash; changing it there affects
+                every product linked to it.</em>
+            </p>
+            {% endif %}
         </div>
 
-        <!-- Hidden input to store selected format data -->
-        <input type="hidden" id="formats-data" name="formats" value="[]">
-
-        <!-- Load Format Template Picker JS -->
-        <script src="{{ request.script_root }}/static/js/format-template-picker.js"></script>
+        {% include 'components/format_options_editor.html' %}
 
         <!-- Publisher Properties -->
         <h3 style="margin-top: 2rem;">
@@ -484,9 +501,6 @@ function removePricingOption(index) {
     }
 }
 
-// Format Template Picker initialization
-// Use window.formatPicker for global access (needed for form submission and testing)
-const existingFormats = {{ product.formats | tojson if product.formats else '[]' }};
 
 // Initialize on page load
 document.addEventListener('DOMContentLoaded', function() {
@@ -504,18 +518,6 @@ document.addEventListener('DOMContentLoaded', function() {
         addPricingOption();
     }
 
-    // Initialize format template picker with existing formats
-    window.formatPicker = new FormatTemplatePicker({
-        containerId: 'format-template-picker-container',
-        hiddenInputId: 'formats-data',
-        tenantId: '{{ tenant_id }}',
-        adapterType: '{{ adapter_type }}',
-        scriptRoot: '{{ request.script_root }}' || '',
-        initialFormats: existingFormats,
-        onSelectionChange: function(formats) {
-            console.log('Formats updated:', formats.length, 'formats selected');
-        }
-    });
 });
 </script>
 {% endblock %}

@@ -23,7 +23,7 @@ OBLIGATION COVERAGE:
   UC-002-CC-ADAPTER-ATOMICITY-03, UC-002-CC-ATOMIC-RESPONSE-SEMANTICS-03
   UC-002-CC-CREATIVE-ASSIGNMENT-VALIDATION-03
   UC-002-EXT-D-02, UC-002-EXT-F-01, -02, UC-002-EXT-H-02, -03
-  UC-002-EXT-I-03, UC-002-EXT-J-02, UC-002-EXT-K-03
+  UC-002-EXT-I-03, UC-002-EXT-J-02
   UC-002-EXT-L-01, -02, -03, UC-002-EXT-M-01, -03
   UC-002-EXT-N-02, UC-002-EXT-O-01, UC-002-EXT-Q-01, -02
   UC-002-MAIN-01, -03, -04, -05, -09, -10, -14, -15, -17, -20, -22
@@ -41,6 +41,7 @@ do not use the harness.
 import uuid
 from datetime import UTC, datetime, timedelta
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
+from urllib.parse import urlsplit
 
 import pytest
 from pydantic import ValidationError
@@ -64,6 +65,8 @@ from src.core.schemas import (
     CreateMediaBuySuccess,
     PricingOption,
 )
+from tests.factories import stamp_format_identity
+from tests.factories.creative import DEFAULT_CREATIVE_AGENT_URL
 from tests.factories.creative_asset import build_assets, image_spec
 from tests.harness.media_buy_create import MediaBuyCreateEnv
 from tests.helpers.envelope_assertions import assert_envelope_shape, raises_adcp
@@ -237,30 +240,16 @@ class TestMaxDailySpendExceeded:
 
             assert exc_info.value.error_code == "BUDGET_EXCEEDED"
 
-    def test_max_daily_spend_no_cap_configured(self, integration_db):
-        """When max_daily_package_spend is None, no daily spend check is applied.
-
-        Anchors: media_buy_create.py:1698
-        """
-        # Large budget, no cap -> should pass daily spend check
-        req = _make_request(
-            packages=[
-                {
-                    "product_id": "prod_1",
-                    "budget": 999999.0,
-                    "pricing_option_id": "cpm_usd_fixed",
-                },
-            ]
-        )
-
-        with MediaBuyCreateEnv() as env:
-            tenant, _principal = env.setup_default_data()
-            tenant.currency_limits[0].max_daily_package_spend = None
-            env.setup_product_chain(tenant)
-            # No cap -> daily-spend check skipped -> pipeline reaches success.
-            result = env.call_impl(req=req)
-
-        assert isinstance(result, CreateMediaBuySuccess)
+    # test_max_daily_spend_no_cap_configured is DELETED, and so is its twin
+    # TestExtensionObligations.test_no_max_daily_spend_configured_check_skipped. Both sent a
+    # 999,999 budget with no cap and expected success, which held only while
+    # MediaBuyCreateEnv stubbed the adapter's pre-creation check: at the $10 CPM the create
+    # path assumes that is 99,999,900 impressions, and the real mock ad server refuses
+    # anything over 1,000,000 (VALIDATION_ERROR on packages[0].impressions). The obligation,
+    # "no cap configured means the daily spend check is skipped", is graded on a2a, mcp, rest
+    # and e2e_rest by @T-UC-002-partition-daily-spend-cap (cap_not_configured) and by
+    # @T-UC-002-boundary-daily-spend-cap ("cap not configured (skipped)", daily 9999 over a
+    # one-day flight, which breaches every cap those outlines use).
 
 
 class TestCreativeMissingUrl:
@@ -280,8 +269,10 @@ class TestCreativeMissingUrl:
         # Build a mock DB creative that is missing URL
         mock_creative = MagicMock()
         mock_creative.creative_id = "creative_1"
-        mock_creative.format = "display_300x250_image"
-        mock_creative.agent_url = "https://creative.example.com"
+        # No agent_url: the factory's default is the reference agent's origin, the only one
+        # at which the SDK maps this v1 id to a canonical kind. At a made-up agent the id
+        # has no kind and the stamp itself is refused, before the code under test runs.
+        stamp_format_identity(mock_creative, format_id="display_300x250_image")
         mock_creative.data = {}  # No URL field
 
         # Build a mock format spec (non-generative, so URL is required)
@@ -323,8 +314,8 @@ class TestCreativeMissingUrl:
 
         mock_creative = MagicMock()
         mock_creative.creative_id = "creative_1"
-        mock_creative.format = "display_300x250_image"
-        mock_creative.agent_url = "https://creative.example.com"
+        # The reference agent's origin, by default, for the reason the test above gives.
+        stamp_format_identity(mock_creative, format_id="display_300x250_image")
         mock_creative.data = {"url": "https://example.com/ad.jpg"}
 
         mock_format_spec = MagicMock()
@@ -441,7 +432,7 @@ class TestInlineCreativesProcessedBeforeApproval:
                             "creative_id": "inline_creative_1",
                             "name": "Test Ad",
                             "format_id": {
-                                "agent_url": "https://creative.example.com/",
+                                "agent_url": DEFAULT_CREATIVE_AGENT_URL,
                                 "id": "display_300x250_image",
                             },
                             "assets": build_assets(image_spec("banner_image")),
@@ -496,13 +487,18 @@ class TestMultipleInvalidCreativesAccumulated:
         mock_package = MagicMock()
         mock_package.creative_ids = ["creative_1", "creative_2", "creative_3"]
 
-        # Three creatives, each with different validation failures
+        # Three creatives, each with different validation failures. Their format ids are
+        # three DISTINCT registry globs rather than ``format_1``/``format_2``/``format_3``:
+        # ``stamp_format_identity`` derives the stored columns through the production
+        # projection, which refuses a reference with no canonical kind, so the invented ids
+        # made this test die in its own setup. Distinctness is what the loop needs (three
+        # creatives, not one), and all three project to ``image`` from the glob alone at the
+        # factory's default agent, the reference one, the only agent whose ids the glob reads.
         creatives = []
-        for i in range(1, 4):
+        for creative_index, format_id in enumerate(("display_300x250", "display_728x90", "display_970x250"), start=1):
             c = MagicMock()
-            c.creative_id = f"creative_{i}"
-            c.format = f"format_{i}"
-            c.agent_url = "https://creative.example.com"
+            c.creative_id = f"creative_{creative_index}"
+            stamp_format_identity(c, format_id=format_id)
             c.data = {}
             creatives.append(c)
 
@@ -924,11 +920,15 @@ class TestMainFlowObligations:
         """
         from src.core.tools.media_buy_create import _validate_and_convert_format_ids
 
-        # Plain string format ID should be rejected
-        with pytest.raises(AdCPValidationError) as exc_info:
-            await _validate_and_convert_format_ids(
-                format_ids=["banner_300x250"], tenant_id="test_tenant", package_idx=0
-            )
+        # Plain string format ID should be rejected. The tenant row exists: production
+        # reaches this through the resolver, which loaded it, and the registered-agent
+        # lookup reads it (tenants.use_default_creative_agent).
+        with MediaBuyCreateEnv() as env:
+            tenant = env.ensure_tenant()
+            with pytest.raises(AdCPValidationError) as exc_info:
+                await _validate_and_convert_format_ids(
+                    format_ids=["banner_300x250"], tenant_id=tenant.tenant_id, package_idx=0
+                )
 
         assert exc_info.value.error_code == "VALIDATION_ERROR"
 
@@ -942,8 +942,13 @@ class TestMainFlowObligations:
         the storyboard tenant logged ``field=None details=None`` — salesagent-basxl).
 
         ``rejected_value`` and ``accepted_values`` are the declared keys those sentences
-        were carrying, and "the product has no format_ids configured" is
-        ``accepted_values == []`` rather than a second branch saying so in words.
+        were carrying.
+
+        The CODE is ``UNSUPPORTED_FEATURE``: ``media-buy/package-request.json`` @ 3.2.7,
+        "Format selector contract (normative)" -- "A single resolved route that does not
+        satisfy the product is rejected with ``UNSUPPORTED_FEATURE``". A product declaring
+        only the deprecated ``format_ids`` is satisfied by the deprecated lane, and the
+        reference it refuses is the one route's, so ``rejected_value`` is that one entry.
         """
         from src.core.format_resolver import format_display, format_identity
         from src.core.tools._wire import to_wire
@@ -964,11 +969,11 @@ class TestMainFlowObligations:
         with MediaBuyCreateEnv() as env:
             tenant, _principal = env.setup_default_data()
             env.setup_product_chain(tenant, format_ids=[carried])
-            with raises_adcp(AdCPValidationError) as exc_info:
+            with raises_adcp(AdCPCapabilityNotSupportedError) as exc_info:
                 env.call_impl(req=req)
 
         envelope = to_wire(exc_info.value.response)
-        assert_envelope_shape(envelope, "VALIDATION_ERROR", recovery="correctable")
+        assert_envelope_shape(envelope, "UNSUPPORTED_FEATURE", recovery="correctable")
 
         (error,) = envelope["errors"]
         assert error["field"] == "packages[0].format_ids", error
@@ -978,7 +983,7 @@ class TestMainFlowObligations:
         # `format_display` is the canonical rendering of the (agent_url, id) identity the
         # pinned core/format-id.json defines, so the values are compared through it rather
         # than restated as literals.
-        assert details["rejected_value"] == [format_display(format_identity(requested))], details
+        assert details["rejected_value"] == format_display(format_identity(requested)), details
         assert details["accepted_values"] == [format_display(format_identity(carried))], details
 
     def test_persistence_after_adapter_success(self, integration_db):
@@ -1270,11 +1275,14 @@ class TestInlineCreativeObligations:
         """
         from src.core.tools.media_buy_create import _validate_and_convert_format_ids
 
-        # Missing fields in FormatId should be rejected
-        with pytest.raises(AdCPValidationError) as exc_info:
-            await _validate_and_convert_format_ids(
-                format_ids=[{"agent_url": "", "id": ""}], tenant_id="test_tenant", package_idx=0
-            )
+        # Missing fields in FormatId should be rejected. The tenant row exists, as it does
+        # behind the resolver; the registered-agent lookup reads it.
+        with MediaBuyCreateEnv() as env:
+            tenant = env.ensure_tenant()
+            with pytest.raises(AdCPValidationError) as exc_info:
+                await _validate_and_convert_format_ids(
+                    format_ids=[{"agent_url": "", "id": ""}], tenant_id=tenant.tenant_id, package_idx=0
+                )
 
         assert exc_info.value.error_code == "VALIDATION_ERROR"
 
@@ -1291,8 +1299,9 @@ class TestInlineCreativeObligations:
 
         with MediaBuyCreateEnv() as env:
             tenant, _principal = env.setup_default_data()
-            # Well-formed registration the buyer's format_id should match.
-            CreativeAgentFactory(tenant=tenant, agent_url="https://creative.example.com", enabled=True)
+            # Well-formed registration the buyer's format_id should match: a real peer that
+            # serves the format, since a registered agent is dialled for the lookup.
+            peer_url = env.host_reference_format("display_300x250_image")
             # Malformed pre-existing registration -- bypasses admin-ingestion
             # validation entirely by writing directly to the DB, which is
             # exactly how such a row would already exist in production.
@@ -1302,20 +1311,58 @@ class TestInlineCreativeObligations:
             # case grading nothing. An unparseable authority is refused for real.
             CreativeAgentFactory(tenant=tenant, agent_url="https://[::1", enabled=True)
 
-            # No get_format mocking needed: ADCP_TESTING=true (autouse fixture)
-            # makes CreativeAgentRegistry serve the checked-in reference formats
-            # for any agent_url, so this exercises the real registry lookup.
+            # No get_format mocking: the real registry dials the registered peer.
             result = await _validate_and_convert_format_ids(
-                format_ids=[{"agent_url": "https://creative.example.com", "id": "display_300x250_image"}],
+                format_ids=[{"agent_url": peer_url, "id": "display_300x250_image"}],
                 tenant_id=tenant.tenant_id,
                 package_idx=0,
             )
 
-        # Returned in CANONICAL form, trailing slash and all: the merged canonicalizer
-        # applies url-canonicalization step 5 ("empty path + authority -> /"), which the
-        # pre-merge one undid with a now-deleted rstrip("/"). Same obligation, spelled in
-        # the one canonical form both sides of the registration check now use.
-        assert result == [{"agent_url": "https://creative.example.com/", "id": "display_300x250_image"}]
+        # Returned in CANONICAL form, the one form both sides of the registration check use.
+        # The peer URL already is: a lowercase IP host, a non-default port, a non-empty path.
+        assert result == [{"agent_url": peer_url, "id": "display_300x250_image"}]
+
+    @pytest.mark.asyncio
+    async def test_the_operator_agent_is_registered_by_origin_and_no_other_agent_is(self, integration_db, monkeypatch):
+        """The operator agent's references pass the registration check by ORIGIN; no other agent does.
+
+        CREATIVE_AGENT_ORIGIN names an origin that is not the public agent's, and the tenant
+        registers no agent there, so only the operator rule can admit the operator's
+        mount-path reference. A foreign origin is still refused, and a tenant-registered agent
+        still matches with its path preserved.
+        """
+        from src.core.exceptions import AdCPAuthorizationError
+        from src.core.tools.media_buy_create import _validate_and_convert_format_ids
+
+        operator = "https://creative.seller.example"
+        monkeypatch.setenv("CREATIVE_AGENT_ORIGIN", operator)
+        # Both are read once and cached; drop them so this test's environment is the one read.
+        monkeypatch.setattr("src.core.config._settings", None)
+        monkeypatch.setattr("src.core.creative_agent_registry._registry", None)
+
+        with MediaBuyCreateEnv() as env:
+            tenant, _principal = env.setup_default_data()
+            # A real peer that serves the format: a registered agent is dialled for the lookup.
+            partner = env.host_reference_format("display_300x250_image")
+
+            async def validate(agent_url: str) -> list[dict[str, str]]:
+                return await _validate_and_convert_format_ids(
+                    format_ids=[{"agent_url": agent_url, "id": "display_300x250_image"}],
+                    tenant_id=tenant.tenant_id,
+                    package_idx=0,
+                )
+
+            mounted = await validate(f"{operator}/api/creative-agent")
+            registered = await validate(partner)
+            with pytest.raises(AdCPAuthorizationError) as foreign:
+                await validate("https://creative.other.example/api/creative-agent")
+            with pytest.raises(AdCPAuthorizationError) as other_path:
+                await validate(urlsplit(partner)._replace(path="/other-agent").geturl())
+
+        assert mounted == [{"agent_url": f"{operator}/api/creative-agent", "id": "display_300x250_image"}]
+        assert registered == [{"agent_url": partner, "id": "display_300x250_image"}]
+        assert foreign.value.error_code == "PERMISSION_DENIED"
+        assert other_path.value.error_code == "PERMISSION_DENIED"
 
     @pytest.mark.asyncio
     async def test_unapproved_creatives_may_trigger_manual_approval(self):
@@ -1342,60 +1389,21 @@ class TestInlineCreativeObligations:
 
 
 class TestProposalBasedObligations:
-    """Proposal-based media buy obligation tests.
+    """What still holds on a proposal-carrying request: product validation.
 
-    Note: proposal_id is accepted in the schema (adcp 3.6) but the proposal
-    resolution flow is not yet implemented in salesagent. These tests verify
-    the schema acceptance and current behavioral boundaries.
+    Four tests stood here that asserted DECLARATIONS -- ``"proposal_id" in
+    CreateMediaBuyRequest.model_fields``, that a constructed request echoes back the
+    field it was given -- for a flow their own docstrings called "not yet implemented".
+    The DTO is the pinned model minus a declared omission, so what it declares is
+    inherited and such a test only asserts that Python inheritance works.
+
+    Two of them also failed, and failed CORRECTLY. 3.2 makes the request's accepted
+    shapes exclusive: packages each with a budget; or packages + total_budget +
+    ``budget_allocation.mode='seller_optimized'``; or ``proposal_id`` + total_budget with
+    NO packages. A test pinning "proposal_id and total_budget coexist" alongside
+    ``packages`` was pinning a payload the pin now refuses -- a declaration test
+    outliving the declaration it was written against.
     """
-
-    def test_proposal_id_accepted_in_request_schema(self):
-        """Request schema accepts proposal_id field.
-
-        Covers: UC-002-ALT-PROPOSAL-BASED-MEDIA-01
-
-        Note: Schema accepts proposal_id but the business logic does not
-        currently implement proposal resolution. This test pins schema acceptance.
-        """
-        req = _make_request(proposal_id="prop_123")
-        assert req.proposal_id == "prop_123"
-
-    def test_proposal_id_field_exists_on_schema(self):
-        """CreateMediaBuyRequest has proposal_id field.
-
-        Covers: UC-002-ALT-PROPOSAL-BASED-MEDIA-02
-        """
-        assert "proposal_id" in CreateMediaBuyRequest.model_fields
-
-    def test_total_budget_field_exists_on_schema(self):
-        """CreateMediaBuyRequest has total_budget field for proposal-based.
-
-        Covers: UC-002-ALT-PROPOSAL-BASED-MEDIA-03
-        """
-        assert "total_budget" in CreateMediaBuyRequest.model_fields
-
-    def test_proposal_based_packages_derived_from_allocations(self):
-        """Schema supports the fields needed for package derivation.
-
-        Covers: UC-002-ALT-PROPOSAL-BASED-MEDIA-04
-
-        Note: Package derivation from proposal allocations is not yet
-        implemented. This test pins that the schema has the required
-        fields for when the feature is built.
-        """
-        # proposal_id and total_budget coexist on the schema
-        req = CreateMediaBuyRequest(
-            account={"account_id": "acct_test"},
-            brand={"domain": "test.com"},
-            start_time=_future(1),
-            end_time=_future(8),
-            packages=[{"product_id": "p1", "budget": 5000.0, "pricing_option_id": "cpm_usd_fixed"}],
-            proposal_id="prop_abc",
-            total_budget={"amount": 10000.0, "currency": "USD"},
-            idempotency_key=f"int-key-{uuid.uuid4().hex}",
-        )
-        assert req.proposal_id == "prop_abc"
-        assert req.total_budget is not None
 
     def test_proposal_based_product_validation(self, integration_db):
         """Derived packages still require valid product_ids.
@@ -1491,27 +1499,15 @@ class TestCrossCuttingObligations:
                 "ObjectWorkflowMapping.object_id must reference the persisted media buy"
             )
 
-    @pytest.mark.asyncio
-    async def test_creative_in_valid_state_assigned_successfully(self):
-        """Creative in valid state with compatible format is assigned.
-
-        Covers: UC-002-CC-CREATIVE-ASSIGNMENT-VALIDATION-03
-
-        Note: This tests the format validation helper directly.
-        """
-        # Build mocks
-        from adcp.types import FormatId
-
-        from src.core.helpers import validate_creative_format_against_product
-
-        creative_format = FormatId(agent_url="https://creative.example.com", id="display_300x250")
-        product = MagicMock()
-        product.format_ids = [{"agent_url": "https://creative.example.com", "id": "display_300x250"}]
-
-        is_valid, error = validate_creative_format_against_product(creative_format_id=creative_format, product=product)
-
-        assert is_valid is True
-        assert error is None
+    # DELETED: test_creative_in_valid_state_assigned_successfully
+    # (UC-002-CC-CREATIVE-ASSIGNMENT-VALIDATION-03). It said so itself -- "this tests the
+    # format validation helper directly" -- and the helper it tested,
+    # ``validate_creative_format_against_product``, no longer exists: the one satisfaction
+    # function (``src/core/format_satisfaction.py``) replaced it and the three sibling gates.
+    # It was also a bare ``MagicMock()`` product, which answers every unstubbed attribute
+    # with a truthy child, so it graded the mock rather than the seller. The behaviour it
+    # named -- a compatible creative IS assigned -- is graded on the wire, on all four
+    # transports, by @T-UC-002-inv-1 and the format-satisfaction feature.
 
 
 class TestExtensionObligations:
@@ -1680,23 +1676,8 @@ class TestExtensionObligations:
         with MediaBuyUoW(tenant_id) as uow:
             assert uow.media_buys.list_all() == [], "an adapter failure must persist no media buy"
 
-    def test_no_max_daily_spend_configured_check_skipped(self, integration_db):
-        """No max_daily_package_spend -> daily spend check is skipped.
-
-        Covers: UC-002-EXT-K-03
-        """
-        req = _make_request(
-            packages=[{"product_id": "prod_1", "budget": 999999.0, "pricing_option_id": "cpm_usd_fixed"}]
-        )
-
-        with MediaBuyCreateEnv() as env:
-            tenant, _principal = env.setup_default_data()
-            tenant.currency_limits[0].max_daily_package_spend = None
-            env.setup_product_chain(tenant)
-            # No cap -> the very large budget passes the daily-spend check.
-            result = env.call_impl(req=req)
-
-        assert isinstance(result, CreateMediaBuySuccess)
+    # test_no_max_daily_spend_configured_check_skipped (UC-002-EXT-K-03) is DELETED; see the
+    # note in TestMaxDailySpendExceeded for why and for the BDD scenarios that grade it.
 
     def test_proposal_not_found_error_code(self):
         """PROPOSAL_NOT_FOUND error code is used for missing proposals.

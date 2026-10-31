@@ -21,8 +21,8 @@ validated against :class:`~adcp.types.PushNotificationConfig` ``Authentication``
 honours -- so what "deliverable" means is stated once, by a type derived from the
 spec, instead of by a hand-rolled union each caller had to destructure.
 
-Spec grounding: pinned AdCP 3.1.1,
-``dist/schemas/3.1.1/core/push-notification-config.json`` -- ``url`` is
+Spec grounding: pinned AdCP,
+``dist/schemas/<pin>/core/push-notification-config.json`` -- ``url`` is
 required at top level; ``authentication`` is optional but, when present,
 requires ``schemes`` and ``credentials``; ``AuthenticationScheme`` is
 ``["Bearer", "HMAC-SHA256"]``. The schema is SILENT on refusing a
@@ -38,13 +38,14 @@ the recovery value derives from the SDK's bundled pinned
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, TypedDict
 
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 from src.core.errors.details import ValidationDetails
-from src.core.exceptions import AdCPValidationError
+from src.core.exceptions import AdCPInvalidRequestError, AdCPValidationError
 from src.core.schema_helpers import require_push_notification_config, to_push_notification_config
 
 # The push-config spelling of the block, as a narrowing subtype of the one Authentication
@@ -108,11 +109,11 @@ class ValidatedWebhookRegistration:
     subset of it, and that is not a stylistic preference. The first version of
     this type was a hand-rolled dataclass carrying ``url`` plus two flattened
     auth primitives -- 2 of the 4 fields the pinned schema defines
-    (``dist/schemas/3.1.1/core/push-notification-config.json``: ``url``,
+    (``dist/schemas/<pin>/core/push-notification-config.json``: ``url``,
     ``operation_id``, ``token``, ``authentication``). It therefore silently DROPPED
     ``operation_id`` and ``token``, both of which carry echo obligations the seller
     MUST honour -- ``operation_id`` is graded by the conformance universal
-    ``dist/compliance/3.1.1/universal/webhook-emission.yaml`` requirement 1, and
+    ``dist/compliance/<pin>/universal/webhook-emission.yaml`` requirement 1, and
     the schema requires ``token`` echoed "verbatim in every webhook payload".
     A value that claims to receipt a document must not be a lossy projection of it;
     that is the same defect this package exists to remove, one level up.
@@ -352,7 +353,7 @@ class ValidatedWebhookRegistration:
         and ``authentication``. An earlier version rebuilt the dict from three
         flattened fields and silently dropped the other two — including
         ``operation_id``, whose echo is graded by
-        ``dist/compliance/3.1.1/universal/webhook-emission.yaml`` req. 1 and which
+        ``dist/compliance/<pin>/universal/webhook-emission.yaml`` req. 1 and which
         that requirement forbids recovering from the URL.
 
         Dumping the model also makes the byte-identity claim STRUCTURAL rather
@@ -375,6 +376,10 @@ def _accept(
     sees -- ``tests/integration/test_webhook_hmac_credentials_ingest_refusal.py``
     and ``tests/helpers/webhook_credential_refusal.py`` grade exactly this text
     and that a credential refusal is not mislabelled as a URL refusal.
+
+    The URL and credential halves live here because they hold of EVERY registration
+    this seller accepts, from every surface. The correlation-id refusal does NOT,
+    and so is not here: see :func:`accept_push_notification_config`.
     """
     url = str(config.url) if config.url is not None else None
     reject_unsafe_webhook_registration_url(url, field=f"{field_prefix}.url")
@@ -390,6 +395,7 @@ def _accept(
     # recovery="correctable", i.e. exactly what
     # tests/helpers/webhook_credential_refusal.py grades). Keeping a second copy
     # of the rule here would be a place for the two to drift apart.
+
     return ValidatedWebhookRegistration(config=config)
 
 
@@ -403,10 +409,27 @@ def accept_push_notification_primitives(
 ) -> ValidatedWebhookRegistration:
     """Accept a registration already destructured into primitives.
 
-    For the A2A protobuf shape, whose ``authentication`` carries a SINGULAR
-    free-form ``scheme`` string rather than the tool path's ``schemes`` list, and
-    which also carries ``token`` — passed through here so the value keeps it, since
-    the pinned schema requires the seller to echo it verbatim in every payload.
+    THE ONLY ``src/`` CALLER IS THE ADMIN FORM
+    (:mod:`src.admin.blueprints.principals`, the per-principal webhook route),
+    which holds ``request.form`` strings rather than a config-shaped document.
+    This docstring said "for the A2A protobuf shape" and that is no longer true of
+    any caller — a comment that lies about what a function is for is how a defect
+    survives review, and this one hid a real gap for a while: the admin surface
+    registers a STANDING push config, while ``push_notification_config`` is a
+    PER-REQUEST registration whose ``operation_id`` the buyer generates per task
+    invocation (``L3/webhooks.mdx`` :136). So this path cannot supply one, and the
+    rows it writes are refused by the one envelope builder at delivery time.
+    That gap is tracked upstream of this function, not papered over inside it.
+
+    The SHAPE the signature takes is still the flattened one the A2A protobuf used:
+    a SINGULAR free-form ``scheme`` string rather than the tool path's ``schemes``
+    list, plus ``token`` — passed through so the value keeps it, since the pinned
+    schema requires the seller to echo it verbatim in every payload. That shape is
+    why the function exists; the A2A route that once fed it does not.
+
+    It must NOT grow an ``operation_id`` parameter. The value is the buyer's, and
+    an operator typing one would be fabricating a correlation id — which :143
+    forbids as squarely as deriving one from the receiver URL.
 
     The URL gate runs BEFORE the model is built, deliberately: a blocked-but-
     well-formed URL (a metadata address, say) is a valid ``uri`` to pydantic, and
@@ -462,6 +485,110 @@ def _coerce_primitives_to_config(
     return require_push_notification_config(payload, field_prefix=field_prefix)
 
 
+def stored_registration_fields(document: Mapping[str, Any]) -> dict[str, Any]:
+    """Project a STORED webhook document onto the fields the pinned config declares.
+
+    For a sender that has to rebuild a registration out of a document it read
+    back -- a media buy's ``raw_request["reporting_webhook"]``, a workflow step's
+    ``request_data["push_notification_config"]`` -- rather than receiving one
+    through the ingest gate.
+
+    The field set is DERIVED from :class:`PushNotificationConfig`, never listed
+    here. Both callers used to list it, and both listed the same two of the four
+    fields the pinned schema defines::
+
+        registration_config = {"url": url}
+        if document.get("authentication"):
+            registration_config["authentication"] = document["authentication"]
+
+    so ``operation_id`` and ``token`` were dropped on every read. Both carry echo
+    obligations the seller MUST honour (``webhooks.mdx`` :142), and
+    ``operation_id`` is REQUIRED on ``core/mcp-webhook-payload.json``, so dropping
+    it did not degrade the payload -- it made the envelope unbuildable, and
+    ``build_webhook_envelope`` then refused every delivery these two paths
+    attempted. This is the same lossy-projection defect
+    :class:`ValidatedWebhookRegistration` was introduced to delete one level up,
+    reintroduced by the two callers that build the document instead of receiving
+    it.
+
+    Only TRUTHY values are carried, which preserves the ``if
+    document.get("authentication")`` semantics both call sites had exactly: a
+    stored ``authentication: {}`` keeps meaning "no authentication" and keeps
+    delivering unsigned. The gate refuses an empty block, so forwarding one would
+    turn a delivered webhook into a refusal -- a change that needs an owner
+    sign-off (#1802 made one for a legacy scheme) and is not a projection's to
+    make. An empty ``operation_id`` or ``token`` is likewise indistinguishable
+    from an absent one for an echo obligation.
+    """
+    return {field: value for field in PushNotificationConfig.model_fields if (value := document.get(field))}
+
+
+#: The field a reporting registration's correlation value is carried on, named once
+#: because two surfaces answer for it: the scheduler suppresses the stream and
+#: ``get_media_buy_delivery`` flags it, and a field path spelled twice is a field path
+#: that drifts.
+REPORTING_STREAM_ID_FIELD = "reporting_webhook.operation_id"
+
+
+def reporting_stream_id_missing(document: Mapping[str, Any]) -> bool:
+    """Is this stored ``reporting_webhook`` registration unable to carry a correlation id?
+
+    THE REPORTING-PATH CONDITION, and it is deliberately NOT the registration-path
+    one. ``L3/webhooks.mdx`` :652-673 scopes the fail-closed ``MUST NOT``
+    to 3.3 and makes 3.2 opt-in guidance; this seller has adopted the interim
+    agreement, so :666 is the rule it follows: "A registration without a
+    buyer-supplied ID cannot enable this interim delivery path. Flag the missing
+    value for the buyer and suppress scheduled sends; do not fabricate an ID or
+    extract one from the URL."
+
+    So the reporting route does not reject the REGISTRATION the way :141 lets the
+    push-config route reject one. ``core/reporting-webhook.json`` does not define
+    ``operation_id`` at the 3.2 pin — the field rides that schema's
+    ``additionalProperties: true`` — so refusing a ``create_media_buy`` over its
+    absence would refuse a document the published schema accepts. The two sanctioned
+    shapes differ by route and this is the reporting one: accept, then suppress and
+    flag.
+
+    Read off the REGISTRATION DOCUMENT, never off a ``push_notification_config``
+    row that happens to share the URL: :669 says the reporting registration's value
+    "is independent of any task-status ``push_notification_config.operation_id``",
+    so borrowing one would be fabricating a correlation id from the wrong stream.
+    """
+    return not document.get("operation_id")
+
+
+#: Where a media buy's reporting registration is stashed. Named HERE and nowhere else:
+#: ``media_buys.raw_request`` is a persistence document, and a reader that spells its key
+#: inline is a second place that has to be edited when the stash shape moves.
+_STASHED_REPORTING_WEBHOOK = "reporting_webhook"
+
+
+def suppressed_reporting_stream(raw_request: Mapping[str, Any] | None) -> bool:
+    """Does this media buy's stored request register a reporting stream with no id?
+
+    The same question :func:`reporting_stream_id_missing` answers, reached from a media
+    buy's ``raw_request`` rather than from the registration document — for a reader that
+    holds the buy and not the registration.
+
+    It exists so that reader does not have to know where a registration is stashed. That
+    is cohesion and it is also what
+    ``tests/unit/test_architecture_webhook_ingest_validation.py`` enforces: a module
+    under ``src/core/tools/`` that NAMES ``reporting_webhook`` must be built against the
+    ingest gate, because naming the field is how the five hand-rolled
+    pull-the-url-out-and-store-it copies looked. A delivery READ is not an ingest and
+    has no registration to gate, so it asks this package instead of spelling the key and
+    then needing an allowlist row for a gate it has no use for.
+    """
+    registration = (raw_request or {}).get(_STASHED_REPORTING_WEBHOOK)
+    if not registration:
+        # No reporting stream registered at all, so none is suppressed. An early
+        # return rather than an ``and``: the stash is a JSON document, so the read
+        # is typed ``Any | None``, and narrowing it by returning is what makes the
+        # delegation below type-check without a cast.
+        return False
+    return reporting_stream_id_missing(registration)
+
+
 def accept_push_notification_config(
     # The two shapes the tool surfaces actually hold, named: create had a
     # dict, update a typed model, sync either. The signature said `Any`,
@@ -471,6 +598,11 @@ def accept_push_notification_config(
     config: dict[str, Any] | PushNotificationConfig | None,
     *,
     field_prefix: str = "push_notification_config",
+    # The PINNED SCHEMA the buyer's document came from, which decides whether the
+    # correlation-id refusal below applies at all. Defaulted to the push config
+    # because that is what every protocol surface sends; the account-level gate is
+    # the one caller that holds a different pinned shape and says so.
+    declared_by: type[BaseModel] = PushNotificationConfig,
 ) -> ValidatedWebhookRegistration:
     """Accept a config-shaped registration, normalizing model-or-dict ONCE.
 
@@ -490,6 +622,51 @@ def accept_push_notification_config(
     What remains genuinely ours is what the schema does NOT say: the registration
     SSRF gate on the URL, and the refusal of an ``HMAC-SHA256`` registration with no
     usable secret (the schema is silent on both — see the module docstring).
+
+    THE CORRELATION-ID REFUSAL lives here, and this is the one funnel it belongs in.
+    ``operation_id`` is optional on ``core/push-notification-config.json`` and
+    REQUIRED on ``core/mcp-webhook-payload.json``, and ``L3/webhooks.mdx``
+    :143 forbids the one bridge between them ("Sellers MUST NOT derive
+    ``operation_id`` by parsing ``push_notification_config.url``"). So a registration
+    without it names a webhook whose conformant body can never be built, and :141
+    grants the seller the way out it takes here: "Sellers MAY reject a webhook
+    registration that omits ``operation_id`` with ``INVALID_REQUEST``."
+
+    The alternative is why. Without this, the registration is accepted, every later
+    delivery is refused by the one envelope builder
+    (:func:`src.core.webhooks.delivery.build_webhook_envelope`), and both senders log
+    that refusal and continue -- so the buyer registers a webhook, receives a success,
+    and is never told that nothing will ever arrive on it. PERMANENT SILENCE, with the
+    seller's own reason in a log line the buyer cannot read.
+
+    WHY NOT IN ``_accept``, the shared gate body. Two other registration shapes reach
+    that body and the rule is wrong for both, which was MEASURED rather than reasoned:
+    written there, it failed ``test_notification_config_gate_accepts_authentication``.
+
+    * An ACCOUNT-LEVEL subscription (``core/notification-config.json``) is routed
+      through this very function by ``accounts._check_notification_configs``, because
+      its ``url`` and ``authentication`` carry the same contract in the pin's own
+      words. But that schema declares NO ``operation_id`` -- so there is nothing for
+      its buyer to supply, and refusing one would reject every conformant
+      subscription. ``declared_by.model_fields`` is the pin's own answer to "does this
+      shape carry a correlation id", so that caller passes its own type and the rule
+      skips itself. A hand-written "push only" condition would be a second opinion
+      about a pinned field set, which is the 2-of-4 field list this module exists to
+      delete, one level up.
+    * The ADMIN registration form reaches ``_accept`` through
+      :func:`accept_push_notification_primitives`, which has no ``operation_id``
+      parameter -- and must not grow one. The value is the BUYER's, generated per task
+      invocation (:141: "Buyers SHOULD supply ``operation_id`` ... and generate a
+      unique value per task invocation"), and an operator typing one would be
+      fabricating a correlation id, which :143 forbids as squarely as reading one off
+      the URL. So an admin-registered push config cannot carry one, and refusing it
+      for the omission would break the form while fixing nothing. What that surface
+      produces instead is a stored row the sender refuses, and the refusal now has an
+      enumerable record (``context_manager._log_webhook_refusal``) -- which is the
+      honest answer when there is no buyer on the call. That the admin surface can
+      register a task-notification webhook no conformant envelope can be built for is
+      a REAL GAP, reported rather than papered over: closing it means that surface
+      registering something other than a per-task push config.
     """
     coerced = to_push_notification_config(config, field_prefix=field_prefix)
     if coerced is None:
@@ -497,4 +674,24 @@ def accept_push_notification_config(
             field=field_prefix,
             details=ValidationDetails(received_type=type(config).__name__),
         )
-    return _accept(config=coerced, field_prefix=field_prefix)
+    # THE URL GATE RUNS FIRST, and the order is load-bearing rather than incidental.
+    # ``_accept`` opens with the registration SSRF gate, so letting the correlation
+    # check jump ahead of it means an UNSAFE DESTINATION gets refused for a missing
+    # ``operation_id`` instead of for being unsafe — the buyer is told to add a
+    # correlation id to a webhook pointed at a blocked address, and the security
+    # verdict never reaches them. Measured, not foreseen: writing the check above this
+    # line reddened
+    # ``test_protocol_webhook_ssrf.py::test_sync_creatives_rejects_unsafe_push_config_url``,
+    # which builds a raw dict with an unsafe URL and no ``operation_id`` and grades
+    # ``.url``. The egress scenarios did not catch it because
+    # ``PushNotificationConfigRequestFactory`` defaults ``operation_id``, so their
+    # documents are only wrong in one way.
+    #
+    # An unsafe destination is refused unconditionally; an absent correlation id is a
+    # lesser, correctable omission. So the value is BUILT first — which is what runs
+    # the URL half — and the correlation rule applies to a registration that already
+    # cleared it.
+    registration = _accept(config=coerced, field_prefix=field_prefix)
+    if "operation_id" in declared_by.model_fields and not coerced.operation_id:
+        raise AdCPInvalidRequestError(field=f"{field_prefix}.operation_id")
+    return registration

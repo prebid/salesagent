@@ -11,7 +11,7 @@ import pytest
 from pydantic import ValidationError
 
 from src.core.config import get_pydantic_extra_mode
-from src.core.schemas.pricing import _MEMBER_TYPES, CpmPricingOption, PricingOption
+from src.core.schemas.pricing import _MEMBER_TYPES, CpmPricingOption, PricingOptionAdapter
 
 
 def _cpm_kwargs(**overrides):
@@ -73,21 +73,19 @@ class TestInternalAnnotationsStayOffTheWire:
         assert local == sdk
 
 
-class TestWrapperCoercion:
-    def test_kwargs_construct_local_member(self):
-        wrapped = PricingOption(**_cpm_kwargs())
-        assert type(wrapped.root) is CpmPricingOption
-        assert wrapped.fixed_price == 5.0  # proxied attribute access
-
-    def test_local_member_instance_passes_through_by_identity(self):
-        member = CpmPricingOption(**_cpm_kwargs())
-        assert PricingOption(member).root is member
-
-    # The two tests that lived here graded a coercion that no longer exists: an SDK member
-    # instance and the SDK's own wrapper were each revalidated into a local member by a
-    # mode="before" validator that dumped them. The validator is deleted, so an SDK instance
-    # is refused instead of coerced, and a test asserting the coercion would be asserting
-    # against the rule. The refusal is graded below.
+class TestTheUnionRefusesAnSdkInstance:
+    # Two tests here graded a local ``RootModel`` wrapper over the union: that kwargs
+    # reached the CPM member through it and that a member instance passed through it by
+    # identity. The wrapper is DELETED -- ``Product.pricing_options`` is typed with the
+    # arms, so nothing ever held one and no call site ever read ``.root`` off one -- and a
+    # test of its construction would be a test of a class the repo does not have.
+    #
+    # Two earlier ones graded a coercion that no longer exists: an SDK member instance and
+    # the SDK's own wrapper were each revalidated into a local member by a mode="before"
+    # validator that dumped them. That validator is deleted too, so an SDK instance is
+    # refused instead of coerced. The refusal is what is still live, and it is below --
+    # asserted through the union VALIDATOR, which is what the runtime malformation gate
+    # holds and therefore the object production actually validates against.
 
     def test_sdk_instance_is_refused_rather_than_coerced(self):
         """An SDK-typed member is not a local member, and nothing converts it.
@@ -100,9 +98,9 @@ class TestWrapperCoercion:
         refusing the instance outright -- the test passed either way and could not tell
         which mechanism it had exercised.
 
-        What actually holds is stronger and is asserted by TYPE: the root is a discriminated
-        union over the LOCAL members, so an SDK instance fails the union's instance check
-        with ``model_type``. That check precedes any extra handling, which is why extras are
+        What actually holds is stronger and is asserted by TYPE: the union is discriminated
+        over the LOCAL members, so an SDK instance fails its instance check with
+        ``model_type``. That check precedes any extra handling, which is why extras are
         irrelevant here and why the refusal does not depend on the extra mode -- the
         undeclared field cannot leak because the object carrying it is never admitted.
         """
@@ -112,7 +110,7 @@ class TestWrapperCoercion:
         for kwargs in (_cpm_kwargs(), _cpm_kwargs(rate=5.0)):
             sdk_member = LibraryCpmPricingOption(**kwargs)
             with pytest.raises(ValidationError) as exc_info:
-                PricingOption(sdk_member)
+                PricingOptionAdapter.validate_python(sdk_member)
             assert [e["type"] for e in exc_info.value.errors()] == ["model_type"], (
                 f"expected the union to refuse the SDK instance, got {exc_info.value.errors()}"
             )
@@ -161,10 +159,20 @@ class TestProductIntegration:
             is_custom=False,
         )
 
-    def test_product_wraps_options_in_local_wrapper(self):
+    def test_product_holds_the_local_members_not_a_wrapper(self):
+        """``Product.pricing_options`` validates into the LOCAL member class.
+
+        It used to validate into the local ``PricingOption`` RootModel wrapper, because
+        the SDK's own field held that wrapper and the local one subclassed it. adcp 9
+        deletes the wrapper (the fix for adcp-client-python#1077) and types the field as
+        the arms, so holding a wrapper here would RESHAPE the parent instead of narrowing
+        it. What still matters, and is what this asserts, is that the element is the LOCAL
+        subclass -- that is what carries this seller's extra policy and the derived
+        ``is_fixed``, which an SDK member would not.
+        """
         product = self._product([_cpm_kwargs()])
-        assert type(product.pricing_options[0]) is PricingOption
-        assert type(product.pricing_options[0].root) is CpmPricingOption
+        assert type(product.pricing_options[0]) is CpmPricingOption
+        assert product.pricing_options[0].is_fixed is True
 
     def test_product_wire_pricing_options_exact_shape(self):
         """A nested option reaches the wire as exactly the pinned dict, no local extras.
@@ -173,8 +181,8 @@ class TestProductIntegration:
         onto the inner member, to grade that the get_products annotation path never
         reached the buyer. Those fields and that path are both deleted, so the write is
         gone; the exact-dict assertion is kept because it grades something else that is
-        live -- the nested member re-serializing through its own serializer inside the
-        PricingOption wrapper inside Product (critical pattern #4).
+        live -- the nested member re-serializing through its own serializer inside Product
+        (critical pattern #4).
         """
         product = self._product([_cpm_kwargs()])
 

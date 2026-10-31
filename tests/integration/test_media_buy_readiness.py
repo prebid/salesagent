@@ -11,6 +11,7 @@ from sqlalchemy import delete
 from src.admin.services.media_buy_readiness_service import MediaBuyReadinessService
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Creative, CreativeAssignment, MediaBuy, Principal, Tenant
+from tests.factories import stamp_format_identity
 from tests.factories.principal import plaintext_token_for
 from tests.utils.database_helpers import vhost_for
 
@@ -214,11 +215,10 @@ class TestMediaBuyReadinessService:
                 tenant_id=test_tenant,
                 principal_id=test_principal,
                 name="Approved Creative",
-                agent_url="https://test-agent.example.com",
-                format="display_300x250",
                 status="approved",
                 data={},
             )
+            stamp_format_identity(creative, format_id="display_300x250")
             session.add(creative)
 
             # Create assignment
@@ -278,11 +278,10 @@ class TestMediaBuyReadinessService:
                 tenant_id=test_tenant,
                 principal_id=test_principal,
                 name="Live Creative",
-                agent_url="https://test-agent.example.com",
-                format="display_300x250",
                 status="approved",
                 data={},
             )
+            stamp_format_identity(creative, format_id="display_300x250")
             session.add(creative)
 
             # Create assignment

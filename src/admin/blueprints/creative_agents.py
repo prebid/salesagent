@@ -10,6 +10,7 @@ from src.admin.utils.audit_decorator import log_admin_action
 from src.admin.utils.url_policy import redirect_if_url_blocked
 from src.core.database.database_session import get_db_session
 from src.core.database.models import CreativeAgent, Tenant
+from src.core.database.repositories.uow import TenantConfigUoW
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +62,31 @@ def list_creative_agents(tenant_id):
         logger.error(f"Error loading creative agents: {e}", exc_info=True)
         flash("Error loading creative agents", "error")
         return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id))
+
+
+@creative_agents_bp.route("/default-agent", methods=["POST"])
+@log_admin_action("update_default_creative_agent")
+@require_tenant_access()
+def update_default_creative_agent(tenant_id):
+    """Turn this seller's federation of the AdCP standard creative agent on or off.
+
+    Off, the seller's format catalog and its ``creative_agents`` referrals list only the
+    agents configured on this page (``tenants.use_default_creative_agent``).
+    """
+    use_default = request.form.get("use_default_creative_agent") == "on"
+    with TenantConfigUoW(tenant_id) as uow:
+        assert uow.tenant_config is not None
+        if not uow.tenant_config.update_tenant(use_default_creative_agent=use_default):
+            flash("Tenant not found", "error")
+            return redirect(url_for("core.index"))
+
+    flash(
+        "The AdCP standard creative agent is now listed"
+        if use_default
+        else "The AdCP standard creative agent is no longer listed",
+        "success",
+    )
+    return redirect(url_for("creative_agents.list_creative_agents", tenant_id=tenant_id))
 
 
 @creative_agents_bp.route("/add", methods=["GET", "POST"])

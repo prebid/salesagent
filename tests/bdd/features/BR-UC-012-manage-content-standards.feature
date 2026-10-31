@@ -34,7 +34,7 @@ Feature: BR-UC-012 Manage Content Standards
     And the request context is echoed in the response
     # POST-S3: Buyer discovers all content standards matching scope filters
     # POST-S6: Application context echoed unchanged
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/content-standards/list-content-standards-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/content-standards/list-content-standards-request.json
 
     Examples:
       | transport |
@@ -59,7 +59,7 @@ Feature: BR-UC-012 Manage Content Standards
     And the request context is echoed in the response
     # POST-S1: Buyer has created standard and knows standards_id
     # POST-S6: Application context echoed
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/content-standards/list-content-standards-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/content-standards/list-content-standards-request.json
 
     Examples:
       | transport |
@@ -73,7 +73,7 @@ Feature: BR-UC-012 Manage Content Standards
     Then the response contains a generated standards_id
     And both the bespoke policy "no_violence" and the registry policy "iab:hate-speech" are recorded as governance for the standard
     # BR-RULE-256 INV-5: both channels present -> both evaluated, neither overrides
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/content-standards/list-content-standards-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/content-standards/list-content-standards-request.json
 
   @T-UC-012-legacy-policy-rejected @create @governance @error @partition @post-f2 @post-f3
   Scenario: Create content standard - legacy singular policy string is not recognized as governance in v3.1
@@ -85,7 +85,7 @@ Feature: BR-UC-012 Manage Content Standards
     And the error should include "suggestion"
     # BR-RULE-256 INV-7: v3.0 singular `policy` string no longer recognized; governance must use policies[]/registry_policy_ids[]
     # With no policies[]/registry_policy_ids[], the v3.1 create-request anyOf (INV-1) is unsatisfied → rejection
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/content-standards/list-content-standards-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/content-standards/list-content-standards-request.json
 
   @T-UC-012-ext-b-get @get @happy-path @post-s2 @post-s6
   Scenario: Get content standard by ID - returns full configuration
@@ -94,7 +94,7 @@ Feature: BR-UC-012 Manage Content Standards
     Then the response contains the full content standard including standards_id, name, scope, policies, and calibration_exemplars
     And the request context is echoed in the response
     # POST-S2: Buyer retrieves full content standard by ID
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/content-standards/list-content-standards-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/content-standards/list-content-standards-request.json
 
   @T-UC-012-get-pricing-options @get @pricing-options @partition @boundary
   Scenario: Get content standard - response includes pricing_options when seller provides them
@@ -116,7 +116,7 @@ Feature: BR-UC-012 Manage Content Standards
     # Response uses oneOf success branch: {"success": true, "standards_id": "..."}
     # POST-S4: Buyer updated content standard (new version)
     # POST-S6: Context echoed
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/content-standards/list-content-standards-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/content-standards/list-content-standards-request.json
 
     Examples:
       | transport |
@@ -130,7 +130,7 @@ Feature: BR-UC-012 Manage Content Standards
     Then the response success field is true
     And the policies remain [{"policy_id": "keep", "enforcement": "must", "policy": "Keep this policy"}]
     # BR-RULE-066 INV-2: Unchanged fields carried forward
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/content-standards/list-content-standards-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/content-standards/list-content-standards-request.json
 
   @T-UC-012-update-no-changes @update @edge-case @partition
   Scenario: Update content standard - no fields changed still returns success branch
@@ -189,7 +189,7 @@ Feature: BR-UC-012 Manage Content Standards
     And the response conforms to the success branch of update-content-standards-response oneOf
     # Response schema: oneOf success branch requires ["success", "standards_id"]
     # BR-RULE-066 INV-3: success returns same standards_id
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/content-standards/list-content-standards-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/content-standards/list-content-standards-request.json
 
   @T-UC-012-update-error-branch @update @oneOf @error @post-f1 @post-f2
   Scenario: Update response error branch requires success:false and errors array (minItems:1)
@@ -224,7 +224,7 @@ Feature: BR-UC-012 Manage Content Standards
     # BR-RULE-067 INV-2: Unreferenced → deleted with versions and exemplars
     # POST-S5: Buyer deleted obsolete standard
     # POST-S6: Context echoed
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/content-standards/list-content-standards-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/content-standards/list-content-standards-request.json
 
   @T-UC-012-delete-in-use @delete @in-use @error @ext-g @post-f1 @post-f2 @post-f3
   Scenario: Delete content standard - blocked when referenced by active media buy
@@ -324,7 +324,7 @@ Feature: BR-UC-012 Manage Content Standards
     # BR-RULE-063 INV-2,3: No token or invalid token → rejected
     # BR-RULE-063 INV-4: All five operations enforce identical auth
     # POST-F2: Buyer knows what failed
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/content-standards/list-content-standards-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/content-standards/list-content-standards-request.json
 
     Examples:
       | operation                |
@@ -410,7 +410,7 @@ Feature: BR-UC-012 Manage Content Standards
     And error.details.policy_id is present and is a string
     And error.details.violated_rules is a non-empty array of strings
     And error.details.policy_url, when present, is an absolute URI
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/content-standards/list-content-standards-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/content-standards/list-content-standards-request.json
 
   @T-UC-012-conflict-details-shape @conflict @error-details @schema @post-f4
   Scenario: CONFLICT error on update carries conflict details (resource_id, expected_version, current_version)
@@ -422,7 +422,7 @@ Feature: BR-UC-012 Manage Content Standards
     And error.details.expected_version reflects the version the client sent
     And error.details.current_version reflects the server's current version
     # Buyer can re-read the resource at current_version and retry
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/content-standards/list-content-standards-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/content-standards/list-content-standards-request.json
 
   @T-UC-012-escalation-severity-enum @escalation @enum @governance @partition
   Scenario Outline: Governance escalation severity must be one of info|warning|critical

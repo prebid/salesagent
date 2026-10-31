@@ -5,7 +5,7 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-# adcp 3.6.0: BrandManifest removed from CreateMediaBuyRequest; now uses BrandReference (brand field)
+# the pinned SDK: BrandManifest removed from CreateMediaBuyRequest; now uses BrandReference (brand field)
 from pydantic import Field
 
 from src.adapters.base import (
@@ -34,12 +34,14 @@ from src.core.exceptions import (
     AdCPCreativeRejectedError,
     AdCPMediaBuyNotFoundError,
     AdCPMediaBuyRejectedError,
+    AdCPPackageNotFoundError,
     AdCPServiceUnavailableError,
     AdCPValidationError,
 )
 from src.core.helpers.brand_key import brand_key_parts
 from src.core.schemas import (
     AdapterGetMediaBuyDeliveryResponse,
+    AffectedPackage,
     AssetStatus,
     CheckMediaBuyStatusResponse,
     DeliveryTotals,
@@ -51,14 +53,23 @@ from src.core.security.webhook_egress import deliver_webhook
 from src.core.validation_helpers import package_field_path
 
 
-def simulate_breakdowns(impressions: float, spend: float) -> tuple[list[dict], list[dict]]:
-    """Return deterministic geo + device_type splits for mock delivery data.
+def simulate_breakdowns(impressions: float, spend: float) -> tuple[list[dict], list[dict], list[dict]]:
+    """Return deterministic geo + device_type + placement splits for mock delivery data.
 
     Weights are distinct and descending so sort/truncation behaviour is
     verifiable in tests.  Real adapters replace this with actual platform data.
 
+    THE PLACEMENT SPLIT LIVES HERE RATHER THAN IN THE DELIVERY TOOL. It used to be
+    synthesized inside ``_build_placement_breakdown`` whenever an adapter reported no
+    per-placement rows, which gave the sort tests their multi-row input at the cost of
+    returning three invented placement ids to every real tenant's buyers. Supplying it
+    from the mock adapter puts the test input in a fixture and leaves the production path
+    reporting only what an ad server actually said. ``clicks`` is populated for the same
+    reason it was before -- so ``sort_by=clicks`` is a substantive ordering rather than a
+    vacuous all-null sort -- but now only for a tenant that chose the mock adapter.
+
     Returns:
-        (geo, device_type) — lists of raw dicts ready for AdapterPackageDelivery.
+        (geo, device_type, placement) — raw dicts ready for AdapterPackageDelivery.
     """
     device_type = [
         {"device_type": "mobile", "impressions": impressions * 0.50, "spend": spend * 0.50},
@@ -76,7 +87,16 @@ def simulate_breakdowns(impressions: float, spend: float) -> tuple[list[dict], l
         }
         for geo_code, weight in zip(_geo_codes, _geo_weights, strict=False)
     ]
-    return geo, device_type
+    placement = [
+        {
+            "placement_id": placement_id,
+            "impressions": impressions * weight,
+            "spend": spend * weight,
+            "clicks": round(impressions * weight * 0.01, 4),
+        }
+        for weight, placement_id in ((0.5, "plc_a"), (0.3, "plc_b"), (0.2, "plc_c"))
+    ]
+    return geo, device_type, placement
 
 
 class MockConnectionConfig(BaseConnectionConfig):
@@ -344,7 +364,20 @@ class MockAdServer(AdServerAdapter):
         test_behavior = self._read_test_behavior()
         if not test_behavior.get(flag):
             return
-        from src.core.exceptions import AdCPAdapterError, AdCPConfigurationError, AdCPValidationError
+        from src.core.exceptions import (
+            AdCPAdapterError,
+            AdCPConfigurationError,
+            AdCPRateLimitError,
+            AdCPValidationError,
+        )
+
+        # A throttled ad server is its own fault, not a recovery class: RATE_LIMITED shares
+        # ``transient`` with SERVICE_UNAVAILABLE, so the recovery knob below cannot select it.
+        # The knob carries the wait the ad server named, which the buyer receives as
+        # ``retry_after``.
+        rate_limit_retry_after = test_behavior.get("rate_limit_retry_after")
+        if rate_limit_retry_after is not None:
+            raise AdCPRateLimitError(retry_after=int(rate_limit_retry_after))
 
         # The injected knob selects a CLASS, not a recovery value. ``recovery`` is
         # derived from the wire code now, so "give me a terminal failure" is
@@ -620,7 +653,7 @@ class MockAdServer(AdServerAdapter):
 
         # Keyword-based test orchestration (check brand.domain for test instructions)
         # Keywords: [REJECT:reason], [DELAY:N], [ASYNC], [HITL:Nm:outcome], [ERROR:msg], [QUESTION:text]
-        # adcp 3.6.0: brand_manifest → brand (BrandReference with domain field)
+        # the pinned SDK: brand_manifest → brand (BrandReference with domain field)
         scenario = None
         test_message = None
         if request.brand:
@@ -990,7 +1023,7 @@ class MockAdServer(AdServerAdapter):
             self.log("   Manual completion required - use complete_task tool")
 
         # Return pending status for all assets
-        return [AssetStatus(creative_id=asset["id"], status="pending") for asset in assets]
+        return [AssetStatus(creative_id=asset["creative_id"], status="pending") for asset in assets]
 
     def associate_creatives(self, line_item_ids: list[str], platform_creative_ids: list[str]) -> list[dict[str, Any]]:
         """Associate already-uploaded creatives with line items (mock simulation)."""
@@ -1043,7 +1076,7 @@ class MockAdServer(AdServerAdapter):
                 approved_assets.append(asset)
             else:
                 rejected_assets.append((asset, rejection_reason))
-                asset_id = asset.get("id", "unknown")
+                asset_id = asset.get("creative_id", "unknown")
                 self.log(f"❌ Creative {asset_id} rejected: {rejection_reason}")
 
         if rejected_assets and not approved_assets:
@@ -1057,7 +1090,7 @@ class MockAdServer(AdServerAdapter):
         elif rejected_assets:
             # Some rejected - log warnings but continue with approved ones
             for asset, reason in rejected_assets:
-                self.log(f"⚠️ Creative {asset['id']} rejected: {reason}")
+                self.log(f"⚠️ Creative {asset['creative_id']} rejected: {reason}")
 
         # Continue with immediate processing for approved assets
         self.log(f"✅ SYNC delay completed, proceeding with {len(approved_assets)} approved creatives")
@@ -1069,14 +1102,33 @@ class MockAdServer(AdServerAdapter):
         """Add creative assets immediately (original behavior)."""
         from src.adapters.test_scenario_parser import has_test_keywords, parse_test_scenario
 
-        # Log operation
+        # Log operation. ``assets`` is the receipt: the dicts this ad server was HANDED,
+        # recorded whole rather than counted.
+        #
+        # A count cannot answer the one question an audit trail of a creative push exists to
+        # answer. Several fields of an uploaded asset appear in NO response the buyer ever
+        # sees -- the click destination is the plain case, which is why losing it is silent
+        # (the buy succeeds and the line item ships unclickable). With only
+        # ``creative_count`` here, neither the buyer nor the seller can establish after the
+        # fact what was sent, and the in-memory ``_media_buys[...]["creatives"]`` record
+        # below dies with the process.
+        #
+        # It is also what makes the push observable across a process boundary, which is how
+        # the e2e harness grades it: ``MediaBuyCreateEnv.uploaded_adapter_assets`` reads the
+        # adapter's own mock in-process and this row on the live stack, where the adapter
+        # runs inside the server container. Same fact, two sources, one assertion.
+        #
+        # KNOWN CEILING: the whole asset list goes into one JSON column, so a push of very
+        # many creatives writes a large row. Unbounded deliberately -- a truncated receipt
+        # is the failure mode this replaces -- and acceptable because this is the mock ad
+        # server. A real adapter wanting the same record should bound it.
         self.audit_logger.log_operation(
             operation="add_creative_assets",
             principal_name=self.principal.name,
             principal_id=self.principal.principal_id,
             adapter_id=self.adapter_principal_id or "unknown",
             success=True,
-            details={"media_buy_id": media_buy_id, "creative_count": len(assets)},
+            details={"media_buy_id": media_buy_id, "creative_count": len(assets), "assets": assets},
         )
 
         self.log(
@@ -1104,7 +1156,7 @@ class MockAdServer(AdServerAdapter):
                 if scenario.should_reject:
                     reason = scenario.rejection_reason or "Test rejection"
                     self.log(f"   ❌ Rejecting creative '{creative_name}' - {reason}")
-                    results.append(AssetStatus(creative_id=asset["id"], status="rejected"))
+                    results.append(AssetStatus(creative_id=asset["creative_id"], status="rejected"))
                     continue
 
                 # Handle creative-specific actions
@@ -1115,15 +1167,15 @@ class MockAdServer(AdServerAdapter):
 
                     if action_type == "ask_for_field":
                         self.log(f"   ❓ Asking for field in creative '{creative_name}' - {reason}")
-                        results.append(AssetStatus(creative_id=asset["id"], status="pending"))
+                        results.append(AssetStatus(creative_id=asset["creative_id"], status="pending"))
                         continue
                     elif action_type == "approve":
                         self.log(f"   ✅ Approving creative '{creative_name}'")
-                        results.append(AssetStatus(creative_id=asset["id"], status="approved"))
+                        results.append(AssetStatus(creative_id=asset["creative_id"], status="approved"))
                         continue
 
             # Default behavior - auto-approve
-            results.append(AssetStatus(creative_id=asset["id"], status="approved"))
+            results.append(AssetStatus(creative_id=asset["creative_id"], status="approved"))
 
         return results
 
@@ -1307,7 +1359,7 @@ class MockAdServer(AdServerAdapter):
                         package_spend = spend / len(packages) if packages else spend
                         package_impressions = int(impressions / len(packages) if packages else impressions)
 
-                    simulated_geo, simulated_device_type = simulate_breakdowns(
+                    simulated_geo, simulated_device_type, simulated_placement = simulate_breakdowns(
                         float(package_impressions), float(package_spend)
                     )
 
@@ -1318,6 +1370,7 @@ class MockAdServer(AdServerAdapter):
                             spend=package_spend,
                             by_geo=simulated_geo,
                             by_device_type=simulated_device_type,
+                            by_placement=simulated_placement,
                         )
                     )
 
@@ -1392,7 +1445,41 @@ class MockAdServer(AdServerAdapter):
         budget: int | None,
         today: datetime,
     ) -> AdapterUpdateResult:
-        """Update media buy in database (Mock adapter implementation)."""
+        """Apply the update in the simulated ad server and report the package it changed.
+
+        ``affected_packages`` is a graded field, not bookkeeping: 3.2.1
+        ``media-buy/update-media-buy-response.json``
+        (``/oneOf/0/properties/affected_packages``) calls it "full Package objects
+        showing complete post-update state for each modified package ... a state
+        snapshot, not a sparse delta: sellers MUST NOT return package_id-only stubs",
+        and permits the empty array only for "campaign-level updates that do not modify
+        packages". This method used to return ``[]`` unconditionally — including out of
+        the branch that had just rewritten a package's budget.
+
+        The mock's simulated ad server IS the stored package: ``paused`` in
+        ``package_config`` is what ``get_media_buys`` serves back (``media_buy_list.py:343``).
+        The two package-level actions report that package, and the actions that touch no
+        package report the empty array the pin permits, because for them it is true:
+
+        * ``update_package_budget`` — writes NOTHING and reports that package with the
+          budget it was called with. The update tool writes ``media_packages.budget``
+          inside the request's unit of work after this call returns, so the write rolls
+          back with a later refusal; a second write here, committed in its own session,
+          survived that rollback and could store a different value (``budget`` arrives
+          as an ``int``).
+        * ``pause_package`` / ``resume_package`` — write ``paused``, report that package.
+          Nothing recorded a package's pause state on update before this (no update path
+          under ``src/`` wrote ``package_config["paused"]``), so a pause neither stuck nor
+          could be reported; GAM, Kevel and Broadstreet all report the resulting state
+          here, and the mock was the one adapter that did not.
+        * ``pause_media_buy`` / ``resume_media_buy`` — the tool persists the buy's own
+          ``is_paused``; no package record changes, so ``[]``. The pin's own worked example
+          for a campaign-level ``paused: true`` returns exactly that
+          (``update_media_buy.mdx`` § Response Patterns).
+        * the order-lifecycle actions (``activate_order``, ``submit_for_approval``,
+          ``approve_order``, ``archive_order``) and ``update_package_impressions``, which
+          the mock does not model — no package record changes, so ``[]``.
+        """
         import logging
 
         from sqlalchemy.orm import attributes
@@ -1407,24 +1494,56 @@ class MockAdServer(AdServerAdapter):
         # Check DB-driven test_behavior (injected by BDD Given steps for E2E)
         self._raise_injected_failure("fail_on_update")
 
-        with get_db_session() as session:
-            if action == "update_package_budget" and package_id and budget is not None:
-                repo = MediaBuyRepository(session, self.tenant_id)
-                media_package = repo.get_package(media_buy_id, package_id)
-                if media_package:
-                    # Update budget in package_config JSON
-                    media_package.package_config["budget"] = float(budget)
-                    # Flag the JSON field as modified so SQLAlchemy persists it
-                    attributes.flag_modified(media_package, "package_config")
-                    session.commit()
-                    logger.info(f"[MockAdapter] Updated package {package_id} budget to {budget} in database")
-                else:
-                    logger.warning(f"[MockAdapter] Package {package_id} not found for media buy {media_buy_id}")
+        # One place decides which package this action reports and whether the mock writes
+        # its pause state, so the write and the report below cannot disagree.
+        paused_value: bool | None = None
+        if action == "update_package_budget" and package_id and budget is not None:
+            changed_package_id = package_id
+        elif action in ("pause_package", "resume_package") and package_id:
+            changed_package_id = package_id
+            paused_value = action == "pause_package"
+        else:
+            return AdapterUpdateResult(media_buy_id=media_buy_id, affected_packages=[])
 
-        return AdapterUpdateResult(
-            media_buy_id=media_buy_id,
-            affected_packages=[],
-        )
+        with get_db_session() as session:
+            repo = MediaBuyRepository(session, self.tenant_id)
+            media_package = repo.get_package(media_buy_id, changed_package_id)
+            if media_package is None:
+                # A refusal, not a logged warning followed by a successful-looking result:
+                # the three real adapters all raise AdCPPackageNotFoundError for this exact
+                # condition (google_ad_manager.py:1289, kevel.py:461,
+                # broadstreet/adapter.py:620), the tool's budget path already pre-checks it
+                # with get_package_or_raise and raises the same code, and reporting success
+                # for a package that does not exist is the quiet failure CLAUDE.md bans.
+                raise AdCPPackageNotFoundError(
+                    details=EntityRefDetails(package_id=changed_package_id, media_buy_id=media_buy_id)
+                )
+
+            if paused_value is not None:
+                media_package.package_config["paused"] = paused_value
+                # Flag the JSON field as modified so SQLAlchemy persists it
+                attributes.flag_modified(media_package, "package_config")
+                session.commit()
+                logger.info(f"[MockAdapter] Set package {changed_package_id} paused to {paused_value}")
+
+            return AdapterUpdateResult(
+                media_buy_id=media_buy_id,
+                affected_packages=[
+                    AffectedPackage(
+                        package_id=changed_package_id,
+                        # Read off the record, never a plausible default: a budget update
+                        # reports the pause state the package really has, and a pause
+                        # reports the value this call stored.
+                        paused=bool(media_package.package_config.get("paused", False)),
+                        # A budget update reports the budget it was called with (the tool
+                        # writes the record); a pause reports the stored one.
+                        budget=float(budget)
+                        if budget is not None
+                        else (float(media_package.budget) if media_package.budget is not None else None),
+                        product_id=media_package.package_config.get("product_id"),
+                    )
+                ],
+            )
 
     def get_config_ui_endpoint(self) -> str | None:
         """Return the URL path for the mock adapter's configuration UI."""
@@ -1484,26 +1603,14 @@ class MockAdServer(AdServerAdapter):
                             },
                         }
 
-                        # Handle format selection
-                        formats = request.form.getlist("formats")
-                        if formats:
-                            product_obj.format_ids = formats
-
                         # Validate the configuration
                         validation_errors = self.validate_product_config(new_config)
                         if validation_errors:
-                            # Get formats for re-rendering
-                            from src.admin.blueprints.products import get_creative_formats
-
-                            available_formats = get_creative_formats(tenant_id=tenant_id)
-
                             return render_template(
                                 "adapters/mock_product_config.html",
                                 tenant_id=tenant_id,
                                 product=product,
                                 config=config,
-                                formats=available_formats,
-                                selected_formats=product_obj.format_ids or [],
                                 error=validation_errors[0],
                             )
 
@@ -1511,33 +1618,21 @@ class MockAdServer(AdServerAdapter):
                         product_obj.implementation_config = new_config
                         session.commit()
 
-                        # Get formats for success page
-                        from src.admin.blueprints.products import get_creative_formats
-
-                        available_formats = get_creative_formats(tenant_id=tenant_id)
-
                         return render_template(
                             "adapters/mock_product_config.html",
                             tenant_id=tenant_id,
                             product=product,
                             config=new_config,
-                            formats=available_formats,
-                            selected_formats=product_obj.format_ids or [],
                             success=True,
                         )
 
-                    # GET request - fetch available formats from creative agents
-                    from src.admin.blueprints.products import get_creative_formats
-
-                    available_formats = get_creative_formats(tenant_id=tenant_id)
-
+                    # Formats are not authored here: the product form authors the canonical
+                    # format_options, and format_ids is derived from them.
                     return render_template(
                         "adapters/mock_product_config.html",
                         tenant_id=tenant_id,
                         product=product,
                         config=config,
-                        formats=available_formats,
-                        selected_formats=product_obj.format_ids or [],
                     )
 
             return wrapped_view()

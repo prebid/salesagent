@@ -216,7 +216,12 @@ jobs:
     # tests) on top of agent pull + compose build + migrations + TLS. That
     # exceeds 15m on its own. A ceiling is not a wait — the four host-path groups
     # still finish in minutes and are unaffected by the higher bound.
-    timeout-minutes: 35
+    # When the pin-keyed ghcr image cannot be pulled (a pin no main run has published
+    # yet, or a pull request whose token cannot read the package), the agent is built
+    # from source first: 11m on a hosted runner for adcp@8d1d3244b2ef. 35m then ran out
+    # mid-suite, so the ceiling covers the source build as well. Measured with that
+    # build and three workers: 17m to a healthy stack, 26m of pytest, 43m in all.
+    timeout-minutes: 75
     strategy:
       fail-fast: false
       matrix:
@@ -303,7 +308,11 @@ jobs:
       # wall-clock note on salesagent-2xnqw.
       - name: Run integration suite in-network
         if: matrix.group == 'creative'
-        run: ./run_all_tests.sh integration
+        timeout-minutes: 60
+        run: |
+          sudo fallocate -l 8G /ci-swapfile && sudo chmod 600 /ci-swapfile
+          sudo mkswap /ci-swapfile && sudo swapon /ci-swapfile
+          ./run_all_tests.sh integration
         env:
           DOCKER_BUILDKIT: 1
           COMPOSE_DOCKER_CLI_BUILD: 1
@@ -312,6 +321,22 @@ jobs:
           # The dedicated Security Audit check owns the uv-secure scan; letting
           # it run here would fail this job on an unrelated gate.
           RUN_ALL_SKIP_AUDIT: 1
+          # A hosted runner has 16 GiB and 3 GiB of swap. Measured in-network with
+          # run_all_tests.sh's default of 4 workers: each worker ~1.4 GiB and
+          # growing, both app servers ~1.8 GiB, the nested BDD/storyboard pytest
+          # runs ~1 GiB each, and harden-runner's agent climbing past 2 GiB; RAM
+          # and swap were exhausted 16 minutes into the suite and the runner was
+          # shut down. Three workers plus the swapfile above finished it with swap
+          # peaking at 5.5 of 11 GiB.
+          INTEGRATION_XDIST_N: 3
+      # On a failed run, run_all_tests.sh saves every container's log beside the
+      # reports under test-results/innet_*/ (as in bdd-in-network below).
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: failure() && matrix.group == 'creative'
+        with:
+          name: integration-in-network-results
+          path: test-results/innet_*/
+          if-no-files-found: warn
       - name: Cleanup Docker services
         if: always() && matrix.group == 'creative'
         run: docker compose -f docker-compose.e2e.yml down -v 2>/dev/null || true
@@ -438,6 +463,15 @@ jobs:
           # No host uvx in this job (no _setup-env); the dedicated Security
           # Audit check owns the uv-secure scan.
           RUN_ALL_SKIP_AUDIT: 1
+      # On a failed run, run_all_tests.sh saves every container's log under
+      # test-results/innet_*/containers/ before removing the stack; the reports beside them
+      # show the wire answer, the server logs say why it was given.
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: failure()
+        with:
+          name: bdd-in-network-results
+          path: test-results/innet_*/
+          if-no-files-found: warn
       - name: Cleanup Docker services
         if: always()
         run: docker compose -f docker-compose.e2e.yml down -v 2>/dev/null || true

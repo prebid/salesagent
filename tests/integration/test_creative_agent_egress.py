@@ -29,7 +29,7 @@ What does NOT move to the seam, and is therefore graded here:
 ``ADCP_TESTING=true`` is autouse for the whole suite (``tests/conftest.py``), and
 the public entry point (``get_formats_for_agent``) skips this path entirely for
 an operator agent — only a COUNTERPARTY ``agent_url`` reaches it, ahead of the
-testing short-circuit (see ``_is_operator_agent`` in creative_agent_registry.py).
+testing short-circuit (see ``is_operator_agent`` in creative_agent_registry.py).
 The fetch is therefore driven directly — as the unit tests it replaces did —
 because a test that went through the public entry points would assert on
 formats that were never fetched.
@@ -208,18 +208,18 @@ class TestParsing:
         allow_local_origin(monkeypatch)
         local_origin_tls.respond_with(200, body=_jsonrpc_body())
 
-        formats = await registry._fetch_formats_raw_mcp(agent_at(local_origin_tls), provenance=_OPERATOR_PROVENANCE)
+        catalog = await registry._fetch_formats_raw_mcp(agent_at(local_origin_tls), provenance=_OPERATOR_PROVENANCE)
 
-        assert [fmt.format_id.id for fmt in formats] == ["display_image"]
+        assert [fmt.format_id.id for fmt in catalog.formats] == ["display_image"]
 
     async def test_an_sse_response_parses_formats(self, registry, local_origin_tls, monkeypatch):
         """``text/event-stream`` is read off the same body, one ``data:`` line at a time."""
         allow_local_origin(monkeypatch)
         local_origin_tls.respond_with(200, body=_sse_body(), content_type="text/event-stream")
 
-        formats = await registry._fetch_formats_raw_mcp(agent_at(local_origin_tls), provenance=_OPERATOR_PROVENANCE)
+        catalog = await registry._fetch_formats_raw_mcp(agent_at(local_origin_tls), provenance=_OPERATOR_PROVENANCE)
 
-        assert [fmt.format_id.id for fmt in formats] == ["display_image"]
+        assert [fmt.format_id.id for fmt in catalog.formats] == ["display_image"]
 
 
 class TestTaxonomy:

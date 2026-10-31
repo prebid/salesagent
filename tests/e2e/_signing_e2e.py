@@ -12,9 +12,11 @@ exactly ONE home:
   same green.
 * **The tenant seam** — :func:`provisioned_trust_root_tenant`, which owns the
   ``virtual_host`` routing state the whole e2e session shares.
-* **The hop-1 seed** — :func:`seeded_capabilities_factory`, needed because the
-  SDK's capabilities hop raw-GETs the agent URL (SDK divergence #4, see
-  ``test_trust_root_e2e``).
+* **The hop-1 seed** — :func:`seeded_capabilities_factory`, which keeps a module
+  that grades the PUBLISHED DOCUMENTS from also grading the capabilities builder
+  (see ``test_trust_root_e2e``). It no longer exists to route around the SDK: the
+  capabilities hop used to raw-GET the agent URL and now invokes the tool over
+  MCP, so the seed speaks MCP too.
 * **Production-path key provisioning** — :func:`provision_signing_key_via_admin`,
   which drives the real admin route over real HTTP so the row is minted under
   the SERVER CONTAINER's KEK rather than the test runner's.
@@ -91,6 +93,48 @@ def tls_base_url(live_server: dict) -> str:
     )
     assert url.startswith("https://"), f"the TLS base URL must be an https origin; got {url!r}"
     return url.rstrip("/")
+
+
+#: The seller hostname a SPEC-CONFORMANT verifier can resolve us by, under the
+#: generated leaf's ``*.adcp-e2e.dev`` wildcard SAN.
+#:
+#: ``proxy.adcp.test`` — the name every other TLS test dials — cannot be walked,
+#: and the reason is normative rather than a stack limitation. security.mdx step 3
+#: (Origin binding): "The agent URL ``A``'s host eTLD+1 MUST equal the
+#: ``brand_json_url``'s host eTLD+1. eTLD+1 computation MUST use a pinned, dated
+#: Public Suffix List snapshot". ``.test`` is not in the PSL, so
+#: ``registrable_domain`` is ``None`` on BOTH sides and equality never holds; the
+#: documented fallback is an ``authorized_operators[]`` entry, which only a House
+#: Portfolio document carries and no seller's brand.json does. A conformant
+#: verifier therefore MUST answer ``request_signature_brand_origin_mismatch`` for
+#: a ``.test`` seller, and ``adcp.signing.agent_resolver`` does exactly that with
+#: no development-domain opt-in (``async_resolve_agent`` takes no
+#: ``allow_development_domains``; only ``brand_authz`` has one).
+#:
+#: This is the SAME conclusion ``COUNTERPARTY_HOSTNAME`` reached for the inbound
+#: direction (``tests/unit/test_architecture_e2e_counterparty_origin_wiring.py``),
+#: measured in-network there. The alias is additive: ``proxy.adcp.test`` keeps its
+#: route, and this name reaches the same upstream.
+SELLER_ETLD1_HOST = "seller.adcp-e2e.dev"
+
+
+def seller_etld1_base_url(live_server: dict) -> str:
+    """The seller origin a conformant resolver can walk: :data:`SELLER_ETLD1_HOST`.
+
+    Derived from :func:`tls_base_url` by swapping the host and KEEPING the port,
+    rather than read from a variable of its own: it is one more SNI alias on the one
+    TLS front, so it answers at exactly the port that front already serves. A second
+    env var would be a second thing to keep in step with the port allocator.
+
+    IN-NETWORK ONLY. The alias is a compose network alias, so it resolves inside the
+    stack's network and nowhere else — the host path has no name with a registrable
+    domain pointing at the loopback listener, and cannot be given one offline.
+    """
+    from urllib.parse import urlsplit, urlunsplit
+
+    front = urlsplit(tls_base_url(live_server))
+    port = f":{front.port}" if front.port else ""
+    return urlunsplit(("https", f"{SELLER_ETLD1_HOST}{port}", "", "", ""))
 
 
 def ca_bundle() -> str:
@@ -227,6 +271,9 @@ def seeded_capabilities_factory(body: dict):
     ``async_resolve_agent`` calls ``factory(agent_url)`` and uses the result as an
     async context manager, so an ``httpx.AsyncClient`` over a ``MockTransport`` is
     a drop-in — no monkeypatching of the SDK.
+
+    Hop 1 is an MCP ``tools/call``, and the transport underneath answers it as one;
+    *body* is what the tool returns. See ``json_seeded_client_factory``.
     """
 
     return json_seeded_client_factory(body)

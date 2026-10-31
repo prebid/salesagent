@@ -4,16 +4,16 @@ import logging
 from datetime import datetime
 from decimal import Decimal
 from enum import StrEnum
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 from adcp.types import BrandReference
-from adcp.types.generated_poc.core.account import (
+from adcp.types.domains.core.account import (
     CreditLimit,
     GovernanceAgent,
     Setup,
 )  # TODO: no stable alias in adcp.types
-from adcp.types.generated_poc.core.business_entity import (
+from adcp.types.domains.core.business_entity import (
     BusinessEntity,
 )  # TODO: no stable alias in adcp.types
 from sqlalchemy import (
@@ -42,7 +42,7 @@ from src.core.credentials import hash_token, mint_token, token_prefix
 from src.core.database.json_type import JSONType
 from src.core.errors.details import ConfigurationDetails
 from src.core.exceptions import AdCPConfigurationError, AdCPPersistedStateError
-from src.core.json_validators import JSONValidatorMixin
+from src.core.json_validators import PLACEMENTS_ARE_EXPLICIT_CHECK, PLACEMENTS_ARE_EXPLICIT_SQL, JSONValidatorMixin
 
 # The ONE NotificationConfig, whose authentication block is the one Authentication class
 # (src/core/schemas/notification.py): a stored row reads back as the same type the request
@@ -53,6 +53,9 @@ from src.core.signing.algorithms import (
     signing_alg_check_clause,
     signing_purpose_check_clause,
 )
+
+if TYPE_CHECKING:
+    from src.core.format_resolver import FormatContract
 
 logger = logging.getLogger(__name__)
 
@@ -93,6 +96,27 @@ class Tenant(Base, JSONValidatorMixin):
     hitl_webhook_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
     # List of format ID strings (just the id part, not full FormatId objects)
     # Validated at database level via CHECK constraint (see migration: rename_formats_to_format_ids)
+    #
+    # A LEGACY-ONLY CONVENIENCE THAT CANNOT CHANGE AN APPROVAL OUTCOME. Recorded here because
+    # it reads like policy and is not: no canonical sibling is needed, and adding one would
+    # add a reader where there is none.
+    #
+    # Its value reaches ``config["creative_engine"]["auto_approve_formats"]`` (admin/utils/
+    # helpers.py, core/utils/tenant_utils.py, admin/tenant_management_api.py) and the only
+    # object that consumes that key is ``MockCreativeEngine``, whose ``process_creatives`` has
+    # no caller in ``src/`` at all -- the module-level instance that once existed in
+    # ``core/main.py`` was built from a hardcoded ``{}`` and read by nothing, and is deleted.
+    # The one live behaviour anywhere downstream of this column is
+    # ``setup_checklist_service``'s ``has_approval_config``, which tests PRESENCE and reads no
+    # element.
+    #
+    # THE REAL APPROVAL DECISION IS ``approval_mode`` BELOW: a tri-state applied to every
+    # creative whatever its format (``core/tools/creatives/_sync.py`` ->
+    # ``_processing.py``). The pin has nothing to say about approval POLICY -- it defines
+    # outcomes (``core/creative-approval-scope.json``, ``enums/creative-approval-status.json``)
+    # and no policy input -- so keying this on ``format_kind`` would be new ungraded
+    # behaviour, not a migration of existing behaviour (salesagent-ol033.8 D4, measured in
+    # salesagent-b8gf9).
     auto_approve_format_ids: Mapped[list[str] | None] = mapped_column(JSONType, nullable=True)
     human_review_required: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     policy_settings: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
@@ -104,6 +128,13 @@ class Tenant(Base, JSONValidatorMixin):
     account_sandbox: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default="false"
     )  # #1592 C2/A2
+    # Whether this seller federates the AdCP standard creative agent (the deployment's
+    # operator agent) in its format catalog and its ``creative_agents`` referrals. Default
+    # TRUE: a seller federates it unless an operator turns it off on the creative-agents
+    # admin page, which a seller listing only its own creative agents does.
+    use_default_creative_agent: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default="true"
+    )
     account_approval_mode: Mapped[str | None] = mapped_column(
         String(50), nullable=True
     )  # BR-RULE-060: auto|credit_review|legal_review
@@ -136,6 +167,13 @@ class Tenant(Base, JSONValidatorMixin):
         nullable=True,
         comment="Implementation-backed AdCP capability declaration blocks (#1592); NULL = nothing declared",
     )
+
+    # The reusable publisher format options this tenant publishes as the ``formats[]`` of the
+    # adagents.json served at its own host (RFC S3; see src/core/publisher_format_catalog.py).
+    # Each entry is a core/product-format-declaration.json document carrying a unique
+    # format_option_id; a product names one as {publisher_domain: primary_domain,
+    # format_option_id}. NULL means no catalog, and the served file then carries no formats[].
+    publisher_format_options: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONType, nullable=True)
 
     # Pydantic AI configuration for multi-model support
     # Structure: {"provider": "anthropic", "model": "claude-sonnet-4-20250514", "api_key": "encrypted:...", ...}
@@ -275,6 +313,18 @@ class Tenant(Base, JSONValidatorMixin):
         self.virtual_host_name = hostname_of(host)
         return host
 
+    @validates("publisher_format_options")
+    def _validate_publisher_format_options(self, _key: str, value: list[dict[str, Any]] | None) -> list | None:
+        """Every write path stores a catalog of referenceable options, or nothing.
+
+        Refused on assignment, so the admin form, the management API and a seed script cannot
+        store an entry the served adagents.json would publish as an unreferenceable or
+        ambiguous option. An empty catalog is stored as NULL (``formats[]`` has minItems 1).
+        """
+        from src.core.publisher_format_catalog import validated_catalog
+
+        return validated_catalog(value)
+
     @property
     def gemini_api_key(self) -> str | None:
         """Get decrypted Gemini API key."""
@@ -375,9 +425,41 @@ class Product(Base, JSONValidatorMixin):
     product_id: Mapped[str] = mapped_column(String(100), primary_key=True)
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # THE TWO HALVES of a product's format declaration. core/product.json's root anyOf has
+    # TWO arms -- "Named-format product" (requires format_ids, and marked
+    # `deprecated: true`) and "Canonical-format product" (requires format_options) -- and
+    # satisfying either admits the row, so NEITHER column can be NOT NULL on the strength of
+    # the spec. `format_ids` kept a NOT NULL it had only because it predated
+    # `format_options`, which made a canonically-authored product unrepresentable; migration
+    # 08cd415b3d91 drops it.
+    #
+    # The two arms are NOT equally available to a new product, and nothing here should be
+    # read as saying so. The pin's permission to carry either lives in the `format_ids`
+    # PROPERTY description, which time-boxes it: "Deprecated in AdCP; removed in AdCP
+    # 4.0. ... Products MUST carry format_ids, format_options, or both during the 3.x
+    # migration window. New products MUST author canonical format_options[]; sellers MAY
+    # additionally project those declarations to format_ids for legacy buyers. When both
+    # fields are present they MUST describe the same underlying formats, and buyers MUST
+    # prefer format_options. Do not author a new product from format_ids alone."
+    # So the nullability below is a migration-window accommodation, not a standing choice.
+    # Which arm is present is checked where the anyOf is readable as a whole -- in
+    # product_conversion, against the pair -- and not by a per-column NOT NULL that can only
+    # see one arm.
+    #
     # Type hint: list of FormatId dicts with {agent_url: str, id: str}
-    # Validated at database level via CHECK constraint (see migration: rename_formats_to_format_ids)
-    format_ids: Mapped[list[dict[str, str]]] = mapped_column(JSONType, nullable=False)
+    # Validated at database level via CHECK constraint (see migration: rename_formats_to_format_ids).
+    # That CHECK tolerates NULL -- measured, with both controls, in 08cd415b3d91's docstring.
+    format_ids: Mapped[list[dict[str, str]] | None] = mapped_column(JSONType, nullable=True)
+    # The canonical half: core/product-format-declaration.json documents, each requiring
+    # `format_kind` + `params` and admitting fifteen more members. Stored as the document it
+    # is -- the pinned type is a sixteen-branch discriminated union over `format_kind`, and
+    # the DTO already declares it by inheritance, so nothing here reshapes it.
+    #
+    # Each declaration's `v1_format_ref[]` rides INSIDE it, which is what makes serving a
+    # legacy peer a lookup rather than a synthesis: the projection runs one way only, so a
+    # seller that wants a v1 projection asserts one, and `canonical_formats_only` says there
+    # is none.
+    format_options: Mapped[list[dict] | None] = mapped_column(JSONType, nullable=True)
     # Type hint: targeting template dict structure
     targeting_template: Mapped[dict] = mapped_column(JSONType, nullable=False)
     delivery_type: Mapped[str] = mapped_column(String(50), nullable=False)
@@ -401,9 +483,9 @@ class Product(Base, JSONValidatorMixin):
     # XOR constraint: exactly one of (properties, property_ids, property_tags) must be set
     # Type hint: list of Property dicts for validation (legacy, full objects)
     properties: Mapped[list[dict] | None] = mapped_column(JSONType, nullable=True)
-    # Type hint: list of property ID strings (AdCP 2.0.0 by_id variant)
+    # Type hint: list of property ID strings (by_id variant)
     property_ids: Mapped[list[str] | None] = mapped_column(JSONType, nullable=True)
-    # Type hint: list of tag strings (AdCP 2.0.0 by_tag variant)
+    # Type hint: list of tag strings (by_tag variant)
     property_tags: Mapped[list[str] | None] = mapped_column(JSONType, nullable=True)
     # Note: PR #79 fields (estimated_exposures, floor_cpm, recommended_cpm) are NOT stored in database
     # They are calculated dynamically from product_performance_metrics table
@@ -427,12 +509,14 @@ class Product(Base, JSONValidatorMixin):
     product_card: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
     # Type hint: detailed product card dict with format_id and manifest
     product_card_detailed: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
-    # Type hint: list of placement dicts (each with placement_id, name, description, format_ids)
+    # core/placement.json documents, served as stored. Each one states kind, placement_id and
+    # mode (plus name for seller_inline, publisher_domain for publisher_ref);
+    # ck_products_placements_explicit below refuses a row that omits one.
     placements: Mapped[list[dict] | None] = mapped_column(JSONType, nullable=True)
     # Type hint: reporting capabilities dict
     reporting_capabilities: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
 
-    # AdCP 3.6.0 product fields
+    # product fields
     property_targeting_allowed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     signal_targeting_allowed: Mapped[bool | None] = mapped_column(Boolean, nullable=True, default=False)
     # Type hint: CatalogMatch object (matching criteria for product catalogs)
@@ -487,24 +571,33 @@ class Product(Base, JSONValidatorMixin):
 
     # Effective properties - auto-resolve from inventory profile if set
     @property
-    def effective_format_ids(self) -> list[dict[str, str]]:
-        """Get format_ids from inventory profile (if set) or product itself.
+    def format_contract(self) -> "FormatContract":
+        """The format contract this product is served and graded against.
 
-        Returns format_ids as list of FormatId dicts: [{"agent_url": str, "id": str}, ...]
-        When inventory_profile_id is set, returns current profile's format_ids (auto-updates).
-        When inventory_profile_id is null, returns product's own format_ids.
+        A linked inventory profile supplies the contract, as it supplies the publisher
+        properties; the product's own columns answer only when it has no profile. The one
+        exception is a profile that carries no canonical arm while the product does: the
+        product's declarations are then the canonical source, because the pin makes
+        ``format_options`` the source of truth and a legacy-only profile has none to offer.
 
-        Database validation ensures all format_ids match AdCP FormatId spec.
+        The canonical arm, wherever it comes from, decides the whole contract
+        (:func:`~src.core.format_resolver.format_contract`): its legacy projection is derived
+        from the declarations and no stored ``format_ids`` column is read. Only a product
+        with no canonical arm is served the legacy arm it, or its profile, authored.
+
+        The FK column is tested before the relationship so a detached row with no profile
+        never triggers a lazy load.
         """
-        if self.inventory_profile_id and self.inventory_profile:
-            return self.inventory_profile.format_ids
-        return self.format_ids
+        from src.core.format_resolver import linked_format_contract
+
+        profile = self.inventory_profile if self.inventory_profile_id and self.inventory_profile else None
+        return linked_format_contract(profile=profile, format_options=self.format_options, format_ids=self.format_ids)
 
     @property
     def effective_properties(self) -> list[dict] | None:
         """Get publisher properties from inventory profile (if set) or product itself.
 
-        Returns properties in AdCP 2.0.0 discriminated union format:
+        Returns properties in discriminated union format:
         - all variant: {publisher_domain, selection_type='all'} (default)
         - by_id variant: {publisher_domain, property_ids, selection_type='by_id'}
         - by_tag variant: {publisher_domain, property_tags, selection_type='by_tag'}
@@ -526,7 +619,7 @@ class Product(Base, JSONValidatorMixin):
             return ensure_selection_type(self.properties)
 
         if self.property_ids:
-            # AdCP 2.0.0 by_id variant
+            # by_id variant
             return [
                 {
                     "publisher_domain": self.publisher_domain,
@@ -535,7 +628,7 @@ class Product(Base, JSONValidatorMixin):
                 }
             ]
         if self.property_tags:
-            # AdCP 2.0.0 by_tag variant
+            # by_tag variant
             return [
                 {
                     "publisher_domain": self.publisher_domain,
@@ -621,6 +714,7 @@ class Product(Base, JSONValidatorMixin):
             "(properties IS NOT NULL AND property_tags IS NULL) OR (properties IS NULL AND property_tags IS NOT NULL)",
             name="ck_product_properties_xor",
         ),
+        CheckConstraint(PLACEMENTS_ARE_EXPLICIT_SQL, name=PLACEMENTS_ARE_EXPLICIT_CHECK),
     )
 
 
@@ -779,7 +873,7 @@ class Principal(Base, JSONValidatorMixin):
     #: The displayable head of the token, so an operator can tell tokens apart.
     token_prefix: Mapped[str] = mapped_column(String(16), nullable=False)
     # RFC 9421 (#1291 B1): the counterparty's own AdCP agent URL, from onboarding.
-    # This is the ONLY legitimate source for it — security.mdx @ v3.1.1 §"agent_url
+    # This is the ONLY legitimate source for it — security.mdx §"agent_url
     # derivation" forbids taking the signer's agent URL from a header, a body field or any
     # other self-assertion, because that would let the signer choose which brand.json (and
     # therefore which key set) it is verified against. NULL means we cannot resolve a key
@@ -791,6 +885,12 @@ class Principal(Base, JSONValidatorMixin):
     # establishes (``_resolve_identity`` step 6). A second principal claiming one agent_url
     # would make that second lookup ambiguous, which is a silent authentication defect.
     agent_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    # The agent's commercial relationship, from onboarding: TRUE when it is onboarded as
+    # passthrough-only (no payments relationship, so only the operator can be invoiced).
+    # sync_accounts answers BILLING_NOT_PERMITTED_FOR_AGENT from it (enums/error-code.json).
+    billing_passthrough_only: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
@@ -943,8 +1043,37 @@ class Creative(Base):
     tenant_id: Mapped[str] = mapped_column(String(50), primary_key=True)
     principal_id: Mapped[str] = mapped_column(String(100), primary_key=True)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
-    agent_url: Mapped[str] = mapped_column(String(500), nullable=False)
-    format: Mapped[str] = mapped_column(String(100), nullable=False)
+    # THE FORMAT IDENTITY. The spec is canonical-first and the projection between the two
+    # identities runs ONE WAY -- v1 -> v2 resolves through a normative order, and a seller
+    # MUST NOT synthesize a v1 ``format_id`` by inverting a structural match -- so
+    # ``format_kind`` is the identity every layer shares and the deprecated ``format_id`` is
+    # a RETAINED BUYER ASSERTION: stored verbatim, echoed to a legacy peer, never what
+    # business logic keys on.
+    #
+    # ``format_kind`` is nullable because a legacy reference only has a kind once something
+    # projects it, and the sixth normative step is to fail closed rather than guess one.
+    #
+    # The assertion needs TWO columns because one value cannot serve both obligations: the
+    # echo must be VERBATIM (sync_creatives owes the buyer its own format_id back), while a
+    # COMPARISON must canonicalize ``agent_url`` first, which ``core/format-id.json`` makes
+    # a MUST. So ``legacy_format_id`` keeps the document as sent -- agent_url, id and every
+    # parameter ``FormatId`` declares -- and ``legacy_format_key`` carries
+    # the ``FormatKey`` of it, indexed, so the comparison is exact rather than
+    # tolerant and a filter can use the index.
+    #
+    # ``CreativeFormatIdentity.from_row`` is the ONE reader of these four. The two-arm
+    # exclusivity is not a CHECK constraint: it is a protocol rule the request and state
+    # models both enforce as a oneOf on the way in, and restating it here would be another
+    # place for it to drift.
+    # NOT NULL: the canonical identifier every layer keys on, so a row without one has no
+    # identity ``CreativeFormatIdentity.from_row`` can read. The write path refuses a
+    # creative whose reference has no canonical projection (``creative_identity_of``), and
+    # this constraint is what makes that refusal the only way in rather than a guard a new
+    # caller could route around. Migration b4f1a9c27d53 projects pre-existing NULL rows.
+    format_kind: Mapped[str] = mapped_column(String(100), nullable=False)
+    format_option_ref: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
+    legacy_format_id: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
+    legacy_format_key: Mapped[str | None] = mapped_column(String, nullable=True)
     # AdCP CreativeStatus member: the buyer-facing reader (list_creatives) parses this
     # column through the closed spec enum, so a non-member default (this was "pending")
     # makes every row written with the field omitted unreadable. No CHECK constraint or
@@ -954,10 +1083,6 @@ class Creative(Base):
 
     # Data field stores creative content and metadata as JSON
     data: Mapped[dict] = mapped_column(JSONType, nullable=False, default=dict)
-
-    # Format parameters for parameterized FormatId (AdCP 2.5 format templates)
-    # Stores width, height, duration_ms when format is parameterized
-    format_parameters: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
 
     # Relationships and metadata
     group_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
@@ -979,7 +1104,10 @@ class Creative(Base):
         Index("idx_creatives_tenant", "tenant_id"),
         Index("idx_creatives_principal", "tenant_id", "principal_id"),
         Index("idx_creatives_status", "status"),
-        Index("idx_creatives_format_namespace", "agent_url", "format"),  # AdCP v2.4 format namespacing
+        # The retained assertion's canonical comparison key. One column, so the
+        # list_creatives format_ids filter is an indexed IN over keys rather than a
+        # disjunction of per-pair column comparisons.
+        Index("idx_creatives_legacy_format_key", "legacy_format_key"),
     )
 
 
@@ -1059,6 +1187,11 @@ class CreativeAssignment(Base):
     weight: Mapped[int] = mapped_column(Integer, nullable=False, default=100)
     # adcp#208: placement-specific targeting within package
     placement_ids: Mapped[list[str] | None] = mapped_column(JSONType, nullable=True)
+    # Whether the assignment came in through a package's inline ``creatives``. The two
+    # package arrays replace different sets (update_media_buy.mdx): ``creatives`` "Replace
+    # assigned inline creative bodies", ``creative_assignments`` "Replace assigned library
+    # creatives", so the inline replacement drops only rows marked here.
+    inline: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
     # Relationships
@@ -1229,7 +1362,7 @@ class AgentAccountAccess(Base):
 
 
 # Statuses in which the seller has NOT yet committed to running the buy. The
-# AdCP 3.1.1 `confirmed_at` field ("when the seller committed to this media buy")
+# `confirmed_at` field ("when the seller committed to this media buy")
 # carries no commitment instant for these — on get_media_buys it is serialized as
 # PRESENT-AND-NULL, because the pinned item schema types it {"type": ["string",
 # "null"]} AND lists it in `required`. "Absent" is only true of the create
@@ -1459,18 +1592,22 @@ class MediaBuy(Base):
     start_time: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     end_time: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="draft")
-    # Monotonic optimistic-concurrency counter (AdCP 3.1.1 `revision`). Starts at
+    # Monotonic optimistic-concurrency counter (`revision`). Starts at
     # 1 on create; bumped by MediaBuyRepository on every successful mutation.
     # Persisted rather than derived: buyers treat it as a concurrency token, so it
     # MUST strictly increase, and anything derived from timestamps collides when
     # two updates land inside the clock resolution.
     revision: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
-    # The instant the seller COMMITTED to running the buy (AdCP 3.1.1
+    # The instant the seller COMMITTED to running the buy (AdCP.1
     # `confirmed_at`), written once. Distinct from approved_at only in intent —
     # on the manual-approval path it IS the approval instant, while on the
     # synchronous auto-approve path a successful create_media_buy response is
     # itself the confirmation. NULL until commitment.
     confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # The buy-level creative upload deadline the adapter reported on create
+    # (create-media-buy-response.json `creative_deadline`), kept so get_media_buys
+    # reports the same value. NULL when the adapter set none.
+    creative_deadline: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
@@ -1567,7 +1704,7 @@ class IdempotencyAttempt(Base):
     spec-defined scope tuples are implemented as written; extra dimensions may
     exist as columns but never in uniqueness/lookup semantics.)
 
-    AdCP 3.0.1 idempotency: retrying a mutating tool call with the same
+    idempotency: retrying a mutating tool call with the same
     idempotency_key must return the ORIGINAL success response byte-for-byte
     (marked `replayed: true`), and errors are NEVER cached — a retry after an
     error re-executes. This table is the verbatim success cache: it stores the
@@ -2024,10 +2161,18 @@ class InventoryProfile(Base, JSONValidatorMixin):
     # }
     inventory_config: Mapped[dict] = mapped_column(JSONType, nullable=False)
 
-    # Creative formats (FormatId objects)
-    # Structure: [{"agent_url": "...", "id": "display_300x250_image"}]
-    # Validated at database level via CHECK constraint (see migration: rename_formats_to_format_ids)
-    format_ids: Mapped[list] = mapped_column(JSONType, nullable=False)
+    # Creative formats: the same two arms a product carries, and a linked product takes its
+    # format contract from here (``Product.format_contract``).
+    #
+    # The canonical arm: core/product-format-declaration.json documents, stored as
+    # ``products.format_options`` stores them. A profile authored today carries this one.
+    format_options: Mapped[list[dict] | None] = mapped_column(JSONType, nullable=True)
+    # The deprecated arm (FormatId objects): [{"agent_url": "...", "id": "display_300x250_image"}].
+    # Nullable since migration a34a2ff137da, so a canonically-authored profile carries none;
+    # a profile authored before then keeps the one it has, and its linked products are served
+    # it as their legacy arm. Validated at database level via CHECK constraint (see migration:
+    # rename_formats_to_format_ids), which tolerates NULL.
+    format_ids: Mapped[list | None] = mapped_column(JSONType, nullable=True)
 
     # Publisher properties (AdCP spec-compliant)
     # Structure: [
@@ -2943,7 +3088,7 @@ class ReplayNonce(Base):
     it. ``"C"`` is byte-for-byte comparison.
 
     **No ``tenant_id``, no FK — a decision, not an oversight.** The RFC 9421 signature base
-    covers ``@authority`` as a MANDATORY component (AdCP 3.1.1;
+    covers ``@authority`` as a MANDATORY component (AdCP;
     ``test-vectors/request-signing/negative/006-missing-covered-component.json`` is
     literally "Covered components missing @authority"), so a nonce captured against tenant
     A's virtual host cannot verify against tenant B's — cross-tenant replay dies at verifier

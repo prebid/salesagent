@@ -10,6 +10,7 @@ the repository owns the query, the helper owns the assertion.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any
 
 from tests.harness.transport import TransportResult
@@ -304,6 +305,149 @@ def wire_absent(ctx: dict, path: str) -> None:
     assert value is WIRE_MISSING, f"{path!r} unexpectedly present on the wire: {value!r}"
 
 
+def assert_listed_format_option_ref(entry: dict[str, Any], sent: dict[str, Any]) -> None:
+    """Assert a listed creative's ``format_option_ref`` is the document the buyer sent.
+
+    Whole-document equality, not a subset: ``scope`` is the discriminator of
+    core/format-option-ref.json's oneOf, and a subset check over the members the seller DID
+    emit passes while it is gone. The product arm's ``publisher_domain: false`` makes the
+    other direction matter too -- an extra member is as wrong as a missing one.
+    """
+    listed = entry.get("format_option_ref")
+    assert listed == sent, f"the listed format_option_ref is not the reference the buyer sent: {listed!r} != {sent!r}"
+
+
+def assert_listed_on_canonical_kind(
+    entry: dict[str, Any], kind: str, *, option_ref: dict[str, Any] | None = None
+) -> None:
+    """Assert a list_creatives wire entry sits on the canonical arm with format kind *kind*.
+
+    creative/list-creatives-response.json's item is a oneOf over the format identity: the
+    canonical arm requires ``format_kind`` and forbids ``format_id``. The kind is compared
+    by VALUE (a presence check passes on the wrong identity) and ``format_id`` must be
+    absent. When *option_ref* is given, the entry must also carry exactly that
+    ``format_option_ref`` (:func:`assert_listed_format_option_ref`).
+    """
+    assert entry.get("format_kind") == kind, (
+        f"expected the listed creative on format_kind {kind!r}, got {entry.get('format_kind')!r}: {entry}"
+    )
+    assert "format_id" not in entry, f"a creative synced by format_kind is listed with a format_id: {entry}"
+    if option_ref is not None:
+        assert_listed_format_option_ref(entry, option_ref)
+
+
+def stored_package_config(ctx: dict, media_buy_id: str, package_id: str) -> dict[str, Any]:
+    """The persisted ``package_config`` for one package, through the repository.
+
+    Reached from a UoW rather than a raw ``select()``: the repository's ``get_package``
+    joins through MediaBuy for tenant scoping, so this reads the row the way production
+    reads it and cannot see another tenant's package.
+
+    HERE rather than in one feature's step module because two features now read stored
+    package state for the same reason -- a response-only assertion is echo-satisfiable, so
+    a scenario that claims the seller RECORDED something has to read the record. This
+    module is where that belongs: "the harness owns the session, the repository owns the
+    query, the helper owns the assertion".
+    """
+    from src.core.database.repositories.uow import MediaBuyUoW
+
+    tenant = ctx.get("tenant")
+    assert tenant is not None, "No tenant in ctx — conftest must seed one"
+    with MediaBuyUoW(tenant.tenant_id) as uow:
+        assert uow.media_buys is not None
+        row = uow.media_buys.get_package(media_buy_id, package_id)
+        assert row is not None, (
+            f"no persisted package {package_id!r} on media buy {media_buy_id!r}; "
+            "the create reported it but stored nothing"
+        )
+        return dict(row.package_config or {})
+
+
+def stored_creative_column(ctx: dict, creative_id: str, column: str) -> Any:
+    """One column of the scenario principal's stored creative *creative_id*, through the repository.
+
+    The same reason as :func:`stored_package_config`: a sync response does not carry what a
+    seller stored, so a scenario claiming the seller RECORDED something reads the record.
+    The value is read INSIDE the unit of work, because a row returned past the block is
+    detached and every attribute read raises DetachedInstanceError.
+    """
+    from src.core.database.repositories.uow import CreativeUoW
+
+    tenant, principal = ctx.get("tenant"), ctx.get("principal")
+    assert tenant is not None and principal is not None, "No tenant/principal in ctx — conftest must seed them"
+    with CreativeUoW(tenant.tenant_id) as uow:
+        assert uow.creatives is not None
+        row = uow.creatives.get_by_id(creative_id, principal.principal_id)
+        assert row is not None, f"no creative {creative_id!r} was stored for principal {principal.principal_id!r}"
+        return getattr(row, column)
+
+
+def assert_sync_entry_refused_and_not_stored(
+    ctx: dict, creative_id: str, code: str, *, field: str | None = None
+) -> None:
+    """The sync's batch entry for *creative_id* FAILED with exactly *code*, and no row was written.
+
+    sync_creatives is a batch tool: one refused creative is an entry with ``action: failed``
+    and its own ``errors``, while the request completes. So the refusal is read off the
+    typed payload by ``creative_id`` (``payload_or_none`` keeps the value's provenance), and
+    the absence is read back through ``CreativeUoW`` -- the wire alone cannot tell a seller
+    that refused BEFORE writing from one that wrote the row and then answered an error.
+
+    *field*, when given, is the entry error's ``field``: which member the buyer corrects.
+    """
+    from src.core.database.repositories.uow import CreativeUoW
+
+    resp = payload_or_none(ctx)
+    assert resp is not None, (
+        f"the dispatch produced no payload, so the batch never answered about {creative_id!r} ({ctx.get('error')!r})"
+    )
+    entries = {entry.creative_id: entry for entry in resp.creatives}
+    assert creative_id in entries, f"the batch answered about {sorted(entries)}, not {creative_id!r}"
+    entry = entries[creative_id]
+    action = entry.action.value if hasattr(entry.action, "value") else str(entry.action)
+    assert action == "failed", f"the creative was reported {action!r}; any action but failed means it was admitted"
+    errors = entry.errors or []
+    assert [error.code for error in errors] == [code], f"expected exactly {code} on the entry, got {errors!r}"
+    if field is not None:
+        assert errors[0].field == field, f"the refusal names {errors[0].field!r}, expected {field!r}"
+    # Values, not rows: a ``Creative`` read past the UoW is detached and raises on attribute
+    # access, which would surface as a DetachedInstanceError instead of this assertion.
+    with CreativeUoW(ctx["tenant"].tenant_id) as uow:
+        assert uow.creatives is not None
+        stored = {c.creative_id for c in uow.creatives.list_by_principal(ctx["principal"].principal_id)}
+    assert creative_id not in stored, f"the seller refused {creative_id!r} on the wire but STORED it anyway"
+
+
+def parked_media_buy(ctx: dict) -> Any:
+    """The one media buy the scenario's tenant holds, through the repository.
+
+    FORCED rather than preferred, which is why it is a helper and not a wire read: a buy
+    parked for a human decision is answered with the SUBMITTED task envelope, and that
+    envelope carries no ``media_buy_id`` — correctly, since nothing is on the ad server
+    yet. So a scenario about a parked buy cannot address it by id and has to find it by
+    tenant.
+
+    Tenant-scoped by the repository's own ``tenant_id`` rather than by a predicate written
+    here, so this cannot see another tenant's buy. Asserts there is EXACTLY one: these
+    scenarios send one request, and "the first of several" would silently grade whichever
+    the database happened to order first.
+    """
+    from src.core.database.repositories.uow import MediaBuyUoW
+
+    tenant = ctx.get("tenant")
+    assert tenant is not None, "No tenant in ctx — conftest must seed one"
+    with MediaBuyUoW(tenant.tenant_id) as uow:
+        assert uow.media_buys is not None
+        buys = uow.media_buys.list_all()
+        assert len(buys) == 1, (
+            f"expected exactly one media buy for {tenant.tenant_id!r} to identify the parked buy, "
+            f"got {[b.media_buy_id for b in buys]}"
+        )
+        buy = buys[0]
+        # Read the ids out while the unit is open; the row detaches on exit.
+        return SimpleNamespace(media_buy_id=buy.media_buy_id, status=buy.status)
+
+
 def _real_wire_error_envelope(ctx: dict) -> dict | None:
     """Read ``TransportResult.wire_error_envelope`` — the ONE attribute-access site.
 
@@ -519,8 +663,12 @@ def is_e2e(ctx: dict) -> bool:
 def assert_media_buy_created(ctx: dict, media_buy_id: str | None = None) -> object:
     """Verify media buy exists in DB through the harness.
 
-    Returns the MediaBuy ORM instance for further assertions.
+    Returns the MediaBuy ORM instance for further assertions. Read through ``env.get_one``,
+    which every harness env carries, scoped to the env's tenant: the ``env.get_media_buy`` this
+    used to call is declared by no env, so every caller died on an AttributeError.
     """
+    from src.core.database.models import MediaBuy
+
     env = ctx["env"]
 
     if media_buy_id is None:
@@ -530,7 +678,8 @@ def assert_media_buy_created(ctx: dict, media_buy_id: str | None = None) -> obje
 
     assert media_buy_id is not None, "No media_buy_id available to verify creation"
 
-    mb = env.get_media_buy(media_buy_id)
+    mb = env.get_one(MediaBuy, media_buy_id=media_buy_id, tenant_id=env.tenant_id)
+    assert mb is not None, f"the create answered {media_buy_id!r} but the seller stored no such media buy"
     return mb
 
 
@@ -548,111 +697,49 @@ def assert_adapter_executed(ctx: dict) -> object:
 
 
 def assert_audit_logged(ctx: dict, *, operation_substring: str = "create_media_buy") -> None:
-    """Verify audit logging occurred — transport-aware.
+    """Assert the PERSISTED audit trail carries an entry for the operation.
 
-    In-process: asserts on mock audit logger calls (fast, precise).
-    E2E: queries audit_logs through the harness.
+    Read from the audit_logs table through the harness on every transport -- "the
+    database is the audit authority" (src/core/audit_logger.py). A call on an audit
+    logger mock graded the call, not the record, and existed only in process.
     """
-    if is_e2e(ctx):
-        env = ctx["env"]
-        logs = env.get_audit_logs(operation_substring)
-        assert logs, f"Expected audit_logs entry containing '{operation_substring}' for tenant {env._tenant_id}"
-    else:
-        _assert_audit_logged_mock(ctx, operation_substring)
-
-
-def _assert_audit_logged_mock(ctx: dict, operation_substring: str) -> None:
-    """Assert audit logger mock was called with the operation (in-process mode)."""
     env = ctx["env"]
-    mock_audit = env.mock["audit"].return_value
-    assert mock_audit.log_operation.called, (
-        f"Expected audit_logger.log_operation to be called with '{operation_substring}', but it was never called"
-    )
-    operations = [
-        call.kwargs.get("operation") or (call.args[0] if call.args else None)
-        for call in mock_audit.log_operation.call_args_list
-    ]
-    matching = [op for op in operations if op and operation_substring in op]
-    assert matching, (
-        f"Expected at least one log_operation call containing '{operation_substring}', got operations: {operations}"
-    )
+    logs = env.get_audit_logs(operation_substring)
+    assert logs, f"Expected audit_logs entry containing '{operation_substring}' for tenant {env._tenant_id}"
 
 
 def assert_audit_approval_logged(ctx: dict) -> None:
-    """Verify approval decision was logged — transport-aware."""
-    if is_e2e(ctx):
-        env = ctx["env"]
-        logs = env.get_audit_logs()
-        found = any("pending_approval" in (log.operation or "") for log in logs) or any(
-            "create_media_buy" in (log.operation or "") and log.success is True for log in logs
-        )
-        assert found, (
-            f"Expected audit entry for approval decision, found: {[(log.operation, log.success) for log in logs]}"
-        )
-    else:
-        _assert_audit_approval_mock(ctx)
+    """Assert the persisted audit trail records the approval decision.
 
-
-def _assert_audit_approval_mock(ctx: dict) -> None:
-    """Assert approval-specific audit log call exists (in-process mode)."""
+    Either the pending-approval entry, or the successful create entry carrying the
+    created media buy's id -- the auto-approved decision.
+    """
     env = ctx["env"]
-    mock_audit = env.mock["audit"].return_value
-    assert mock_audit.log_operation.called, (
-        "Expected audit_logger.log_operation to be called for approval decision logging"
+    logs = env.get_audit_logs()
+    found = any("pending_approval" in (log.operation or "") for log in logs) or any(
+        (log.operation or "").endswith(".create_media_buy")
+        and log.success is True
+        and "media_buy_id" in (log.details or {})
+        for log in logs
     )
-    for call in mock_audit.log_operation.call_args_list:
-        op = call.kwargs.get("operation") or (call.args[0] if call.args else None)
-        if op == "create_media_buy_pending_approval":
-            return
-        if op == "create_media_buy":
-            success = call.kwargs.get("success")
-            details = call.kwargs.get("details") or {}
-            if success is True and "media_buy_id" in details:
-                return
-    raise AssertionError(
-        f"Expected audit log entry with approval-specific content, "
-        f"got calls: {[c.kwargs for c in mock_audit.log_operation.call_args_list]}"
-    )
+    assert found, f"Expected audit entry for approval decision, found: {[(log.operation, log.success) for log in logs]}"
 
 
 def assert_audit_adapter_logged(ctx: dict) -> None:
-    """Verify adapter execution was logged — transport-aware.
+    """Assert the persisted audit trail records the adapter execution.
 
-    If the media buy went to pending_approval, the adapter was not called —
-    that's correct behavior (no adapter audit log expected).
+    If the media buy went to pending_approval, the adapter was not called — that's
+    correct behavior, and the pending entry is what the trail carries instead.
     """
-    if is_e2e(ctx):
-        env = ctx["env"]
-        logs = env.get_audit_logs()
-        for log in logs:
-            op = log.operation or ""
-            if "create_media_buy" in op and log.success is True and log.details is not None:
-                return
-            if "pending_approval" in op:
-                return
-        raise AssertionError(
-            f"Expected audit entry for adapter execution or pending_approval, "
-            f"found: {[(log.operation, log.success) for log in logs]}"
-        )
-    else:
-        _assert_audit_adapter_mock(ctx)
-
-
-def _assert_audit_adapter_mock(ctx: dict) -> None:
-    """Assert adapter execution audit log call exists (in-process mode)."""
     env = ctx["env"]
-    mock_audit = env.mock["audit"].return_value
-    assert mock_audit.log_operation.called, (
-        "Expected audit_logger.log_operation to be called for adapter execution logging"
-    )
-    for call in mock_audit.log_operation.call_args_list:
-        op = call.kwargs.get("operation") or (call.args[0] if call.args else None)
-        success = call.kwargs.get("success")
-        details = call.kwargs.get("details")
-        if op == "create_media_buy" and success is True and details is not None:
+    logs = env.get_audit_logs()
+    for log in logs:
+        op = log.operation or ""
+        if op.endswith(".create_media_buy") and log.success is True and log.details:
+            return
+        if "pending_approval" in op:
             return
     raise AssertionError(
-        f"Expected audit log entry for adapter execution "
-        f"(operation='create_media_buy', success=True, with details), "
-        f"got: {[c.kwargs for c in mock_audit.log_operation.call_args_list]}"
+        f"Expected audit entry for adapter execution or pending_approval, "
+        f"found: {[(log.operation, log.success) for log in logs]}"
     )

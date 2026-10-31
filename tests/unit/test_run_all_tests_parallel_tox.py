@@ -130,12 +130,23 @@ exit 0
 #:                             missing shared dependency hands the runner a
 #:                             scripts/ dir that cannot execute the checks it
 #:                             invokes.
+#:   audit/run_identity.py     the run's tree identity, written before any suite
+#:                             (pure stdlib + `git`, reaching only the workdir).
+#:                             BOTH an entry point and the shared dependency the
+#:                             bullet above describes: the runner invokes it, and
+#:                             _suite_reports.py imports its IDENTITY_FILE to
+#:                             keep the record out of the report walk. The
+#:                             workdir is not a repository, so it records an
+#:                             absent identity and warns -- which is the faithful
+#:                             simulation of the CI box, where git cannot name a
+#:                             commit either.
 _REAL_HOST_SCRIPTS = (
     "scripts/creative-agent-stack.sh",
     "scripts/dev/alloc-e2e-subnet.sh",
     "scripts/check_truncated_reports.py",
     "scripts/report_suite_failures.py",
     "scripts/_suite_reports.py",
+    "scripts/audit/run_identity.py",
 )
 
 #: Helper scripts run_all_tests.sh executes on the host that must NOT run for
@@ -336,6 +347,24 @@ def test_an_unreadable_report_is_a_finding_not_a_pass(tmp_path):
     problems = truncation_report(str(tmp_path))
 
     assert len(problems) == 1 and "unreadable" in problems[0], problems
+
+
+def test_a_half_written_identity_record_is_not_reported_as_a_truncated_suite(tmp_path):
+    """``meta.json`` is not a suite report, and the SAME event produces both.
+
+    A whole identity record is inert here -- it carries no ``summary``, so
+    ``collected`` and ``total`` are both absent and the predicate above returns
+    nothing. The case that is NOT inert is the one the predicate exists for: a
+    run killed mid-write leaves a half-written ``meta.json``, and read as a
+    report that is "unreadable", which this check reddens with the diagnosis
+    "the run is TRUNCATED" and "an xdist worker died". Both sentences would be
+    about the identity record rather than about any suite, and they would fail a
+    run whose suites all reported in full.
+    """
+    _write_report(tmp_path, "unit.json", collected=10, total=10, deselected=0, failed=0)
+    (tmp_path / "meta.json").write_text('{\n "schema": 1,\n "commit": "0c53', encoding="utf-8")
+
+    assert truncation_report(str(tmp_path)) == []
 
 
 def test_the_predicate_exits_non_zero_so_a_shell_caller_can_branch_on_it(tmp_path):

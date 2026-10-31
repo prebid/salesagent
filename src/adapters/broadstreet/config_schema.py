@@ -8,7 +8,29 @@ from typing import Any
 from pydantic import BaseModel, Field, field_validator
 
 # Broadstreet template definitions
-# Each template has required assets that must be provided
+# Each template has required assets that must be provided, and declares the AdCP
+# canonical format kind it projects to.
+#
+# WHY ``canonical_kind`` IS MANDATORY DATA HERE AND NOT DERIVED.
+# A Broadstreet format's ``format_id`` pairs a non-HTTP pseudo-URL
+# (``broadstreet://<tenant_id>``) with a ``broadstreet_*`` id, so NEITHER route that
+# resolves a legacy reference to a canonical kind is available to it: the id matches none
+# of the globs in ``registries/v1-canonical-mapping.json`` (every one is ``display_*`` /
+# ``video_*`` / ``audio_15s``), and there is no host to fetch a declaration from. The one
+# remaining route is step 1 of the normative projection order --
+# ``core/canonical-projection-ref.json``, "Authoritative v1 -> v2 projection annotation on
+# a v1 named format", whose ``kind`` is required when a format declares one. For an
+# adapter-served format THIS ADAPTER is the declaring party, so the kind is authored here,
+# beside the template it describes. A template with no ``canonical_kind`` is not servable
+# and ``BroadstreetAdapter.creative_formats`` refuses it rather than guessing one.
+#
+# HOW EACH KIND WAS CHOSEN. ``canonical-formats.mdx`` states the rule:
+# "Classification follows the buyer deliverable and who renders it, not the behavioral
+# richness of the placement", and the 3.2 classification vectors
+# (``static/test-vectors/canonical-format-classification.json``) apply it -- a docking
+# video whose deliverable is an MP4 is ``video_hosted`` because "docking is placement or
+# renderer behavior, not creative structure". So each kind below reads the template's
+# REQUIRED assets (what the buyer ships) and ignores how Broadstreet animates it.
 BROADSTREET_TEMPLATES = {
     # Basic types (no template - direct content)
     "static": {
@@ -16,18 +38,34 @@ BROADSTREET_TEMPLATES = {
         "description": "Basic banner/display image ad",
         "required_assets": ["image"],
         "optional_assets": ["click_url", "alt_text"],
+        # One image plus a click URL: ``image``'s own default slot shape
+        # (``image_main`` + optional ``landing_page_url``), and the registry's
+        # ``display_static`` -> ``image`` mapping says the same.
+        "canonical_kind": "image",
     },
     "html": {
         "name": "HTML/JavaScript",
         "description": "Custom HTML or JavaScript ad",
         "required_assets": ["html"],
         "optional_assets": ["click_url"],
+        # Buyer-supplied markup that BROADSTREET serves. The ``buyer_html_bundle``
+        # classification vector draws the line there: "A buyer-supplied bundle hosted by
+        # the seller is html5; display_tag is reserved for opaque externally served markup
+        # or URLs." Broadstreet hosts it, so it is not the externally-served case.
+        "canonical_kind": "html5",
     },
     "text": {
         "name": "Text Ad",
         "description": "Text-only ad",
         "required_assets": ["headline", "body"],
         "optional_assets": ["click_url"],
+        # A headline and a body the publisher's own renderer lays out -- ``native_in_feed``
+        # with its image slots absent. Its default slots are the IAB Native 1.2 set
+        # (``title``, ``body_text``, ``landing_page_url`` among them) and the canonical
+        # states products "MAY use slots_override to ... remove slots the surface doesn't
+        # render"; its scope list names "in-feed sponsored placements without catalog
+        # dependency".
+        "canonical_kind": "native_in_feed",
     },
     # Special templates (use setAdvertisementSource API)
     "cube_3d": {
@@ -53,6 +91,11 @@ BROADSTREET_TEMPLATES = {
             "auto_rotate_ms",
         ],
         "api_source_type": "cube",
+        # Six images each with its own caption, uniform per face: ``image_carousel``'s
+        # deliverable ("cards", each an image plus an optional headline, "per-card
+        # structure the same across all cards"). The cube and its rotation are renderer
+        # behavior, which the classification rule excludes from the decision.
+        "canonical_kind": "image_carousel",
     },
     "youtube_video": {
         "name": "YouTube Video with Text",
@@ -60,6 +103,10 @@ BROADSTREET_TEMPLATES = {
         "required_assets": ["youtube_url"],
         "optional_assets": ["headline", "body", "click_url", "autoplay"],
         "api_source_type": "youtube",
+        # The buyer ships a video reference and Broadstreet plays it in its own player.
+        # ``video_hosted``'s slot is "video_main (video asset, file or hosted URL)" with
+        # optional ``headline``; it is not a VAST tag, so not ``video_vast``.
+        "canonical_kind": "video_hosted",
     },
     "push_pin": {
         "name": "Push Pin Photo",
@@ -67,6 +114,9 @@ BROADSTREET_TEMPLATES = {
         "required_assets": ["image"],
         "optional_assets": ["click_url", "caption", "pin_color"],
         "api_source_type": "pushpin",
+        # One image plus a caption. The bulletin-board pop-up is the renderer's doing;
+        # the deliverable is ``static``'s.
+        "canonical_kind": "image",
     },
     "gallery": {
         "name": "Image Gallery",
@@ -74,6 +124,9 @@ BROADSTREET_TEMPLATES = {
         "required_assets": ["images"],  # List of image URLs
         "optional_assets": ["captions", "click_urls", "auto_rotate_ms"],
         "api_source_type": "gallery",
+        # N images with N captions, rotating. ``native_in_feed`` routes this away
+        # explicitly: "Multi-card carousel -- use image_carousel".
+        "canonical_kind": "image_carousel",
     },
     "native": {
         "name": "Native Ad",
@@ -81,6 +134,10 @@ BROADSTREET_TEMPLATES = {
         "required_assets": ["headline", "image"],
         "optional_assets": ["body", "sponsor", "click_url", "cta_text"],
         "api_source_type": "native",
+        # Headline, image, body, sponsor and CTA assembled by the publisher's renderer
+        # into its own look-and-feel: the IAB Native 1.2 asset bundle ``native_in_feed``
+        # is defined as.
+        "canonical_kind": "native_in_feed",
     },
 }
 

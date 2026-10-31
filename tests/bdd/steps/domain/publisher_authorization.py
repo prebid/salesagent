@@ -40,9 +40,13 @@ def given_no_publisher_auto_verify(ctx: dict) -> None:
     _env(ctx).disable_publisher_auto_verify()
 
 
-@given(parsers.parse('the tenant runs the "{adapter_type}" ad server'))
-def given_ad_server(ctx: dict, adapter_type: str) -> None:
-    _env(ctx).run_ad_server(adapter_type)
+# ``the tenant runs the "<adapter_type>" ad server`` used to live here. It moved to
+# tests/bdd/steps/generic/given_config.py when BR-UC-002's sandbox-isolation pair
+# started using it: the sentence names a fact about the TENANT, not about publisher
+# authorization, and two envs now realize it (PublisherAuthorizationEnv.run_ad_server,
+# MediaBuyCreateEnv.run_ad_server). Left here, a media-buy scenario would bind its
+# setup to a step module about a different domain — accidental coupling that reads as
+# a mistake and would be one as soon as anyone narrowed this module's ``_env``.
 
 
 @given(parsers.parse('the publisher "{publisher}" lists property "{property_id}" named "{name}" in its adagents.json'))

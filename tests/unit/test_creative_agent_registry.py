@@ -58,7 +58,7 @@ must accept a Pydantic ``AnyUrl``.
 import pytest
 from pydantic import AnyUrl
 
-from src.core.creative_agent_registry import CreativeAgentRegistry
+from src.core.creative_agent_registry import CreativeAgentRegistry, PeerCatalog
 
 
 class TestCacheKeyAcceptsAnyUrl:
@@ -94,7 +94,7 @@ class TestCacheKeyAcceptsAnyUrl:
 
         # Patch _fetch to avoid real HTTP — we only test the cache_key path
         async def mock_fetch(*args, **kwargs):
-            return []
+            return PeerCatalog(formats=[])
 
         monkeypatch.setattr(registry, "_fetch_formats_operator", mock_fetch)
 

@@ -89,6 +89,26 @@ class MediaBuyRepository:
             raise AdCPMediaBuyNotFoundError(details=EntityRefDetails(media_buy_id=media_buy_id))
         return media_buy
 
+    def lock_revision(self, media_buy_id: str) -> int | None:
+        """Lock the media buy's row for this transaction and return its current revision.
+
+        ``SELECT ... FOR NO KEY UPDATE``: the row stays locked until the Unit of Work ends,
+        so no other writer can bump the revision between a caller's comparison against this
+        value and the bump its own write makes. That is the atomicity the update request's
+        ``revision`` demands of the check. ``NO KEY`` is the lock PostgreSQL's own UPDATE of
+        a non-key column takes: it serializes writers of this row but not inserts of rows
+        that reference it (packages, webhook delivery logs), which take ``FOR KEY SHARE``.
+        ``None`` when the buy is not in this tenant.
+        """
+        return self._session.scalars(
+            select(MediaBuy.revision)
+            .where(
+                MediaBuy.tenant_id == self._tenant_id,
+                MediaBuy.media_buy_id == media_buy_id,
+            )
+            .with_for_update(key_share=True)
+        ).first()
+
     def find_by_idempotency_key(
         self, idempotency_key: str, principal_id: str, account_id: str | None = None
     ) -> MediaBuy | None:
@@ -343,6 +363,7 @@ class MediaBuyRepository:
         by_alias: bool = False,
         created_at: datetime.datetime | None = None,
         account_id: str | None = None,
+        creative_deadline: datetime.datetime | None = None,
     ) -> MediaBuy:
         """Create a MediaBuy from a request model, serializing raw_request at the DB boundary.
 
@@ -367,6 +388,7 @@ class MediaBuyRepository:
             by_alias: Whether to serialize with field aliases (e.g., content_uri).
             created_at: Optional explicit created_at timestamp.
             account_id: Resolved account scope (AdCP idempotency scope is agent+account+key).
+            creative_deadline: The buy-level creative deadline the adapter reported, or None.
 
         Returns:
             The created MediaBuy ORM object (added to session, not committed).
@@ -404,6 +426,7 @@ class MediaBuyRepository:
             # arrangement started; a repository is not an ``_impl``, so it may canonicalize
             # the request it was handed.
             "payload_hash": canonical_request_hash(req) if getattr(req, "idempotency_key", None) else None,
+            "creative_deadline": creative_deadline,
         }
         if campaign_objective is not None:
             kwargs["campaign_objective"] = campaign_objective
@@ -537,10 +560,16 @@ class MediaBuyRepository:
         seller_committed: bool = False,
         approved_at: datetime.datetime | None = None,
         approved_by: str | None = None,
+        creative_deadline: datetime.datetime | None = None,
     ) -> MediaBuy | None:
         """Update the status of a media buy within this tenant.
 
         Returns the updated MediaBuy, or None if not found in this tenant.
+
+        ``creative_deadline`` is the buy-level deadline the adapter reported when it
+        created the order. The approval path records it in this same write, so a
+        manually approved buy keeps it the way ``create_from_request`` keeps it for an
+        auto-approved one. None leaves the column as it is.
 
         The status must be a member of the persisted vocabulary. Rejecting an
         unknown value HERE is what lets every reader stop guessing: the wire
@@ -561,6 +590,8 @@ class MediaBuyRepository:
             media_buy.approved_at = approved_at
         if approved_by is not None:
             media_buy.approved_by = approved_by
+        if creative_deadline is not None:
+            media_buy.creative_deadline = creative_deadline
         # Stamp before bumping: _bump_revision leaves revision holding a SQL
         # expression, and reading any attribute after that can trigger a refresh
         # mid-mutation. The stamp reads status and confirmed_at, so it goes first.

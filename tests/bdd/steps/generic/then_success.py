@@ -9,7 +9,7 @@ from __future__ import annotations
 from pytest_bdd import parsers, then
 
 from src.core.helpers import enum_value
-from tests.bdd.steps._outcome_helpers import require_payload
+from tests.bdd.steps._outcome_helpers import require_payload, wire_field
 from tests.bdd.steps.generic.then_media_buy import then_no_media_buy_persisted as _then_no_media_buy_persisted
 
 
@@ -111,9 +111,9 @@ def then_response_contains_array(ctx: dict, field: str) -> None:
 
 @then("the response should include sandbox equals true")
 def then_sandbox_true(ctx: dict) -> None:
-    """Assert response includes sandbox: true."""
-    resp = require_payload(ctx)
-    assert getattr(resp, "sandbox", None) is True, f"Expected sandbox=True, got {getattr(resp, 'sandbox', None)}"
+    """Assert the response the buyer received carries ``sandbox: true`` on the wire."""
+    sandbox = wire_field(ctx, "sandbox")
+    assert sandbox is True, f"Expected sandbox: true on the wire, got {sandbox!r}"
 
 
 @then("the response should not include a sandbox field")

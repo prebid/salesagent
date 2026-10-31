@@ -82,7 +82,7 @@ def _operator_cause(exc: Exception) -> str:
     ``internal_detail`` first. Post-ADR-010 an ``AdCPSalesAgentError``'s
     ``message`` is a read-only property over ``CODE_TABLE`` -- a function of the
     CODE, not of the raise site -- because it is the text that reaches a BUYER
-    over the wire, where AdCP 3.1.1 ``transport-errors.mdx`` § Security
+    over the wire, where ``transport-errors.mdx`` § Security
     Considerations forbids deployment specifics. So ``message`` reads
     "Configuration error" for a handshake refusal, an egress refusal and an
     unparseable answer alike, and "Service temporarily unavailable" for an

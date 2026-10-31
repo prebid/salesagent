@@ -13,7 +13,7 @@ running before crypto verify without anything in salesagent reordering,
 re-deciding or second-sourcing it.
 
 Spec grounding (reproducible):
-``git -C ~/projects/adcp show v3.1.1:docs/building/by-layer/L1/security.mdx``
+``git -C ~/projects/adcp show <pin>:docs/building/by-layer/L1/security.mdx``
 — :1238 (step 9), :1328 (one combined list at the brand.json origin), :1333
 (fetch-failure safe default, grace = 4x the previous polling interval),
 :1686-1689 (the checklist pseudo-code). Graded at the wire by compliance vector

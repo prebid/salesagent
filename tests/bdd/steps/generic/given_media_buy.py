@@ -19,6 +19,7 @@ from adcp.types import ErrorCode
 from pytest_bdd import given, parsers
 
 from src.core.database.models import PricingOption
+from src.core.helpers import MEDIA_ASSET_TYPES
 from tests.bdd.steps.generic._create_request import (
     build_create_request_kwargs,
     pricing_option_id,
@@ -29,7 +30,7 @@ from tests.factories import (
     PricingOptionFactory,
     ProductFactory,
 )
-from tests.factories.creative_asset import build_assets, image_spec
+from tests.factories.creative_asset import build_assets, image_spec, named_format_assets
 from tests.factories.malformed import malformed
 from tests.factories.mint import mint
 from tests.factories.request import CreativeAssetRequestFactory
@@ -172,6 +173,18 @@ def _sync_adapter_approval_to_db(ctx: dict, *, manual_approval_required: bool) -
     set_adapter_test_behavior(env, tenant.tenant_id, manual_approval_required=manual_approval_required)
 
 
+def _set_tenant_human_review(ctx: dict, *, required: bool) -> None:
+    """Set ``human_review_required`` on the tenant row and on the identity overrides.
+
+    The committed row is what the live (e2e) server reads; the overrides are what the
+    in-process call_impl identity is built from.
+    """
+    env = ctx["env"]
+    ctx["tenant"].human_review_required = required
+    env._commit_factory_data()
+    env._tenant_overrides["human_review_required"] = required
+
+
 def _seed_auto_approval(ctx: dict, *, sync_adapter: bool = True) -> None:
     """Force the auto-approval create path for the scenario's tenant.
 
@@ -186,14 +199,9 @@ def _seed_auto_approval(ctx: dict, *, sync_adapter: bool = True) -> None:
 
     No-op when the scenario has no tenant yet.
     """
-    tenant = ctx.get("tenant")
-    if tenant is None:
+    if ctx.get("tenant") is None:
         return
-    env = ctx["env"]
-    tenant.human_review_required = False
-    env._commit_factory_data()
-    # Also update the tenant overrides the call_impl identity is built from.
-    env._tenant_overrides["human_review_required"] = False
+    _set_tenant_human_review(ctx, required=False)
     if sync_adapter:
         _sync_adapter_approval_to_db(ctx, manual_approval_required=False)
 
@@ -225,27 +233,58 @@ def _sync_adapter_error_to_db(
     set_adapter_test_behavior(env, tenant.tenant_id, **kwargs)
 
 
+def set_update_adapter_outcome(ctx: dict, error: Exception | None) -> None:
+    """Make the adapter the UPDATE path calls succeed (``error`` None) or raise ``error``.
+
+    In process that adapter is ``env.mock['update_adapter']`` (MediaBuyDualEnv); the
+    create-module ``env.mock['adapter']`` is never asked during an update, so a Given
+    that configured only that one changed nothing the update could observe. Success
+    restores the harness's own adapter contract rather than clearing the side effect,
+    which would leave a bare MagicMock as the adapter's answer. The DB knob carries the
+    same outcome to the live server's mock adapter on e2e_rest, which raises its
+    default transient class (SERVICE_UNAVAILABLE) — the class given here in process.
+    """
+    from tests.harness._mixins import make_adapter_update_side_effect
+
+    env = ctx["env"]
+    if "update_adapter" in env.mock:
+        env.mock["update_adapter"].return_value.update_media_buy.side_effect = (
+            make_adapter_update_side_effect() if error is None else error
+        )
+    _sync_adapter_error_to_db(
+        ctx,
+        fail_on_update=error is not None,
+        error_message=None if error is None else "Ad server returned error during update",
+    )
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # Tenant configuration
 # ═══════════════════════════════════════════════════════════════════════
 
 
-def _configure_adapter_manual_approval(env: Any, *, required: bool) -> None:
+#: The operations a real adapter puts behind approval when its config names none
+#: (``AdServerAdapter.__init__``'s ``manual_approval_operations`` default, src/adapters/base.py).
+_REAL_ADAPTER_APPROVAL_OPERATIONS = frozenset({"create_media_buy", "update_media_buy", "add_creative_assets"})
+
+
+def _configure_adapter_manual_approval(env: Any, *, required: bool, operations: frozenset[str] | None = None) -> None:
     """Set manual-approval config on EVERY adapter mock the env exposes.
 
-    MediaBuyCreateEnv patches the create-module adapter as ``env.mock['adapter']``;
-    MediaBuyDualEnv additionally patches the update-module adapter as
-    ``env.mock['update_adapter']``. The production create/update manual-approval
+    ``env.adapter_mocks()`` lists them: the create module's on MediaBuyCreateEnv, and the
+    update module's as well on MediaBuyDualEnv. The production create/update manual-approval
     gate reads ``manual_approval_required`` + ``'<op>' in manual_approval_operations``
-    from its OWN module's adapter, so both must be configured (guarded on presence).
+    from its OWN module's adapter, so each must be configured.
+
+    ``operations`` defaults to the two media-buy operations when ``required`` and to none
+    otherwise. A Given that wants the adapter to act as a real one with its flag off passes
+    :data:`_REAL_ADAPTER_APPROVAL_OPERATIONS`.
     """
-    operations = {"create_media_buy", "update_media_buy"} if required else []
-    for name in ("adapter", "update_adapter"):
-        if name not in env.mock:
-            continue
-        adapter_mock = env.mock[name].return_value
+    if operations is None:
+        operations = frozenset({"create_media_buy", "update_media_buy"}) if required else frozenset()
+    for adapter_mock in env.adapter_mocks():
         adapter_mock.manual_approval_required = required
-        adapter_mock.manual_approval_operations = operations
+        adapter_mock.manual_approval_operations = set(operations)
 
 
 @given("tenant human_review_required is false")
@@ -263,26 +302,43 @@ def given_tenant_auto_approval(ctx: dict) -> None:
     _seed_auto_approval(ctx)
 
 
+@given("tenant human_review_required is true")
+def given_tenant_review_only(ctx: dict) -> None:
+    """The TENANT requires review, and the adapter does not.
+
+    The sentence names one input, so it sets one: ``tenant.human_review_required``. The
+    adapter is left as a real adapter with its own flag off -- ``manual_approval_required``
+    false, and the operations a real adapter gates by default -- on the in-process mocks and
+    on the live server's AdapterConfig alike. Approval then follows the tenant column alone,
+    so a seller that ignored it would complete the buy. The BR-RULE-080 approval outlines'
+    tenant rows reach it too, which isolates the tenant arm of the create approval gate
+    (``tenant.human_review_required OR adapter.manual_approval_required``, then
+    ``'create_media_buy' in adapter.manual_approval_operations``). (``given_tenant_manual_approval``
+    also raises the adapter's flag, which update_media_buy scenarios rely on.)
+    """
+    assert ctx.get("tenant") is not None, (
+        "No tenant in ctx — step claims 'tenant human_review_required is true' but no tenant exists to configure"
+    )
+    _set_tenant_human_review(ctx, required=True)
+    _configure_adapter_manual_approval(ctx["env"], required=False, operations=_REAL_ADAPTER_APPROVAL_OPERATIONS)
+    _sync_adapter_approval_to_db(ctx, manual_approval_required=False)
+
+
 @given("the tenant is configured for manual approval")
 @given("the tenant requires manual approval")
 @given(parsers.parse('the tenant has "human_review_required" set to true'))
-@given("tenant human_review_required is true")
 @given("approval path is manual")
 def given_tenant_manual_approval(ctx: dict) -> None:
     """Configure tenant for manual approval."""
-    tenant = ctx.get("tenant")
-    assert tenant is not None, (
+    assert ctx.get("tenant") is not None, (
         "No tenant in ctx — step claims 'tenant is configured for manual approval' but no tenant exists to configure"
     )
-    tenant.human_review_required = True
-    env = ctx["env"]
-    env._commit_factory_data()
-    env._tenant_overrides["human_review_required"] = True
+    _set_tenant_human_review(ctx, required=True)
     # Production code checks: manual_approval_required AND
     # "<op>" in adapter.manual_approval_operations. The mock adapter defaults to
     # manual_approval_operations=[], so configure every adapter mock (create +
     # update) for manual approval — the update submitted path reads update_adapter.
-    _configure_adapter_manual_approval(env, required=True)
+    _configure_adapter_manual_approval(ctx["env"], required=True)
     # Also write to DB so Docker-hosted adapter reads the correct config
     _sync_adapter_approval_to_db(ctx, manual_approval_required=True)
 
@@ -325,7 +381,7 @@ def given_approval_partition(ctx: dict, partition: str) -> None:
         given_tenant_auto_approval(ctx)
         given_adapter_no_manual_approval(ctx)
     elif partition == "pending_human_review":
-        given_tenant_manual_approval(ctx)
+        given_tenant_review_only(ctx)
     elif partition == "pending_adapter_approval":
         # Tenant auto-approve, but adapter requires manual approval
         given_tenant_auto_approval(ctx)
@@ -346,7 +402,7 @@ def given_approval_boundary(ctx: dict, config: str) -> None:
         given_tenant_auto_approval(ctx)
         given_adapter_no_manual_approval(ctx)
     elif config == "tenant_hr=true":
-        given_tenant_manual_approval(ctx)
+        given_tenant_review_only(ctx)
     elif config == "adapter_ma=true":
         # Tenant auto-approve, but adapter requires manual approval
         given_tenant_auto_approval(ctx)
@@ -486,11 +542,10 @@ def given_valid_create_request_with_table(ctx: dict, datatable: list[list[str]])
             if "account_id" in value:
                 account_id = value.split('"')[1]
                 from adcp.types import (
-                    AccountReference,
                     AccountReferenceById,
                 )
 
-                kwargs["account"] = AccountReference(root=AccountReferenceById(account_id=account_id))
+                kwargs["account"] = AccountReferenceById(account_id=account_id)
             else:
                 raise ValueError(f"Unrecognized account format: '{value}'. Expected format: account_id \"acc-001\"")
         elif field == "proposal_id":
@@ -1052,92 +1107,66 @@ def given_neither_fixed_nor_floor(ctx: dict) -> None:
 # ═══════════════════════════════════════════════════════════════════════
 
 
-def _setup_fixed_pricing(ctx: dict, rate: float = 5.00) -> None:
-    """Configure a fixed-price pricing option (is_fixed=True, rate set, no floor)."""
-    po = ctx.get("default_pricing_option")
-    assert po is not None, "No default_pricing_option in ctx"
-    if po.is_fixed and po.rate:
-        # Default PO is already fixed — just ensure it has the right rate if overridden
-        if rate != 5.00:
-            env = ctx["env"]
-            new_po = PricingOptionFactory(
-                product=ctx["default_product"],
-                pricing_model="cpm",
-                currency="USD",
-                is_fixed=True,
-                rate=rate,
-            )
-            env._commit_factory_data()
-            kwargs = _ensure_request_defaults(ctx)
-            assert kwargs.get("packages"), "No packages in request — cannot assign fixed pricing option"
-            kwargs["packages"][0]["pricing_option_id"] = pricing_option_id(new_po)
-        return
-    # Default PO is not fixed — create a new fixed one
+def _select_new_pricing_option(ctx: dict, **option: Any) -> None:
+    """Seed a pricing option on the default product and select it on the first package.
+
+    Every pricing/currency Given that varies the selected option goes through here. An
+    option whose id would collide with the seeded ``cpm_usd_fixed`` must name its own
+    ``pricing_option_id``: ``uq_pricing_options_option_id`` is unique per product.
+    """
     env = ctx["env"]
-    new_po = PricingOptionFactory(
-        product=ctx["default_product"],
-        pricing_model="cpm",
-        currency="USD",
-        is_fixed=True,
-        rate=rate,
-    )
+    po = PricingOptionFactory(product=ctx["default_product"], **option)
     env._commit_factory_data()
     kwargs = _ensure_request_defaults(ctx)
-    assert kwargs.get("packages"), "No packages in request — cannot assign fixed pricing option"
-    kwargs["packages"][0]["pricing_option_id"] = pricing_option_id(new_po)
+    assert kwargs.get("packages"), "No packages in request — cannot select a pricing option"
+    kwargs["packages"][0]["pricing_option_id"] = pricing_option_id(po)
+
+
+def _setup_fixed_pricing(ctx: dict, rate: float = 5.00) -> None:
+    """Select a fixed-price option (is_fixed=True, rate set, no floor) at ``rate``."""
+    po = ctx["default_pricing_option"]
+    if po.is_fixed and po.rate == Decimal(str(rate)):
+        _ensure_request_defaults(ctx)["packages"][0]["pricing_option_id"] = pricing_option_id(po)
+        return
+    _select_new_pricing_option(
+        ctx, pricing_model="cpm", currency="USD", is_fixed=True, rate=rate, pricing_option_id=f"cpm_usd_fixed_{rate}"
+    )
 
 
 def _setup_auction_pricing(ctx: dict, floor: float = 2.0, bid: float = 5.0) -> None:
-    """Configure an auction pricing option (is_fixed=False, floor set) with bid_price."""
-    env = ctx["env"]
-    auction_po = PricingOptionFactory(
-        product=ctx["default_product"],
-        pricing_model="cpm",
-        currency="USD",
-        is_fixed=False,
-        price_guidance={"floor": floor},
+    """Select an auction option (is_fixed=False, floor set) and bid on it."""
+    _select_new_pricing_option(
+        ctx, pricing_model="cpm", currency="USD", is_fixed=False, price_guidance={"floor": floor}
     )
-    env._commit_factory_data()
-    kwargs = _ensure_request_defaults(ctx)
-    assert kwargs.get("packages"), "No packages in request — cannot assign auction pricing option"
-    kwargs["packages"][0]["pricing_option_id"] = pricing_option_id(auction_po)
-    kwargs["packages"][0]["bid_price"] = bid
+    _ensure_request_defaults(ctx)["packages"][0]["bid_price"] = bid
 
 
 def _setup_both_pricing(ctx: dict, rate: float = 5.00, floor: float = 2.0) -> None:
-    """Configure a malformed PO with both fixed_price and floor_price (XOR violation).
+    """Select a fixed option whose row also carries a floor (both set on the seller row).
 
-    SPEC-PRODUCTION GAP: Production treats this as a valid fixed option because
-    _validate_pricing_model_selection only checks is_fixed + rate. The XOR invariant
-    is a spec-level constraint not enforced at create_media_buy time.
+    The XOR is a property of the PUBLISHED option, and the seller publishes a fixed row as
+    ``fixed_price`` alone (``product_conversion``), so the buyer sees a valid fixed option.
     """
-    env = ctx["env"]
-    malformed_po = PricingOptionFactory(
-        product=ctx["default_product"],
+    _select_new_pricing_option(
+        ctx,
         pricing_model="cpm",
         currency="USD",
         is_fixed=True,
         rate=rate,
         price_guidance={"floor": floor},
+        pricing_option_id="cpm_usd_fixed_with_floor",
     )
-    env._commit_factory_data()
-    kwargs = _ensure_request_defaults(ctx)
-    assert kwargs.get("packages"), "No packages in request — cannot assign both-set pricing option"
-    kwargs["packages"][0]["pricing_option_id"] = pricing_option_id(malformed_po)
 
 
 def _setup_neither_pricing(ctx: dict) -> None:
-    """Configure request with a pricing_option_id that has neither fixed nor auction pricing.
+    """Select a pricing_option_id that resolves to no option on the product.
 
-    DB constraints (check_fixed_has_rate + check_auction_has_price_guidance) make
-    it impossible to INSERT a PricingOption row without valid pricing data.
-    Instead, we reference a synthetic pricing_option_id that doesn't match any
-    existing option — this exercises the app-level "no matching option" path in
-    _validate_pricing_model_selection → PRICING_ERROR.
+    The seller cannot hold an option with neither a fixed price nor a floor
+    (check_fixed_has_rate, check_auction_has_price_guidance), so the state a buyer can
+    produce is an id the product does not offer: INVALID_PRICING_OPTION.
     """
     kwargs = _ensure_request_defaults(ctx)
     assert kwargs.get("packages"), "No packages in request — cannot assign neither-set pricing option"
-    # Use a pricing_option_id that matches no existing option (neither fixed nor auction)
     kwargs["packages"][0]["pricing_option_id"] = "cpm_usd_neither"
 
 
@@ -1157,26 +1186,16 @@ def given_pricing_option_configuration(ctx: dict, config: str) -> None:
         _setup_auction_pricing(ctx)
 
     elif config == "cpa_model":
-        # CPA pricing model — create a fixed CPA option (valid from production's view)
-        env = ctx["env"]
-        cpa_po = PricingOptionFactory(
-            product=ctx["default_product"],
-            pricing_model="cpa",
-            currency="USD",
-            is_fixed=True,
-            rate=10.00,
+        # pricing-options/cpa-option.json requires event_type, and the seller cannot
+        # publish a CPA option without one (product_conversion refuses the row).
+        _select_new_pricing_option(
+            ctx, pricing_model="cpa", currency="USD", is_fixed=True, rate=10.00, parameters={"event_type": "purchase"}
         )
-        env._commit_factory_data()
-        kwargs = _ensure_request_defaults(ctx)
-        assert kwargs.get("packages"), (
-            "No packages in request — pricing option configuration 'cpa_model' requires at least one package"
-        )
-        kwargs["packages"][0]["pricing_option_id"] = pricing_option_id(cpa_po)
 
     elif config in ("both_set", "fixed+floor"):
         _setup_both_pricing(ctx)
 
-    elif config in ("neither_set", "neither"):
+    elif config in ("neither_set", "neither", "neither (code rejects)"):
         _setup_neither_pricing(ctx)
 
     elif config.startswith("fixed_price="):
@@ -1196,43 +1215,66 @@ def given_pricing_option_configuration(ctx: dict, config: str) -> None:
 # ═══════════════════════════════════════════════════════════════════════
 
 
-def _setup_multi_package_request(ctx: dict, currencies: list[str]) -> None:
-    """Create a request with N packages, each using a pricing option with the given currency.
+def _set_packages(ctx: dict, selections: list[tuple[str, str]]) -> None:
+    """Replace the request's packages: one per ``(product_id, currency)``.
 
-    Also ensures a CurrencyLimit row exists for each currency that should be
-    in the tenant's table.
+    Each package selects a fixed CPM option in that currency. The default product and
+    its seeded option are reused, and every other row is created ONCE: a product named
+    twice is one product, and one option per (product, currency) -- a second
+    ``cpm_<currency>_fixed`` row on the same product violates
+    ``uq_pricing_options_option_id``.
     """
     env = ctx["env"]
     kwargs = _ensure_request_defaults(ctx)
+    default_product = ctx["default_product"]
+    default_option = ctx["default_pricing_option"]
+    products = {default_product.product_id: default_product}
+    options = {(default_product.product_id, default_option.currency): default_option}
     packages = []
-
-    for i, currency in enumerate(currencies):
-        if i == 0:
-            # Re-use the default product for the first package
-            product = ctx["default_product"]
-        else:
-            product = ProductFactory(
-                tenant=ctx["tenant"],
-                product_id=f"product_{currency.lower()}_{i}",
-                property_tags=["all_inventory"],
+    for product_id, currency in selections:
+        if product_id not in products:
+            products[product_id] = ProductFactory(
+                tenant=ctx["tenant"], product_id=product_id, property_tags=["all_inventory"]
             )
-        po = PricingOptionFactory(
-            product=product,
-            pricing_model="cpm",
-            currency=currency,
-            is_fixed=True,
-            rate=5.00,
-        )
-        env._commit_factory_data()
-        packages.append(
-            {
-                "product_id": product.product_id,
-                "budget": 5000.0,
-                "pricing_option_id": pricing_option_id(po),
-            }
-        )
-
+        if (product_id, currency) not in options:
+            options[(product_id, currency)] = PricingOptionFactory(
+                product=products[product_id], pricing_model="cpm", currency=currency, is_fixed=True, rate=5.00
+            )
+            env._commit_factory_data()
+        option = options[(product_id, currency)]
+        packages.append({"product_id": product_id, "budget": 5000.0, "pricing_option_id": pricing_option_id(option)})
     kwargs["packages"] = packages
+
+
+def _setup_multi_package_request(ctx: dict, currencies: list[str]) -> None:
+    """One package per currency: the default product first, a fresh product for each other."""
+    default_pid = ctx["default_product"].product_id
+    _set_packages(ctx, [(default_pid if i == 0 else f"product_{c.lower()}_{i}", c) for i, c in enumerate(currencies)])
+
+
+def _select_currency_option(ctx: dict, currency: str) -> None:
+    """Select a fixed CPM option in ``currency`` on the default product's single package."""
+    _select_new_pricing_option(ctx, pricing_model="cpm", currency=currency, is_fixed=True, rate=5.00)
+
+
+def _setup_ad_server_currencies(ctx: dict, currency: str, *, secondary: list[str]) -> None:
+    """A tenant that accepts ``currency`` but whose ad-server network is USD-primary.
+
+    ``currency`` goes into the tenant's CurrencyLimit table so the tenant gate passes and
+    the ad-server gate (``AdapterConfig.gam_network_currency`` plus
+    ``gam_secondary_currencies``) is the one graded. ``secondary`` lists the network's
+    enabled secondary currencies. Written through the AdapterConfig upsert the e2e server
+    reads as well.
+    """
+    from tests.factories.core import set_adapter_type
+
+    env = ctx["env"]
+    CurrencyLimitFactory(tenant=ctx["tenant"], currency_code=currency)
+    row = set_adapter_type(env, ctx["tenant"].tenant_id, "mock")
+    row.gam_network_currency = "USD"
+    row.gam_secondary_currencies = secondary
+    env._commit_factory_data()
+    _select_currency_option(ctx, currency)
 
 
 @given(parsers.parse("the currency scenario is {partition}"))
@@ -1243,10 +1285,11 @@ def given_currency_scenario(ctx: dict, partition: str) -> None:
     - single_package: 1 package, USD (trivially valid — only 1 currency)
     - all_same_currency: 2 packages, both USD
     - currency_in_tenant_table: 1 package, EUR (tenant has EUR in CurrencyLimit)
+    - currency_in_ad_server: 1 package, JPY; tenant has JPY, network secondary has JPY
     - mixed_currencies: 2 packages, USD + EUR (cross-package mismatch)
     - currency_not_in_tenant: 1 package, XYZ (not in tenant's CurrencyLimit table)
+    - currency_not_in_ad_server: 1 package, JPY; tenant has JPY, network is USD only
     """
-    env = ctx["env"]
     partition = partition.strip()
 
     if partition == "single_package":
@@ -1257,44 +1300,20 @@ def given_currency_scenario(ctx: dict, partition: str) -> None:
         _setup_multi_package_request(ctx, ["USD", "USD"])
 
     elif partition == "currency_in_tenant_table":
-        # Add EUR to tenant's CurrencyLimit table, then use EUR pricing option
         CurrencyLimitFactory(tenant=ctx["tenant"], currency_code="EUR")
-        env._commit_factory_data()
-        kwargs = _ensure_request_defaults(ctx)
-        po_eur = PricingOptionFactory(
-            product=ctx["default_product"],
-            pricing_model="cpm",
-            currency="EUR",
-            is_fixed=True,
-            rate=5.00,
-        )
-        env._commit_factory_data()
-        assert kwargs.get("packages"), (
-            "No packages in request — currency_in_tenant_table partition requires packages to assign EUR PO"
-        )
-        kwargs["packages"][0]["pricing_option_id"] = pricing_option_id(po_eur)
+        _select_currency_option(ctx, "EUR")
+
+    elif partition == "currency_in_ad_server":
+        _setup_ad_server_currencies(ctx, "JPY", secondary=["JPY"])
 
     elif partition == "mixed_currencies":
-        # 2 packages with different currencies — production derives currency from
-        # the first package's pricing option, so the second package's currency
-        # mismatch may or may not trigger an error depending on production logic.
         _setup_multi_package_request(ctx, ["USD", "EUR"])
 
     elif partition == "currency_not_in_tenant":
-        # Use a currency not in tenant's CurrencyLimit table
-        kwargs = _ensure_request_defaults(ctx)
-        po_xyz = PricingOptionFactory(
-            product=ctx["default_product"],
-            pricing_model="cpm",
-            currency="XYZ",
-            is_fixed=True,
-            rate=5.00,
-        )
-        env._commit_factory_data()
-        assert kwargs.get("packages"), (
-            "No packages in request — currency_not_in_tenant partition requires packages to assign XYZ PO"
-        )
-        kwargs["packages"][0]["pricing_option_id"] = pricing_option_id(po_xyz)
+        _select_currency_option(ctx, "XYZ")
+
+    elif partition == "currency_not_in_ad_server":
+        _setup_ad_server_currencies(ctx, "JPY", secondary=[])
 
     else:
         raise ValueError(f"Unknown currency partition: {partition}")
@@ -1306,35 +1325,36 @@ def given_currency_configuration(ctx: dict, config: str) -> None:
 
     Boundary values:
     - 1 pkg USD: single package, USD
-    - 2 pkg USD+USD: two packages, same currency
-    - 2 pkg USD+EUR: two packages, different currencies
-    - 1 pkg XYZ: single package, unsupported currency
+    - 2 pkg USD+USD / 2 pkg same pricing_option_id currency: two packages, same currency
+    - 2 pkg USD+EUR / 2 pkg divergent pricing_option_id currency: two packages, different
+      currencies. The pin carries currency on the selected pricing option only, so the two
+      spellings of each pair are one request.
+    - 1 pkg XYZ: single package, currency the tenant does not hold
+    - 1 pkg JPY (GAM no JPY): tenant holds JPY, the ad-server network does not
+    - total_budget USD, 1 pkg EUR: the buyer's total_budget names USD (equal to the
+      package budget sum, as fixed mode requires) while the only package selects EUR
     """
-    env = ctx["env"]
     config = config.strip()
 
     if config == "1 pkg USD":
-        # Default request already has 1 package with USD
         _ensure_request_defaults(ctx)
 
-    elif config == "2 pkg USD+USD":
+    elif config in ("2 pkg USD+USD", "2 pkg same pricing_option_id currency"):
         _setup_multi_package_request(ctx, ["USD", "USD"])
 
-    elif config == "2 pkg USD+EUR":
+    elif config in ("2 pkg USD+EUR", "2 pkg divergent pricing_option_id currency"):
         _setup_multi_package_request(ctx, ["USD", "EUR"])
 
     elif config == "1 pkg XYZ":
-        kwargs = _ensure_request_defaults(ctx)
-        po_xyz = PricingOptionFactory(
-            product=ctx["default_product"],
-            pricing_model="cpm",
-            currency="XYZ",
-            is_fixed=True,
-            rate=5.00,
-        )
-        env._commit_factory_data()
-        assert kwargs.get("packages"), "No packages in request — '1 pkg XYZ' config requires packages to assign XYZ PO"
-        kwargs["packages"][0]["pricing_option_id"] = pricing_option_id(po_xyz)
+        _select_currency_option(ctx, "XYZ")
+
+    elif config == "1 pkg JPY (GAM no JPY)":
+        _setup_ad_server_currencies(ctx, "JPY", secondary=[])
+
+    elif config == "total_budget USD, 1 pkg EUR":
+        _select_currency_option(ctx, "EUR")
+        kwargs = ctx["request_kwargs"]
+        kwargs["total_budget"] = {"amount": sum(pkg["budget"] for pkg in kwargs["packages"]), "currency": "USD"}
 
     else:
         raise ValueError(f"Unknown currency boundary config: {config}")
@@ -1346,49 +1366,8 @@ def given_currency_configuration(ctx: dict, config: str) -> None:
 
 
 def _setup_multi_product_request(ctx: dict, product_ids: list[str]) -> None:
-    """Create a request with N packages, each using the given product_id.
-
-    All packages use USD/CPM/fixed pricing — currency is not the variable under test.
-    Duplicate product_ids are intentional for testing the uniqueness constraint.
-    """
-    env = ctx["env"]
-    kwargs = _ensure_request_defaults(ctx)
-    packages = []
-
-    for _i, pid in enumerate(product_ids):
-        default_product = ctx.get("default_product")
-        if default_product is not None and pid == default_product.product_id:
-            product = default_product
-        else:
-            # Check if product already exists in the session (dedup for same pid)
-            existing = ctx.get(f"_product_{pid}")
-            if existing is not None:
-                product = existing
-            else:
-                product = ProductFactory(
-                    tenant=ctx["tenant"],
-                    product_id=pid,
-                    property_tags=["all_inventory"],
-                )
-                ctx[f"_product_{pid}"] = product
-
-        po = PricingOptionFactory(
-            product=product,
-            pricing_model="cpm",
-            currency="USD",
-            is_fixed=True,
-            rate=5.00,
-        )
-        env._commit_factory_data()
-        packages.append(
-            {
-                "product_id": product.product_id,
-                "budget": 5000.0,
-                "pricing_option_id": pricing_option_id(po),
-            }
-        )
-
-    kwargs["packages"] = packages
+    """One USD package per product_id. A repeated id is the uniqueness violation under test."""
+    _set_packages(ctx, [(pid, "USD") for pid in product_ids])
 
 
 @given(parsers.parse("the product scenario is {partition}"))
@@ -1450,51 +1429,63 @@ def given_product_configuration(ctx: dict, config: str) -> None:
 def _set_min_spend(ctx: dict, *, product_min: float | None, tenant_min: float | None, budget: float) -> None:
     """Configure minimum spend thresholds and package budget.
 
-    Sets PricingOption.min_spend_per_package (product-level) and
-    CurrencyLimit.min_package_budget (tenant-level), then adjusts
-    the request package budget.
+    Sets the two minimums (``_set_minimums``), then adjusts the request package budget.
     """
-    from decimal import Decimal
-
-    env = ctx["env"]
     kwargs = _ensure_request_defaults(ctx)
+    _set_minimums(ctx, product_min=product_min, tenant_min=tenant_min)
+    if kwargs.get("packages"):
+        kwargs["packages"][0]["budget"] = budget
 
-    # Product-level minimum: update the default pricing option IN PLACE.
-    #
-    # This is the one place that writes to the seeded ``default_pricing_option`` row
-    # rather than creating a sibling through ``PricingOptionFactory`` like every other
-    # pricing Given here, and the asymmetry is forced, not an oversight. A
-    # ``PricingOption`` has no id COLUMN: production derives its id as
-    # ``{pricing_model}_{currency}_{fixed|auction}`` and selects the FIRST row whose
-    # derived id matches (``media_buy_create._validate_pricing_model_selection``,
-    # mirrored by ``database/product_pricing.get_product_pricing_options``). A second
-    # cpm/USD/fixed row therefore carries the SAME id as the seeded one and is shadowed
-    # by it — the package would keep resolving to the row without ``min_spend_per_package``
-    # and the "budget below product min" examples would stop being exercised while
-    # staying green. Editing the identified row is the only way to say "the cpm/USD/fixed
-    # option now has a minimum". Safe because the row is this scenario's own: ``_harness_env``
-    # is function-scoped and seeds a fresh tenant/product/option per scenario.
+
+@given("the seller sets no minimum package budget")
+def given_no_minimum_package_budget(ctx: dict) -> None:
+    """Clear the seller's minimum at both levels, so a budget is judged by no seller minimum.
+
+    For a budget-amount boundary: the factory tenant's USD CurrencyLimit carries
+    ``min_package_budget=100``, which refuses every small positive budget with the same
+    BUDGET_TOO_LOW a positivity rule answers, so the row could not tell the two apart.
+    """
+    _set_minimums(ctx, product_min=None, tenant_min=None)
+
+
+def _set_minimums(ctx: dict, *, product_min: float | None, tenant_min: float | None) -> None:
+    """Set PricingOption.min_spend_per_package (product) and CurrencyLimit.min_package_budget (tenant)."""
+    env = ctx["env"]
+
+    # Product-level minimum: update the default pricing option IN PLACE -- the one row
+    # the package already selects. A sibling cpm/USD/fixed row cannot be added instead:
+    # ``uq_pricing_options_option_id`` refuses a second ``cpm_usd_fixed`` on the product.
+    # Safe because the row is this scenario's own: ``_harness_env`` is function-scoped
+    # and seeds a fresh tenant/product/option per scenario.
     po = ctx["default_pricing_option"]
     po.min_spend_per_package = Decimal(str(product_min)) if product_min is not None else None
-    env._commit_factory_data()
 
-    # Tenant-level minimum: update the existing CurrencyLimit row
-    from sqlalchemy import select
+    _set_tenant_min_package_budget(env, tenant_min)
 
-    from src.core.database.models import CurrencyLimit
 
-    cl = env._session.scalars(
-        select(CurrencyLimit).filter_by(
-            tenant_id=ctx["tenant"].tenant_id,
-            currency_code="USD",
-        )
-    ).one()
+def _set_tenant_min_package_budget(env: Any, tenant_min: float | None) -> None:
+    """Write the tenant's USD ``CurrencyLimit.min_package_budget`` (None clears it).
+
+    The tenant-level seller minimum, on its existing USD row; committed through the env,
+    so on e2e_rest it is the live server's row that changes.
+    """
+    cl = env.get_currency_limit("USD")
     cl.min_package_budget = Decimal(str(tenant_min)) if tenant_min is not None else None
     env._commit_factory_data()
 
-    # Set package budget
-    if kwargs.get("packages"):
-        kwargs["packages"][0]["budget"] = budget
+
+@given("the tenant sets no min_package_budget")
+def given_no_tenant_min_package_budget(ctx: dict) -> None:
+    """Clear the seller's tenant-level package minimum (the seeded tenant's is 100).
+
+    For rows that grade the request's own budget rules: with the minimum in place, any
+    amount under 100 is refused BUDGET_TOO_LOW by it, so a 0.01 row could not succeed and
+    a 0 row passed whether or not the positivity rule ran.
+    """
+    _set_tenant_min_package_budget(ctx["env"], None)
+    assert ctx["env"].get_currency_limit("USD").min_package_budget is None, (
+        "step claims the tenant sets no min_package_budget, but its USD CurrencyLimit still has one"
+    )
 
 
 @given(parsers.parse("the minimum spend scenario is {partition}"))
@@ -1505,7 +1496,8 @@ def given_minimum_spend_scenario(ctx: dict, partition: str) -> None:
     - budget_meets_product_min: budget 5000 >= product min_spend 1000
     - budget_meets_tenant_min: budget 5000 >= tenant min_package_budget 100 (no product min)
     - no_minimum_configured: no min_spend at either level
-    - budget_below_product_min: budget 50 < product min_spend 1000
+    - budget_below_product_min: budget 500 < product min_spend 1000, but >= tenant
+      min_package_budget 100, so only the product minimum can refuse it
     - budget_below_tenant_min: budget 50 < tenant min_package_budget 100 (no product min)
     """
     partition = partition.strip()
@@ -1520,7 +1512,9 @@ def given_minimum_spend_scenario(ctx: dict, partition: str) -> None:
         _set_min_spend(ctx, product_min=None, tenant_min=None, budget=5000.0)
 
     elif partition == "budget_below_product_min":
-        _set_min_spend(ctx, product_min=1000.0, tenant_min=100.0, budget=50.0)
+        # Between the two minimums. At 50 the tenant minimum refused it too, with the same
+        # code and field, so the row passed whether or not the product minimum was enforced.
+        _set_min_spend(ctx, product_min=1000.0, tenant_min=100.0, budget=500.0)
 
     elif partition == "budget_below_tenant_min":
         _set_min_spend(ctx, product_min=None, tenant_min=100.0, budget=50.0)
@@ -1534,19 +1528,23 @@ def given_minimum_spend_configuration(ctx: dict, config: str) -> None:
     """Set up minimum spend configuration for boundary scenarios (BR-RULE-008).
 
     Boundary values:
-    - budget=100 min=100: budget exactly at product min_spend (exact match)
-    - budget=99.99 min=100: budget just below product min_spend
+    - budget=100 min=100: budget exactly at product min_spend (exact match), no tenant min
+    - budget=99.99 min=100: budget just below product min_spend, no tenant min
     - budget=50 tmin=50: budget exactly at tenant min_package_budget (no product min)
     - budget=49.99 tmin=50: budget just below tenant min_package_budget
     - budget=1 no-min: no minimum configured at any level
+
+    The two product-minimum rows clear the tenant minimum. With a tenant minimum of 100 as
+    well, 99.99 was refused by the tenant check with the same code and field, so the rows
+    graded nothing about the product minimum.
     """
     config = config.strip()
 
     if config == "budget=100 min=100":
-        _set_min_spend(ctx, product_min=100.0, tenant_min=100.0, budget=100.0)
+        _set_min_spend(ctx, product_min=100.0, tenant_min=None, budget=100.0)
 
     elif config == "budget=99.99 min=100":
-        _set_min_spend(ctx, product_min=100.0, tenant_min=100.0, budget=99.99)
+        _set_min_spend(ctx, product_min=100.0, tenant_min=None, budget=99.99)
 
     elif config == "budget=50 tmin=50":
         _set_min_spend(ctx, product_min=None, tenant_min=50.0, budget=50.0)
@@ -1574,12 +1572,6 @@ def _set_daily_spend_cap(ctx: dict, *, cap: float | None, budget: float, flight_
 
     Daily spend = budget / max(flight_days, 1).
     """
-    from decimal import Decimal
-
-    from sqlalchemy import select
-
-    from src.core.database.models import CurrencyLimit
-
     env = ctx["env"]
     kwargs = _ensure_request_defaults(ctx)
 
@@ -1592,12 +1584,7 @@ def _set_daily_spend_cap(ctx: dict, *, cap: float | None, budget: float, flight_
         kwargs["packages"][0]["budget"] = budget
 
     # Set cap on CurrencyLimit
-    cl = env._session.scalars(
-        select(CurrencyLimit).filter_by(
-            tenant_id=ctx["tenant"].tenant_id,
-            currency_code="USD",
-        )
-    ).one()
+    cl = env.get_currency_limit("USD")
     cl.max_daily_package_spend = Decimal(str(cap)) if cap is not None else None
     env._commit_factory_data()
 
@@ -1698,8 +1685,9 @@ def _set_targeting_overlay(ctx: dict, overlay: dict[str, Any] | None) -> None:
 def given_targeting_overlay_partition(ctx: dict, partition: str) -> None:
     """Set up targeting overlay for partition scenarios (BR-RULE-014).
 
-    Valid partitions (12): targeting validation passes
-    Invalid partitions (7): error INVALID_REQUEST with suggestion
+    Valid partitions (8): targeting validation passes
+    Invalid partitions (11): INVALID_REQUEST for a request fault, UNSUPPORTED_FEATURE for a
+    dimension this seller does not declare (keyword_targeting, proximity_*)
     """
     partition = partition.strip()
 
@@ -1717,11 +1705,15 @@ def given_targeting_overlay_partition(ctx: dict, partition: str) -> None:
         _set_targeting_overlay(ctx, overlay={"geo_countries": ["US"]})
 
     elif partition == "multiple_dimensions":
+        # Two pinned dimensions this seller declares in get_adcp_capabilities
+        # (media_buy.execution.targeting geo_countries and geo_regions). The row used to pair
+        # geo_countries with device_type_any_of, a seller-internal field no pinned
+        # core/targeting.json declares, which the live ad server refuses as UNSUPPORTED_FEATURE.
         _set_targeting_overlay(
             ctx,
             overlay={
                 "geo_countries": ["US"],
-                "device_type_any_of": ["mobile", "desktop"],
+                "geo_regions": ["US-CA"],
             },
         )
 
@@ -2051,14 +2043,23 @@ def _add_creative_ids_to_package(ctx: dict, creative_ids: list[str]) -> None:
 
 
 def _create_approved_creative(
-    ctx: dict, creative_id: str, fmt: str = "display_300x250", asset_key: str = "primary"
+    ctx: dict, creative_id: str, fmt: str = "display_300x250_image", asset_key: str = "banner_image"
 ) -> Any:
     """Create an approved Creative in the DB and return it.
 
     Uses CreativeFactory with the tenant/principal from harness context.
-    The default asset key "primary" matches the harness format spec's
-    asset_id; scenarios seeding a real reference-catalog format pass the
-    format's actual asset_id (e.g. "banner_image" for display_300x250_image).
+
+    THE FORMAT AND THE ASSET KEY MOVE TOGETHER and are not independent defaults. The
+    previous pair -- ``display_300x250`` keyed ``primary`` -- named the harness's own
+    format-spec STUB: the id is absent from the pinned capture, and ``primary`` was the
+    stub's asset_id. With the stub gone, both halves have to come from the capture, which
+    declares ``banner_image`` (image, required) and ``click_url`` (url, required) for
+    ``display_300x250_image``.
+
+    Only ``banner_image`` is seeded, which is survivable TODAY and is worth saying why:
+    nothing validates a creative's assets against the resolved spec, so a missing required
+    ``click_url`` costs nothing here. That gap is #767; when it lands, this default needs
+    the url asset too. The pre-existing ``cr-upload-ok`` call site made the same trade.
     """
     from tests.factories.creative import CreativeFactory
 
@@ -2075,7 +2076,7 @@ def _create_approved_creative(
     return creative
 
 
-def _add_inline_creatives(ctx: dict, count: int = 1, fmt_id: str = "display_300x250") -> None:
+def _add_inline_creatives(ctx: dict, count: int = 1, fmt_id: str = "display_300x250_image") -> None:
     """Add inline creative dicts to the first package's 'creatives' field.
 
     Builds creative payloads matching the product's accepted format, through
@@ -2095,19 +2096,38 @@ def _add_inline_creatives(ctx: dict, count: int = 1, fmt_id: str = "display_300x
     if kwargs.get("packages"):
         pkg = kwargs["packages"][0]
         creatives = pkg.get("creatives") or []
-        for i in range(count):
-            creatives.append(
-                CreativeAssetRequestFactory.payload(
-                    creative_id=f"inline-cr-{i + 1:03d}",
-                    name=f"Inline Creative {i + 1}",
-                    format_id={
-                        "agent_url": "https://creative.adcontextprotocol.org",
-                        "id": fmt_id,
-                    },
-                    assets=build_assets(image_spec("primary", url=f"https://example.com/banner-{i + 1}.png")),
-                )
-            )
+        creatives.extend(inline_creative_payload(i + 1, fmt_id) for i in range(count))
         pkg["creatives"] = creatives
+
+
+def inline_creative_payload(number: int, fmt_id: str = "display_300x250_image") -> dict[str, Any]:
+    """The *number*-th inline creative ``_add_inline_creatives`` builds: one image for *fmt_id*."""
+    return CreativeAssetRequestFactory.payload(
+        creative_id=f"inline-cr-{number:03d}",
+        name=f"Inline Creative {number}",
+        format_id={
+            "agent_url": "https://creative.adcontextprotocol.org",
+            "id": fmt_id,
+        },
+        # Every asset the CAPTURE requires for this format, keyed by its asset_id, not by
+        # the deleted stub's ``primary``. See _create_approved_creative.
+        assets=named_format_assets(fmt_id, media_url=f"https://example.com/banner-{number}.png"),
+    )
+
+
+def inline_creative_media_asset(creative: dict[str, Any]) -> dict[str, Any]:
+    """The asset carrying *creative*'s content URL: its one image, video or audio asset.
+
+    The named format requires more than one asset (``display_300x250_image``: ``banner_image``
+    image plus ``click_url`` url), so a step that breaks "the" asset has to say which. The
+    content asset is the media one (``MEDIA_ASSET_TYPES``); a ``url`` asset is a clickthrough
+    link, not the creative's content. Refuses a creative with no media asset, or with several,
+    because then the scenario has to name the asset itself.
+    """
+    assets = creative.get("assets") or {}
+    media = [a for a in assets.values() if isinstance(a, dict) and a.get("asset_type") in MEDIA_ASSET_TYPES]
+    assert len(media) == 1, f"expected exactly one media asset to break, got assets={assets}"
+    return media[0]
 
 
 @given(parsers.parse("the creative scenario is {partition}"))
@@ -2158,7 +2178,7 @@ def given_creative_partition(ctx: dict, partition: str) -> None:
 
     elif partition == "format_mismatch":
         # Creative with format that doesn't match the product's supported formats
-        creative = _create_approved_creative(ctx, "cr-badfmt-001", fmt="video_640x480")
+        creative = _create_approved_creative(ctx, "cr-badfmt-001", fmt="video_1280x720")
         _add_creative_ids_to_package(ctx, [creative.creative_id])
 
     elif partition == "missing_required_assets":
@@ -2211,7 +2231,7 @@ def given_creative_boundary(ctx: dict, config: str) -> None:
 
     elif config == "wrong format":
         # Creative with mismatched format
-        creative = _create_approved_creative(ctx, "cr-wrongfmt", fmt="video_640x480")
+        creative = _create_approved_creative(ctx, "cr-wrongfmt", fmt="video_1280x720")
         _add_creative_ids_to_package(ctx, [creative.creative_id])
 
     elif config == "weight=0":
@@ -2271,15 +2291,21 @@ def given_package_references_missing_creative(ctx: dict, creative_id: str) -> No
 def given_creative_format_mismatch(ctx: dict) -> None:
     """ext-p: seed an approved creative whose format is absent from the product.
 
-    The default product accepts ``display_300x250``; this creative carries
-    ``video_640x480``. The pre-adapter creative validation in the create path
-    rejects the format mismatch with CREATIVE_REJECTED on the wire.
+    The default product accepts ``display_300x250_image``; this creative carries
+    ``video_1280x720``. The pre-adapter creative validation in the create path rejects the
+    format mismatch with CREATIVE_REJECTED on the wire.
+
+    BOTH ids are in the pinned capture, which is what makes this partition grade the
+    MISMATCH. It used to carry ``video_640x480``, absent from the capture, so the creative
+    could be refused for not EXISTING rather than for not matching -- a partition passing
+    for a reason other than the one it is named after. ``video_1280x720`` is present and
+    still mismatches an image product, so the intent survives and the vacuity does not.
 
     Auto-approval is seeded because the CREATIVE_REJECTED raise lives on the
     auto path; the live-server default (human_review_required=True) would take
     the PENDING path, which emits VALIDATION_ERROR for the same condition.
     """
-    creative = _create_approved_creative(ctx, "cr-fmt-mismatch", fmt="video_640x480")
+    creative = _create_approved_creative(ctx, "cr-fmt-mismatch", fmt="video_1280x720")
     _add_creative_ids_to_package(ctx, [creative.creative_id])
     _seed_auto_approval(ctx)
 
@@ -2293,15 +2319,15 @@ def given_request_with_inline_creatives(ctx: dict) -> None:
 
 @given("a creative is missing the required URL in assets")
 def given_inline_creative_missing_url(ctx: dict) -> None:
-    """ext-g: strip the content URL from the inline creative's primary asset.
+    """ext-g: strip the content URL from the inline creative's media asset.
 
     WHAT THIS ACTUALLY REACHES, measured rather than intended. The empty URL is
     refused at the REQUEST BOUNDARY, not by production's reference-creative
-    validation: ``CreativeAssetRequest`` rejects ``url: ""`` with
-    ``assets.primary.AssetVariant.image.url Input should be a valid URL, input is
-    empty [type=url_parsing]``. So T-UC-002-ext-g grades an INVALID_REQUEST from
-    the boundary and never gets as far as the reference-creative URL check its
-    sentence names.
+    validation: ``CreativeAssetRequest`` rejects ``url: ""`` as ``url_parsing``
+    ("Input should be a valid URL, input is empty"), which the buyer receives at
+    ``packages[0].creatives[0].assets.banner_image.url``. So T-UC-002-ext-g grades an
+    INVALID_REQUEST from the boundary and never gets as far as the
+    reference-creative URL check its sentence names.
 
     That is a real obligation and the scenario now asserts it BY CODE AND FIELD
     (salesagent-b9hi1.2). It used to pass on any error whatsoever, because its two
@@ -2322,18 +2348,22 @@ def given_inline_creative_missing_url(ctx: dict) -> None:
     assert creatives, "No inline creatives on package — wire the inline-creatives Given first"
     declared = []
     for creative in creatives:
-        primary = creative.get("assets", {}).get("primary")
-        assert primary is not None, "Inline creative has no primary asset to clear the URL on"
+        # "The required URL" is the creative's CONTENT url, on its media asset. The named
+        # format requires two url-bearing assets (banner_image, an image, and click_url, a
+        # clickthrough), so the step names the asset by its role instead of by "the one that
+        # has a url". It is found by type rather than by a hardcoded key, so the key stays
+        # where the fixture puts it (the Then reads it as assets.banner_image.url).
+        target = inline_creative_media_asset(creative)
         # Empty, not absent: an absent url would fail as a MISSING field, and the
         # scenario is about a URL the buyer supplied and left blank.
-        primary["url"] = ""
+        target["url"] = ""
         declared.append(
             malformed(
                 "empty_string",
-                "url='' on the primary asset is the scenario's whole subject: a URL the buyer "
+                "url='' on the media asset is the scenario's whole subject: a URL the buyer "
                 "supplied and left blank, not one they omitted. CreativeAssetRequest refuses the "
-                "bytes themselves — assets.primary.AssetVariant.image.url 'Input should be a valid "
-                "URL, input is empty' [type=url_parsing] — so the obligation is INVALID_REQUEST "
+                "bytes themselves — packages[0].creatives[0].assets.banner_image.url 'Input should be a "
+                "valid URL, input is empty' [type=url_parsing] — so the obligation is INVALID_REQUEST "
                 "from the request boundary, not VALIDATION_ERROR from a seller rule.",
                 creative,
                 obligation=ErrorCode.INVALID_REQUEST,
@@ -2346,17 +2376,24 @@ def given_inline_creative_missing_url(ctx: dict) -> None:
 def given_creative_format_not_generative(ctx: dict) -> None:
     """ext-g: assert the inline creative uses a non-generative reference format.
 
-    Generative formats (those with output_format_ids) skip URL validation, so
-    the missing-URL rejection only fires for reference formats. The default
-    inline creative uses ``display_300x250`` (a reference format with no
-    output_format_ids), satisfying this precondition.
+    Generative formats (those with output_format_ids) skip URL validation, so the
+    missing-URL rejection only fires for reference formats. The default inline creative uses
+    ``display_300x250_image``, which satisfies this precondition on BOTH halves -- and the
+    id this used to assert satisfied neither.
+
+    MEASURED against tests/fixtures/creative_formats/reference_formats.json, 76 formats:
+    ``display_300x250`` is ABSENT from the capture entirely, so calling it "a reference
+    format with no output_format_ids" was false twice over -- it is not a reference format
+    the agent serves, and a format that does not exist has no output_format_ids to lack.
+    ``display_300x250_image`` IS in the capture and carries no ``output_format_ids`` key
+    (69 of the 76 carry none), so the docstring is now true rather than aspirational.
     """
     kwargs = ctx.get("request_kwargs", {})
     for pkg in kwargs.get("packages", []):
         for creative in pkg.get("creatives") or []:
             fmt = creative.get("format_id", {})
             fmt_id = fmt.get("id") if isinstance(fmt, dict) else fmt
-            assert fmt_id == "display_300x250", (
+            assert fmt_id == "display_300x250_image", (
                 f"Inline creative format '{fmt_id}' is not the expected non-generative reference format"
             )
 
@@ -2391,6 +2428,212 @@ def given_request_inline_creatives_valid(ctx: dict) -> None:
             {"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250_image"},
         ]
         env._commit_factory_data()
+    _seed_auto_approval(ctx)
+
+
+#: The click destination the canonical-clickthrough scenarios ship and then expect at the
+#: ad server. Public and defined once, because the Given seeds it and the Then asserts it: a
+#: Then comparing against its own literal would pass on a seller that invented a URL, and
+#: two literals drift.
+CANONICAL_CLICK_URL = "https://advertiser.example.com/canonical-landing"
+
+#: How a manifest can tell the seller which url asset is the click destination, per the
+#: ladder in ``core/assets/url-asset.json``. Two independent signals -- the KEY the asset is
+#: stored under, and whether the asset carries ``url_type`` -- and each row offers exactly
+#: ONE of them, so each ISOLATES one rung.
+#:
+#: That orthogonality is the point and it is not free. A row shipping ``url_type`` on an
+#: asset ALSO keyed ``landing_page_url`` offers both signals at once: remove the registry
+#: lookup from production and the row stays green, because the ``url_type`` read still finds
+#: it. A row two rungs can satisfy grades neither.
+#:
+#: ``mystery`` is a deliberately non-canonical ``asset_group_id``. The registry permits one
+#: ("Non-canonical IDs remain valid for platform-specific extensions"), so pairing it with
+#: ``url_type`` is a legitimate manifest rather than a malformed one -- which is what makes
+#: it a fair isolation of the first rung instead of a broken input.
+_CLICK_SIGNALS: dict[str, tuple[str, str | None]] = {
+    # url_type present, asset_group_id meaningless -> ONLY the first rung can find it.
+    "url_type": ("mystery", "clickthrough"),
+    # asset_group_id in the registry, no url_type -> ONLY the registry lookup can find it.
+    "the canonical slot name alone": ("landing_page_url", None),
+    # neither signal -> the pin forbids a guess and recommends refusing the manifest.
+    "nothing the pin recognises": ("mystery", None),
+}
+
+
+@given(
+    parsers.parse(
+        'a valid create_media_buy request with a canonical creative signalling its clickthrough by "{signal}"'
+    )
+)
+def given_request_canonical_creative_with_clickthrough(ctx: dict, signal: str) -> None:
+    """Attach an approved CANONICAL creative whose manifest carries a url asset.
+
+    Shaped after ``given_request_inline_creatives_valid`` above and differing in the two
+    things under test: the creative is identified by ``canonical_kind`` rather than by a
+    legacy ``format``, and its manifest carries a url asset. Everything else -- approved
+    status, auto-approval, one package -- is the sibling's, because those are what make the
+    synchronous create path reach ``adapter.add_creative_assets`` at all, and these
+    scenarios are about what that call CARRIES rather than whether it happens.
+
+    ``image_main`` is what ``formats/canonical/image.json`` declares as the image slot, and
+    it is fixed across every row: the media asset is not what these rows vary.
+
+    The product gets a canonical ``format_options`` declaration, because a canonical
+    creative is graded against the product's closed set and the default product publishes
+    only the deprecated arm -- without it the buy is refused UNSUPPORTED_FEATURE before any
+    upload, and the scenario would grade the closed set instead of the clickthrough.
+    """
+    from tests.factories.creative import CreativeFactory
+    from tests.factories.creative_asset import build_assets, image_spec, url_spec
+
+    assert signal in _CLICK_SIGNALS, f"unknown click signal {signal!r}; known: {sorted(_CLICK_SIGNALS)}"
+    asset_key, url_type = _CLICK_SIGNALS[signal]
+
+    _ensure_request_defaults(ctx)
+    env = ctx["env"]
+    creative = CreativeFactory(
+        creative_id="cr-canonical-click",
+        tenant=ctx["tenant"],
+        principal=ctx["principal"],
+        canonical_kind="image",
+        approved=True,
+        data={
+            "assets": build_assets(
+                image_spec("image_main"),
+                url_spec(asset_key, url=CANONICAL_CLICK_URL, url_type=url_type),
+            )
+        },
+    )
+    env._commit_factory_data()
+    _add_creative_ids_to_package(ctx, [creative.creative_id])
+    _publish_on_default_product(ctx, {"format_kind": "image", "params": {"width": 300, "height": 250}})
+
+
+@given("a valid create_media_buy request with a canonical audio creative")
+def given_request_canonical_audio_creative(ctx: dict) -> None:
+    """Attach an approved canonical ``audio_hosted`` creative carrying only its audio slot.
+
+    ``audio_main`` is what ``formats/canonical/audio_hosted.json`` declares, and the
+    manifest deliberately carries NOTHING else: the kind also declares ``companion_image``,
+    and including one would supply dimensions and so hide the obligation under test. An
+    audio asset has no width or height, and the buy must be accepted anyway.
+    """
+    from tests.factories.creative import CreativeFactory
+    from tests.factories.creative_asset import asset_spec, build_assets
+
+    _ensure_request_defaults(ctx)
+    env = ctx["env"]
+    creative = CreativeFactory(
+        creative_id="cr-canonical-audio",
+        tenant=ctx["tenant"],
+        principal=ctx["principal"],
+        canonical_kind="audio_hosted",
+        approved=True,
+        data={"assets": build_assets(asset_spec("audio_main", "audio", url="https://cdn.example.com/spot.mp3"))},
+    )
+    env._commit_factory_data()
+    _add_creative_ids_to_package(ctx, [creative.creative_id])
+    _publish_on_default_product(ctx, {"format_kind": "audio_hosted", "params": {}})
+
+
+#: A media slot id named by NOTHING except the product declaration under test: no slot of
+#: any canonical kind, no member of MEDIA_ASSET_FALLBACK_IDS, no entry or alias of
+#: core/asset-group-vocabulary.json. If the seller finds this asset, it read the product's
+#: effective declaration — there is no other source that could have told it the name.
+PRODUCT_RENAMED_MEDIA_SLOT = "hero_shot"
+
+
+@given("a valid create_media_buy request whose product renames the canonical media slot")
+def given_request_product_renames_the_media_slot(ctx: dict) -> None:
+    """A product whose declaration REPLACES the kind's slot list, and a creative keyed to it.
+
+    ``core/product-format-declaration.json`` permits this outright -- its own
+    ``audio_hosted`` example declares ``script`` and ``offering_ref``, neither of which any
+    kind declares -- so the kind's vocabulary is NOT a superset of what a product may name.
+    A seller reading only the kind looks for ``image_main``, finds nothing, and refuses a
+    buy whose manifest matches the product's own published declaration exactly.
+
+    The creative is a canonical ``image`` keyed :data:`PRODUCT_RENAMED_MEDIA_SLOT`, with
+    dimensions because an image slot is a sized type. The product publishes one declaration
+    naming only that slot, which is also what makes this a control rather than a
+    demonstration: every other way the seller could find a media asset is excluded by the
+    name, so the scenario reddens unless the product declaration was actually consulted.
+    """
+    from tests.factories.creative import CreativeFactory
+
+    _ensure_request_defaults(ctx)
+    env = ctx["env"]
+    creative = CreativeFactory(
+        creative_id="cr-product-renamed-slot",
+        tenant=ctx["tenant"],
+        principal=ctx["principal"],
+        canonical_kind="image",
+        approved=True,
+        data={"assets": build_assets(image_spec(PRODUCT_RENAMED_MEDIA_SLOT))},
+    )
+    env._commit_factory_data()
+    _add_creative_ids_to_package(ctx, [creative.creative_id])
+    _declare_renamed_media_slot(ctx)
+
+
+@given("a valid create_media_buy request uploading an inline creative keyed to the slot its product renames")
+def given_request_inline_creative_in_renamed_slot(ctx: dict) -> None:
+    """The renamed-slot product again, with the creative sent INLINE on the package.
+
+    create_media_buy syncs a package's inline creatives before the package exists, so the
+    sync names no assignment for them -- and a sync that assigns nothing holds a canonical
+    manifest to its KIND's slots, where ``image`` requires ``image_main``. These creatives are
+    assigned the moment the buy exists, and their manifest is owed the product's declaration,
+    which names :data:`PRODUCT_RENAMED_MEDIA_SLOT` (creative-manifests.mdx § Basic structure:
+    "assets is keyed by asset_group_id from the matched declaration's params.slots[]"). So the
+    sibling stored-creative scenario and this one must answer alike; update_media_buy, which
+    passes its assignments to the sync, already did.
+    """
+    from tests.factories.request import OMIT
+
+    _ensure_request_defaults(ctx)
+    ctx["request_kwargs"]["packages"][0]["creatives"] = [
+        CreativeAssetRequestFactory.payload(
+            creative_id="inline-renamed-slot",
+            name="Inline creative in the renamed slot",
+            format_id=OMIT,
+            format_kind="image",
+            assets=build_assets(image_spec(PRODUCT_RENAMED_MEDIA_SLOT)),
+        )
+    ]
+    _declare_renamed_media_slot(ctx)
+
+
+def _declare_renamed_media_slot(ctx: dict) -> None:
+    """Give the default product the one image declaration naming :data:`PRODUCT_RENAMED_MEDIA_SLOT`.
+
+    Its slot list REPLACES the kind's, so ``image_main`` is not owed.
+    """
+    _publish_on_default_product(
+        ctx,
+        {
+            "format_kind": "image",
+            "params": {
+                "width": 300,
+                "height": 250,
+                "slots": [{"asset_group_id": PRODUCT_RENAMED_MEDIA_SLOT, "asset_type": "image", "required": True}],
+            },
+        },
+    )
+
+
+def _publish_on_default_product(ctx: dict, declaration: dict[str, Any]) -> None:
+    """Add one canonical *declaration* to the default product's ``format_options``, then auto-approve.
+
+    The canonical creative Givens each need the product to publish the declaration their
+    creative selects; auto-approval is seeded so the create takes the synchronous path the
+    Thens read.
+    """
+    product = ctx.get("default_product")
+    if product is not None:
+        product.format_options = [*(product.format_options or []), declaration]
+        ctx["env"]._commit_factory_data()
     _seed_auto_approval(ctx)
 
 
@@ -2938,9 +3181,9 @@ def given_adapter_success(ctx: dict) -> None:
     else:
         # Fallback: just clear error injection; return_value may already be set
         mock_adapter.create_media_buy.side_effect = None
-    mock_adapter.update_media_buy.side_effect = None
-    # Also reset DB test_behavior so Docker adapter stops raising errors
-    _sync_adapter_error_to_db(ctx, fail_on_create=False, fail_on_update=False)
+    # The update path's adapter, in process and (through the DB knob, which also clears
+    # fail_on_create) on the live server.
+    set_update_adapter_outcome(ctx, None)
 
 
 @given("a create_media_buy request")
@@ -2986,34 +3229,15 @@ def given_request_passes_validation(ctx: dict) -> None:
 
     Includes creative_ids with matching DB records so scenarios that test
     creative assignment persistence (INV-020-1) have actual creatives.
-    """
-    from tests.factories.creative import CreativeFactory
 
-    kwargs = _ensure_request_defaults(ctx)
-    env = ctx["env"]
-    # Create a creative in the DB and add its ID to the first package
-    creative = CreativeFactory(
-        tenant=ctx["tenant"],
-        principal=ctx["principal"],
-        creative_id="cr-all-validation",
-        format="display_300x250",
-        status="approved",
-        data={
-            "assets": {
-                "primary": {
-                    "url": "https://cdn.example.com/cr-all-validation.png",
-                    "width": 300,
-                    "height": 250,
-                }
-            }
-        },
-    )
-    env._commit_factory_data()
-    if kwargs.get("packages"):
-        kwargs["packages"][0]["creative_ids"] = [creative.creative_id]
-    # Register expected creative IDs for Then steps (Given→Then contract)
-    ctx.setdefault("expected_creative_ids", set())
-    ctx["expected_creative_ids"].add(creative.creative_id)
+    Through ``_create_approved_creative``, so the creative carries a format the pinned
+    capture SERVES and the product accepts. It was hand-built on ``display_300x250``, an id
+    absent from the capture, so the create's format resolution refused it and a request this
+    sentence calls valid failed validation (``given_adapter_error`` strips the ids for
+    exactly that reason).
+    """
+    creative = _create_approved_creative(ctx, "cr-all-validation")
+    _add_creative_ids_to_package(ctx, [creative.creative_id])
 
 
 @given("a create_media_buy request that fails validation")
@@ -3104,10 +3328,9 @@ def _make_catalog(catalog_type: str, suffix: str = "") -> dict[str, Any]:
 def given_catalog_partition(ctx: dict, partition: str) -> None:
     """Set up catalogs for partition scenarios (catalog distinct type).
 
-    SPEC-PRODUCTION GAP: Production code accepts catalogs (field is in adcp
-    library PackageRequest) but never validates duplicate types or catalog_id
-    existence. Valid partitions succeed silently; invalid partitions should fail
-    but succeed instead.
+    Production refuses a package whose catalogs repeat a type (VALIDATION_ERROR). It
+    does not check catalog_id existence: the seller has no sync_catalogs, so there is
+    no synced catalog to look one up in.
     """
     partition = partition.strip()
 
@@ -3152,8 +3375,7 @@ def given_catalog_partition(ctx: dict, partition: str) -> None:
 def given_catalog_boundary(ctx: dict, config: str) -> None:
     """Set up catalogs for boundary scenarios (catalog distinct type).
 
-    SPEC-PRODUCTION GAP: same as partition — production never validates catalog
-    uniqueness or catalog_id existence.
+    Same production behavior as the partition step above.
     """
     config = config.strip()
 
@@ -3186,16 +3408,12 @@ def given_catalog_boundary(ctx: dict, config: str) -> None:
         _set_catalogs(ctx, [_make_catalog(t) for t in _CATALOG_TYPES])
 
     elif config == "cross-pkg product":
-        # Two packages, each with type=product — distinct per-package, not cross-package
-        kwargs = _ensure_request_defaults(ctx)
-        kwargs["packages"][0]["catalogs"] = [_make_catalog("product")]
-        # Duplicate the first package for a second one
-        if len(kwargs["packages"]) < 2:
-            import copy
-
-            pkg2 = copy.deepcopy(kwargs["packages"][0])
-            kwargs["packages"].append(pkg2)
-        kwargs["packages"][1]["catalogs"] = [_make_catalog("product")]
+        # Two packages, each with type=product — distinct per-package, not cross-package.
+        # Two PRODUCTS as well: a repeated product_id is refused by the uniqueness rule
+        # before any catalog rule is reached.
+        _setup_multi_product_request(ctx, [ctx["default_product"].product_id, "product_catalog_b"])
+        for package in _ensure_request_defaults(ctx)["packages"]:
+            package["catalogs"] = [_make_catalog("product")]
 
     elif config == "valid catalog_id":
         _set_catalogs(ctx, [{"type": "product", "catalog_id": "cat-synced-001", "url": "https://example.com/feed.xml"}])
@@ -3213,8 +3431,6 @@ def given_catalog_boundary(ctx: dict, config: str) -> None:
 # Format ID structure partition / boundary
 # ═══════════════════════════════════════════════════════════════════════
 
-_VALID_FORMAT_ID = {"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"}
-
 
 def _set_format_ids(ctx: dict, format_ids: list[dict[str, Any] | str] | None) -> None:
     """Set format_ids on the first package of the request."""
@@ -3225,65 +3441,51 @@ def _set_format_ids(ctx: dict, format_ids: list[dict[str, Any] | str] | None) ->
         kwargs["packages"][0]["format_ids"] = format_ids
 
 
+#: The boundary outline's spellings of the partition outline's cases. One request per case.
+_FORMAT_ID_BOUNDARY_CASES = {
+    "valid FormatId": "valid_format_id",
+    '"banner_300x250"': "plain_string",
+    "no agent_url": "missing_agent_url",
+    "bad agent_url": "unregistered_agent",
+    "unknown format": "unknown_format",
+}
+
+
+def _format_ids_for(ctx: dict, case: str) -> list[dict[str, Any] | str]:
+    """The package ``format_ids`` for one format-ID-structure case.
+
+    Every case is derived from the seeded product's own format reference, so the valid
+    case is one the product actually accepts and each invalid case differs from it in
+    exactly the one dimension it names. A literal ``display_300x250`` here was refused by
+    the product (which carries ``display_300x250_image``), so "valid" was never valid.
+    """
+    valid = dict(ctx["default_product"].format_ids[0])
+    if case == "valid_format_id":
+        return [valid]
+    if case == "plain_string":
+        return ["banner_300x250"]
+    if case == "missing_agent_url":
+        return [{"id": valid["id"]}]
+    if case == "missing_id":
+        return [{"agent_url": valid["agent_url"]}]
+    if case == "unregistered_agent":
+        return [{**valid, "agent_url": "https://unknown-agent.example.com"}]
+    if case == "unknown_format":
+        return [{**valid, "id": "nonexistent_format_999"}]
+    raise ValueError(f"Unknown format ID case: {case}")
+
+
 @given(parsers.parse("the format ID scenario is {partition}"))
 def given_format_id_partition(ctx: dict, partition: str) -> None:
-    """Set up format_ids for partition scenarios (format ID structure).
-
-    SPEC-PRODUCTION GAP: Production validates format_id structure via Pydantic
-    (FormatId model), so plain strings and missing fields raise ValidationError.
-    However, unregistered agent and unknown format pass Pydantic validation and
-    are only caught later (or not at all) by format compatibility checks.
-    """
-    partition = partition.strip()
-
-    if partition == "valid_format_id":
-        _set_format_ids(ctx, [_VALID_FORMAT_ID])
-
-    elif partition == "plain_string":
-        _set_format_ids(ctx, ["banner_300x250"])
-
-    elif partition == "missing_agent_url":
-        _set_format_ids(ctx, [{"id": "display_300x250"}])
-
-    elif partition == "missing_id":
-        _set_format_ids(ctx, [{"agent_url": "https://creative.adcontextprotocol.org"}])
-
-    elif partition == "unregistered_agent":
-        _set_format_ids(ctx, [{"agent_url": "https://unknown-agent.example.com", "id": "display_300x250"}])
-
-    elif partition == "unknown_format":
-        _set_format_ids(ctx, [{"agent_url": "https://creative.adcontextprotocol.org", "id": "nonexistent_format_999"}])
-
-    else:
-        raise ValueError(f"Unknown format ID partition: {partition}")
+    """Set up format_ids for partition scenarios (format ID structure)."""
+    _set_format_ids(ctx, _format_ids_for(ctx, partition.strip()))
 
 
 @given(parsers.parse("the format ID scenario is: {config}"))
 def given_format_id_boundary(ctx: dict, config: str) -> None:
-    """Set up format_ids for boundary scenarios (format ID structure).
-
-    SPEC-PRODUCTION GAP: same as partition — Pydantic catches structural issues,
-    but agent registration and format existence are not fully validated.
-    """
+    """Set up format_ids for boundary scenarios (format ID structure)."""
     config = config.strip()
-
-    if config == "valid FormatId":
-        _set_format_ids(ctx, [_VALID_FORMAT_ID])
-
-    elif config == '"banner_300x250"':
-        _set_format_ids(ctx, ["banner_300x250"])
-
-    elif config == "no agent_url":
-        _set_format_ids(ctx, [{"id": "display_300x250"}])
-
-    elif config == "bad agent_url":
-        _set_format_ids(ctx, [{"agent_url": "https://unknown-agent.example.com", "id": "display_300x250"}])
-
-    elif config == "unknown format":
-        _set_format_ids(ctx, [{"agent_url": "https://creative.adcontextprotocol.org", "id": "nonexistent_format_999"}])
-
-    else:
-        raise ValueError(f"Unknown format ID boundary config: {config}")
+    _set_format_ids(ctx, _format_ids_for(ctx, _FORMAT_ID_BOUNDARY_CASES.get(config, config)))
 
 
 # ═══════════════════════════════════════════════════════════════════════

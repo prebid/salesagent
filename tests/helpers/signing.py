@@ -87,17 +87,49 @@ COUNTERPARTY_KID = "buyer-request-signing-1"
 #: one supplied the key rather than only that some key was found.
 REGISTRY_AGENT_URL = "https://test-kit.example.com/a2a"
 
-#: An ``agent_url`` whose brand.json walk FAILS, deterministically and with no network.
+#: An ``agent_url`` whose capabilities hop CANNOT BE REACHED, deterministically.
 #:
 #: The SDK resolves and validates the host SYNCHRONOUSLY before any socket is opened
 #: (``adcp/signing/ip_pinned_transport.py`` ``resolve_and_validate_host`` via
-#: ``build_async_ip_pinned_transport``), so a loopback authority is refused as a
-#: reserved range and ``async_resolve_agent`` raises ``AgentResolverError
-#: ("capabilities_unreachable")`` in microseconds. That is a REAL failure of the real
-#: walk — not a patched resolver — which is what a test grading "the walk failed" needs
-#: if it is not to be a mock asserting on itself. A public-looking hostname would
-#: instead put a DNS lookup in the test's critical path.
-UNRESOLVABLE_AGENT_URL = "http://127.0.0.1:1/a2a"
+#: ``build_async_ip_pinned_transport``), so ``resolve_agent`` raises
+#: ``AgentResolverError("capabilities_unreachable")`` off a DNS miss, in single-digit
+#: milliseconds. ``.invalid`` is RFC 2606 2 reserved and guaranteed never to resolve,
+#: so the miss costs one NXDOMAIN and cannot become a real destination. That is a REAL
+#: failure of the real walk -- not a patched resolver -- which is what a test grading
+#: "the walk failed" needs if it is not to be a mock asserting on itself.
+#:
+#: UNREACHABLE, NOT REFUSED, and the distinction is the whole choice of value. A DNS
+#: failure is the capabilities hop's own transient row -- "Capabilities fetch failed
+#: (DNS, TCP, TLS, timeout, non-2xx)" in the 3.2.1 discovery-chain table (:1376) -- so the
+#: walk carries no ``signature_code`` and the wire code is
+#: ``request_signature_capabilities_unreachable``, which is what this constant is named
+#: for. The two banned-destination URLs that preceded it both answer
+#: ``request_signature_jwks_untrusted`` instead, for two different reasons, and neither
+#: grades an unreachable counterparty:
+#:
+#: * ``http://127.0.0.1:1/a2a`` -- step 1 of the pinned chain is HTTPS-only
+#:   (``security.mdx`` :1358), and 9.x enforces that at canonicalization BEFORE the
+#:   reserved-range check, so the URL short-circuits to ``invalid_agent_url`` and the hop
+#:   is never attempted. Measured: 6.6.0 answered ``capabilities_unreachable`` here, which
+#:   is why this value read correctly for as long as it did.
+#: * ``https://127.0.0.1:1/a2a`` -- reaches the reserved-range check and is refused by it,
+#:   which is a TERMINAL trust-boundary rejection: the resolver attaches
+#:   ``signature_code=request_signature_jwks_untrusted`` (the pinned enum scopes that code
+#:   to a "resolved network destination" failing SSRF and trust-boundary validation). It
+#:   answers ``capabilities_unreachable`` only on a verifier that drops ``signature_code``
+#:   -- so a test pinned to this value grades that bug, not the walk.
+#:
+#: Measured against adcp 9.0.0b1+prs1435.1415 -- ``code`` / ``signature_code`` / what the
+#: current map returns:
+#:
+#:   https://unreachable.invalid/a2a  capabilities_unreachable  None            -> capabilities_unreachable
+#:   https://127.0.0.1:1/a2a          capabilities_unreachable  jwks_untrusted  -> capabilities_unreachable
+#:   https://10.0.0.1/a2a             capabilities_unreachable  jwks_untrusted  -> capabilities_unreachable
+#:   http://127.0.0.1:1/a2a           invalid_agent_url         None            -> jwks_untrusted
+#:
+#: Only the first row carries no ``signature_code``, so only the first is stable under
+#: both the current map and a map that reads ``signature_code``.
+UNRESOLVABLE_AGENT_URL = "https://unreachable.invalid/a2a"
 
 #: The origin the in-process ASGI client dials. ``httpx``'s ASGI transport defaults to
 #: ``http://testserver``, and the signature covers ``@target-uri``, so a request signed
@@ -657,7 +689,7 @@ async def walk_discovery_to_jwks(client: Any, identity: dict[str, Any]) -> tuple
 
 
 def json_seeded_client_factory(body: dict[str, Any]):
-    """An ``httpx.AsyncClient`` factory that answers EVERY request with *body*.
+    """An ``httpx.AsyncClient`` factory that serves *body* for EVERY request.
 
     The SDK resolvers take a ``_client_factory``/``factory`` seam and use the
     result as an async context manager, so a ``MockTransport`` client is a drop-in
@@ -668,11 +700,36 @@ def json_seeded_client_factory(body: dict[str, Any]):
 
     One implementation for both the integration and e2e sides: these were
     byte-identical closures in two files (salesagent-og9k.10).
+
+    A POST is answered over MCP rather than with the bare document. The two
+    resolvers this seeds read their hop differently: ``BrandJsonAuthorizationResolver``
+    fetches brand.json with a ``GET``, while ``async_resolve_agent``'s hop 1 opens
+    an MCP ``ClientSession`` and calls ``get_adcp_capabilities`` (AdCP 3.1.1
+    ``L1/security.mdx``:1142 — the declared transport, never a raw ``GET``). Handing
+    the capabilities document straight back to the JSON-RPC parser fails it with
+    ``Failed to parse JSON response`` and the walk reports
+    ``capabilities_unreachable`` — a transport verdict for a seed that arrived
+    intact. ``mcp_capabilities_post`` answers the handshake and wraps *body* as the
+    tool result; the GET branch is unchanged, so the brand.json seam is untouched.
     """
     import httpx
 
+    # Backwards from the usual direction, deliberately: the other caller of this
+    # framing is the ``counterparty-origin`` compose service, which runs on a bare
+    # python image and CANNOT import ``tests.helpers``. So the shared code lives on
+    # the stdlib-only side of that wall and this side reaches across.
+    from tests.e2e._stdlib_json_http import mcp_capabilities_post
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        if request.method != "POST":
+            return httpx.Response(200, json=body)
+        status, payload = mcp_capabilities_post(request.content, {"get_adcp_capabilities": body})
+        if payload is None:
+            return httpx.Response(status)
+        return httpx.Response(status, json=payload)
+
     def factory(_url: str) -> httpx.AsyncClient:
-        return httpx.AsyncClient(transport=httpx.MockTransport(lambda _request: httpx.Response(200, json=body)))
+        return httpx.AsyncClient(transport=httpx.MockTransport(respond))
 
     return factory
 
@@ -1353,6 +1410,31 @@ def request_headers(token: str | None, extra: dict[str, str] | None = None) -> d
     return headers
 
 
+def buyer_signing_profile_version() -> str:
+    """The signing profile version every test-side signer sends.
+
+    DERIVED from the pin, never declared — the same rule production follows in
+    ``src.core.signing.algorithms.request_signing_profile``, which is where the seller's
+    own two halves read it (the signer held this expression inline until
+    ``salesagent-8qela.1`` moved it, because the verifier was not reading it at all).
+    Deliberately a SECOND function and not a call into that one: this is the BUYER's
+    choice of profile, and a test-side signer has to be able to sign under a profile the
+    seller does not speak. adcp 9 made ``signing_profile_version`` a
+    required keyword of ``sign_request``, and the SDK helper's own docstring says a
+    caller "must derive this from trusted endpoint configuration, never an unbound
+    request-body field". ``get_adcp_spec_version()`` is the installed wheel reporting
+    the version it implements, so it moves on its own at the next pin bump; a literal
+    here would quietly sign under a stale profile instead.
+
+    One function rather than the expression at each call site: the buyer signer in
+    this module and the replay-store integration test both need it, and a second
+    copy is a second thing to forget at the next bump.
+    """
+    from adcp.signing import signing_profile_for_adcp_version
+
+    return signing_profile_for_adcp_version(get_adcp_spec_version())
+
+
 def sign_wire_request(
     private_key: Any,
     *,
@@ -1374,6 +1456,7 @@ def sign_wire_request(
         key_id=key_id,
         alg="ed25519",
         cover_content_digest=True,
+        signing_profile_version=buyer_signing_profile_version(),
     )
     return signed.as_dict()
 
@@ -1532,7 +1615,7 @@ def verify_as_conformant_receiver(signed: CapturedWebhook, jwks: dict[str, Any])
     holds no production import.
     """
     from adcp.signing.constants import ADCP_USE_REQUEST, ADCP_USE_WEBHOOK
-    from adcp.signing.errors import REQUEST_SIGNATURE_KEY_PURPOSE_INVALID, SignatureVerificationError
+    from adcp.signing.errors import SignatureVerificationError
     from adcp.signing.jwks import StaticJwksResolver
     from adcp.signing.verifier import VerifierCapability, VerifyOptions, verify_request_signature
     from adcp.signing.webhook_signer import WEBHOOK_TAG as _TAG
@@ -1541,12 +1624,27 @@ def verify_as_conformant_receiver(signed: CapturedWebhook, jwks: dict[str, Any])
     headers = dict(signed.headers)
     _precheck_webhook_has_required_components(headers)
 
-    # FIXME(#1291): the retry below exists only because adcp-client-python's webhook
-    # verifier pins expected_adcp_use to the deprecated "webhook-signing" value and
-    # gives no way to widen it (WebhookVerifyOptions has no expected_adcp_use field).
-    # Delete this retry and call verify_webhook_signature directly once
-    # https://github.com/adcontextprotocol/adcp-client-python/issues/1018 lands.
-    def _attempt(expected_adcp_use: str) -> Any:
+    # The accept-SET, stated once, in one attempt. This was a two-attempt retry --
+    # ``request-signing`` first, then ``webhook-signing`` on an ``adcp_use`` refusal --
+    # because adcp-client-python#1018 pinned the webhook verifier's expected purpose to
+    # the deprecated value alone and ``VerifyOptions`` exposed no way to widen it. #1018
+    # landed (CLOSED 2026-08-16) and ``VerifyOptions`` now carries
+    # ``accepted_adcp_uses``, so the spec's set is expressible directly: step 8 (:1478)
+    # and the taxonomy row (:1560) both make the accept-set exactly
+    # ``{request-signing, webhook-signing}``, which is now what we hand the verifier
+    # instead of simulating it by trying one value and then the other.
+    #
+    # STILL the request verifier, NOT ``verify_webhook_signature``, and that is a
+    # deliberate hold rather than leftover scaffolding. That route forces
+    # ``signing_profile_version="3.1"`` ("the rc.4 webhook-v1 corpus retains legacy
+    # Base64URL signatures"), while this seller derives its signing profile from the pin
+    # (``request_signer`` -> ``signing_profile_for_adcp_version``), which is 3.2 at the
+    # current pin. Whether those two can meet is unsettled -- forcing 3.1 here broke
+    # ``test_emitted_challenge_verifies_against_the_published_jwks`` in a module run and
+    # not in isolation, so the result is order-dependent and the question is open, not
+    # answered. Switching routes on an unproven profile change would trade a verified
+    # call for an unverified one.
+    try:
         return verify_request_signature(
             method="POST",
             url=signed.url,
@@ -1564,19 +1662,14 @@ def verify_as_conformant_receiver(signed: CapturedWebhook, jwks: dict[str, Any])
                 # test's, not production's.
                 jwks_resolver=StaticJwksResolver(jwks),
                 expected_tag=_TAG,
-                expected_adcp_use=expected_adcp_use,
+                accepted_adcp_uses=frozenset({ADCP_USE_REQUEST, ADCP_USE_WEBHOOK}),
             ),
         )
-
-    try:
-        return _attempt(ADCP_USE_REQUEST)
     except SignatureVerificationError as exc:
-        if exc.code != REQUEST_SIGNATURE_KEY_PURPOSE_INVALID or "adcp_use" not in str(exc):
-            raise _retag_to_webhook(exc) from exc
-        try:
-            return _attempt(ADCP_USE_WEBHOOK)
-        except SignatureVerificationError as retried:
-            raise _retag_to_webhook(retried) from retried
+        # The webhook taxonomy, not the request one. Calling the request verifier means
+        # refusals arrive as ``request_signature_*``; a conformant webhook receiver
+        # reports ``webhook_signature_*``, which is what the callers grade.
+        raise _retag_to_webhook(exc) from exc
 
 
 def just_after_provisioning() -> datetime:

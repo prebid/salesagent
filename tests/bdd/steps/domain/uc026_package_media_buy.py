@@ -12,7 +12,14 @@ from typing import Any
 
 from pytest_bdd import given, parsers, then, when
 
-from tests.bdd.steps._outcome_helpers import assert_wire_rejection, payload_or_none, require_payload
+from tests.bdd.steps._outcome_helpers import (
+    assert_wire_rejection,
+    payload_or_none,
+    require_payload,
+    stored_package_config,
+    wire_entry,
+    wire_field,
+)
 from tests.bdd.steps.generic._table import as_bool
 from tests.bdd.steps.generic.given_media_buy import _ensure_request_defaults
 
@@ -280,6 +287,15 @@ def _assert_has_packages(ctx: dict) -> list:
     return packages
 
 
+def _created_media_buy_id(ctx: dict) -> str:
+    """The media_buy_id the create response reported, for reading the buy back."""
+    resp = require_payload(ctx)
+    inner = getattr(resp, "response", resp)
+    media_buy_id = getattr(inner, "media_buy_id", None)
+    assert media_buy_id, "create response carries no media_buy_id — nothing to read back"
+    return str(media_buy_id)
+
+
 def _create_media_buy_for_update(ctx: dict, **pkg_overrides: Any) -> None:
     """Create a media buy with a single package, store in ctx for update scenarios.
 
@@ -502,6 +518,14 @@ def _apply_package_table(kwargs: dict, datatable: list[list[str]], ctx: dict | N
             pkg["impressions"] = int(value)
         elif field == "catalogs":
             pkg["catalogs"] = json.loads(value)
+            if ctx is not None:
+                # Recorded as a ctx contract, and the PRECONDITION is asserted here rather
+                # than in the Then that grades the echo. A Then asserting that the request
+                # carried catalogs is testing this setup, not the seller --
+                # tests/unit/test_architecture_bdd_no_request_in_then.py refuses it, and its
+                # allowlist is empty.
+                ctx["expected_catalogs"] = pkg["catalogs"]
+                assert ctx["expected_catalogs"], "the scenario declared a catalogs row carrying no catalogs"
         elif field == "optimization_goals":
             pkg["optimization_goals"] = json.loads(value)
         elif field == "creative_assignments":
@@ -952,10 +976,33 @@ def given_buyer_owns_pkg_max_bid(ctx: dict, pkg_id: str) -> None:
     _own_pkg_with_metadata(ctx, pkg_id, max_bid=True)
 
 
-@given(parsers.parse('the Buyer owns a media buy with a package "{pkg_id}" having catalogs {catalogs}'))
+# The argument is a JSON list, so the pattern requires one: a bare ``{catalogs}`` also matched
+# "having catalogs and optimization_goals" and pytest-bdd picked this step for that line.
+@given(
+    parsers.re(r'the Buyer owns a media buy with a package "(?P<pkg_id>[^"]+)" having catalogs (?P<catalogs>\[.*\])')
+)
 def given_buyer_owns_pkg_with_catalogs(ctx: dict, pkg_id: str, catalogs: str) -> None:
-    """Create a media buy with a package having specific catalogs."""
-    _own_pkg_with_metadata(ctx, pkg_id, catalogs=catalogs)
+    """Create a media buy whose package is CREATED with *catalogs*, not merely said to have them.
+
+    The replacement scenario this opens (T-UC-026-inv-201-1) grades "the old catalog
+    should not be present", which says nothing unless the old catalog was sent. Recording
+    the claim as metadata left the package with no catalogs at all, so a seller that
+    merged instead of replacing passed it.
+
+    The record is read back, not the create echo: the update's ``affected_packages``
+    reports the stored ``package_config["catalogs"]``, so a seller that echoed the request
+    on create but stored nothing would leave the update nothing to merge into, and a
+    merging seller would pass the replacement Thens.
+    """
+    requested = json.loads(catalogs)
+    _create_media_buy_for_update(ctx, catalogs=requested)
+    package_id = ctx.get("existing_package_id")
+    assert package_id, "the created package carries no package_id, so its stored catalogs cannot be read back"
+    stored = stored_package_config(ctx, str(ctx["existing_media_buy_id"]), str(package_id))
+    assert _catalog_identities(stored.get("catalogs") or []) == _catalog_identities(requested), (
+        f"the package was created with catalogs {_catalog_identities(requested)} but the record holds "
+        f"{stored.get('catalogs')!r}, so a later replacement has no stored list to replace"
+    )
 
 
 @given(parsers.parse('the Buyer owns a media buy with a package "{pkg_id}" having optimization_goals {goals}'))
@@ -1238,9 +1285,12 @@ def given_boundary_pricing_option(ctx: dict, boundary_point: str) -> None:
 # --- Update partition/boundary Given steps ---
 
 
-def _setup_update_partition(ctx: dict) -> tuple[dict, dict]:
-    """Create a media buy for update partition/boundary tests, return (update_kwargs, pkg_update)."""
-    _create_media_buy_for_update(ctx)
+def _setup_update_partition(ctx: dict, **pkg_overrides: Any) -> tuple[dict, dict]:
+    """Create a media buy for update partition/boundary tests, return (update_kwargs, pkg_update).
+
+    *pkg_overrides* go on the CREATED package, so a scenario's starting state is realized.
+    """
+    _create_media_buy_for_update(ctx, **pkg_overrides)
     update_kwargs = _ensure_update_kwargs(ctx)
     pkg_update: dict[str, Any] = {"package_id": ctx.get("existing_package_id", "pkg-001")}
     return update_kwargs, pkg_update
@@ -1539,30 +1589,41 @@ def _apply_keyword_boundary(pkg_update: dict, field_name: str, bp: str) -> None:
 # --- Paused partition/boundary ---
 
 
+def _paused_create_request(ctx: dict, paused: bool | None) -> None:
+    """Build a create request whose one package asks for *paused* (``None`` omits it)."""
+    _build_request_with_overrides(ctx, **({} if paused is None else {"paused": paused}))
+    ctx["paused_request_type"] = "create"
+
+
+def _paused_update_request(ctx: dict, *, start_paused: bool, paused: bool) -> None:
+    """Create a package in the *start_paused* state, then build an update asking for *paused*.
+
+    The starting state is REALIZED, not assumed. A resume row that starts from an
+    active package passes on a seller that ignores the resume, because the package was
+    never paused; the "already-paused" row would not be idempotent at all. Both rows
+    used to start from the default (active) package, so neither graded its own name.
+    The create honours ``paused`` and stores it (T-UC-026-inv-200-2), and
+    T-UC-026-alt-resume starts from exactly this state on every transport.
+    """
+    update_kwargs, pkg_update = _setup_update_partition(ctx, paused=start_paused)
+    pkg_update["paused"] = paused
+    update_kwargs["packages"] = [pkg_update]
+    ctx["update_kwargs"] = update_kwargs
+    ctx["paused_request_type"] = "update"
+
+
 @given(parsers.re(r"a package request with paused per (?!boundary )(?P<partition>.+)"))
 def given_partition_paused(ctx: dict, partition: str) -> None:
     """Build request per partition for paused behavior."""
     partition = partition.strip()
-    if partition in ("active_default", "explicitly_active", "explicitly_paused"):
-        # Create flow
-        kwargs = _ensure_request_defaults(ctx)
-        pkg = _build_default_package(ctx)
-        if partition == "explicitly_paused":
-            pkg["paused"] = True
-        elif partition == "explicitly_active":
-            pkg["paused"] = False
-        # active_default: omit paused field
-        kwargs["packages"] = [pkg]
-        ctx["paused_request_type"] = "create"
-    elif partition in ("pause_on_update", "resume_on_update"):
-        # Update flow
-        _create_media_buy_for_update(ctx)
-        update_kwargs = _ensure_update_kwargs(ctx)
-        pkg_update = {"package_id": ctx.get("existing_package_id", "pkg-001")}
-        pkg_update["paused"] = partition == "pause_on_update"
-        update_kwargs["packages"] = [pkg_update]
-        ctx["update_kwargs"] = update_kwargs
-        ctx["paused_request_type"] = "update"
+    if partition == "active_default":
+        _paused_create_request(ctx, None)
+    elif partition in ("explicitly_active", "explicitly_paused"):
+        _paused_create_request(ctx, partition == "explicitly_paused")
+    elif partition == "pause_on_update":
+        _paused_update_request(ctx, start_paused=False, paused=True)
+    elif partition == "resume_on_update":
+        _paused_update_request(ctx, start_paused=True, paused=False)
     else:
         raise ValueError(f"Unknown paused partition: {partition}")
 
@@ -1571,27 +1632,12 @@ def given_partition_paused(ctx: dict, partition: str) -> None:
 def given_boundary_paused(ctx: dict, boundary_point: str) -> None:
     """Build request per boundary for paused behavior."""
     bp = boundary_point.strip()
+    asked = True if "paused=true" in bp else False if "paused=false" in bp else None
     if "on create" in bp:
-        kwargs = _ensure_request_defaults(ctx)
-        pkg = _build_default_package(ctx)
-        if "paused=true" in bp:
-            pkg["paused"] = True
-        elif "paused=false" in bp:
-            pkg["paused"] = False
-        # "omitted" case: don't set paused
-        kwargs["packages"] = [pkg]
-        ctx["paused_request_type"] = "create"
-    elif "on update" in bp or "already-paused" in bp:
-        _create_media_buy_for_update(ctx)
-        update_kwargs = _ensure_update_kwargs(ctx)
-        pkg_update = {"package_id": ctx.get("existing_package_id", "pkg-001")}
-        if "paused=true" in bp:
-            pkg_update["paused"] = True
-        elif "paused=false" in bp:
-            pkg_update["paused"] = False
-        update_kwargs["packages"] = [pkg_update]
-        ctx["update_kwargs"] = update_kwargs
-        ctx["paused_request_type"] = "update"
+        _paused_create_request(ctx, asked)
+    elif asked is not None and ("on update" in bp or "already-paused" in bp):
+        # "resume paused package" and "already-paused package" both start paused.
+        _paused_update_request(ctx, start_paused="already-paused" in bp or asked is False, paused=asked)
     else:
         raise ValueError(f"Unknown paused boundary: {bp}")
 
@@ -1599,21 +1645,21 @@ def given_boundary_paused(ctx: dict, boundary_point: str) -> None:
 # --- Replacement semantics partition/boundary ---
 
 
+#: The catalogs a "preserved" row creates its package with, so the update that omits every
+#: array field has a stored list to leave unchanged -- and a seller that dropped it fails.
+_PRESERVED_CATALOGS: list[dict[str, str]] = [{"type": "product", "catalog_id": "cat-kept"}]
+
+
 @given(parsers.re(r"a package update request per replacement semantics (?P<partition>.+)"))
 def given_partition_replacement(ctx: dict, partition: str) -> None:
     """Build update request per partition for replacement semantics."""
-    update_kwargs, pkg_update = _setup_update_partition(ctx)
     partition = partition.strip()
+    seed = {"catalogs": _PRESERVED_CATALOGS} if partition == "omit_array_fields" else {}
+    update_kwargs, pkg_update = _setup_update_partition(ctx, **seed)
     if partition == "replace_catalogs":
         pkg_update["catalogs"] = [{"type": "store", "catalog_id": "cat-new"}]
-    elif partition == "replace_optimization_goals":
-        pkg_update["optimization_goals"] = [{"metric": "clicks", "priority": 1}]
-    elif partition == "replace_creative_assignments":
-        pkg_update["creative_assignments"] = [{"creative_id": "cr-new", "weight": 1.0}]
     elif partition == "omit_array_fields":
         pkg_update["budget"] = 8000  # Only scalar update
-    elif partition == "replace_targeting_overlay":
-        pkg_update["targeting_overlay"] = {"audiences": [{"audience_id": "aud-new"}]}
     else:
         raise ValueError(f"Unknown replacement partition: {partition}")
     update_kwargs["packages"] = [pkg_update]
@@ -1623,21 +1669,16 @@ def given_partition_replacement(ctx: dict, partition: str) -> None:
 @given(parsers.parse("a package update request per replacement boundary {boundary_point}"))
 def given_boundary_replacement(ctx: dict, boundary_point: str) -> None:
     """Build update request per boundary for replacement semantics."""
-    update_kwargs, pkg_update = _setup_update_partition(ctx)
     bp = boundary_point.strip()
+    seed = {"catalogs": _PRESERVED_CATALOGS} if "all array fields omitted" in bp else {}
+    update_kwargs, pkg_update = _setup_update_partition(ctx, **seed)
     if "catalogs provided" in bp:
         pkg_update["catalogs"] = [{"type": "store", "catalog_id": "cat-new"}]
-    elif "optimization_goals provided" in bp:
-        pkg_update["optimization_goals"] = [{"metric": "clicks", "priority": 1}]
-    elif "creative_assignments provided" in bp:
-        pkg_update["creative_assignments"] = [{"creative_id": "cr-new", "weight": 1.0}]
     elif "all array fields omitted" in bp:
         pkg_update["budget"] = 8000
     elif "only scalar fields" in bp:
         pkg_update["budget"] = 8000
         pkg_update["pacing"] = "even"
-    elif "targeting_overlay replacement" in bp:
-        pkg_update["targeting_overlay"] = {"audiences": [{"audience_id": "aud-new"}]}
     else:
         raise ValueError(f"Unknown replacement boundary: {bp}")
     update_kwargs["packages"] = [pkg_update]
@@ -1744,27 +1785,50 @@ def then_package_pricing(ctx: dict, pricing_option_id: str) -> None:
     assert actual == expected, f"Expected pricing_option_id '{expected}', got '{actual}'"
 
 
-@then("the package should contain format_ids defaulting to all product formats")
-def then_package_default_formats(ctx: dict) -> None:
-    """Assert package format_ids default to all product formats."""
+@then("the package carries no format_ids, since the request carried none")
+def then_package_omits_unrequested_format_ids(ctx: dict) -> None:
+    """Assert the created package does not echo a ``format_ids`` the buyer never sent.
 
-    packages = _get_packages(ctx)
-    pkg = packages[0]
-    pkg_id = _pkg_field(pkg, "package_id")
-    assert pkg_id, "Package has no package_id — cannot verify format_ids"
-    format_ids = _pkg_field(pkg, "format_ids")
-    if format_ids is None:
-        raise AssertionError(
-            "format_ids not defaulted to the product formats when omitted; the pinned 3.1 core/package.json declares format_ids"
-        )
-    assert isinstance(format_ids, list), f"Expected format_ids to be a list, got {type(format_ids)}"
-    assert format_ids, "Expected format_ids to default to all product formats, got empty list"
-    product = ctx["default_product"]
-    product_format_ids = product.format_ids or []
-    expected_ids = {_extract_format_id(f) for f in product_format_ids}
-    actual_ids = {_extract_format_id(f) for f in format_ids}
-    assert actual_ids == expected_ids, (
-        f"Package format_ids should default to all product formats. Expected {expected_ids}, got {actual_ids}"
+    ``core/package.json`` @ 3.2.7 defines the response field as "Legacy named-format IDs
+    supplied for this package on create_media_buy" and gives its absence one meaning:
+    "Omitted means the request did not carry legacy format_ids". A seller that wrote the
+    product's defaulted formats here would be telling the buyer it sent them. The default
+    itself ("If omitted and no canonical selector is present, all formats supported by the
+    product are active", ``media-buy/package-request.json``) is applied, not reported on
+    this field.
+
+    Asserted on the ENTRY DICT through ``wire_entry``, which proves the package is on the
+    wire first, so the absence cannot pass on a response that dropped the package.
+    """
+    assert len(wire_field(ctx, "packages")) == 1, "the request built one package, so the wire must carry one"
+    package = wire_entry(ctx, "packages", index=0)
+    assert "format_ids" not in package, (
+        f"the request carried no format_ids, yet the package echoes {package['format_ids']!r}; "
+        "core/package.json: 'Omitted means the request did not carry legacy format_ids'"
+    )
+
+
+@then(parsers.parse("the package's format_ids_to_provide lists the product's formats {format_ids}"))
+def then_package_formats_to_provide_are_product_formats(ctx: dict, format_ids: str) -> None:
+    """Assert the omitted-format_ids default is applied: the package must provide every product format.
+
+    ``media-buy/package-request.json`` @ 3.2.7: "If omitted and no canonical selector is
+    present, all formats supported by the product are active." ``format_ids`` is not where
+    the seller reports that (it echoes only what the request carried), so the default is
+    read off ``format_ids_to_provide``, the legacy projection of the package's to-provide
+    checklist. Compared for set equality on the wire entry dict, so a seller that applied
+    no default (field absent), or narrowed or widened it, fails.
+    """
+    package = wire_entry(ctx, "packages", index=0)
+    provided = package.get("format_ids_to_provide")
+    assert provided, (
+        "the request omitted format_ids, so every product format is active and must be listed "
+        f"in format_ids_to_provide; the package carries {provided!r}"
+    )
+    expected = set(json.loads(format_ids))
+    actual = {_extract_format_id(f) for f in provided}
+    assert actual == expected, (
+        f"format_ids_to_provide lists {sorted(actual)}, expected the product's {sorted(expected)}"
     )
 
 
@@ -1997,6 +2061,230 @@ def then_operation_succeeds(ctx: dict) -> None:
         )
 
 
+# --- Requested-effect read, for the outcome step ---
+
+
+def _requested_packages(ctx: dict) -> list[dict[str, Any]]:
+    """Return the package documents the scenario ASKED the seller to apply.
+
+    The request is the authority on what effect to look for, not the Examples
+    outcome cell. The cell is English ("success with bid_price updated"); the
+    request carries the value, the field name and the operation. Deriving the
+    assertion from the request means a row cannot be graded against a different
+    effect than the one it asked for, and a new Examples row is graded the
+    moment it is written, with no outcome text to keep in step with.
+
+    Update dispatch builds ``ctx["update_kwargs"]``; create dispatch accumulates
+    into ``ctx["request_kwargs"]``. A scenario that set neither never reached
+    dispatch at all.
+
+    Both keys are read as LITERALS rather than looped over as a variable.
+    ``test_architecture_bdd_ctx_keys`` resolves every ctx key statically so the
+    set a step reads is knowable, and a loop variable -- even over a tuple of two
+    literals right here -- is the one form it cannot resolve. Two reads cost
+    nothing and keep the key set legible to the reader as well as the guard.
+    """
+
+    for kwargs in (ctx.get("update_kwargs"), ctx.get("request_kwargs")):
+        if not kwargs:
+            continue
+        packages = kwargs.get("packages")
+        if packages:
+            return [p for p in packages if isinstance(p, dict)]
+    return []
+
+
+def _numbers_equal(requested: Any, actual: Any) -> bool:
+    """Compare two numbers across the int/float/Decimal the wire and ORM mix."""
+    try:
+        return abs(float(requested) - float(actual)) < 1e-6
+    except (TypeError, ValueError):
+        return False
+
+
+def _format_id_set(raw: Any) -> set[str]:
+    """Normalize either side of a format_ids comparison to a set of id strings."""
+    if raw is None:
+        return set()
+    return {_extract_format_id(f) for f in raw}
+
+
+def _assert_keyword_op(pkg: Any, overlay_field: str, entries: list, *, present: bool) -> None:
+    """Assert an add/remove keyword operation landed in the package's overlay.
+
+    ``present`` says which way: an add must be findable afterwards, a remove must
+    not be. Both read the same overlay through the same helper, so the two
+    directions cannot drift apart.
+    """
+
+    found_in = _get_overlay_keywords(pkg, overlay_field)
+    if found_in is None:
+        if not present:
+            # A remove against an absent collection is satisfied by its absence.
+            return
+        raise AssertionError(
+            f"{overlay_field} absent from targeting_overlay, so the requested "
+            f"{len(entries)}-entry add is not readable anywhere on the response. "
+            "The pinned 3.2 media-buy/package-update.json declares the operation."
+        )
+    for entry in entries:
+        keyword = _keyword_field(entry, "keyword")
+        match_type = _keyword_field(entry, "match_type")
+        hit = _find_keyword(found_in, keyword, str(match_type) if match_type is not None else None)
+        if present:
+            assert hit is not None, (
+                f"Requested ({keyword!r}, {match_type!r}) is not in {overlay_field} after the add. "
+                f"Present: {[(_keyword_field(k, 'keyword'), _keyword_field(k, 'match_type')) for k in found_in]}"
+            )
+            bid = _keyword_field(entry, "bid_price")
+            if bid is not None:
+                actual_bid = _keyword_field(hit, "bid_price")
+                assert _numbers_equal(bid, actual_bid), (
+                    f"({keyword!r}, {match_type!r}) carries bid_price {actual_bid!r}, requested {bid!r}"
+                )
+        else:
+            assert hit is None, f"Requested removal of ({keyword!r}, {match_type!r}) left it in {overlay_field}"
+
+
+def _catalog_identities(catalogs: list) -> list[tuple[str, Any]]:
+    """The (type, catalog_id) pairs of *catalogs*, sorted: what the buyer named each catalog by."""
+    pairs = []
+    for item in catalogs:
+        doc = _normalize_item(item)
+        kind = doc.get("type")
+        pairs.append((str(getattr(kind, "value", kind)), doc.get("catalog_id")))
+    return sorted(pairs)
+
+
+def _assert_unnamed_catalogs_preserved(ctx: dict, pkg: Any, want: dict[str, Any]) -> None:
+    """An update that does not name catalogs reports the catalogs the package was created with.
+
+    3.2.7 media-buy/package-update.json on ``catalogs``: "Omit to leave catalogs unchanged",
+    and media-buy/update-media-buy-response.json makes ``affected_packages`` "full Package
+    objects showing complete post-update state". Applies only to an update of a package the
+    scenario created with catalogs (``ctx["existing_package"]`` is the create echo), so the
+    preserved list is the one the Given sent rather than an empty one a dropped list matches.
+    """
+    existing = ctx.get("existing_package")
+    created = _pkg_field(existing, "catalogs") if existing is not None and ctx.get("update_kwargs") else None
+    if not created or "catalogs" in want:
+        return
+    actual = _pkg_field(pkg, "catalogs")
+    assert actual, (
+        f"the package was created with catalogs {_catalog_identities(created)} and the update did "
+        "not name catalogs, yet the snapshot carries none"
+    )
+    assert _catalog_identities(actual) == _catalog_identities(created), (
+        f"catalogs changed by an update that did not name them: created {_catalog_identities(created)}, "
+        f"now {_catalog_identities(actual)}"
+    )
+
+
+def _assert_requested_package_effects(ctx: dict) -> None:
+    """Assert the response package reflects every field the request asked for.
+
+    This is the read that the outcome step was missing. Every field spelled in
+    the requested package is looked up on the returned package and compared --
+    there is no per-field opt-in and no "unknown field is ignored" path, so a
+    field this function has no reader for FAILS by name rather than passing
+    silently. That property is the whole point: the step it serves used to pass
+    54-plus Examples rows whose outcome cell named an effect, while asserting
+    only that no error came back.
+    """
+
+    requested = _requested_packages(ctx)
+    if not requested:
+        return
+    packages = _assert_has_packages(ctx)
+
+    for index, want in enumerate(requested):
+        pkg = packages[index] if index < len(packages) else packages[0]
+        _assert_unnamed_catalogs_preserved(ctx, pkg, want)
+        for field, value in want.items():
+            if field in ("keyword_targets_add", "negative_keywords_add"):
+                _assert_keyword_op(pkg, field.removesuffix("_add"), value, present=True)
+            elif field in ("keyword_targets_remove", "negative_keywords_remove"):
+                _assert_keyword_op(pkg, field.removesuffix("_remove"), value, present=False)
+            elif field == "format_ids":
+                actual = _format_id_set(_pkg_field(pkg, "format_ids"))
+                assert _format_id_set(value) <= actual, (
+                    f"Requested format_ids {sorted(_format_id_set(value))} are not all on the "
+                    f"package, which carries {sorted(actual)}"
+                )
+            elif field == "targeting_overlay":
+                overlay = _pkg_field(pkg, "targeting_overlay")
+                assert overlay is not None, (
+                    "targeting_overlay was requested and the package carries none; the pinned "
+                    "core/package.json declares it"
+                )
+                for overlay_field, overlay_value in value.items():
+                    if overlay_field in ("keyword_targets", "negative_keywords"):
+                        _assert_keyword_op(pkg, overlay_field, overlay_value, present=True)
+                        continue
+                    # Every OTHER overlay dimension the request set -- audiences,
+                    # geo, dayparting -- is read back too. Grading only the keyword
+                    # dimensions here would leave "success with overlay replaced"
+                    # passing on a merely non-null overlay, which is the same
+                    # vacuity this function exists to remove.
+                    actual_dim = overlay_value and (
+                        overlay.get(overlay_field)
+                        if isinstance(overlay, dict)
+                        else getattr(overlay, overlay_field, None)
+                    )
+                    assert actual_dim, (
+                        f"Requested targeting_overlay.{overlay_field} with {len(overlay_value)} "
+                        f"entries and the package's overlay carries none"
+                    )
+                    assert len(actual_dim) == len(overlay_value), (
+                        f"Requested targeting_overlay.{overlay_field} with {len(overlay_value)} "
+                        f"entries, overlay carries {len(actual_dim)} -- a replacement is a whole swap"
+                    )
+            elif field == "paused":
+                # GRADE THE RECORD, NOT ONLY THE ENVELOPE. A response echo cannot catch a
+                # seller that reports the buyer's ask and stores the opposite, and the
+                # stored row is what the next get_media_buys answers from. Measured: with
+                # the carrier hardcoded False this row PASSED on a2a, mcp and rest while
+                # T-UC-026-inv-200-2 failed, so the generic bool branch below made this
+                # field echo-satisfiable (salesagent-0a2ue).
+                #
+                # Create dispatch only. The update-side pause not persisting is a separate
+                # open defect (salesagent-1ete); reading the record there would grade that
+                # bug from this step instead of from its own scenario.
+                actual = _pkg_field(pkg, field)
+                assert str(actual) == str(value), f"Requested {field}={value!r}, package carries {actual!r}"
+                if ctx.get("request_kwargs"):
+                    package_id = _pkg_field(pkg, "package_id")
+                    assert package_id, (
+                        "response package carries no package_id, so the persisted package_config cannot be read back"
+                    )
+                    stored = stored_package_config(ctx, _created_media_buy_id(ctx), str(package_id))
+                    assert bool(stored.get("paused")) == bool(value), (
+                        f"stored package_config['paused']={stored.get('paused')!r}, expected "
+                        f"{value!r} -- the response reported the buyer's ask while the record "
+                        "says otherwise, so the package would deliver"
+                    )
+            elif isinstance(value, int | float) and not isinstance(value, bool):
+                actual = _pkg_field(pkg, field)
+                assert _numbers_equal(value, actual), f"Requested {field}={value!r}, package carries {actual!r}"
+            elif isinstance(value, str | bool):
+                actual = _pkg_field(pkg, field)
+                assert str(actual) == str(value), f"Requested {field}={value!r}, package carries {actual!r}"
+            elif isinstance(value, list):
+                actual = _pkg_field(pkg, field)
+                assert actual is not None, (
+                    f"Requested {field} with {len(value)} entries and the package carries none, so "
+                    "the replacement is not readable on the response"
+                )
+                assert len(actual) == len(value), (
+                    f"Requested {field} with {len(value)} entries, package carries {len(actual)}"
+                )
+            else:
+                raise AssertionError(
+                    f"No reader for requested package field {field!r} (value {value!r}). Add one rather "
+                    "than letting the row pass ungraded -- that is the defect this function exists for."
+                )
+
+
 # --- Outcome dispatch step (partition/boundary) ---
 
 
@@ -2016,7 +2304,30 @@ def then_outcome(ctx: dict, outcome: str) -> None:
 
     outcome = outcome.strip()
     if outcome.startswith("success"):
-        assert "error" not in ctx, f"Expected success but got error: {ctx.get('error')}"
+        # Two assertions, in order: the seller answered and said it succeeded, and the
+        # effect the request asked for is READABLE on what came back.
+        #
+        # ``then_operation_succeeds`` is the one success contract in this tree -- no
+        # error, a payload that actually arrived, and a status that is not a failure
+        # value. On its own it let a row whose outcome cell names an EFFECT ("success
+        # with keyword added", "success with bid_price updated", "success with catalogs
+        # replaced") pass on whatever production did, because nothing read the effect.
+        #
+        # ``_assert_requested_package_effects`` is that read. It derives the assertion
+        # from the REQUEST rather than from the outcome text, so it grades every row --
+        # including the plain "success" ones, which also asked for something -- and a new
+        # Examples row is graded the moment it is written.
+        #
+        # A previous attempt at this assertion was reverted on the grounds that a Then
+        # which cannot pass until production changes belongs with the production fix.
+        # That is the opposite of what this module needs: a row that cannot pass is a row
+        # whose effect production does not produce, and the honest report of that is a
+        # failing row, not a silent one. Measured on this tree, `git grep keyword_targets
+        # -- src/` returns ZERO hits, so the seller accepts the keyword-targeting
+        # operations that our own pinned 3.2 media-buy/package-update.json declares and
+        # drops them, answering success. Those rows now fail and say so.
+        then_operation_succeeds(ctx)
+        _assert_requested_package_effects(ctx)
         return
     if not outcome.startswith("error"):
         raise ValueError(f"Unknown outcome format: {outcome}")
@@ -2613,47 +2924,84 @@ def then_pricing_defaults(ctx: dict) -> None:
         )
 
 
-@then(parsers.parse("the package should be created with format_ids {fmt_ids}"))
-def then_created_with_formats(ctx: dict, fmt_ids: str) -> None:
-    """Assert package was created with specific format_ids."""
-    pkgs = _assert_has_packages(ctx)
-    actual_format_ids = _pkg_field(pkgs[0], "format_ids")
-    assert actual_format_ids is not None, "format_ids not echoed in response — production should echo format_ids"
-    try:
-        expected = json.loads(fmt_ids)
-    except (json.JSONDecodeError, TypeError):
-        inner = fmt_ids.strip("[]")
-        expected = [s.strip().strip('"') for s in inner.split(",")]
-    actual_set = {_extract_format_id(f) for f in actual_format_ids}
-    expected_set = set(expected)
-    assert expected_set == actual_set, f"Expected format_ids {expected_set}, got {actual_set}"
-
-
 @then(parsers.parse("the package should be created with paused={paused}"))
 def then_created_with_paused(ctx: dict, paused: str) -> None:
-    """Assert package was created with specific paused value."""
+    """Assert the package was CREATED in the asked-for pause state, reported and stored.
+
+    Two assertions, because the response alone cannot carry this one. ``paused`` is in
+    ``Package.SELLER_DECIDED``, so the create response does not echo the request -- it
+    reports what the ad server answered, which is the first half. The second half is the
+    record: ``package_config["paused"]`` is where a package's pause state is kept and is
+    the field ``get_media_buys`` serves back (``media_buy_list.py``), so a seller that
+    reported the ask and stored the opposite would hand the buyer "active" on the very
+    next read. Grading only the response passed against exactly that.
+
+    Both halves are the EFFECT, not an echo: a seller that drops the buyer's ask before
+    the adapter answers ``paused=false`` here, and a seller that drops it before the
+    write stores ``false``.
+    """
     pkgs = _assert_has_packages(ctx)
     expected = as_bool(paused)
     actual = _pkg_field(pkgs[0], "paused")
     assert actual is not None, f"paused not echoed in response; expected {expected}"
     assert actual == expected, f"Expected paused={expected}, got {actual!r}"
 
+    media_buy_id = _created_media_buy_id(ctx)
+    package_id = _pkg_field(pkgs[0], "package_id")
+    assert package_id, "created package has no package_id — cannot read back what was stored"
+    stored = stored_package_config(ctx, media_buy_id, package_id)
+    assert stored.get("paused") == expected, (
+        f"stored package_config['paused']={stored.get('paused')!r}, expected {expected}; "
+        "this is the record get_media_buys serves paused from, so the next read would "
+        "report the wrong state"
+    )
+
 
 @then("the package should be created with both catalogs")
 def then_created_with_catalogs(ctx: dict) -> None:
-    """Assert package was created with both catalog entries."""
+    """Assert the created package echoes exactly the catalogs the request carried.
+
+    Graded as a set of ``(type, catalog_id)`` pairs against the REQUEST, not as a
+    count plus a distinct-type tally. The pinned 3.2.1 ``core/package.json`` says
+    catalogs are "Echoed from the create_media_buy request", so the obligation is an
+    echo and the request is the only thing it can be compared with. A count-and-types
+    check passed on two catalogs of the right types carrying the wrong ids -- and on a
+    seller that substituted its own catalog_ids, which is precisely the echo failing.
+
+    The distinct-type rule (BR-RULE-089 INV-2, and the schema's "Each catalog MUST have
+    a distinct type") still holds, and holds more strongly: equal pair sets means the
+    response carries the two distinct types the request did.
+    """
     pkgs = _assert_has_packages(ctx)
     catalogs = _pkg_field(pkgs[0], "catalogs")
     assert catalogs is not None, "catalogs not echoed in response — production should echo catalogs"
     assert isinstance(catalogs, list), f"Expected catalogs to be a list, got {type(catalogs)}"
-    assert len(catalogs) == 2, f"Expected 2 catalogs, got {len(catalogs)}"
-    # Verify catalogs have distinct types (per BR-RULE-089 INV-2)
-    types = set()
-    for cat in catalogs:
-        cat_type = cat.get("type") if isinstance(cat, dict) else getattr(cat, "type", None)
-        if cat_type:
-            types.add(cat_type)
-    assert len(types) == 2, f"Expected 2 distinct catalog types, got types: {types}"
+
+    def _scalar(value: Any) -> str | None:
+        # ``type`` arrives as a str on the request side and may arrive as an enum member
+        # on the response side, depending on which model the transport parsed into.
+        # Comparing those two directly would report a mismatch for an identical value.
+        if value is None:
+            return None
+        return str(getattr(value, "value", value))
+
+    def _pairs(entries: list) -> set[tuple[str | None, str | None]]:
+        out: set[tuple[str | None, str | None]] = set()
+        for cat in entries:
+            getter = cat.get if isinstance(cat, dict) else lambda name, cat=cat: getattr(cat, name, None)
+            out.add((_scalar(getter("type")), _scalar(getter("catalog_id"))))
+        return out
+
+    # Read from the ctx contract the Given records, not out of request_kwargs: a Then that
+    # asserts the REQUEST carried catalogs grades the setup rather than the seller, and the
+    # precondition now lives with the Given that creates it.
+    expected = _pairs(ctx.get("expected_catalogs") or [])
+    actual = _pairs(catalogs)
+    assert actual == expected, f"Expected catalogs {sorted(expected)} echoed, got {sorted(actual)}"
+    # The distinct-type rule (BR-RULE-089 INV-2, and the schema's "Each catalog MUST have a
+    # distinct type") asserted on the RESPONSE. It was previously asserted on the request,
+    # where it could only restate what the Given had just built.
+    assert len(actual) == 2, f"the response must carry two distinct catalogs, got {sorted(actual)}"
 
 
 @then("the package should be created without catalogs")
@@ -2685,39 +3033,16 @@ def then_pkg_catalogs(ctx: dict, expected: str) -> None:
         then_catalogs_unchanged(ctx)
         return
 
+    _assert_no_error(ctx)
     pkgs = _assert_has_packages(ctx)
     actual_catalogs = _pkg_field(pkgs[0], "catalogs")
-    expected_parsed = json.loads(expected)
-
     assert actual_catalogs is not None, f"Expected catalogs {expected} but catalogs field is None in response"
-
-    # Normalize for comparison
-    actual_normalized = [
-        c if isinstance(c, dict) else (c.model_dump() if hasattr(c, "model_dump") else {"raw": str(c)})
-        for c in actual_catalogs
-    ]
-    expected_list = expected_parsed if isinstance(expected_parsed, list) else [expected_parsed]
-    assert len(actual_normalized) == len(expected_list), (
-        f"Expected {len(expected_list)} catalogs, got {len(actual_normalized)}"
-    )
-    # Verify each expected catalog is present with matching fields
-    for exp_cat in expected_list:
-        if isinstance(exp_cat, dict):
-            _assert_catalog_in_list(exp_cat, actual_normalized)
-
-
-def _assert_catalog_in_list(expected: dict, actual_list: list[dict]) -> None:
-    """Assert expected catalog dict is found in actual list (matching key fields)."""
-    exp_type = expected.get("type")
-    exp_id = expected.get("catalog_id")
-    for actual in actual_list:
-        a_type = actual.get("type")
-        a_id = actual.get("catalog_id")
-        if exp_type and a_type == exp_type and exp_id and a_id == exp_id:
-            return
-        if exp_id and a_id == exp_id:
-            return
-    raise AssertionError(f"Expected catalog {expected} not found in actual catalogs {actual_list}")
+    # The whole list, by the (type, catalog_id) pair the buyer named each catalog by: a
+    # replacement is a swap, so an extra catalog, a missing one, or the right id under
+    # another type each fail here.
+    want = _catalog_identities(json.loads(expected))
+    got = _catalog_identities(actual_catalogs)
+    assert got == want, f"Expected the package's catalogs to be exactly {want}, got {got}"
 
 
 def _assert_goal_in_list(expected: dict, actual_list: list[dict]) -> None:

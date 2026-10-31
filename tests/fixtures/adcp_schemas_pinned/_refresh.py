@@ -102,15 +102,24 @@ version back for the ``$id`` check only, never for the path.
 ``$id`` convention (GH #1881)
 ----------------------------
 Vendored files keep upstream's ``$id`` **verbatim** — whatever the revision
-they were fetched from ships, byte for byte. Two forms are therefore live in
-this directory, and both are legitimate:
+they were fetched from ships, byte for byte. THREE forms are therefore live in
+this directory, and all three are legitimate:
 
 - the version-free ``/schemas/<category>/<name>.json`` that upstream wrote
   before 3.1.1 (``core/activation-key.json``, vendored at 04f59d2d5);
 - the version-stamped ``/schemas/<version>/<category>/<name>.json`` — so
   ``/schemas/3.1.1/enums/error-code.json`` — that upstream's own ``$id``
   carries at tag ``v3.1.1``, for BOTH ``enums/error-code.json`` and the
-  ``3.1.1/`` tree.
+  ``3.1.1/`` tree;
+- the ABSOLUTE ``https://adcontextprotocol.org/schemas/<version>/<category>/<name>.json``
+  that upstream adopted at 3.2. Measured across both tags rather than inferred
+  from one file: every ``dist/schemas/3.1.1/core/*.json`` at ``v3.1.1`` carries
+  the path form and every ``dist/schemas/3.2.1/core/*.json`` at ``v3.2.1``
+  carries the absolute form, and the 3.2.1 schema INDEX publishes its ``$ref``
+  values the same way. :data:`ID_ORIGIN` is that origin, and it is the ONLY
+  prefix :func:`check_id_convention` will accept in front of the vendored URI —
+  so the path, the category, the name and the version segment all stay exact and
+  the one thing upstream changed is the one thing admitted.
 
 :func:`check_id_convention` refuses to write a file whose fetched ``$id`` is
 anything other than the URI it is vendored as — which is what makes "verbatim"
@@ -224,6 +233,21 @@ def expected_id(ref: str, version: str = "") -> str:
     return f"/schemas/{version}" + ref[len("/schemas") :]
 
 
+#: The origin upstream stamps into ``$id`` from AdCP 3.2 on. Not a wildcard: a fetched
+#: ``$id`` is accepted either as *ref* verbatim (the pre-3.2 forms) or as this origin
+#: immediately followed by *ref*, and nothing else.
+ID_ORIGIN = "https://adcontextprotocol.org"
+
+
+def _local_ref(ref: str) -> str:
+    """*ref* as this directory's layout rule addresses it: origin stripped, path kept.
+
+    Only :data:`ID_ORIGIN` is stripped, so a ``$ref`` pointing at any other host stays
+    foreign and the namespace test below skips it, as it always did.
+    """
+    return ref[len(ID_ORIGIN) :] if ref.startswith(ID_ORIGIN) else ref
+
+
 def check_id_convention(ref: str, schema: dict) -> None:
     """Raise unless *schema*'s ``$id`` is verbatim the ``ref`` it is vendored as.
 
@@ -237,14 +261,16 @@ def check_id_convention(ref: str, schema: dict) -> None:
     reader much later.
     """
     actual = schema.get("$id")
-    if actual != ref:
+    if actual not in (ref, f"{ID_ORIGIN}{ref}"):
         raise IdConventionError(
-            f"{ref}: upstream $id is {actual!r}, expected {ref!r}. Vendored fixtures keep "
-            f"upstream's own /schemas/<category>/<name>.json form verbatim, version segment "
-            f"included or omitted exactly as upstream wrote it (GH #1881). If upstream "
-            f"deliberately changed its $id convention, update this script's docstring and "
-            f"tests/unit/test_pinned_fixture_id_convention.py in the same reviewed change — "
-            f"do not vendor the new form silently."
+            f"{ref}: upstream $id is {actual!r}, expected {ref!r} or "
+            f"{ID_ORIGIN + ref!r}. Vendored fixtures keep upstream's own "
+            f"/schemas/<category>/<name>.json form verbatim, version segment included or "
+            f"omitted exactly as upstream wrote it, optionally behind the "
+            f"{ID_ORIGIN} origin upstream adopted at 3.2 (GH #1881). If upstream "
+            f"deliberately changed its $id convention again, update this script's docstring "
+            f"and tests/unit/test_pinned_fixture_id_convention.py in the same reviewed "
+            f"change — do not vendor the new form silently."
         )
 
 
@@ -267,7 +293,13 @@ def vendor(roots: list[str], *, rev: str, src_prefix: str, id_version: str = "")
     stack = list(roots)
     written = 0
     while stack:
-        ref = stack.pop().split("#")[0]
+        # STRIP THE 3.2 ORIGIN before the namespace test. From 3.2 on upstream writes its
+        # ``$ref`` values absolute, exactly as it writes ``$id``, so a closure walk that
+        # only recognised ``/schemas/...`` stopped at the roots and vendored 3 files where
+        # 3.1.1's walk vendored 73. One origin, stripped in one place, and everything
+        # downstream -- the namespace test, the layout rule, the ``$id`` check -- keeps
+        # working on the path form it was written for.
+        ref = _local_ref(stack.pop().split("#")[0])
         if not ref.startswith("/schemas/") or ref in seen:
             continue
         seen.add(ref)
@@ -276,7 +308,13 @@ def vendor(roots: list[str], *, rev: str, src_prefix: str, id_version: str = "")
         check_id_convention(expected_id(ref, id_version), schema)
         out = FIXTURE_DIR / ref[len("/schemas/") :]
         out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text(json.dumps(schema, indent=2) + "\n")
+        # ``ensure_ascii=False``: upstream writes its prose with real characters (em dashes
+        # in every enumDescription), and the default would re-encode them as ``\\u2014``.
+        # That makes a refresh NON-IDEMPOTENT -- re-running the documented procedure
+        # rewrote the SHA-256-pinned ``enums/error-code.json`` with identical content and
+        # different bytes, tripping test_guards_error_code_fixture_pin for no upstream
+        # change at all. A frozen artifact has to round-trip byte-for-byte.
+        out.write_text(json.dumps(schema, indent=2, ensure_ascii=False) + "\n")
         written += 1
         stack.extend(re.findall(r'"\$ref"\s*:\s*"([^"]+)"', body))
     print(f"vendored {written} schema files from {REPO}@{rev[:9]} into {FIXTURE_DIR}")

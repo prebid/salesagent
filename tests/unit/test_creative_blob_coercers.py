@@ -169,7 +169,9 @@ class TestCoerceBlobAssets:
         # one place a row becomes a model, so a passthrough of the raw blob would be the
         # regression (the model is what Creative then carries).
         assert set(coerced) == {"headline"}
-        assert coerced["headline"].root.content == "Hi"
+        # No ``.root``: adcp 9 generates the asset arms as plain models, so the coerced
+        # value IS the ``TextAsset`` rather than a RootModel wrapping one.
+        assert coerced["headline"].content == "Hi"
         assert mock_logger.warning.call_count == 0
 
     @pytest.mark.parametrize(

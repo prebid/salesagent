@@ -4,7 +4,7 @@ Verifies that when two concurrent requests with the same idempotency_key
 both pass the initial lookup and attempt to commit, the loser catches
 IntegrityError and resolves to the winner — replaying the winner's verbatim
 cached success when visible, enforcing the payload-hash conflict rule even
-after the race, and FAILING CLOSED (transient SERVICE_UNAVAILABLE) when the
+after the race, and FAILING CLOSED (transient IDEMPOTENCY_IN_FLIGHT) when the
 cache row is missing or unusable: verbatim replay is byte-for-byte or
 nothing, never a fabricated body.
 """
@@ -91,7 +91,7 @@ class TestDegradedReplayFailsClosed:
     """
 
     def test_missing_cache_row_rejects_transient(self, integration_db):
-        """A same-key buy with no cache row rejects SERVICE_UNAVAILABLE + retry_after."""
+        """A same-key buy with no cache row rejects IDEMPOTENCY_IN_FLIGHT + retry_after."""
         from src.core.exceptions import AdCPSalesAgentError
         from src.core.tools.media_buy_create import _raise_degraded_replay_outcome
         from tests.factories import MediaBuyFactory, MediaPackageFactory, PrincipalFactory, TenantFactory
@@ -123,7 +123,7 @@ class TestDegradedReplayFailsClosed:
             )
 
         exc = exc_info.value
-        assert exc.error_code == "SERVICE_UNAVAILABLE"
+        assert exc.error_code == "IDEMPOTENCY_IN_FLIGHT"
         assert exc.retry_after >= 1
 
 
@@ -171,7 +171,7 @@ class TestDegradedReplayImpossibleState:
         exc = exc_info.value
         assert exc.error_code == "CONFIGURATION_ERROR", (
             f"an impossible post-race state is terminal, but got {exc.error_code!r} — if this is now "
-            "SERVICE_UNAVAILABLE the guard has collapsed onto its transient sibling and the buyer is "
+            "IDEMPOTENCY_IN_FLIGHT the guard has collapsed onto its transient sibling and the buyer is "
             "being told to retry a state that cannot resolve"
         )
         assert exc.recovery == "terminal"
@@ -249,7 +249,7 @@ class TestIdempotencyRaceRecovery:
                     # Matches the winner's scope above, which is deliberately account-less.
                     account_id=None,
                 )
-            assert exc_info.value.error_code == "SERVICE_UNAVAILABLE"
+            assert exc_info.value.error_code == "IDEMPOTENCY_IN_FLIGHT"
 
         assert caught, "IntegrityError should have been raised by the duplicate idempotency_key"
 
@@ -295,7 +295,7 @@ class TestDegradedFallbackStatus:
                 account_id=DEFAULT_TEST_ACCOUNT_ID,
             )
 
-        assert exc_info.value.error_code == "SERVICE_UNAVAILABLE"
+        assert exc_info.value.error_code == "IDEMPOTENCY_IN_FLIGHT"
 
 
 class TestRaceLoserPayloadRules:
@@ -407,7 +407,7 @@ class TestRaceSeamThroughEntrypoint:
         # The probe missed (row gone) → full re-execution → backstop fired →
         # the except-branch failed closed instead of fabricating a body.
         assert calls_after == calls_before + 1, "the retry must re-execute (probe miss), not replay"
-        assert exc_info.value.error_code == "SERVICE_UNAVAILABLE"
+        assert exc_info.value.error_code == "IDEMPOTENCY_IN_FLIGHT"
 
         # Exactly one booking exists for the key — the backstop held.
         with MediaBuyUoW(tenant_id) as verify_uow:

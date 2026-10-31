@@ -68,7 +68,7 @@ def test_updating_profile_formats_affects_all_products(integration_db, sample_te
         stmt = select(Product).where(Product.tenant_id == sample_tenant["tenant_id"])
         db_products = session.scalars(stmt).all()
         for product in db_products:
-            effective_formats = product.effective_format_ids
+            effective_formats = list(product.format_contract.format_ids)
             assert len(effective_formats) == 2
             assert {"agent_url": "https://test.example.com", "id": "format_a"} in effective_formats
             assert {"agent_url": "https://test.example.com", "id": "format_b"} in effective_formats
@@ -88,7 +88,7 @@ def test_updating_profile_formats_affects_all_products(integration_db, sample_te
         assert len(db_products) == 3
 
         for product in db_products:
-            effective_formats = product.effective_format_ids
+            effective_formats = list(product.format_contract.format_ids)
             assert len(effective_formats) == 2
             assert {"agent_url": "https://test.example.com", "id": "format_c"} in effective_formats
             assert {"agent_url": "https://test.example.com", "id": "format_d"} in effective_formats

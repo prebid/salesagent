@@ -91,7 +91,7 @@ Feature: BR-UC-015 Track Conversions
     # POST-S1: Buyer configured event sources with per-source action results
     # POST-S9: Context echoed
     # BR-RULE-106 INV-2: upsert semantics
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/sync-event-sources-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/sync-event-sources-request.json
 
     Examples:
       | transport |
@@ -104,7 +104,7 @@ Feature: BR-UC-015 Track Conversions
     When the Buyer Agent syncs event_sources with identical configuration for "src_1"
     Then the response contains event_sources with source "src_1" action "unchanged"
     # BR-RULE-106 INV-7: idempotent re-sync of identical config yields action "unchanged"
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/sync-event-sources-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/sync-event-sources-request.json
 
   @T-UC-015-ext-a-003 @extension @post-s1 @br-rule-105
   Scenario: Sync event sources -- seller-managed sources not modified by buyer sync
@@ -140,7 +140,7 @@ Feature: BR-UC-015 Track Conversions
     # POST-S9: Context echoed
     # BR-RULE-112 INV-1: Success branch
     # BR-RULE-112 INV-4: All events pass, no partial_failures
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/sync-event-sources-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/sync-event-sources-request.json
 
     Examples:
       | transport |
@@ -288,7 +288,7 @@ Feature: BR-UC-015 Track Conversions
     # POST-F3: Context echoed
     # POST-F4: Error references the provided event_source_id
     # --- Extension F: ACCOUNT_NOT_FOUND ---
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/sync-event-sources-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/sync-event-sources-request.json
 
     Examples:
       | transport |
@@ -371,7 +371,7 @@ Feature: BR-UC-015 Track Conversions
     # POST-F3: Context echoed
     # BR-RULE-110 INV-3: Over max rejected
     # --- Extension J: MISSING_USER_MATCH ---
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/sync-event-sources-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/sync-event-sources-request.json
 
     Examples:
       | transport |
@@ -1020,7 +1020,7 @@ Feature: BR-UC-015 Track Conversions
     And the error should include "suggestion" field
     # BR-RULE-232 INV-1: idempotency_key is REQUIRED
     # boundary: idempotency_key field omitted
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/sync-event-sources-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/sync-event-sources-request.json
 
   @T-UC-015-log-idempotency-required @v31 @idempotency @br-rule-232 @inv-1 @error
   Scenario: Log without idempotency_key is rejected as a validation error
@@ -1030,7 +1030,7 @@ Feature: BR-UC-015 Track Conversions
     And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
     # BR-20: idempotency_key is REQUIRED on log_event
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/sync-event-sources-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/sync-event-sources-request.json
 
   @T-UC-015-idempotency-key-boundary @v31 @idempotency @br-rule-232 @inv-2 @boundary
   Scenario Outline: idempotency_key boundary -- "<value_desc>" (<outcome>)
@@ -1041,7 +1041,7 @@ Feature: BR-UC-015 Track Conversions
     # boundary: key with exactly 255 characters (maximum)
     # boundary: key with 256 characters (one above maximum)
     # boundary: key containing a disallowed character (space, /, @)
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/sync-event-sources-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/sync-event-sources-request.json
 
     Examples:
       | value_desc                 | value                                                                                                                                                                                                                                                           | outcome                                                          |
@@ -1061,7 +1061,7 @@ Feature: BR-UC-015 Track Conversions
     And no additional downstream pixel provisioning is triggered
     # POST-S10: idempotent replay returns prior result without side effects
     # boundary: same key replayed for the same (seller, request)
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/sync-event-sources-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/sync-event-sources-request.json
 
   @T-UC-015-log-replay @v31 @idempotency @br-rule-232 @inv-3 @post-s10
   Scenario: Log replay with same idempotency_key returns prior result without duplicate event logging
@@ -1070,7 +1070,7 @@ Feature: BR-UC-015 Track Conversions
     When the Buyer Agent re-sends the identical log_event request with the same idempotency_key "log-ev-2026-05-21-001"
     Then the response equals the prior response
     And the seller does not record duplicate events for the replay
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/sync-event-sources-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/sync-event-sources-request.json
 
   @T-UC-015-discovery-only-idempotency @v31 @idempotency @br-rule-232 @inv-5
   Scenario: Discovery-only sync still requires idempotency_key as a request ID
@@ -1079,7 +1079,7 @@ Feature: BR-UC-015 Track Conversions
     Then the response contains an event_sources array with 3 items
     And the idempotency_key serves as the request ID for this discovery-only call
     # BR-20: idempotency_key required even when event_sources omitted
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/sync-event-sources-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/sync-event-sources-request.json
 
   @T-UC-015-cross-seller-idempotency-isolation @v31 @idempotency @br-rule-232 @inv-4
   Scenario: Same idempotency_key reused by a different seller is an independent request -- no cross-seller correlation
@@ -1096,7 +1096,7 @@ Feature: BR-UC-015 Track Conversions
     When the Buyer Agent discovers event sources and source "src_web" returns health status "<status>"
     Then the health status value is <validity> per /schemas/enums/assessment-status.json
     # boundary: status outside assessment-status enum
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/sync-event-sources-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/sync-event-sources-request.json
 
     Examples:
       | status       | validity |
@@ -1113,7 +1113,7 @@ Feature: BR-UC-015 Track Conversions
     Given an account has a buyer-managed source "src_web" for which the seller evaluates health
     When the source "src_web" returns health field "<field>" with value "<value>"
     Then the value is <validity> for the health object
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/sync-event-sources-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/sync-event-sources-request.json
 
     Examples:
       | field               | value | validity |
@@ -1134,7 +1134,7 @@ Feature: BR-UC-015 Track Conversions
     # health is optional per source; when present, status (assessment-status) is REQUIRED
     # boundary: health present but status omitted
     # boundary: health present with status only
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/sync-event-sources-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/sync-event-sources-request.json
 
   @T-UC-015-health-absent-when-not-evaluated @v31 @health @partition
   Scenario: event source health -- health field is absent when the seller does not evaluate source quality
@@ -1143,14 +1143,14 @@ Feature: BR-UC-015 Track Conversions
     Then source "src_web" is returned without a health field
     # health is OPTIONAL: absent when the seller does not compute health (success path unaffected)
     # boundary: health omitted (seller does not evaluate)
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/sync-event-sources-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/sync-event-sources-request.json
 
   @T-UC-015-task-history-entry-type-enum @v31 @history-entry-type @enum @partition @br-21
   Scenario Outline: Task execution history -- entry_type must be one of request|response
     Given the Buyer Agent inspects the execution history of a tracked sync_event_sources or log_event task
     When the history contains an entry with entry_type "<entry_type>"
     Then the entry_type value is <validity> per /schemas/enums/history-entry-type.json
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/sync-event-sources-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/sync-event-sources-request.json
 
     Examples:
       | entry_type | validity |

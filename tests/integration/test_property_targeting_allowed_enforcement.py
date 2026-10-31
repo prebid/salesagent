@@ -15,7 +15,7 @@ import uuid
 import pytest
 
 from src.core.database.database_session import get_db_session
-from src.core.exceptions import AdCPValidationError
+from src.core.exceptions import AdCPCapabilityNotSupportedError, AdCPValidationError
 from src.core.resolved_identity import AccountIdentity
 from src.core.schemas import (
     CollectionListReference,
@@ -184,8 +184,13 @@ async def test_create_accepts_property_list_when_product_allows(property_targeti
 
 
 @pytest.mark.requires_db
-async def test_create_accepts_collection_list_without_property_list(property_targeting_tenant):
-    """collection_list alone never triggers the property_list check."""
+async def test_create_refuses_collection_list_as_undeclared(property_targeting_tenant):
+    """collection_list alone is refused UNSUPPORTED_FEATURE, never the property_list check.
+
+    core/targeting.json (v3.2.7): collection_list needs declared support, and "A fresh
+    create/update request MUST be applied exactly or rejected". This seller declares no
+    collection-list support, so the reference is refused rather than accepted and dropped.
+    """
     start, end = future_iso_date_range()
     request = CreateMediaBuyRequest(
         account={"account_id": "acct_test"},
@@ -208,16 +213,11 @@ async def test_create_accepts_collection_list_without_property_list(property_tar
         idempotency_key=f"int-key-{uuid.uuid4().hex}",
     )
 
-    response = await _create_media_buy_impl(req=request, identity=_make_identity())
+    with pytest.raises(AdCPCapabilityNotSupportedError) as excinfo:
+        await _create_media_buy_impl(req=request, identity=_make_identity())
 
-    # Mirror the line-157 split for the sister test — the compound
-    # ``isinstance(...) or all(...)`` short-circuits on success, leaving the
-    # happy-path proof vacuous. Separate ``not isinstance`` gates the success
-    # branch with a real check; the follow-up ``all(...)`` ensures the
-    # property_list rule still doesn't fire if an unrelated error did appear.
-    assert not isinstance(response, CreateMediaBuyError), (
-        f"Expected success but got CreateMediaBuyError: {[err.message for err in (response.errors or [])]}"
-    )
+    assert excinfo.value.error_code == "UNSUPPORTED_FEATURE"
+    assert excinfo.value.field == "packages[0].targeting_overlay.collection_list"
 
 
 # ---------------------------------------------------------------------------
@@ -280,8 +280,8 @@ def test_update_rejects_property_list_when_product_disallows(property_targeting_
 
 
 @pytest.mark.requires_db
-def test_update_accepts_collection_list_only(property_targeting_tenant):
-    """collection_list-only update never triggers property_list rejection."""
+def test_update_refuses_collection_list_as_undeclared(property_targeting_tenant):
+    """collection_list-only update is refused UNSUPPORTED_FEATURE, never the property_list check."""
     media_buy_id = _seed_media_buy(TENANT_ID, "prod_no_property_targeting", media_buy_id="mb_collection_only")
 
     request = UpdateMediaBuyRequest(
@@ -309,6 +309,8 @@ def test_update_accepts_collection_list_only(property_targeting_tenant):
     assert overlay is not None
     assert isinstance(overlay.collection_list, CollectionListReference)
 
-    response = _update_media_buy_impl(req=request, identity=_make_identity())
-    response_dict = response.model_dump() if hasattr(response, "model_dump") else response
-    assert "property_targeting_allowed" not in str(response_dict)
+    with pytest.raises(AdCPCapabilityNotSupportedError) as excinfo:
+        _update_media_buy_impl(req=request, identity=_make_identity())
+
+    assert excinfo.value.error_code == "UNSUPPORTED_FEATURE"
+    assert excinfo.value.field == "packages[0].targeting_overlay.collection_list"

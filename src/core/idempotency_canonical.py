@@ -1,5 +1,8 @@
 """Canonical payload hashing for idempotency replay-conflict detection.
 
+The one RFC 8785 seam in this repo, so it also computes the other JCS digest the pin asks a
+seller to check: ``selected_output_digest`` of a sync item carrying ``representation_selection``.
+
 The AdCP idempotency contract (the ``replay_ttl_seconds`` capability) defines
 payload equivalence as RFC 8785 JSON Canonicalization Scheme over the request
 as sent, with a CLOSED exclusion list: two requests carrying the same
@@ -43,6 +46,7 @@ __all__ = [
     "_EXCLUDED_FIELDS",
     "canonical_payload_hash",
     "canonical_request_hash",
+    "selected_output_digest",
     "strip_excluded_fields",
 ]
 
@@ -82,3 +86,44 @@ def canonical_request_hash(request: SupportsModelDump) -> str:
     call ``.model_dump()`` directly (the no-model-dump-in-impl architecture guard).
     """
     return canonical_payload_hash(request.model_dump(mode="json"))
+
+
+#: The top-level members a seller-bound manifest projection drops before it is digested --
+#: core/representation-selection.json (v3.2.7) ``selected_output_digest``: "remove exactly
+#: top-level ``$schema``, ``representation_selection``, ``creative_id``, ``revision_id``,
+#: ``name``, ``tags``, ``status``, ``weight``, ``placement_refs``, ``placement_ids``, and
+#: ``inputs``. Every other field, including unknown delivery fields, is included."
+SELECTED_OUTPUT_EXCLUDED: frozenset[str] = frozenset(
+    {
+        "$schema",
+        "representation_selection",
+        "creative_id",
+        "revision_id",
+        "name",
+        "tags",
+        "status",
+        "weight",
+        "placement_refs",
+        "placement_ids",
+        "inputs",
+    }
+)
+
+
+def selected_output_digest(creative: SupportsModelDump) -> str:
+    """``sha256:<hex>`` of the RFC 8785 JCS of *creative*'s seller-bound manifest projection.
+
+    The value a sync item's ``representation_selection.selected_output_digest`` must equal
+    (docs/creative/representation-sets.mdx § Seller-bound resolution, v3.2.7). Over what the
+    buyer SENT -- ``exclude_unset``, so no default is materialized -- as the boundary's own
+    request hash is over the validated request (``tools/_boundary.py``): a member this
+    seller's DTO discards cannot be part of what it compares. Reproduces the pin's worked
+    example (``sha256:02735eb8...`` for the paired-redirect manifest in that section).
+
+    The same engine as the idempotency hash. Its closed exclusion list (``idempotency_key``,
+    ``context``, ``governance_context``) names no member of a creative item, so on this
+    projection it strips nothing and the digest is plain JCS SHA-256.
+    """
+    document = creative.model_dump(mode="json", by_alias=True, exclude_unset=True)
+    projection = {key: value for key, value in document.items() if key not in SELECTED_OUTPUT_EXCLUDED}
+    return f"sha256:{canonical_payload_hash(projection)}"

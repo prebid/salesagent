@@ -25,8 +25,10 @@ made this suite red non-deterministically .
 
 CREATIVE_AGENT_URL must point at the pinned reference agent. The authoritative
 runner brings it up automatically (run_all_tests.sh → scripts/creative-agent-stack.sh,
-mirroring the CI `creative` matrix group, single-sourced pin). To run ad-hoc:
-``scripts/creative-agent-stack.sh up`` then export the URL. If it is unset or
+mirroring the CI `creative` matrix group, single-sourced pin). To run this module on its
+own: ``./run_all_tests.sh ci tests/integration/test_creative_agent_live.py``, which brings
+the stack up and sets everything a host process needs to reach it (salesagent-ol033.18).
+If it is unset or
 points at the public host, the guard below FAILS LOUD with instructions — it
 does not hit the internet (set ALLOW_LIVE_CREATIVE_AGENT=1 to deliberately
 override for manual prod testing).
@@ -41,12 +43,16 @@ import os
 import pytest
 
 from src.core import creative_agent_registry as creative_agent_registry_module
-from src.core.creative_agent_registry import CreativeAgent, CreativeAgentRegistry
+from src.core.creative_agent_registry import PUBLIC_DEFAULT_AGENT_URL, CreativeAgent, CreativeAgentRegistry
 from src.core.exceptions import AdCPNotFoundError
 
-# The live creative agent URL — reads env var so CI can point at a containerized agent
-CREATIVE_AGENT_URL = os.environ.get("CREATIVE_AGENT_URL", "https://creative.adcontextprotocol.org")
-CREATIVE_AGENT_URL_WITH_SLASH = CREATIVE_AGENT_URL.rstrip("/") + "/"
+# The agent every test names is the operator agent's IDENTITY, the origin the stack sets in
+# CREATIVE_AGENT_ORIGIN (the public agent, which the pinned container stands in for).
+# CREATIVE_AGENT_URL is only where that agent is DIALLED -- an MCP endpoint, not an agent a
+# reference can name -- and the registry reroutes the identity to it, which is the path
+# production takes for every reference the stack serves.
+OPERATOR_AGENT_URL = os.environ.get("CREATIVE_AGENT_ORIGIN") or PUBLIC_DEFAULT_AGENT_URL
+OPERATOR_AGENT_URL_WITH_SLASH = OPERATOR_AGENT_URL + "/"
 
 
 _PUBLIC_CREATIVE_AGENT_HOST = "creative.adcontextprotocol.org"
@@ -69,10 +75,9 @@ def _require_controlled_creative_agent():
         pytest.fail(
             "Controlled creative agent required . CREATIVE_AGENT_URL is "
             f"{url!r} — unset or the live public host. These tests must NOT hit "
-            "https://creative.adcontextprotocol.org (its catalog drifts). Bring up the pinned "
-            "reference agent: `scripts/creative-agent-stack.sh up` then "
-            "`export CREATIVE_AGENT_URL=$(scripts/creative-agent-stack.sh url)`. The authoritative "
-            "runner does this automatically. Deliberate prod test: ALLOW_LIVE_CREATIVE_AGENT=1.",
+            "https://creative.adcontextprotocol.org (its catalog drifts). Run it against the pinned "
+            "reference agent: `./run_all_tests.sh ci tests/integration/test_creative_agent_live.py`. "
+            "Deliberate prod test: ALLOW_LIVE_CREATIVE_AGENT=1.",
             pytrace=False,
         )
 
@@ -112,7 +117,7 @@ class TestURLNormalization:
     async def test_fetch_formats_without_trailing_slash(self, registry):
         """Fetch formats using URL without trailing slash."""
         agent = CreativeAgent(
-            agent_url=CREATIVE_AGENT_URL,  # No trailing slash
+            agent_url=OPERATOR_AGENT_URL,  # No trailing slash
             name="Test Agent",
             enabled=True,
         )
@@ -124,7 +129,7 @@ class TestURLNormalization:
     async def test_fetch_formats_with_trailing_slash(self, registry):
         """Fetch formats using URL with trailing slash."""
         agent = CreativeAgent(
-            agent_url=CREATIVE_AGENT_URL_WITH_SLASH,  # With trailing slash
+            agent_url=OPERATOR_AGENT_URL_WITH_SLASH,  # With trailing slash
             name="Test Agent",
             enabled=True,
         )
@@ -135,13 +140,13 @@ class TestURLNormalization:
     @pytest.mark.asyncio
     async def test_get_format_without_trailing_slash(self, registry):
         """Get specific format using URL without trailing slash."""
-        fmt = await registry.get_format(CREATIVE_AGENT_URL, "display_image")
+        fmt = await registry.get_format(OPERATOR_AGENT_URL, "display_image")
         assert fmt is not None, "Should find display_image without trailing slash"
 
     @pytest.mark.asyncio
     async def test_get_format_with_trailing_slash(self, registry):
         """Get specific format using URL with trailing slash."""
-        fmt = await registry.get_format(CREATIVE_AGENT_URL_WITH_SLASH, "display_image")
+        fmt = await registry.get_format(OPERATOR_AGENT_URL_WITH_SLASH, "display_image")
         assert fmt is not None, "Should find display_image with trailing slash"
 
 
@@ -184,7 +189,7 @@ class TestPreviewCreativeIdentityForm:
     @pytest.mark.asyncio
     async def test_preview_creative_identity_without_trailing_slash(self, registry):
         """preview succeeds with the no-slash identity form (current raw-dict bytes)."""
-        result = await registry.preview_creative(CREATIVE_AGENT_URL, "display_300x250", self._manifest())
+        result = await registry.preview_creative(OPERATOR_AGENT_URL, "display_300x250", self._manifest())
         self._assert_preview_succeeded(result)
 
     @pytest.mark.asyncio
@@ -195,7 +200,7 @@ class TestPreviewCreativeIdentityForm:
         path-less URLs; calling through the slash URL variant sends exactly that
         identity form on the wire, pinning the agent's tolerance of it.
         """
-        result = await registry.preview_creative(CREATIVE_AGENT_URL_WITH_SLASH, "display_300x250", self._manifest())
+        result = await registry.preview_creative(OPERATOR_AGENT_URL_WITH_SLASH, "display_300x250", self._manifest())
         self._assert_preview_succeeded(result)
 
 
@@ -223,8 +228,9 @@ class TestCacheConsistency:
         # Fetch formats (populates cache)
         await registry.list_all_formats(tenant_id=None)
 
-        # DEFAULT_AGENT uses URL without trailing slash
-        expected_key = CREATIVE_AGENT_URL
+        # DEFAULT_AGENT is the operator identity, an origin; the cache keys its canonical
+        # form, which renders the empty path as "/".
+        expected_key = OPERATOR_AGENT_URL + "/"
 
         cache_keys = list(registry._format_cache.keys())
         print(f"Cache keys: {cache_keys}")
@@ -236,7 +242,7 @@ class TestCacheConsistency:
         """URL with and without trailing slash share the same cache entry."""
         # Fetch with no trailing slash (DEFAULT_AGENT style)
         agent_no_slash = CreativeAgent(
-            agent_url=CREATIVE_AGENT_URL,
+            agent_url=OPERATOR_AGENT_URL,
             name="No Slash",
             enabled=True,
         )
@@ -245,7 +251,7 @@ class TestCacheConsistency:
 
         # Fetch with trailing slash — should hit cache, not create new entry
         agent_with_slash = CreativeAgent(
-            agent_url=CREATIVE_AGENT_URL_WITH_SLASH,
+            agent_url=OPERATOR_AGENT_URL_WITH_SLASH,
             name="With Slash",
             enabled=True,
         )
@@ -266,7 +272,7 @@ class TestFormatResolverIntegration:
 
         fmt = get_format(
             format_id="display_image",
-            agent_url=CREATIVE_AGENT_URL,
+            agent_url=OPERATOR_AGENT_URL,
             tenant_id=None,
             product_id=None,
         )
@@ -280,7 +286,7 @@ class TestFormatResolverIntegration:
 
         fmt = get_format(
             format_id="display_image",
-            agent_url=CREATIVE_AGENT_URL_WITH_SLASH,
+            agent_url=OPERATOR_AGENT_URL_WITH_SLASH,
             tenant_id=None,
             product_id=None,
         )
@@ -295,7 +301,7 @@ class TestFormatResolverIntegration:
         with pytest.raises(AdCPNotFoundError) as exc_info:
             get_format(
                 format_id="nonexistent_format_xyz",
-                agent_url=CREATIVE_AGENT_URL,
+                agent_url=OPERATOR_AGENT_URL,
                 tenant_id=None,
                 product_id=None,
             )

@@ -30,6 +30,7 @@ from src.core.schemas import (
     UpdateMediaBuyRequest,
 )
 from src.core.schemas.account import Account
+from tests.factories import stamp_format_identity
 from tests.factories.account import DEFAULT_TEST_ACCOUNT_ID, seed_default_account
 from tests.factories.principal import PrincipalFactory
 from tests.helpers.adcp_factories import create_test_format
@@ -177,23 +178,21 @@ def ca_creatives(integration_db, ca_tenant, ca_principal):
                 )
             ).first()
             if not existing:
-                session.add(
-                    DBCreative(
-                        creative_id=cid,
-                        tenant_id=ca_tenant["tenant_id"],
-                        principal_id=ca_principal["principal_id"],
-                        name=f"Regression Creative {cid}",
-                        agent_url="https://creative.adcontextprotocol.org",
-                        format="display_300x250",
-                        data={
-                            "url": "https://example.com/creative.jpg",
-                            "width": 300,
-                            "height": 250,
-                            "primary": {"url": "https://example.com/creative.jpg"},
-                            "platform_creative_id": f"mock_creative_{cid}",
-                        },
-                    )
+                creative = DBCreative(
+                    creative_id=cid,
+                    tenant_id=ca_tenant["tenant_id"],
+                    principal_id=ca_principal["principal_id"],
+                    name=f"Regression Creative {cid}",
+                    data={
+                        "url": "https://example.com/creative.jpg",
+                        "width": 300,
+                        "height": 250,
+                        "primary": {"url": "https://example.com/creative.jpg"},
+                        "platform_creative_id": f"mock_creative_{cid}",
+                    },
                 )
+                stamp_format_identity(creative, format_id="display_300x250")
+                session.add(creative)
         session.commit()
     return creative_ids
 

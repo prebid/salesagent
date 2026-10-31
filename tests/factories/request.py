@@ -77,7 +77,7 @@ def dto(tool: str) -> type:
     return TOOLS[tool].dto
 
 
-from tests.factories.creative_asset import build_assets, image_spec
+from tests.factories.creative_asset import named_format_assets
 from tests.factories.format import AGENT_URL, FormatIdFactory
 from tests.factories.mint import mint, mint_shared
 from tests.helpers.sample_account import SAMPLE_ACCOUNT, SAMPLE_BRAND
@@ -178,8 +178,8 @@ class CreativeAssetRequestFactory(_RequestFactory):
     confusion comes back.
 
     Lives here rather than beside the concept in ``creative_asset.py`` because
-    ``request.py`` imports ``build_assets``/``image_spec`` from that module at line 78,
-    ABOVE ``_RequestFactory``: the reverse import is a cycle, reproduced as
+    ``request.py`` imports ``named_format_assets`` from that module, ABOVE
+    ``_RequestFactory``: the reverse import is a cycle, reproduced as
     ``ImportError: cannot import name 'build_assets'``.
 
     OVERRIDE CONTRACT (all four measured against ``CreativeAssetRequest``)::
@@ -223,7 +223,9 @@ class CreativeAssetRequestFactory(_RequestFactory):
     creative_id = factory.Sequence(lambda n: f"creative-{n:03d}")
     name = "Test Creative"
     format_id = factory.SubFactory(FormatIdFactory, id="display_300x250")
-    assets = factory.LazyFunction(lambda: build_assets(image_spec("image")))
+    #: What the catalog format every BDD caller names (``display_300x250_image``) requires,
+    #: so a step that states no assets sends a manifest the seller accepts.
+    assets = factory.LazyFunction(named_format_assets)
 
 
 class PackageRequestFactory(_RequestFactory):
@@ -297,15 +299,14 @@ class CreateMediaBuyRequestFactory(_RequestFactory):
 class SyncCreativesRequestFactory(_RequestFactory):
     """A sync_creatives request conforming to ``creative/sync-creatives-request.json``.
 
-    The creative is built through ``image_spec``/``build_assets`` rather than as a
-    literal dict, so the ``assets`` shape has the same single owner every other
-    creative test uses. ``assets`` is on the pin's ``/required`` for a creative
+    The creative's assets are what its named format requires (``named_format_assets``)
+    rather than a literal dict, so the ``assets`` shape has the same single owner every
+    other creative test uses. ``assets`` is on the pin's ``/required`` for a creative
     asset, which a hand-written ``{creative_id, name, format_id}`` triple misses.
 
     The ITEM here is still a literal, and ``CreativeAssetRequestFactory`` above now owns
     that shape. Routing this default through it would change the bytes of an existing
-    baseline (role ``banner`` vs ``image``, and the normalised ``agent_url``), so it is
-    left for the sweep that grades the dispatched wire payload (salesagent-b341x.11).
+    baseline (the normalised ``agent_url``), so it is left for the sweep that grades the dispatched wire payload (salesagent-b341x.11).
     """
 
     class Meta:
@@ -319,7 +320,7 @@ class SyncCreativesRequestFactory(_RequestFactory):
                 "creative_id": "c_0001",
                 "name": "Test Creative",
                 "format_id": {"id": "display_300x250_image", "agent_url": AGENT_URL},
-                "assets": build_assets(image_spec("banner")),
+                "assets": named_format_assets("display_300x250_image"),
             }
         ]
     )

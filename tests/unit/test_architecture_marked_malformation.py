@@ -62,8 +62,8 @@ import scripts.audit.creative_literal_sites as census_module
 import tests.factories.malformed as malformed_module
 from scripts.audit.creative_literal_sites import SCOPES, scan
 from src.core.errors.codes import AppErrorCode, ErrorCode, Recovery
-from src.core.schemas.creative import CreativeAssetRequest
 from tests.factories.malformed import (
+    GATED_CREATIVE_ITEM,
     GATED_ITEMS,
     MALFORMATION_KINDS,
     MALFORMATION_OBLIGATIONS,
@@ -399,8 +399,11 @@ def test_gated_creative_model_is_the_pinned_request_item() -> None:
     item_models = get_args(SyncCreativesRequest.model_fields["creatives"].annotation)
     assert len(item_models) == 1, f"expected list[<one model>], got {item_models}"
     item_model = item_models[0]
-    assert GATED_ITEMS["creatives"][0] is item_model, (
-        f"The runtime gate validates creatives against {GATED_ITEMS['creatives'][0].__name__}, "
+    # ``GATED_CREATIVE_ITEM``, not ``GATED_ITEMS["creatives"][0]``: the gate's entries are
+    # ``TypeAdapter``s (pricing's pinned item is a nine-arm union, not a class), and a
+    # TypeAdapter does not expose the type it wraps. The constant IS what the entry wraps.
+    assert GATED_CREATIVE_ITEM is item_model, (
+        f"The runtime gate validates creatives against {GATED_CREATIVE_ITEM.__name__}, "
         f"but SyncCreativesRequest.creatives holds {item_model.__name__}. Grading a model the "
         "request does not use is how a request shape became a response shape once already."
     )
@@ -602,11 +605,14 @@ def test_the_graded_partition_is_the_only_thing_the_pin_can_derive() -> None:
     """
     assert PIN_DERIVABLE_OBLIGATION is ErrorCode.INVALID_REQUEST
     assert PIN_DERIVABLE_OBLIGATION in MALFORMATION_OBLIGATIONS
-    accepted = _pin_rejection(CreativeAssetRequest, _CONFORMANT_CREATIVE)
+    # The gate's OWN entry for creatives, not a fresh adapter over the same class: these
+    # three calls then exercise the object production validates against.
+    creative_pin = GATED_ITEMS["creatives"][0]
+    accepted = _pin_rejection(creative_pin, _CONFORMANT_CREATIVE)
     assert _pin_refuses_the_bytes(accepted) is False
-    refused = _pin_rejection(CreativeAssetRequest, _rejected_creative())
+    refused = _pin_rejection(creative_pin, _rejected_creative())
     assert _pin_refuses_the_bytes(refused) is True
-    key_only = _pin_rejection(CreativeAssetRequest, {**_CONFORMANT_CREATIVE, "snippet": "<div/>"})
+    key_only = _pin_rejection(creative_pin, {**_CONFORMANT_CREATIVE, "snippet": "<div/>"})
     assert _pin_refuses_the_bytes(key_only) is None
 
 

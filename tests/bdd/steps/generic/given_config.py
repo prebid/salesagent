@@ -1,6 +1,12 @@
-"""Given steps for registry/configuration setup with specific format definitions.
+"""Given steps for seller CONFIGURATION: which ad server the tenant runs, and the
+format registry it serves.
 
-These steps populate ``ctx["registry_formats"]`` with real Format objects
+Most of this module is the format half. The tenant's ad server lives here too
+because it is the same kind of fact — something configured about the seller, asked
+by more than one domain — and a Given that names it belongs where every feature can
+reach it rather than inside one domain's step module.
+
+The format steps populate ``ctx["registry_formats"]`` with real Format objects
 for invariant and edge-case scenarios. They use pytest-bdd data tables where
 the feature file includes ``| col | col |`` rows.
 
@@ -13,6 +19,9 @@ from __future__ import annotations
 import json
 from collections.abc import Sequence
 
+from adcp.types.domains.core.requirements.image_asset_requirements import (  # no stable alias in adcp.types
+    ImageAssetRequirements,
+)
 from pytest_bdd import given, parsers, when
 
 from tests.bdd.steps.generic._registry import sync_registry as _sync_registry
@@ -23,11 +32,30 @@ from tests.factories.format import (
     FormatIdFactory,
     make_asset,
     make_asset_group,
+    make_disclosure_capabilities,
     make_fixed_renders,
     make_renders,
     make_responsive_renders,
 )
 from tests.factories.webhook import PushNotificationConfigRequestFactory
+
+
+@given(parsers.parse('the tenant runs the "{adapter_type}" ad server'))
+def given_ad_server(ctx: dict, adapter_type: str) -> None:
+    """The tenant genuinely runs *adapter_type* as its ad server.
+
+    Generic because it says something about the TENANT and two domains now ask it:
+    publisher authorization (which reads the adapter the tenant declares) and
+    BR-UC-002's sandbox-isolation pair (which needs a LIVE ad server configured so
+    that reaching it is observable). Each env realizes the sentence its own way —
+    ``PublisherAuthorizationEnv.run_ad_server`` writes the row,
+    ``MediaBuyCreateEnv.run_ad_server`` writes the row and stops faking the adapter
+    decision, because an env that keeps faking it is not running this ad server.
+
+    One sentence, one binding, the env realizes it: the step says WHAT is true and
+    never branches on which env is answering.
+    """
+    ctx["env"].run_ad_server(adapter_type)
 
 
 def _add_format(ctx: dict, fmt: object) -> None:
@@ -66,17 +94,24 @@ def given_registry_format_typed(ctx: dict, name: str, fmt_type: str, asset_type:
 # ── Format with format_id ───────────────────────────────────────────
 
 
-@given(parsers.parse('the registry has format "{name}" with format_id id "{fmt_id}"'))
-def given_registry_format_with_id(ctx: dict, name: str, fmt_id: str) -> None:
-    """Register a format with a known format_id.
+@given(
+    parsers.re(
+        r'the registry has format "(?P<name>[^"]+)" with format_id id "(?P<fmt_id>[^"]+)"'
+        r'(?: declared by agent "(?P<agent_url>[^"]+)")?'
+    )
+)
+def given_registry_format_with_id(ctx: dict, name: str, fmt_id: str, agent_url: str | None) -> None:
+    """Register a format with a known format_id, declared by *agent_url* when the sentence names one.
 
-    Uses the FormatIdFactory default agent_url (the seller's own creative agent,
-    matching the format_ids request step). v3.1 matches format_ids on the
-    (agent_url, id) pair, so the seeded format and the requested reference MUST
-    agree on agent_url — a prior "creatives" (plural) typo here diverged from the
-    "creative" the request uses and was masked only by the old id-only filter.
+    Without the clause the format_id carries the FormatIdFactory default agent_url, which
+    is the agent the format_ids request step names. core/format-id.json identifies a
+    format "by its declaring agent and local slug", so a format declared by another agent
+    under the same id is a different format: the clause is how a scenario puts one in the
+    catalog. Both are served verbatim by the tenant's peer agent, so the listing carries
+    each identity as declared. A regex rather than ``parsers.parse``: parse's ``{fmt_id}``
+    would also swallow the clause, binding the longer sentence to the shorter form.
     """
-    fid = FormatIdFactory.build(id=fmt_id)
+    fid = FormatIdFactory.build(id=fmt_id, **({"agent_url": agent_url} if agent_url else {}))
     fmt = FormatFactory.build(name=name, format_id=fid)
     _add_format(ctx, fmt)
     _sync_registry(ctx)
@@ -111,6 +146,19 @@ def given_registry_format_with_asset_group(ctx: dict, name: str, type_a: str, ty
     that repeat together as a unit, distinct from individual assets.
     """
     fmt = FormatFactory.build(name=name, assets=[make_asset_group(type_a, type_b)])
+    _add_format(ctx, fmt)
+    _sync_registry(ctx)
+
+
+@given(
+    parsers.parse(
+        'the registry has format "{name}" with an individual "{asset_type}" asset'
+        ' and a repeatable asset group containing "{type_a}" and "{type_b}"'
+    )
+)
+def given_registry_format_with_asset_and_group(ctx: dict, name: str, asset_type: str, type_a: str, type_b: str) -> None:
+    """Register a format holding one individual asset beside a repeatable asset group."""
+    fmt = FormatFactory.build(name=name, assets=[make_asset(asset_type), make_asset_group(type_a, type_b)])
     _add_format(ctx, fmt)
     _sync_registry(ctx)
 
@@ -191,6 +239,95 @@ def given_registry_format_no_disclosure(ctx: dict, name: str) -> None:
     """Register a format without a supported_disclosure_positions field."""
     fmt = FormatFactory.build(name=name, supported_disclosure_positions=None)
     _add_format(ctx, fmt)
+    _sync_registry(ctx)
+
+
+@given(parsers.parse('"{name}" has no supported_disclosure_positions field'))
+def given_registered_format_drops_flat_disclosure(ctx: dict, name: str) -> None:
+    """The already-registered format *name* carries no flat ``supported_disclosure_positions``.
+
+    Re-seeds the catalog with that one field cleared, so a scenario pairing it with
+    ``disclosure_capabilities`` grades the request schema's two-source rule on
+    ``disclosure_positions`` -- "When a format has disclosure_capabilities, match against
+    those positions. Otherwise fall back to supported_disclosure_positions" -- with no flat
+    list for a filter to fall back to.
+    """
+    formats = ctx.get("registry_formats", [])
+    matches = [i for i, fmt in enumerate(formats) if fmt.name == name]
+    assert len(matches) == 1, f"expected one registered format named {name!r}, found {len(matches)}"
+    formats[matches[0]] = formats[matches[0]].model_copy(update={"supported_disclosure_positions": None})
+    _sync_registry(ctx)
+
+
+# ── Format with disclosure_capabilities (positions × persistence) ────
+
+
+@given(parsers.parse('the registry has format "{name}" with disclosure_capabilities positions {positions}'))
+def given_registry_format_capability_positions(ctx: dict, name: str, positions: str) -> None:
+    """Register a format declaring *positions* through ``disclosure_capabilities``.
+
+    ``core/format.json`` requires ``persistence`` on every entry (``minItems: 1``) and the
+    sentence names positions only, so each position declares ``flexible`` -- the mode
+    ``enums/disclosure-persistence.json`` defines as "presence is sufficient", the one that
+    claims nothing beyond the position itself.
+    """
+    capabilities = make_disclosure_capabilities(*((position, ["flexible"]) for position in json.loads(positions)))
+    _add_format(ctx, FormatFactory.build(name=name, disclosure_capabilities=capabilities))
+    _sync_registry(ctx)
+
+
+@given(parsers.parse('the registry has format "{name}" with disclosure_capabilities:'))
+def given_registry_format_capabilities_table(ctx: dict, name: str, datatable: Sequence[Sequence[object]]) -> None:
+    """Register a format whose ``disclosure_capabilities`` are the table's rows.
+
+    One row per position (the pin: "Each position MUST appear at most once"); the
+    ``persistence`` cell names that position's modes, comma-separated.
+    """
+    capabilities = make_disclosure_capabilities(
+        *(
+            (row["position"], [m.strip() for m in row["persistence"].split(",")])
+            for row in _datatable_to_dicts(datatable)
+        )
+    )
+    _add_format(ctx, FormatFactory.build(name=name, disclosure_capabilities=capabilities))
+    _sync_registry(ctx)
+
+
+@given(parsers.parse('the registry has format "{name}" with no disclosure_capabilities field'))
+def given_registry_format_no_capabilities(ctx: dict, name: str) -> None:
+    """Register a format without ``disclosure_capabilities``, so it declares no persistence mode."""
+    _add_format(ctx, FormatFactory.build(name=name, disclosure_capabilities=None))
+    _sync_registry(ctx)
+
+
+# ── Seller catalog: a format by what it carries ──────────────────────
+
+
+@given(parsers.parse('the seller catalog has at least one format containing an "{asset_type}" asset'))
+def given_catalog_format_with_asset_type(ctx: dict, asset_type: str) -> None:
+    """The seller serves one format whose single asset slot is of *asset_type*.
+
+    ``make_asset`` builds every member of ``enums/asset-content-type.json`` and refuses a
+    type the pinned assets union does not model, so a row naming a non-member fails here
+    rather than seeding a different asset.
+    """
+    _add_format(ctx, FormatFactory.build(name=f"{asset_type}-format", assets=[make_asset(asset_type)]))
+    _sync_registry(ctx)
+
+
+@given(parsers.parse("the seller catalog has a format with a required image asset capped at {megabytes:d} MB"))
+def given_catalog_format_with_capped_image(ctx: dict, megabytes: int) -> None:
+    """The seller serves one format with a required image asset capped at *megabytes* MB.
+
+    The cap is ``max_file_size_kb`` under the slot's ``requirements``:
+    ``core/requirements/image-asset-requirements.json`` declares the member in kilobytes,
+    so *megabytes* MB is ``megabytes * 1024`` KB. The format is remembered as the one a
+    following "for that format" request names.
+    """
+    image = make_asset("image", requirements=ImageAssetRequirements(max_file_size_kb=megabytes * 1024))
+    fmt = FormatFactory.build(name="capped-image-format", assets=[image])
+    _add_format(ctx, fmt)
+    ctx["target_format"] = fmt
     _sync_registry(ctx)
 
 

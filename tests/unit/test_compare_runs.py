@@ -27,6 +27,8 @@ import sys
 
 import pytest
 
+from tests.helpers.run_identity_record import FIXTURE_SHA, write_run_identity
+
 _REPO = pathlib.Path(__file__).resolve().parents[2]
 
 
@@ -46,12 +48,14 @@ def _write_run(
     directory: pathlib.Path,
     reports: dict[str, dict[str, str]],
     declared: list[str] | None = None,
+    commit: str | None = FIXTURE_SHA,
 ) -> pathlib.Path:
-    """One run directory: ``<suite>.json`` reports plus the ``.suites`` manifest.
+    """One run directory: ``<suite>.json`` reports, ``.suites``, and ``meta.json``.
 
     ``reports`` maps suite name -> {nodeid: outcome}. ``declared`` is what the
     run SAID it would execute (``run_all_tests.sh`` writes it); pass ``None`` to
-    model an older run directory that carries no manifest.
+    model an older run directory that carries no manifest. ``commit=None`` models
+    a run from before the identity record existed, which the comparator refuses.
     """
     directory.mkdir(parents=True, exist_ok=True)
     for suite, tests in reports.items():
@@ -59,6 +63,8 @@ def _write_run(
         (directory / f"{suite}.json").write_text(json.dumps(payload))
     if declared is not None:
         (directory / ".suites").write_text(",".join(declared) + "\n")
+    if commit is not None:
+        write_run_identity(directory, commit=commit)
     return directory
 
 
@@ -296,9 +302,14 @@ def test_one_directory_that_does_not_exist_refuses(tmp_path: pathlib.Path, capsy
 
 
 def test_run_directories_holding_no_reports_refuse(tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]) -> None:
-    """The directories exist and are empty: zero suites accounted for."""
-    (tmp_path / "old").mkdir()
-    (tmp_path / "new").mkdir()
+    """The directories exist and hold no reports: zero suites accounted for.
+
+    Given an identity, so that the refusal under test is this one. Both runs
+    being anonymous is ALSO a refusal now, and would have stood in for this one
+    while saying something else entirely.
+    """
+    _write_run(tmp_path / "old", {})
+    _write_run(tmp_path / "new", {})
 
     status, out = _run(tmp_path, capsys)
 
@@ -320,3 +331,138 @@ def test_reports_that_share_no_nodeids_refuse(tmp_path: pathlib.Path, capsys: py
 
     assert status != 0, f"zero shared nodeids graded is not a clean run:\n{out}"
     assert "CLEAN" not in out, out
+
+
+# --------------------------------------------------------------------------
+# Neither endpoint may be anonymous.
+#
+# Every refusal above is about WHAT was compared. This one is about WHICH TREES,
+# and it is the axis the tool was missing while it had all the others: it
+# reported 36 REGRESSED / 15 FIXED between a subject and a baseline that graded
+# neither tree in the claim. Against a real base the same change was 12 fixed, 0
+# new failures and 2 genuine regressions (salesagent-dxb3j).
+# --------------------------------------------------------------------------
+
+
+def test_a_baseline_with_no_identity_refuses_and_names_that_side(
+    tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The retained-run shape: reports, a manifest, and nothing saying which tree.
+
+    The side is named because "identity missing" sends a reader to look at two
+    run directories when one of them is fine.
+    """
+    unit = {"tests/unit/test_a.py::test_one": "passed"}
+    _write_run(tmp_path / "old", {"unit": unit}, declared=["unit"], commit=None)
+    _write_run(tmp_path / "new", {"unit": unit}, declared=["unit"])
+
+    status, out = _run(tmp_path, capsys)
+
+    assert status == 2, f"an unattributable pair is 'no claim possible', not 'regressed':\n{out}"
+    assert "REFUSED" in out, out
+    assert "baseline" in out and "meta.json" in out, f"the refusal must name the side and what it lacked:\n{out}"
+    assert "CLEAN" not in out, f"nothing may print CLEAN over an endpoint nobody can name:\n{out}"
+
+
+def test_a_new_run_with_no_identity_refuses_and_names_that_side(
+    tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The other side, because naming "a side" is not naming the right one."""
+    unit = {"tests/unit/test_a.py::test_one": "passed"}
+    _write_run(tmp_path / "old", {"unit": unit}, declared=["unit"])
+    _write_run(tmp_path / "new", {"unit": unit}, declared=["unit"], commit=None)
+
+    status, out = _run(tmp_path, capsys)
+
+    assert status == 2, out
+    assert "new (" in out, f"the refusal must name the NEW side here, not the baseline:\n{out}"
+
+
+def test_an_unidentified_pair_compares_when_waived_and_says_so(
+    tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Every run retained today predates the identity record.
+
+    Refusing all of them leaves the tool useless on the only data there is, so a
+    caller may proceed BY NAME -- and the verdict word then carries the caveat.
+    Printing a note near an unqualified CLEAN would not do: the word and the exit
+    status are the two things a caller reads.
+    """
+    unit = {f"tests/unit/test_a.py::test_{i}": "passed" for i in range(4)}
+    _write_run(tmp_path / "old", {"unit": unit}, declared=["unit"], commit=None)
+    _write_run(tmp_path / "new", {"unit": unit}, declared=["unit"], commit=None)
+
+    status, out = _run(tmp_path, capsys, "--allow-unidentified")
+
+    assert status == 0, f"the waiver must leave the tool usable on historical runs:\n{out}"
+    assert "CLEAN (UNATTRIBUTED)" in out, f"the verdict WORD must carry the caveat:\n{out}"
+
+
+def test_a_real_regression_is_still_reported_as_one_when_waived(
+    tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The waiver suspends attribution, not grading."""
+    _write_run(tmp_path / "old", {"unit": {"tests/unit/test_a.py::test_one": "passed"}}, commit=None)
+    _write_run(tmp_path / "new", {"unit": {"tests/unit/test_a.py::test_one": "failed"}}, commit=None)
+
+    status, out = _run(tmp_path, capsys, "--allow-unidentified")
+
+    assert status == 1, out
+    assert "REGRESSION (UNATTRIBUTED)" in out, out
+
+
+def test_two_trees_with_no_ancestry_relationship_refuse_unwaivably(
+    tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The exact shape of the false report, and the waiver must not reach it.
+
+    Here identity IS recorded and says the comparison is not one. The commits
+    are well-formed and absent from this repository, which is refused for that
+    reason -- the point under test is that a recorded-but-incomparable pair is
+    not something ``--allow-unidentified`` was given for.
+    """
+    unit = {"tests/unit/test_a.py::test_one": "passed"}
+    _write_run(tmp_path / "old", {"unit": unit}, commit="a" * 40)
+    _write_run(tmp_path / "new", {"unit": unit}, commit="b" * 40)
+
+    status, out = _run(tmp_path, capsys, "--allow-unidentified")
+
+    assert status == 2, f"a pair that cannot be a baseline/subject pair must refuse:\n{out}"
+    assert "REFUSED" in out, out
+    assert "CLEAN" not in out, out
+
+
+def test_a_dirty_tree_refuses_because_its_commit_does_not_identify_it(
+    tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A sha plus uncommitted edits names a tree that no longer exists anywhere."""
+    unit = {"tests/unit/test_a.py::test_one": "passed"}
+    _write_run(tmp_path / "old", {"unit": unit})
+    new = _write_run(tmp_path / "new", {"unit": unit})
+    meta = json.loads((new / "meta.json").read_text())
+    meta["tree"] = "dirty"
+    (new / "meta.json").write_text(json.dumps(meta))
+
+    status, out = _run(tmp_path, capsys)
+
+    assert status == 2, out
+    assert "DIRTY" in out, out
+
+
+def test_the_identity_record_is_not_read_as_a_suite(tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """``meta.json`` sits beside the reports and has no ``tests`` key.
+
+    Enumerated as a suite it is an empty report on both sides, which drags the
+    verdict to NOT MEASURED -- so the record would have broken the tool it was
+    added to serve. Excluded by NAME: ``pathlib.Path.glob("*.json")`` matches a
+    leading dot, so renaming it would not have helped.
+    """
+    unit = {f"tests/unit/test_a.py::test_{i}": "passed" for i in range(4)}
+    _write_run(tmp_path / "old", {"unit": unit}, declared=["unit"])
+    _write_run(tmp_path / "new", {"unit": unit}, declared=["unit"])
+
+    status, out = _run(tmp_path, capsys)
+
+    assert status == 0, f"the identity record must not be accounted for as a suite:\n{out}"
+    assert "1 of 1 suites" in out, f"exactly one suite, not two:\n{out}"
+    assert "meta" not in out.split("SCOPE")[0].replace("meta.json", ""), out

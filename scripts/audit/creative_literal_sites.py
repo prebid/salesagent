@@ -213,7 +213,7 @@ IDENTIFYING_KEY = {"creative": "creative_id", "pricing": "pricing_option_id"}
 MODEL_FIT_THRESHOLD = 0.6
 
 CREATIVE_MODEL = "src.core.schemas.creative.CreativeAssetRequest"
-PRICING_MODEL = "src.core.schemas.pricing.PricingOption"
+PRICING_MODEL = "src.core.schemas.pricing.AdCPPricingOption"
 
 #: Seed kinds this census does not read, declared rather than silently omitted.
 NOT_EXAMINED = (
@@ -405,18 +405,21 @@ def _pinned_models() -> dict[str, Any]:
 
     try:
         from src.core.schemas.creative import CreativeAssetRequest
-        from src.core.schemas.pricing import PricingOption
+        from src.core.schemas.pricing import AdCPPricingOption
     except ImportError as exc:
         raise PinnedModelsUnavailable(ENVIRONMENT_HINT) from exc
 
-    members = typing.get_args(PricingOption.model_fields["root"].annotation)
+    # The arms off the union itself. This read used to go through a local RootModel
+    # wrapper's ``model_fields["root"]``; the wrapper is deleted and the union is what
+    # Product.pricing_options was always typed with.
+    members = typing.get_args(AdCPPricingOption)
     by_discriminator = {}
     for member in members:
         for literal in typing.get_args(member.model_fields["pricing_model"].annotation):
             by_discriminator[literal] = member
     return {
         "creative": CreativeAssetRequest,
-        "pricing_root": PricingOption,
+        "pricing_union": AdCPPricingOption,
         "pricing_members": members,
         "pricing_by_discriminator": by_discriminator,
         "observed_extra_mode": {
@@ -514,7 +517,7 @@ def _resolve_pricing_model(node: ast.Dict, pinned: dict[str, Any]):
                 return member, _declared(member), _required(member), f"src.core.schemas.pricing.{member.__name__}"
     members = pinned["pricing_members"]
     return (
-        pinned["pricing_root"],
+        pinned["pricing_union"],
         set().union(*(_declared(m) for m in members)),
         set.intersection(*(_required(m) for m in members)),
         PRICING_MODEL,
@@ -529,8 +532,8 @@ def verdict_for(kind: str, node: ast.Dict, row: dict[str, Any], pinned: dict[str
     else:
         model, declared, required, dotted = _resolve_pricing_model(node, pinned)
     extra_mode = pinned["observed_extra_mode"].get(getattr(model, "__name__", ""), None)
-    if kind == "pricing" and model is pinned["pricing_root"]:
-        # The RootModel wrapper carries no extra policy; every member of its union does.
+    if kind == "pricing" and model is pinned["pricing_union"]:
+        # The union itself carries no extra policy (and no ``__name__``); every member does.
         extra_mode = pinned["observed_extra_mode"].get(pinned["pricing_members"][0].__name__)
 
     keys = set(row["keys"])

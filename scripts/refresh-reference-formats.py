@@ -12,11 +12,9 @@ The capture uses the PRODUCTION fetch path (CreativeAgentRegistry.get_formats_fo
 with ADCP_TESTING off), so it exercises the same tolerant-validation pipeline the
 server uses at runtime — no duplicated fetch logic.
 
-Usage::
-
-    scripts/creative-agent-stack.sh up                       # bring up the pinned agent
-    uv run python scripts/refresh-reference-formats.py \
-        --url $(scripts/creative-agent-stack.sh url)
+Usage: ``make creative-formats-refresh``. It runs this script inside the e2e compose network
+(scripts/dev/refresh-reference-formats.sh), where the agent is reached through the shared TLS
+front at a public-range address that the egress gateway accepts.
 
 Guard: refuses the live public host (creative.adcontextprotocol.org) unless
 ALLOW_LIVE_CREATIVE_AGENT=1, mirroring tests/integration/test_creative_agent_live.py.
@@ -68,8 +66,8 @@ def _check_url_guard(url: str) -> None:
     if not url or PUBLIC_CREATIVE_AGENT_HOST in url:
         sys.exit(
             f"Refusing to capture from {url!r}: the fixture must be captured from the pinned "
-            "reference agent, never the live public host (its catalog drifts). Bring it up with "
-            "`scripts/creative-agent-stack.sh up` then pass `--url $(scripts/creative-agent-stack.sh url)`. "
+            "reference agent, never the live public host (its catalog drifts). Run "
+            "`make creative-formats-refresh`. "
             "Deliberate prod capture: ALLOW_LIVE_CREATIVE_AGENT=1."
         )
 
@@ -83,10 +81,19 @@ async def _capture_formats(url: str):
     from src.core.creative_agent_registry import CreativeAgent, CreativeAgentRegistry
 
     registry = CreativeAgentRegistry()
-    # Construct our own CreativeAgent rather than rely on DEFAULT_AGENT (which reads
-    # CREATIVE_AGENT_URL at import time and may not match --url).
+    # Construct our own CreativeAgent rather than rely on DEFAULT_AGENT, whose agent_url is
+    # the operator agent's identity (CREATIVE_AGENT_ORIGIN), not the endpoint --url names.
     agent = CreativeAgent(agent_url=url, name="Pinned Reference Creative Agent", enabled=True, priority=1)
-    return await registry.get_formats_for_agent(agent, force_refresh=True)
+    catalog = await registry._fetch_formats_operator(agent)
+    # The serving path discards an entry that does not validate and keeps the rest. A
+    # capture must not: a fixture silently missing a format the agent serves would make
+    # every test agree with a catalog the agent does not have.
+    if catalog.discarded:
+        sys.exit(
+            "Capture discarded entries that do not validate against the pinned schema: "
+            + "; ".join(f"{dropped.label}: {dropped.error}" for dropped in catalog.discarded)
+        )
+    return catalog.formats
 
 
 def _build_fixture(formats, source_url: str) -> dict:
@@ -143,13 +150,14 @@ def main() -> None:
     parser.add_argument(
         "--url",
         default=settings.integrations.creative_agent_url or "",
-        help="URL of the pinned reference creative agent (e.g. scripts/creative-agent-stack.sh url).",
+        help="MCP endpoint of the pinned reference creative agent (in the e2e network: "
+        "https://creative-agent.adcp.test:8443/api/creative-agent/mcp).",
     )
     args = parser.parse_args()
 
     url = args.url.strip()
     if not url:
-        sys.exit("No --url given and CREATIVE_AGENT_URL unset. See scripts/creative-agent-stack.sh url.")
+        sys.exit("No --url given and CREATIVE_AGENT_URL unset. Run `make creative-formats-refresh`.")
     _check_url_guard(url)
 
     from src.core.format_cache import CACHE_FILE

@@ -21,6 +21,7 @@ from decimal import Decimal
 from typing import Any
 
 import pytest
+from pydantic import TypeAdapter
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -29,7 +30,7 @@ pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 # The LOCAL subclass, not ``adcp.CpmPricingOption``: ``Product.pricing_options`` is the
 # local ``PricingOption`` RootModel, whose union members are the local subclasses and which
 # refuses an SDK instance by design (tests/unit/test_pricing_option_schemas.py).
-from adcp.types.generated_poc.core.vendor_pricing_option import (
+from adcp.types.domains.core.vendor_pricing_option import (
     VendorPricingOption,
 )  # TODO: no stable alias in adcp.types
 
@@ -469,11 +470,15 @@ class TestSignalSchemaContract:
             "signal_type": "marketplace",
             "data_provider": "Test Data Provider",
             "coverage_percentage": 95.0,
-            "deployments": [
-                SignalDeployment(platform="test_platform", is_live=True, type="platform", scope="platform-wide")
-            ],
+            "deployments": [SignalDeployment(platform="test_platform", is_live=True, type="platform")],
             "pricing_options": [
-                VendorPricingOption.model_validate(
+                # Through a TypeAdapter, not ``VendorPricingOption.model_validate``: adcp 9
+                # types VendorPricingOption as an Annotated UNION of its eleven arms rather
+                # than a RootModel, and a union has no ``model_validate`` (at adcp 6.6.0 it
+                # was a RootModel, which is why the old call worked). The adapter validates
+                # against the whole pinned union, so this still grades the spec shape instead
+                # of a hand-picked arm -- this payload resolves to VendorPricingOption7.
+                TypeAdapter(VendorPricingOption).validate_python(
                     {"pricing_option_id": "cpm_usd", "cpm": 3.50, "currency": "USD", "model": "cpm"}
                 )
             ],

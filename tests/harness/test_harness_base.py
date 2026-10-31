@@ -401,21 +401,32 @@ class TestEnvMethodNamingConsistency:
             "exception instead. Dispatch by tool name through _run_mcp_client."
         )
 
-    def test_creative_sync_env_has_set_run_async_result(self):
-        """CreativeSyncEnv uses set_run_async_result, not set_registry_formats.
+    def test_creative_sync_env_has_set_served_catalogue(self):
+        """CreativeSyncEnv uses set_served_catalogue, not set_registry_formats.
 
-        set_registry_formats patches registry.list_all_formats (CreativeFormatsEnv).
-        CreativeSyncEnv patches run_async.side_effect, which is a different mechanic.
-        Using the same name is a trap for new Env authors.
+        Both seed a real peer creative agent through the one shared mechanism
+        (PeerCreativeAgentMixin.seed_own_creative_agent), but they promise different
+        identities: set_registry_formats (CreativeFormatsEnv) serves each format_id
+        verbatim, and set_served_catalogue re-homes each at the peer's URL so a sync
+        resolves the creative by dialling that peer (env.seeded_format_ids()). Sharing
+        the name would hide that difference from new Env authors.
+
+        (``set_run_async_result`` was the previous name here. It configured the sync
+        BRIDGE rather than the registry, so ``get_format`` never saw what it set — see
+        CreativeSyncEnv.set_served_catalogue.)
         """
         from tests.harness.creative_sync import CreativeSyncEnv
 
-        assert hasattr(CreativeSyncEnv, "set_run_async_result"), (
-            "CreativeSyncEnv should have set_run_async_result (not set_registry_formats)"
+        assert hasattr(CreativeSyncEnv, "set_served_catalogue"), (
+            "CreativeSyncEnv should have set_served_catalogue (not set_registry_formats)"
         )
         assert not hasattr(CreativeSyncEnv, "set_registry_formats"), (
             "CreativeSyncEnv should NOT have set_registry_formats — "
             "that name belongs to CreativeFormatsEnv (different mechanic)"
+        )
+        assert not hasattr(CreativeSyncEnv, "set_run_async_result"), (
+            "set_run_async_result is gone: it configured the sync bridge, so the "
+            "catalogue it set was invisible to registry.get_format"
         )
 
 

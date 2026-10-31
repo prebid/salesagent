@@ -36,7 +36,17 @@ def make_push_step(tool_name: str = "create_media_buy") -> SimpleNamespace:
         response_data={"ok": True},
         request_data={
             "protocol": "mcp",
-            "push_notification_config": {"url": "https://buyer.example/webhook"},
+            # ``operation_id`` is present because a registration a conformant seller can
+            # serve MUST carry one: core/mcp-webhook-payload.json makes it required on the
+            # envelope and ``compliance/universal/webhook-emission.yaml`` req. 1 grades the
+            # echo, explicitly forbidding recovery from the receiver URL. Omitting it here
+            # made the fixture a registration no delivery can answer -- adcp 6.6.0 built a
+            # schema-invalid body from it anyway, adcp 9 refuses. Matches what
+            # PushNotificationConfigFactory has always set.
+            "push_notification_config": {
+                "url": "https://buyer.example/webhook",
+                "operation_id": "op_push_helper",
+            },
         },
         object_mappings=[SimpleNamespace(object_type="media_buy", object_id="mb_1", action="create")],
         context=SimpleNamespace(tenant_id="tenant_1", principal_id="principal_1"),

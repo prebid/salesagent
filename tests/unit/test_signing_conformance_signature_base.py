@@ -10,7 +10,7 @@
 * **L3** — B4 (``salesagent-z6nr.15``), black-box, the vectors' own URL space.
 
 Why this level cannot go green vacuously — and why it must exist. At L2 the harness
-re-signs 14 transplanted vectors using the SAME canonicalizer the verifier uses, so
+re-signs the transplanted vectors using the SAME canonicalizer the verifier uses, so
 signer and verifier agree BY CONSTRUCTION whatever they compute; positives 005-012
 (default-port, dot-segment, query bytes, percent-encoding, IPv6) would pass
 tautologically if L2 were the only grading. Here NOTHING of ours produced the
@@ -32,16 +32,15 @@ through this exact function, and :mod:`src.vendor.adcp_canonical` deliberately
 re-exports only the canonicalization entry points so the signing half cannot be
 reached through the seam. So this module grades the bytes the verifier will really
 compute. The vendored copy's own grading is
-``tests/unit/test_url_canonicalization_vectors.py``, against the 37 format-id
-vectors — a different vector set exercising the shapes (IDN hosts, the DNS root dot,
-a trailing empty query, six authority forms) that the 13 rows below never reach.
+``tests/unit/test_url_canonicalization_vectors.py``, against the format-id
+vectors — a different vector set exercising shapes (the DNS root dot, a trailing empty
+query, the authority forms) that the rows below do not reach.
 Two graded artifacts, one per canonicalizer; neither stands in for the other.
 
-Spec grounding: AdCP 3.1.1 (``adcp==6.6.0``);
-``adcontextprotocol/adcp@v3.1.1:docs/reference/url-canonicalization.mdx``
-(the authoritative canonicalization algorithm — security.mdx §"@target-uri
-canonicalization" defers to it) and ``dist/compliance/3.1.1/test-vectors/
-request-signing/{positive,negative}/``.
+Spec grounding, at the tag the installed SDK reports (``adcp.get_adcp_spec_version()``):
+``docs/reference/url-canonicalization.mdx`` (the authoritative canonicalization
+algorithm — security.mdx §"@target-uri canonicalization" defers to it) and the
+vendored ``test-vectors/request-signing/{positive,negative}/``.
 """
 
 from __future__ import annotations
@@ -89,10 +88,11 @@ def test_signature_base_matches_the_spec_bytes(vector_id: str) -> None:
 
 
 def test_l1_grades_every_vector_that_ships_the_field() -> None:
-    """Sanity on the parametrization itself: 13 cases, from the vendored data.
+    """Sanity on the parametrization itself: 18 cases, from the vendored data.
 
-    The count is corrected from the B3 design's "12" — that figure missed
-    ``negative/010-content-digest-mismatch``, which ships the field too. The exact
-    SET is pinned by name in ``tests/unit/test_adcp_conformance_vectors_pin.py``.
+    Every positive but ``004`` ships the field, and so do ``negative/010``, ``015``,
+    ``026`` and ``031`` — the negatives whose fault is graded at or after step 10, where
+    the base is spec-authored data. The exact SET is pinned by name in
+    ``tests/unit/test_adcp_conformance_vectors_pin.py``.
     """
-    assert len(_L1_VECTORS) == 13, _L1_VECTORS
+    assert len(_L1_VECTORS) == 18, _L1_VECTORS

@@ -148,3 +148,31 @@ class AdminClient:
         if self._http is not None:
             self._http.close()
             self._http = None
+
+
+class AdminOperatorMixin:
+    """The seller's operator, for an ``IntegrationEnv`` whose scenario includes an admin action.
+
+    One :class:`AdminClient` on the env's OWN transport: in this process when the env has no
+    ``e2e_config``, over HTTP to that live server when it has one. So an AdCP scenario whose
+    Given is an operator action (authoring a product, syncing a publisher) runs that action
+    against the same deployment its When then dispatches to, on every transport.
+
+    The client is opened on the first request, after every earlier Given: the in-process
+    app is composed under the settings those Givens chose. Factory rows are committed first,
+    because the admin request reads them in its own session.
+    """
+
+    _admin: AdminClient | None = None
+
+    def admin_request(
+        self, tenant_id: str, method: str, path: str, *, data: dict[str, str] | None = None
+    ) -> AdminResponse:
+        """One authenticated request to *tenant_id*'s admin route at *path*."""
+        self._commit_factory_data()  # type: ignore[attr-defined]
+        if self._admin is None:
+            e2e_config = self.e2e_config  # type: ignore[attr-defined]
+            self._admin = AdminClient(e2e_config.base_url if e2e_config is not None else None)
+            self._guard("admin_client", self._admin.close)  # type: ignore[attr-defined]
+            self._admin.authenticate(tenant_id)
+        return self._admin.request(method, f"/tenant/{tenant_id}/{path}", data=data)

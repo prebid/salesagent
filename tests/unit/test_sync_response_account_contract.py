@@ -12,7 +12,7 @@ pin declares, and re-listing it here only asks whether someone retyped the pin. 
 rules it out by name. EXPECTED_FIELDS survives only as the optional-field roster below.
 """
 
-from adcp.types.generated_poc.core.brand_ref import BrandReference
+from adcp.types.domains.core.brand_ref import BrandReference
 
 from src.core.errors.codes import CODE_TABLE
 from src.core.schemas import Error as LibraryError

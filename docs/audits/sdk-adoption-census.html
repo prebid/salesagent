@@ -1,0 +1,165 @@
+<!doctype html><html lang=en><head><meta charset=utf-8>
+<meta name=viewport content="width=device-width,initial-scale=1">
+<title>SDK adoption census</title><style>
+:root{--bg:#fbfbfa;--fg:#1a1a18;--mut:#6b6b66;--line:#e2e2dd;--acc:#8a4b2a;--chip:#f2f0ec}
+@media(prefers-color-scheme:dark){:root:not([data-theme=light]){--bg:#17171a;--fg:#e8e8e4;--mut:#9a9a94;--line:#2e2e33;--acc:#d79a6a;--chip:#22222a}}
+:root[data-theme=dark]{--bg:#17171a;--fg:#e8e8e4;--mut:#9a9a94;--line:#2e2e33;--acc:#d79a6a;--chip:#22222a}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);
+font:15px/1.6 ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}
+.wrap{max-width:1100px;margin:0 auto;padding:40px 16px 80px}
+h1{font-size:1.7rem;line-height:1.2;margin:0 0 6px}h2{font-size:1.15rem;margin:38px 0 4px;color:var(--acc)}
+.sub{color:var(--mut);margin:0 0 28px}
+.prov{background:var(--chip);border:1px solid var(--line);border-radius:8px;padding:12px 14px;
+font:12.5px/1.6 ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--mut);margin:0 0 26px;overflow-x:auto}
+table{width:100%;border-collapse:collapse;margin:14px 0 6px;font-size:13px}
+th,td{text-align:left;padding:7px 9px;border-bottom:1px solid var(--line);vertical-align:top}
+th{font-size:11.5px;text-transform:uppercase;letter-spacing:.05em;color:var(--mut);font-weight:600}
+td.c{font-family:ui-monospace,Menlo,monospace;white-space:nowrap}
+td.p{font-family:ui-monospace,Menlo,monospace;color:var(--mut);font-size:12px}
+.sum{display:grid;grid-template-columns:1fr auto;max-width:460px;gap:0 18px;
+border:1px solid var(--line);border-radius:8px;overflow:hidden}
+.sum div{padding:8px 13px;border-bottom:1px solid var(--line)}
+.sum div:nth-child(2n){text-align:right;font-family:ui-monospace,Menlo,monospace}
+.note{color:var(--mut);margin:6px 0 0}
+@media(max-width:640px){td.c,td.p{white-space:normal}}
+</style></head><body><div class=wrap>
+<h1>SDK adoption census</h1>
+<p class=sub>What every local schema declares beyond the pinned model it extends.</p>
+<div class=prov>tree 1cc146ce163bbad1ae0e9559b25788de75553349<br>adcp 9.0.0b3+sa.8qela.f33d4fc71<br>derived 2026-10-17 by walking
+src.core.schemas and comparing each class's model_fields against the first generated pinned
+model in its MRO</div>
+
+<div class=prov style="border-color:var(--acc)">
+<strong>CORRECTED 2026-10-17.</strong> The first version of this page
+compared each class against the FIRST pinned model in its MRO. Several local classes inherit
+from more than one pinned model, so a field declared by a LATER ancestor read as
+&ldquo;added&rdquo;. Against the UNION of every pinned ancestor:
+<br><br>
+ADD fields &mdash; first-ancestor comparison: <b>20 sites, 124 fields</b> (what this page
+said)<br>
+ADD fields &mdash; union comparison: <b>17 sites, 69 fields</b> (correct)<br>
+phantom, declared by a later pinned ancestor: <b>55 fields</b>
+<br><br>
+Three classes add NOTHING and were listed as adding eleven each:
+<code>_base.SalesAgentAdcpResponse</code>, <code>_base.CreateMediaBuyResult</code>,
+<code>_base.UpdateMediaBuyResult</code>. <code>_base.CompleteTaskResponse</code> drops from 13
+to 2 and <code>_base.AdcpErrorResponse</code> from 12 to 1. Found by the lane working
+salesagent-25v2r, which the error had made look like a five-class architectural problem.
+The per-class tables below now show the union figure.<br><br><strong>SECOND CORRECTION.</strong> The union figure still counted a field once per
+CLASS that has it, not once per DECLARATION. All 18 targeting dimensions are declared on
+<code>_base._InternalTargetingDimensions</code> alone, which both <code>Targeting</code> and
+<code>TargetingInput</code> inherit &mdash; so &ldquo;18 &times; 3&rdquo; was the same 18
+declarations counted three times. Counted by declaration site:
+<br><br>
+first-ancestor memberships: <b>124</b> &nbsp;&rarr;&nbsp; union memberships: <b>69</b>
+&nbsp;&rarr;&nbsp; <b>51 declaration sites</b>
+<br><br>
+So 73 of the original 124 were artifacts of two instrument errors of the same family: asking
+&ldquo;what does this class add&rdquo; and answering it against one ancestor, then against
+membership rather than declaration. Both were found by the lane working the beads, not by me.
+
+</div>
+<h2>Counts</h2>
+<div class=sum><div>real adoption sites</div><div>99</div><div>declare NOTHING (target state)</div><div>48</div><div>ADD fields (union of pinned ancestors)</div><div>17</div><div>NARROW a parent field</div><div>33</div><div>REMOVE a parent field</div><div>0</div><div>redeclare IDENTICALLY</div><div>6</div><div>carry own validators</div><div>15</div><div>parent is a branch-split root</div><div>2</div></div>
+<p class=note>Only classes whose MRO reaches a generated model under
+<code>adcp.types.domains</code> or <code>adcp.types.canonical</code> count as adoption sites.
+A first pass counted 168 and 69 of those had <code>AdCPBaseModel</code> as the parent &mdash;
+a fieldless base, so every field read as &ldquo;added&rdquo;. Those are local models, not
+adoptions, and are excluded.</p>
+
+<h2>Corrected adders (union comparison)</h2>
+<p class=note>Third column counts fields the first-ancestor comparison wrongly attributed to
+this class.</p>
+<table><thead><tr><th>local class</th><th>genuinely added</th><th>phantom</th></tr></thead>
+<tbody><tr><td class=c>_base.Targeting</td><td>audiences_any_of, audiences_none_of, browser_any_of, browser_none_of, connection_type_any_of, connection_type_none_of, content_cat_any_of, content_cat_none_of, custom, device_type_any_of, device_type_none_of, keywords_any_of, keywords_none_of, media_type_any_of, media_type_none_of, os_any_of, os_none_of, signals</td><td style='color:var(--mut)'></td></tr><tr><td class=c>_base.TargetingInput</td><td>audiences_any_of, audiences_none_of, browser_any_of, browser_none_of, connection_type_any_of, connection_type_none_of, content_cat_any_of, content_cat_none_of, custom, device_type_any_of, device_type_none_of, keywords_any_of, keywords_none_of, media_type_any_of, media_type_none_of, os_any_of, os_none_of, signals</td><td style='color:var(--mut)'></td></tr><tr><td class=c>_base.TaskSummary</td><td>associated_objects, context_id, error_message, owner, summary, tool_name</td><td style='color:var(--mut)'></td></tr><tr><td class=c>_base.CompleteTaskRequest</td><td>context, error_message, response_data, status, task_id</td><td style='color:var(--mut)'></td></tr><tr><td class=c>_base.Format</td><td>category, is_standard, platform_config, requirements</td><td style='color:var(--mut)'></td></tr><tr><td class=c>product.Product</td><td>allowed_principal_ids, countries, implementation_config</td><td style='color:var(--mut)'></td></tr><tr><td class=c>_base.AffectedPackage</td><td>buyer_package_ref, changes_applied</td><td style='color:var(--mut)'></td></tr><tr><td class=c>_base.SignalDeployment</td><td>decisioning_platform_segment_id, scope</td><td style='color:var(--mut)'></td></tr><tr><td class=c>_base.CompleteTaskResponse</td><td>completed_at, completed_by</td><td style='color:var(--mut)'>11</td></tr><tr><td class=c>creative.SyncCreativeResult</td><td>internal_status, review_feedback</td><td style='color:var(--mut)'></td></tr><tr><td class=c>_base.AdcpErrorResponse</td><td>errors</td><td style='color:var(--mut)'>11</td></tr><tr><td class=c>_base.CreateMediaBuySuccess</td><td>errors</td><td style='color:var(--mut)'></td></tr><tr><td class=c>_base.UpdateMediaBuySuccess</td><td>errors</td><td style='color:var(--mut)'></td></tr><tr><td class=c>_base.PackageRequest</td><td>creative_ids</td><td style='color:var(--mut)'></td></tr><tr><td class=c>_base.AdCPPackageUpdate</td><td>creative_ids</td><td style='color:var(--mut)'></td></tr><tr><td class=c>_base.GetMediaBuysMediaBuy</td><td>buyer_campaign_ref</td><td style='color:var(--mut)'></td></tr><tr><td class=c>creative.Creative</td><td>principal_id</td><td style='color:var(--mut)'></td></tr><tr><td class=c>_base.CreateMediaBuyResult</td><td style='color:var(--mut)'>&ndash;</td><td>11</td></tr><tr><td class=c>_base.SalesAgentAdcpResponse</td><td style='color:var(--mut)'>&ndash;</td><td>11</td></tr><tr><td class=c>_base.UpdateMediaBuyResult</td><td style='color:var(--mut)'>&ndash;</td><td>11</td></tr></tbody></table>
+<h2>The 33 narrowings are mostly sanctioned</h2>
+<p class=note>Pattern #1 permits a redeclaration that narrows a field to a local subclass, and
+pattern #4's nested serializer needs it to keep a local subclass's fields on the wire. Most of
+these are exactly that &mdash; <code>products</code> to the local Product,
+<code>creatives</code> to the local result type. They dissolve only if the local subclass
+itself dissolves, so they are a consequence of the additions below rather than a separate
+problem.</p>
+<table><thead><tr><th>local class</th><th>pinned parent</th><th>narrowed</th><th>added</th></tr></thead><tbody>
+<tr><td class=c>notification.PushNotificationConfig</td><td class=p>domains.core.push_notification_config.PushNotificationConfig</td><td>authentication</td><td>&ndash;</td></tr>
+<tr><td class=c>_base.Error</td><td class=p>domains.core.error.Error</td><td>code</td><td>&ndash;</td></tr>
+<tr><td class=c>_base.UpdateMediaBuySuccess</td><td class=p>domains.media_buy.update_media_buy_response.UpdateMediaBuyResponse1</td><td>affected_packages</td><td>errors</td></tr>
+<tr><td class=c>_base.Targeting</td><td class=p>domains.core.targeting.TargetingOverlay</td><td>frequency_cap</td><td>audiences_any_of, audiences_none_of, browser_any_of, browser_none_of, connection_type_any_of, connection_type_none_of, content_cat_any_of, content_cat_none_of, custom, device_type_any_of, device_type_none_of, keywords_any_of, keywords_none_of, media_type_any_of, media_type_none_of, os_any_of, os_none_of, signals</td></tr>
+<tr><td class=c>_base.TargetingInput</td><td class=p>domains.core.targeting_input.TargetingOverlayInput</td><td>frequency_cap</td><td>audiences_any_of, audiences_none_of, browser_any_of, browser_none_of, connection_type_any_of, connection_type_none_of, content_cat_any_of, content_cat_none_of, custom, device_type_any_of, device_type_none_of, keywords_any_of, keywords_none_of, media_type_any_of, media_type_none_of, os_any_of, os_none_of, signals</td></tr>
+<tr><td class=c>_base.PackageRequest</td><td class=p>domains.media_buy.package_request.PackageRequest</td><td>creatives, impressions, targeting_overlay</td><td>creative_ids</td></tr>
+<tr><td class=c>_base.CreateMediaBuyRequest</td><td class=p>domains.media_buy.create_media_buy_request.CreateMediaBuyRequest</td><td>packages, push_notification_config</td><td>&ndash;</td></tr>
+<tr><td class=c>_base.AdCPPackageUpdate</td><td class=p>domains.media_buy.package_update.PackageUpdate</td><td>targeting_overlay</td><td>creative_ids</td></tr>
+<tr><td class=c>_base.UpdateMediaBuyRequest</td><td class=p>domains.media_buy.update_media_buy_request.UpdateMediaBuyRequest</td><td>end_time, packages, push_notification_config, start_time</td><td>&ndash;</td></tr>
+<tr><td class=c>_base.Signal</td><td class=p>domains.core.wholesale_feed_event.Signal</td><td>deployments</td><td>&ndash;</td></tr>
+<tr><td class=c>_base.GetSignalsResponse</td><td class=p>domains.signals.get_signals_response.GetSignalsResponse</td><td>signals</td><td>&ndash;</td></tr>
+<tr><td class=c>_base.GetMediaBuysPackage</td><td class=p>domains.media_buy.get_media_buys_response.Package</td><td>targeting_overlay</td><td>&ndash;</td></tr>
+<tr><td class=c>_base.GetMediaBuysMediaBuy</td><td class=p>domains.media_buy.get_media_buys_response.MediaBuy</td><td>packages</td><td>buyer_campaign_ref</td></tr>
+<tr><td class=c>_base.GetMediaBuysResponse</td><td class=p>domains.media_buy.get_media_buys_response.GetMediaBuysResponse</td><td>media_buys</td><td>&ndash;</td></tr>
+<tr><td class=c>product.GetProductsRequest</td><td class=p>domains.media_buy.get_products_request.GetProductsRequest</td><td>buying_mode</td><td>&ndash;</td></tr>
+<tr><td class=c>product.GetProductsResponse</td><td class=p>domains.media_buy.get_products_response.GetProductsResponse</td><td>products</td><td>&ndash;</td></tr>
+<tr><td class=c>product.Placement</td><td class=p>domains.core.placement.Placement</td><td>description, format_ids</td><td>&ndash;</td></tr>
+<tr><td class=c>product.Product</td><td class=p>domains.core.product.Product</td><td>pricing_options</td><td>allowed_principal_ids, countries, implementation_config</td></tr>
+<tr><td class=c>notification.NotificationConfig</td><td class=p>domains.core.notification_config.NotificationConfig</td><td>authentication, event_types</td><td>&ndash;</td></tr>
+<tr><td class=c>notification.PushAuthentication</td><td class=p>domains.core.notification_config.Authentication</td><td>credentials</td><td>&ndash;</td></tr>
+<tr><td class=c>delivery.PackageDelivery</td><td class=p>domains.media_buy.get_media_buy_delivery_response.ByPackageItem</td><td>by_device_type, by_geo, by_placement</td><td>&ndash;</td></tr>
+<tr><td class=c>delivery.MediaBuyDeliveryData</td><td class=p>domains.media_buy.get_media_buy_delivery_response.MediaBuyDelivery</td><td>by_package, daily_breakdown, totals</td><td>&ndash;</td></tr>
+<tr><td class=c>delivery.GetMediaBuyDeliveryResponse</td><td class=p>domains.media_buy.get_media_buy_delivery_response.GetMediaBuyDeliveryResponse</td><td>aggregated_totals, media_buy_deliveries</td><td>&ndash;</td></tr>
+<tr><td class=c>delivery.GetCreativeDeliveryResponse</td><td class=p>domains.creative.get_creative_delivery_response.GetCreativeDeliveryResponse</td><td>creatives</td><td>&ndash;</td></tr>
+<tr><td class=c>creative.SyncCreativesRequest</td><td class=p>domains.creative.sync_creatives_request.SyncCreativesRequest</td><td>creatives, push_notification_config</td><td>&ndash;</td></tr>
+<tr><td class=c>creative.SyncCreativesResponse</td><td class=p>domains.creative.sync_creatives_response.SyncCreativesResponse1</td><td>creatives</td><td>&ndash;</td></tr>
+<tr><td class=c>creative.QuerySummary</td><td class=p>domains.core.tasks_list_response.QuerySummary</td><td>filters_applied</td><td>&ndash;</td></tr>
+<tr><td class=c>creative.ListCreativesResponse</td><td class=p>domains.creative.list_creatives_response.ListCreativesResponse</td><td>creatives, pagination, query_summary</td><td>&ndash;</td></tr>
+<tr><td class=c>account.ListAccountsResponse</td><td class=p>domains.account.list_accounts_response.ListAccountsResponse</td><td>accounts</td><td>&ndash;</td></tr>
+<tr><td class=c>account.SettingsUpdateAccountInput</td><td class=p>domains.account.sync_accounts_request.Accounts1</td><td>notification_configs</td><td>&ndash;</td></tr>
+<tr><td class=c>account.SyncAccountInput</td><td class=p>domains.account.sync_accounts_request.Accounts</td><td>notification_configs</td><td>&ndash;</td></tr>
+<tr><td class=c>account.SyncAccountsRequest</td><td class=p>domains.account.sync_accounts_request.SyncAccountsRequest</td><td>accounts, push_notification_config</td><td>&ndash;</td></tr>
+<tr><td class=c>account.SyncAccountsResponse</td><td class=p>domains.account.sync_accounts_response.SyncAccountsResponse1</td><td>accounts</td><td>&ndash;</td></tr>
+</tbody></table>
+<h2>Internal targeting dimensions</h2><p class=note>18 dimensions the pin does not carry, on two classes plus the internal carrier. The largest single block, and the one whose removal needs a decision about where internal targeting lives.</p><table><thead><tr><th>local class</th><th>pinned parent</th><th>added</th><th>narrowed</th></tr></thead><tbody>
+<tr><td class=c>_base.Targeting</td><td class=p>domains.core.targeting.TargetingOverlay</td><td>audiences_any_of, audiences_none_of, browser_any_of, browser_none_of, connection_type_any_of, connection_type_none_of, content_cat_any_of, content_cat_none_of, custom, device_type_any_of, device_type_none_of, keywords_any_of, keywords_none_of, media_type_any_of, media_type_none_of, os_any_of, os_none_of, signals</td><td>frequency_cap</td></tr>
+<tr><td class=c>_base.TargetingInput</td><td class=p>domains.core.targeting_input.TargetingOverlayInput</td><td>audiences_any_of, audiences_none_of, browser_any_of, browser_none_of, connection_type_any_of, connection_type_none_of, content_cat_any_of, content_cat_none_of, custom, device_type_any_of, device_type_none_of, keywords_any_of, keywords_none_of, media_type_any_of, media_type_none_of, os_any_of, os_none_of, signals</td><td>frequency_cap</td></tr>
+</tbody></table><h2>The response envelope family</h2><p class=note>status, task_id, context, message, payload, replayed, governance_context, timestamp, adcp_error, context_id. This is the seller's own response machinery sitting on a pinned response parent.</p><table><thead><tr><th>local class</th><th>pinned parent</th><th>added</th><th>narrowed</th></tr></thead><tbody>
+<tr><td class=c>_base.SalesAgentAdcpResponse</td><td class=p>domains.core.version_envelope.AdcpVersionEnvelope</td><td>adcp_error, context, context_id, governance_context, message, payload, push_notification_config, replayed, status, task_id, timestamp</td><td>&ndash;</td></tr>
+<tr><td class=c>_base.AdcpErrorResponse</td><td class=p>domains.core.version_envelope.AdcpVersionEnvelope</td><td>adcp_error, context, context_id, errors, governance_context, message, payload, push_notification_config, replayed, status, task_id, timestamp</td><td>&ndash;</td></tr>
+<tr><td class=c>_base.CreateMediaBuyResult</td><td class=p>domains.core.version_envelope.AdcpVersionEnvelope</td><td>adcp_error, context, context_id, governance_context, message, payload, push_notification_config, replayed, status, task_id, timestamp</td><td>&ndash;</td></tr>
+<tr><td class=c>_base.UpdateMediaBuyResult</td><td class=p>domains.core.version_envelope.AdcpVersionEnvelope</td><td>adcp_error, context, context_id, governance_context, message, payload, push_notification_config, replayed, status, task_id, timestamp</td><td>&ndash;</td></tr>
+<tr><td class=c>_base.CompleteTaskRequest</td><td class=p>domains.core.version_envelope.AdcpVersionEnvelope</td><td>context, error_message, response_data, status, task_id</td><td>&ndash;</td></tr>
+<tr><td class=c>_base.CompleteTaskResponse</td><td class=p>domains.core.version_envelope.AdcpVersionEnvelope</td><td>adcp_error, completed_at, completed_by, context, context_id, governance_context, message, payload, push_notification_config, replayed, status, task_id, timestamp</td><td>&ndash;</td></tr>
+<tr><td class=c>_base.TaskSummary</td><td class=p>domains.protocol.list_tasks_response.Task</td><td>associated_objects, context_id, error_message, owner, summary, tool_name</td><td>&ndash;</td></tr>
+</tbody></table><h2>Format and Product</h2><p class=note>Format adds category, is_standard, platform_config, requirements; Product adds allowed_principal_ids, countries, implementation_config. Partly filed already (salesagent-mm3uq, salesagent-dd1us).</p><table><thead><tr><th>local class</th><th>pinned parent</th><th>added</th><th>narrowed</th></tr></thead><tbody>
+<tr><td class=c>_base.Format</td><td class=p>domains.core.format.Format</td><td>category, is_standard, platform_config, requirements</td><td>&ndash;</td></tr>
+<tr><td class=c>product.Product</td><td class=p>domains.core.product.Product</td><td>allowed_principal_ids, countries, implementation_config</td><td>pricing_options</td></tr>
+</tbody></table><h2>Small additions</h2><p class=note>One to four fields each. Each needs the same question asked: does the pin declare it somewhere else, or should it live on a repository-owned carrier?</p><table><thead><tr><th>local class</th><th>pinned parent</th><th>added</th><th>narrowed</th></tr></thead><tbody>
+<tr><td class=c>_base.CreateMediaBuySuccess</td><td class=p>domains.media_buy.create_media_buy_response.CreateMediaBuyResponse1</td><td>errors</td><td>&ndash;</td></tr>
+<tr><td class=c>_base.AffectedPackage</td><td class=p>domains.core.package.Package</td><td>buyer_package_ref, changes_applied</td><td>&ndash;</td></tr>
+<tr><td class=c>_base.UpdateMediaBuySuccess</td><td class=p>domains.media_buy.update_media_buy_response.UpdateMediaBuyResponse1</td><td>errors</td><td>affected_packages</td></tr>
+<tr><td class=c>_base.Format</td><td class=p>domains.core.format.Format</td><td>category, is_standard, platform_config, requirements</td><td>&ndash;</td></tr>
+<tr><td class=c>_base.PackageRequest</td><td class=p>domains.media_buy.package_request.PackageRequest</td><td>creative_ids</td><td>creatives, impressions, targeting_overlay</td></tr>
+<tr><td class=c>_base.AdCPPackageUpdate</td><td class=p>domains.media_buy.package_update.PackageUpdate</td><td>creative_ids</td><td>targeting_overlay</td></tr>
+<tr><td class=c>_base.SignalDeployment</td><td class=p>domains.core.deployment.Deployment1</td><td>decisioning_platform_segment_id, scope</td><td>&ndash;</td></tr>
+<tr><td class=c>_base.GetMediaBuysMediaBuy</td><td class=p>domains.media_buy.get_media_buys_response.MediaBuy</td><td>buyer_campaign_ref</td><td>packages</td></tr>
+<tr><td class=c>product.Product</td><td class=p>domains.core.product.Product</td><td>allowed_principal_ids, countries, implementation_config</td><td>pricing_options</td></tr>
+<tr><td class=c>creative.Creative</td><td class=p>domains.creative.list_creatives_response.Creative</td><td>principal_id</td><td>&ndash;</td></tr>
+<tr><td class=c>creative.SyncCreativeResult</td><td class=p>domains.creative.sync_creatives_response.Creative</td><td>internal_status, review_feedback</td><td>&ndash;</td></tr>
+</tbody></table>
+<h2>Identical redeclarations</h2>
+<p class=note>Same annotation, same requiredness, same default as the parent. These state
+nothing and delete with no behavioural change. They pass the inheritance guard precisely
+because they are &ldquo;neither reshaped nor weakened&rdquo;, which is how they accumulated.</p>
+<table><thead><tr><th>local class</th><th>pinned parent</th><th>identical</th></tr></thead><tbody>
+<tr><td class=c>_base.CreateMediaBuySuccess</td><td class=p>domains.media_buy.create_media_buy_response.CreateMediaBuyResponse1</td><td>confirmed_at</td></tr>
+<tr><td class=c>_base.CreateMediaBuyRequest</td><td class=p>domains.media_buy.create_media_buy_request.CreateMediaBuyRequest</td><td>brand</td></tr>
+<tr><td class=c>_base.GetTaskStatusResponse</td><td class=p>domains.protocol.get_task_status_response.GetTaskStatusResponse</td><td>context_id</td></tr>
+<tr><td class=c>product.GetProductsRequest</td><td class=p>domains.media_buy.get_products_request.GetProductsRequest</td><td>brand</td></tr>
+<tr><td class=c>creative.CreativeAssetRequest</td><td class=p>domains.core.creative_asset.CreativeAsset</td><td>format_id</td></tr>
+<tr><td class=c>creative.Creative</td><td class=p>domains.creative.list_creatives_response.Creative</td><td>name</td></tr>
+</tbody></table>
+
+<h2>Parents that are branch-split roots</h2>
+<p class=note>Only these two subclass a root whose arms the SDK dispatches. Under the current
+gate the instance is our class, not the arm, so nothing downstream can switch on the arm
+&mdash; see salesagent-xminb.</p>
+<table><thead><tr><th>local class</th><th>pinned parent</th><th>added</th><th>narrowed</th><th>validators</th></tr></thead><tbody>
+<tr><td class=c>_base.CreateMediaBuyRequest</td><td class=p>domains.media_buy.create_media_buy_request.CreateMediaBuyRequest</td><td>&ndash;</td><td>packages, push_notification_config</td><td>_check_anyof_branch_conditions, _check_idempotency_key</td></tr>
+<tr><td class=c>creative.CreativeAssetRequest</td><td class=p>domains.core.creative_asset.CreativeAsset</td><td>&ndash;</td><td>&ndash;</td><td>_exactly_one_format_identifier, _trackers_bind_tracking_events</td></tr>
+</tbody></table>
+</div></body></html>

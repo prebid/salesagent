@@ -1,0 +1,35 @@
+<!-- Canonical Format Declarations Editor (AdCP 3.2 format_options)
+
+     The authoring surface for the CANONICAL arm of core/product.json's root anyOf.
+     A raw-JSON editor: the pinned type is a sixteen-branch discriminated union over
+     format_kind, so the document is handed through as authored and validated against
+     that union server-side (src/admin/blueprints/products.py).
+
+     Included by add_product.html, add_product_gam.html, edit_product.html and the two
+     inventory-profile forms. One include rather than five copies -- the field, its help
+     text and its pre-fill rule are one thing.
+
+     Reads from the enclosing context, both optional:
+     - product.format_options: the stored declaration, on the edit forms (the profile
+       edit form binds its profile as `product`)
+     - form_data.format_options: what the operator typed, preserved across a refusal
+-->
+
+{% set authored_format_options =
+       (form_data.format_options if form_data and form_data.format_options
+        else product.format_options | tojson if product and product.format_options
+        else '') %}
+
+<div class="form-group">
+    <label for="format_options">Canonical format declarations (<code>format_options</code>)</label>
+    <p style="color: #666; font-size: 0.9rem; margin-bottom: 0.5rem;">
+        AdCP 3.2 authoring path. A JSON array of declarations, each naming a
+        <code>format_kind</code> and its <code>params</code>. To reach buyers that still
+        read the deprecated <code>format_ids</code>, add a <code>v1_format_ref</code> to a
+        declaration: <code>format_ids</code> is derived from those references and is not
+        authored anywhere else.
+    </p>
+    <textarea id="format_options" name="format_options" rows="8"
+              style="width: 100%; font-family: monospace; font-size: 0.85rem;"
+              placeholder='[{"format_kind": "image", "params": {"width": 300, "height": 250}}]'>{{ authored_format_options }}</textarea>
+</div>

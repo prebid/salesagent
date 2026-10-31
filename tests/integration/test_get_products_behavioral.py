@@ -14,6 +14,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from src.core.exceptions import AdCPAuthorizationError, AdCPSalesAgentError, AdCPValidationError
+from src.core.format_resolver import NamedFormats
 from src.core.resolved_identity import PublicIdentity, ResolvedIdentity
 from src.core.tenant_context import TenantContext
 from src.services.policy_check_service import PolicyCheckResult, PolicyStatus
@@ -765,27 +766,21 @@ class TestPricingOptionXorNegativeCases:
 
 
 class TestProductConversionNegativeCardinality:
-    """Test product_conversion rejects products with 0 format_ids, properties, or pricing.
+    """Test product_conversion rejects products with 0 properties or pricing.
 
     BDD scenarios: T-UC-001-rule-007, T-UC-001-partition-product-arrays,
     T-UC-001-boundary-product-arrays (S21, S32, S39)
 
     Note: These test convert_product_model_to_schema directly with mock models.
+
+    A ``test_zero_format_ids_raises_value_error`` used to sit here and is deleted rather
+    than re-grounded, because it asserted the behaviour this seller deliberately removed:
+    an absent ``format_ids`` is now LEGAL on its own, since core/product.json's root anyOf
+    accepts a canonical-format product and marks ``format_ids`` deprecated. The refusal that
+    replaced it fires on NEITHER arm, and it is graded on the wire on all four transports by
+    BR-UC-GET-PRODUCTS-format-options' "a product declaring neither format arm is refused"
+    (salesagent-ntwib). Deleting a red test removes no coverage.
     """
-
-    def test_zero_format_ids_raises_value_error(self):
-        """product_conversion with 0 format_ids -> ValueError."""
-        from src.core.product_conversion import convert_product_model_to_schema
-
-        mock_model = MagicMock()
-        mock_model.product_id = "bad_product"
-        mock_model.name = "Bad Product"
-        mock_model.description = "No formats"
-        mock_model.delivery_type = "guaranteed"
-        mock_model.effective_format_ids = []
-
-        with pytest.raises(ValueError, match="no format_ids"):
-            convert_product_model_to_schema(mock_model)
 
     def test_zero_properties_raises_value_error(self):
         """product_conversion with 0 properties -> ValueError."""
@@ -796,7 +791,9 @@ class TestProductConversionNegativeCardinality:
         mock_model.name = "Bad Product"
         mock_model.description = "No properties"
         mock_model.delivery_type = "guaranteed"
-        mock_model.effective_format_ids = [{"agent_url": "https://example.com", "id": "display_300x250"}]
+        mock_model.format_contract = NamedFormats(
+            format_ids=({"agent_url": "https://example.com", "id": "display_300x250"},)
+        )
         mock_model.effective_properties = []
 
         with pytest.raises(ValueError, match="no publisher_properties"):
@@ -811,7 +808,9 @@ class TestProductConversionNegativeCardinality:
         mock_model.name = "Bad Product"
         mock_model.description = "No pricing"
         mock_model.delivery_type = "guaranteed"
-        mock_model.effective_format_ids = [{"agent_url": "https://example.com", "id": "display_300x250"}]
+        mock_model.format_contract = NamedFormats(
+            format_ids=({"agent_url": "https://example.com", "id": "display_300x250"},)
+        )
         mock_model.effective_properties = [
             {"publisher_domain": "test.com", "selection_type": "by_tag", "property_tags": ["all"]}
         ]

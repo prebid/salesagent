@@ -48,6 +48,7 @@ class DeliveryPollEnv(DeliveryPollMixin, BaseTestEnv):
         "adapter": f"{MODULE}.get_adapter",
         "pricing": f"{MODULE}._get_pricing_options",
         "circuit_open": f"{MODULE}._is_circuit_breaker_open",
+        "delivery_repo": f"{MODULE}.DeliveryRepository",
     }
 
     def __init__(self, **kwargs: Any) -> None:
@@ -82,6 +83,15 @@ class DeliveryPollEnv(DeliveryPollMixin, BaseTestEnv):
         # unset runs every test in this env with the breaker OPEN — which rewrites an
         # active buy's status to "reporting_delayed" before any assertion sees it.
         self.mock["circuit_open"].return_value = False
+
+        # The poll sequence counter answers with an INT, which is the only thing
+        # ``get_max_sequence_number() -> int`` can return and the only thing the
+        # response's ``sequence_number: int | None`` can carry. Unset, ``max_seq + 1`` is
+        # another MagicMock: adcp 6.6.0's lax ``int | None`` coerced it through
+        # ``__int__`` and adcp 9's ``Strict(strict=True)`` refuses it, correctly —
+        # get-media-buy-delivery-response.json types the field ``integer``. Same failure
+        # shape as the breaker above: the mock answered something production cannot.
+        self.mock["delivery_repo"].return_value.get_max_sequence_number.return_value = 0
 
     def add_buy(
         self,

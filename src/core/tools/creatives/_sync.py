@@ -6,24 +6,32 @@ from collections.abc import Sequence
 from contextlib import ExitStack
 from typing import Any
 
-from adcp.types import CreativeAction, CreativeAsset
+from adcp.types import CreativeAction
+from adcp.types.legacy import LegacyCreativeAsset as CreativeAsset
 from pydantic import BaseModel
 
 from src.core.database.repositories.uow import CreativeUoW
 from src.core.errors.details import ValidationDetails
 from src.core.exceptions import AdCPSalesAgentError, adcp_error_for
+from src.core.format_resolver import seller_format_catalogue
 from src.core.helpers import enum_value, log_tool_activity
 from src.core.resolved_identity import AccountIdentity, ResolvedIdentity
 from src.core.schemas import SyncCreativeResult, SyncCreativesResponse
-from src.core.schemas.creative import SyncCreativesRequest
+from src.core.schemas.creative import SyncCreativeAsset, SyncCreativesRequest
 from src.core.tenant_context import TenantContext
-from src.core.validation_helpers import format_validation_error, run_async_in_sync_context
+from src.core.validation_helpers import format_validation_error
 from src.core.webhook_validator import webhook_url_for_log
 from src.core.webhooks.registration import accept_push_notification_config
 
 from ._assignments import _process_assignments
-from ._processing import _create_new_creative, _failed_sync_result, _update_existing_creative
-from ._validation import _get_field, _validate_creative_input, check_provenance_policy
+from ._processing import _create_new_creative, _failed_sync_result, _update_existing_creative, incoming_identity_of
+from ._validation import (
+    _get_field,
+    _validate_creative_input,
+    check_provenance_policy,
+    check_representation_selection,
+    check_unassigned_manifest,
+)
 from ._workflow import _audit_log_sync, _create_sync_workflow_steps, _send_creative_notifications
 
 logger = logging.getLogger(__name__)
@@ -66,12 +74,31 @@ def sync_creatives(
     identity: ResolvedIdentity,
     principal_id: str,
     tenant: TenantContext,
+    assigned_by_caller: bool = False,
+    uow: CreativeUoW | None = None,
 ) -> SyncCreativesResponse:
     """Sync creative assets to the centralized creative library.
 
     THE SERVICE. Takes a resolved caller and does the work: no auth, no transport concerns,
     no idempotency. Callable from any controller, and from any other service that needs
     creatives uploaded -- which is the point.
+
+    ``assigned_by_caller`` is True when the calling service assigns every creative in *req*
+    to a package once the sync returns -- ``create_media_buy``'s inline creatives, which are
+    synced before the packages they belong to exist, so ``req.assignments`` cannot name them.
+    Such a creative is graded against the declaration its package's product selects at that
+    service's own gate, and is not held to its kind here: a product may replace the kind's
+    slot list (core/product-format-declaration.json), and "assets is keyed by asset_group_id
+    from the matched declaration's params.slots[]" (creative-manifests.mdx § Basic structure).
+
+    ``uow`` is the caller's open transaction, joined (``BaseUoW.join``) rather than a unit
+    of this service's own: the creatives, their assignments and the approval steps are
+    written into it and commit or roll back with the caller's other writes, and the audit
+    records wait for that commit. ``update_media_buy``'s inline creatives pass it, because
+    update_media_buy.mdx § Compatibility transaction boundary makes the update "one atomic
+    mutation" and says "No package, assignment, library creative, or MediaBuy field from
+    the rejected update may change". A joined sync is never a preview: the caller's
+    transaction decides whether anything persists.
     """
 
     # ``creatives`` is aliased because it is NARROWED below by the creative_ids filter.
@@ -82,11 +109,13 @@ def sync_creatives(
     # ``bool | None`` -- wider than the pinned {"type": "boolean"} -- so an explicit null is
     # still representable and two callees below want a real bool.
     dry_run = bool(req.dry_run)
+    joined = uow is not None
+    assert not (joined and dry_run), "a joined sync commits with its caller and cannot be a preview"
     validation_mode = enum_value(req.validation_mode)
 
     from pydantic import ValidationError
 
-    # AdCP 2.5: Filter creatives by creative_ids if provided -- scoped updates to specific
+    # Filter creatives by creative_ids if provided -- scoped updates to specific
     # creatives without affecting others.
     if req.creative_ids:
         creative_ids_set = set(req.creative_ids)
@@ -137,22 +166,27 @@ def sync_creatives(
     # Track creatives requiring approval for workflow creation
     creatives_needing_approval = []
 
+    # The creatives this request assigns: each of those is graded against the declaration its
+    # package's product selects, and every other canonical one against its kind.
+    assigned_creative_ids = {assignment.creative_id for assignment in req.assignments or []}
+
     # Get tenant creative approval settings
     # approval_mode: "auto-approve", "require-human", "ai-powered"
     approval_mode = tenant.approval_mode
     logger.info(f"[sync_creatives] Approval mode: {approval_mode} (from tenant: {tenant.tenant_id})")
 
     # Fetch creative formats ONCE before processing loop (outside any transaction)
-    # This avoids async HTTP calls inside database savepoints which cause transaction errors
+    # This avoids async HTTP calls inside database savepoints which cause transaction errors.
+    # The seller's WHOLE catalogue -- agents and ad-server adapter alike (seller_format_catalogue).
     from src.core.creative_agent_registry import get_creative_agent_registry
 
     registry = get_creative_agent_registry()
-    all_formats = run_async_in_sync_context(registry.list_all_formats(tenant_id=tenant.tenant_id))
+    all_formats = seller_format_catalogue(tenant.tenant_id)
 
     # ONE write path for both branches: dry_run rolls this transaction back on clean
     # exit instead of committing it (BaseUoW), so preview and live run identical
     # resolve/validate/write code and a preview's reads see its own flushed rows
-    # (sync-creatives-request.json#/properties/dry_run @ v3.1.1).
+    # (sync-creatives-request.json#/properties/dry_run).
     #
     # The stack, rather than a plain `with`, is what keeps the assignment stage a
     # SINGLE call site below: live closes this transaction before that call (as
@@ -160,7 +194,8 @@ def sync_creatives(
     # both stages share the one rolled-back transaction. A second invocation
     # under an `if dry_run:` would re-fork the very seam this collapses.
     with ExitStack() as stack:
-        uow = stack.enter_context(CreativeUoW(tenant.tenant_id, dry_run=dry_run))
+        if uow is None:
+            uow = stack.enter_context(CreativeUoW(tenant.tenant_id, dry_run=dry_run))
         assert uow.creatives is not None
         creative_repo = uow.creatives
 
@@ -172,7 +207,7 @@ def sync_creatives(
         # tenant and principal -- no second select. Set only when true and omitted
         # otherwise: the error shape forbids the field, and a production account's
         # response simply has none.
-        sandbox = True if identity.account is not None and identity.account.sandbox else None
+        sandbox = identity.sandbox_echo
 
         # Check if any product in this tenant requires AI provenance metadata
         provenance_policies = creative_repo.get_provenance_policies()
@@ -218,7 +253,7 @@ def sync_creatives(
                     # from the pydantic error. The raw text rides internal_detail (server
                     # log only) instead of details, so no arbitrary exception text reaches
                     # the buyer.
-                    typed = adcp_error_for(validation_error)
+                    typed = adcp_error_for(validation_error, document=raw_creative)
                     typed.internal_detail = validation_error
                     # A DECLARED field, not a dict poked onto a built error. The
                     # subject is what `creative_id` names, and ValidationDetails
@@ -229,12 +264,36 @@ def sync_creatives(
                     results.append(_failed_sync_result(creative_id, typed))
                     continue  # Skip to next creative
 
+                # A canonical manifest no assignment selects a declaration for is held to its
+                # kind; an assigned one -- by this request, or by the calling service right
+                # after it -- is graded against the product's declaration at that assignment's
+                # gate instead (creative_satisfies).
+                if not assigned_by_caller and validated_creative.creative_id not in assigned_creative_ids:
+                    check_unassigned_manifest(
+                        creative, index=creative_index, creative_id=validated_creative.creative_id
+                    )
+
                 # The product's provenance policy (core/creative-policy.json, EU AI Act
                 # Article 50): a creative that does not meet it is a per-item PROVENANCE_*
                 # failure, caught below with every other correctable typed error. The first
                 # policy is the tenant-wide one.
                 if tenant_requires_provenance:
-                    check_provenance_policy(validated_creative, provenance_policies[0])
+                    # The REQUEST item is inspected -- that is where the pin declares
+                    # ``provenance`` -- with the resolved id for the refusal to name.
+                    check_provenance_policy(
+                        creative,
+                        provenance_policies[0],
+                        creative_id=validated_creative.creative_id,
+                    )
+
+                # A selected output must be the output its lineage describes, before anything
+                # is written (sync-creatives-request.json ``representation_set_projection``).
+                check_representation_selection(
+                    creative,
+                    revision_id=raw_creative.revision_id if isinstance(raw_creative, SyncCreativeAsset) else None,
+                    index=creative_index,
+                    creative_id=validated_creative.creative_id,
+                )
 
                 # Savepoint per creative: isolates this row's writes AND the effects
                 # queued while processing it, so a creative that fails takes its
@@ -246,18 +305,24 @@ def sync_creatives(
                     if creative.creative_id:
                         existing_creative = creative_repo.get_by_id(creative.creative_id, principal_id)
 
+                    # The identity this item names, read ONCE: it is what the row stores and
+                    # what an operator's review record names (``label``), whichever arm the
+                    # buyer used. The record used to name ``creative.format_id``, so a
+                    # creative identified by format_kind reached review as "format: None".
+                    incoming_identity = incoming_identity_of(creative, all_formats)
+
                     if existing_creative:
                         update_result, needs_approval = _update_existing_creative(
                             creative=creative,
                             existing_creative=existing_creative,
                             creative_repo=creative_repo,
                             format_value=format_value,
-                            approval_mode=approval_mode,
                             tenant=tenant,
                             webhook_url=webhook_url,
                             all_formats=all_formats,
                             registry=registry,
                             principal_id=principal_id,
+                            incoming_identity=incoming_identity,
                         )
 
                         # Handle failed updates
@@ -266,7 +331,7 @@ def sync_creatives(
                                 {
                                     "creative_id": existing_creative.creative_id,
                                     "error": update_result.errors[0] if update_result.errors else "Unknown error",
-                                    "format": creative.format_id,
+                                    "format": incoming_identity.label,
                                 }
                             )
                             failed_count += 1
@@ -283,7 +348,7 @@ def sync_creatives(
                         if needs_approval:
                             creative_info: dict[str, Any] = {
                                 "creative_id": existing_creative.creative_id,
-                                "format": creative.format_id,
+                                "format": incoming_identity.label,
                                 "name": creative.name,
                                 "status": existing_creative.status,
                             }
@@ -304,12 +369,12 @@ def sync_creatives(
                             creative=creative,
                             creative_repo=creative_repo,
                             format_value=format_value,
-                            approval_mode=approval_mode,
                             tenant=tenant,
                             webhook_url=webhook_url,
                             all_formats=all_formats,
                             registry=registry,
                             principal_id=principal_id,
+                            incoming_identity=incoming_identity,
                         )
 
                         # Handle failed creates
@@ -319,7 +384,7 @@ def sync_creatives(
                                 {
                                     "creative_id": creative_id,
                                     "error": create_result.errors[0] if create_result.errors else "Unknown error",
-                                    "format": creative.format_id,
+                                    "format": incoming_identity.label,
                                 }
                             )
                             failed_count += 1
@@ -333,7 +398,7 @@ def sync_creatives(
                         if needs_approval:
                             creative_info = {
                                 "creative_id": create_result.creative_id,
-                                "format": creative.format_id,
+                                "format": incoming_identity.label,
                                 "name": creative.name,
                                 "status": create_result.internal_status,
                             }
@@ -390,7 +455,7 @@ def sync_creatives(
                 # ValidationError becomes VALIDATION_ERROR with its field and details,
                 # anything else becomes INTERNAL_ERROR. Synthesizing a bare INTERNAL_ERROR
                 # here instead threw away the field the buyer needs.
-                typed = adcp_error_for(e)
+                typed = adcp_error_for(e, document=raw_creative)
                 typed.internal_detail = e
                 typed.details = _with_creative(typed.details, creative_id)
                 results.append(_failed_sync_result(creative_id, typed))
@@ -413,7 +478,6 @@ def sync_creatives(
                         SyncCreativeResult(
                             creative_id=db_creative.creative_id,
                             action=CreativeAction.deleted,
-                            review_feedback=None,
                         )
                     )
 
@@ -453,7 +517,10 @@ def sync_creatives(
         # NOTE: this conditional is the transaction seam itself (the commit-vs-
         # rollback decision), not a hand-placed effect gate — it is deliberately
         # retained, so this file is not literally dry_run-free after prkv.16.
-        if not dry_run:
+        # JOINED: the caller owns the transaction, so it stays open like a preview's and
+        # the assignment stage joins it; the caller's commit or rollback decides both.
+        keep_open = dry_run or joined
+        if not keep_open:
             stack.close()
 
         # Process assignments (spec-compliant: creative_id → package_ids mapping).
@@ -467,26 +534,38 @@ def sync_creatives(
             tenant=tenant,
             validation_mode=validation_mode,
             principal_id=principal_id,
-            uow=uow if dry_run else None,
+            uow=uow if keep_open else None,
         )
 
-    # Audit logging
-    _audit_log_sync(
-        tenant=tenant,
-        principal_id=principal_id,
-        synced_creatives=synced_creatives,
-        failed_creatives=failed_creatives,
-        assignment_list=assignment_list,
-        creative_ids=req.creative_ids,
-        dry_run=dry_run,
-        created_count=created_count,
-        updated_count=updated_count,
-        unchanged_count=unchanged_count,
-        failed_count=failed_count,
-        creatives_needing_approval=creatives_needing_approval,
-    )
+    # The audit writer opens a unit and a session of its own, so it runs only once no unit of
+    # this sync is open: after the caller's commit when the sync joined one, and after this
+    # service's own unit closed otherwise. Run inside a joined transaction it would record a
+    # sync the caller can still roll back, and its own commit could release the caller's
+    # pending writes. The nested-unit-of-work guard reads every call in a function handed a
+    # ``uow`` as made inside it, so the two sites below carry its marker.
+    def _record() -> None:
+        # structural-guard: nested-unit-of-work - runs after commit or close, never in a unit
+        _audit_log_sync(
+            tenant=tenant,
+            principal_id=principal_id,
+            synced_creatives=synced_creatives,
+            failed_creatives=failed_creatives,
+            assignment_list=assignment_list,
+            creative_ids=req.creative_ids,
+            dry_run=dry_run,
+            created_count=created_count,
+            updated_count=updated_count,
+            unchanged_count=unchanged_count,
+            failed_count=failed_count,
+            creatives_needing_approval=creatives_needing_approval,
+        )
+        log_tool_activity(identity, "sync_creatives", start_time)
 
-    log_tool_activity(identity, "sync_creatives", start_time)
+    if joined:
+        creative_repo.after_commit(_record, label="sync_creatives_audit")
+    else:
+        # structural-guard: nested-unit-of-work - this service's own unit closed above
+        _record()
 
     # Build message
     message = f"Synced {created_count + updated_count} creatives"

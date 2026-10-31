@@ -107,7 +107,7 @@ def test_query_summary_sort_applied_serializes_enum_values():
     # The sort_applied dict that gets built in _list_creatives_impl
     # must use .value, not str()
     from adcp.types import SortDirection
-    from adcp.types.generated_poc.enums.creative_sort_field import (
+    from adcp.types.domains.enums.creative_sort_field import (
         CreativeSortField,
     )  # TODO: no stable alias in adcp.types
 

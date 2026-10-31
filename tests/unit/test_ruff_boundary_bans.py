@@ -34,6 +34,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.utils.derived_population import assert_derived_population
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CONFIGS = (
     REPO_ROOT / "ruff-boundary.toml",
@@ -52,6 +54,23 @@ def _banned_names() -> list[tuple[Path, str]]:
         table = data["lint"]["flake8-tidy-imports"]["banned-api"]
         pairs.extend((config, dotted) for dotted in sorted(table))
     return pairs
+
+
+def test_the_banned_name_set_is_not_empty() -> None:
+    """Its own item, because the per-ban checks are parametrized over it.
+
+    ``_banned_names`` walks each config to ``data["lint"]["flake8-tidy-imports"]
+    ["banned-api"]``. Ruff moving that table, or a config losing its bans, yields
+    an empty list — and an empty parametrize deletes its cases as a skip rather
+    than failing (salesagent-8qela.176). A boundary ban that stops being graded
+    is exactly the kind of guard whose silence reads as compliance.
+    """
+    assert_derived_population(
+        _banned_names(),
+        name="_banned_names()",
+        derived_from="the [lint.flake8-tidy-imports.banned-api] table of each config in CONFIGS",
+        minimum=40,
+    )
 
 
 def _ruff_on(source: str, tmp_path: Path, config: Path) -> str:

@@ -1,454 +1,100 @@
-"""Behavioral snapshot tests for UC-005 (creative format discovery).
+"""Behavioral tests for UC-005 (creative format discovery) that need no database.
 
-These tests capture the behavioral contract of _list_creative_formats_impl
-as specified by BDD scenarios from BR-UC-005. They serve as a migration safety
-net: if any refactoring (e.g., FastAPI migration) silently changes behavior,
-these tests will catch it.
+``_list_creative_formats_impl`` lists only the formats the tenant's products declare, read
+through ``ProductUoW``, so a test that drives the listing to its answer needs those products
+and runs behind the harness: a BR-UC-005 scenario on a2a, mcp, rest and e2e_rest, or
+``CreativeFormatsEnv`` (tests/harness/creative_formats.py) in tests/integration/. What stays
+here is what is decided before the products are read, or without the listing at all.
 
-Each test references its upstream BDD scenario ID for traceability.
+WHERE THE FILTER, SORT AND ADVISORY TESTS THAT USED TO LIVE HERE ARE GRADED. They called the
+impl with only the creative agent registry mocked, so the product read reached for a real
+database, and each grades an obligation something else already grades through production:
+
+* Sort by name: @T-UC-005-inv-031-2-holds (exact ordered list). The unit test named
+  "after filtering" sent no filter; sort after a real ``name_search`` is
+  tests/integration/test_creative_formats_behavioral.py
+  ``TestFormatsSort::test_sort_preserves_after_filtering``.
+* asset_types excludes a format with no matching asset: @T-UC-005-inv-049-3-violated, and
+  "a match is kept while a non-match is dropped" is @T-UC-005-main-filtered.
+* asset_types on repeatable groups (a group with no match excluded; a format matching
+  through either its individual asset or its group): the integration twins
+  ``TestFormatsAssetTypes::test_group_assets_no_match_excluded`` and
+  ``::test_mixed_individual_and_group_assets``.
+* A format_ids filter that matches nothing returns nothing:
+  @T-UC-005-storyboard-format-id-third-party-agent-out-of-scope (its only reference
+  matches no listed format, and the seller's same-id format is not returned), plus
+  ``TestFormatsFiltering::test_format_ids_no_match_returns_empty``.
+* A render one pixel past min_width or max_width is excluded:
+  ``TestFormatsDimensions::test_off_by_one_max_width_excluded`` and
+  ``::test_off_by_one_min_width_excluded``.
+* An empty ``name_search`` filters nothing: ``TestFormatsEdgeCases::test_empty_name_search_returns_all``.
+* Per-agent advisories (UC-005-EXT-C-01/-02/-04): the impl passes the registry's
+  ``errors`` to the response unchanged when no ``format_ids`` names the agent, and that is
+  graded on the wire by @T-UC-005-peer-catalog-partial-discard (the agent's kept format
+  AND its advisory) and @T-UC-005-peer-catalog-all-discarded (no format AND the advisory).
+  The unit tests fed AGENT_UNREACHABLE advisories straight in, so they never graded the
+  registry's one-advisory-per-failed-agent loop; the real unreachable dial and its
+  first-party message are graded by
+  tests/integration/test_creative_formats_payload_error_wire_safety.py.
+* Successful discovery carries no advisory (UC-005-EXT-C-05): @T-UC-005-inv-049-2-violated
+  (a format returned and ``errors`` empty on the wire) and @T-UC-005-empty-catalog.
+
+The referral-lookup warning test is gone with no replacement, because the state it set up
+does not occur: the agent lookup failing for the ``creative_agents`` referrals after it
+succeeded for the aggregation. ``list_all_formats_with_errors`` calls the same
+``_get_tenant_agents`` first, outside any handler, so a lookup that fails takes the request
+down before the referrals are built. The referral handler itself is the silent degradation
+tracked by FIXME(#1566) and allowlisted in test_architecture_no_silent_loop_failures.py.
 """
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
-from adcp.types import ImageFormatAsset, VideoFormatAsset
-from adcp.types.generated_poc.core.format import Dimensions, Renders  # TODO: no stable alias in adcp.types
 
-# adcp SDK: Assets classes are type-discriminated by asset_type + item_type.
-# ImageFormatAsset = individual image, VideoFormatAsset = individual video
-# RepeatableAssetGroup = repeatable_group (has nested assets, no asset_type)
-# Nested group assets: ImageFormatGroupAsset, VideoFormatGroupAsset, TextFormatGroupAsset, etc.
-from src.core.schemas import Format, FormatId, ListCreativeFormatsRequest
+from src.core.schemas import Format, ListCreativeFormatsRequest
 from tests.factories import PrincipalFactory
 
 DEFAULT_AGENT_URL = "https://creative.adcontextprotocol.org"
 MOCK_TENANT = {"tenant_id": "test-tenant", "name": "Test Tenant"}
 
 
-def _make_format(
-    format_id: str,
-    name: str,
-    renders: list | None = None,
-    assets: list | None = None,
-) -> Format:
-    """Helper to create a Format object with minimal boilerplate."""
-    return Format(
-        format_id=FormatId(agent_url=DEFAULT_AGENT_URL, id=format_id),
-        name=name,
-        is_standard=True,
-        renders=renders,
-        assets=assets,
-    )
-
-
-def _call_impl(
-    formats: list[Format],
-    req: ListCreativeFormatsRequest | None = None,
-) -> list[Format]:
-    """Call _list_creative_formats_impl with mocked dependencies.
-
-    Returns the list of formats from the response. Mocks tenant,
-    creative agent registry, DB session (for broadstreet check), and
-    audit logger so the test exercises only the filtering/sorting logic.
-    Identity is passed directly as a ResolvedIdentity.
-    """
-    from src.core.creative_agent_registry import FormatFetchResult
-    from src.core.tools.creative_formats import _list_creative_formats_impl
-
-    if req is None:
-        req = ListCreativeFormatsRequest()
-
-    identity = PrincipalFactory.make_public_identity(tenant=MOCK_TENANT)
-
-    with (
-        patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_registry,
-        patch("src.core.tools.creative_formats.get_audit_logger") as mock_audit,
-    ):
-        mock_reg = MagicMock()
-
-        async def mock_list_formats(**kwargs):
-            return list(formats)  # Copy to avoid mutation
-
-        async def mock_list_formats_with_errors(**kwargs):
-            return FormatFetchResult(formats=list(formats), errors=[])
-
-        mock_reg.list_all_formats = mock_list_formats
-        mock_reg.list_all_formats_with_errors = mock_list_formats_with_errors
-        mock_registry.return_value = mock_reg
-
-        # Mock audit logger to avoid any side effects
-        mock_audit.return_value = MagicMock()
-
-        response = _list_creative_formats_impl(req, identity)
-        return response.formats
-
-
-# ---------------------------------------------------------------------------
-# HIGH_RISK: Sort order — T-UC-005-inv10
-# ---------------------------------------------------------------------------
-
-
-class TestSortOrderByName:
-    """T-UC-005-inv10: Results sorted by name.
-
-    Behavioral contract at creative_formats.py:337. Refactoring during
-    migration could silently reorder results. In adcp 3.12, type was removed
-    from Format, so sorting is now by name only.
-    """
-
-    # test_sort_order_by_name is REMOVED for the same reason as its sibling above:
-    # @T-UC-005-inv-031-2-holds grades alphabetical ordering with an exact ordered list,
-    # MEASURED passed:3 (a2a/mcp/rest).
-    #
-    # TestSortOrderByName::test_sort_preserves_after_filtering is DELIBERATELY KEPT. The
-    # scenario requests "all formats with no filters", so it does not grade order AFTER a
-    # filter, and @T-UC-005-inv-031-1-holds ("Multiple filters combine as AND") is MEASURED
-    # xfailed -- it reports nothing. This unit test is the only verification of sort-after-filter.
-
-    def test_sort_preserves_after_filtering(self):
-        """Sort order is maintained even after filters reduce the set."""
-        formats = [
-            _make_format("v2", "Zebra Video"),
-            _make_format("v1", "Alpha Video"),
-            _make_format("d1", "Display Ad"),
-        ]
-
-        result = _call_impl(formats)
-
-        names = [f.name for f in result]
-        assert names == [
-            "Alpha Video",
-            "Display Ad",
-            "Zebra Video",
-        ], f"Results should be sorted alphabetically: {names}"
-
-
-# ---------------------------------------------------------------------------
-# MEDIUM_RISK: Type filter empty result — T-UC-005-inv2-violated
-# ---------------------------------------------------------------------------
-
-
-# TestTypeFilterRemovedInAdcp312::test_empty_catalog_returns_empty is REMOVED: already
-# graded by @T-UC-005-empty-catalog ("Empty catalog when no agents have formats"), MEASURED
-# passed:3 (a2a/mcp/rest). The scenario is strictly stronger -- it asserts both "no formats
-# should be returned" AND "no error should be returned", where the unit test asserted only
-# the empty list.
-
-# ---------------------------------------------------------------------------
-# MEDIUM_RISK: Group asset filtering — T-UC-005-inv4-group
-# ---------------------------------------------------------------------------
-
-
-class TestAssetTypesFilterChecksGroupAssets:
-    """T-UC-005-inv4-group: asset_types filter checks nested group assets.
-
-    Code at creative_formats.py:245-264 iterates get_format_assets() and
-    checks both individual asset_type AND nested assets within groups.
-    """
-
-    # test_asset_types_filter_finds_type_in_group_assets is REMOVED: already graded by
-    # @T-UC-005-inv-049-3-group ("BR-RULE-049 INV-3 edge - Group assets checked in addition to
-    # individual assets"), MEASURED passed:3 (a2a/mcp/rest). Same Given (a repeatable asset
-    # group containing image and text), same When (asset_types filter naming one member of the
-    # group), same Then (the format is returned).
-    #
-    # Its two siblings are KEPT. @T-UC-005-inv-049-3-group grades group INCLUSION only, and
-    # @T-UC-005-inv-049-3-violated grades exclusion for an INDIVIDUAL asset with a single
-    # format in the registry -- so group exclusion, and the mixed individual+group case, are
-    # graded by nothing.
-
-    def test_asset_types_filter_excludes_group_without_match(self):
-        """Format with group assets NOT containing requested type should be excluded."""
-        # adcp 3.9: repeatable_group uses RepeatableAssetGroup, nested text items use TextFormatGroupAsset
-        from adcp.types import RepeatableAssetGroup, TextFormatGroupAsset
-
-        group_asset = RepeatableAssetGroup(
-            item_type="repeatable_group",
-            asset_group_id="text_group",
-            required=True,
-            min_count=1,
-            max_count=3,
-            assets=[
-                TextFormatGroupAsset(
-                    asset_id="headline",
-                    required=True,
-                ),
-            ],
-        )
-
-        format_with_text_group = Format(
-            format_id=FormatId(agent_url=DEFAULT_AGENT_URL, id="text_only"),
-            name="Text Only Native",
-            is_standard=True,
-            assets=[group_asset],
-        )
-
-        # Filter for "video" — should NOT match since group only has text
-        req = ListCreativeFormatsRequest(asset_types=["video"])
-        result = _call_impl([format_with_text_group], req)
-
-        assert result == [], "Group asset without video should not match video filter"
-
-    def test_asset_types_filter_mixed_individual_and_group(self):
-        """Format with both individual and group assets: filter checks both."""
-        # adcp 3.9: VideoFormatAsset = individual video, RepeatableAssetGroup = repeatable_group
-        # Nested assets use *FormatGroupAsset classes (image=ImageFormatGroupAsset)
-        from adcp.types import ImageFormatGroupAsset, RepeatableAssetGroup
-
-        individual_asset = VideoFormatAsset(
-            asset_id="hero_video",
-            required=True,
-        )
-        group_asset = RepeatableAssetGroup(
-            item_type="repeatable_group",
-            asset_group_id="product_group",
-            required=False,
-            min_count=0,
-            max_count=5,
-            assets=[
-                ImageFormatGroupAsset(
-                    asset_id="product_image",
-                    required=True,
-                ),
-            ],
-        )
-
-        mixed_format = Format(
-            format_id=FormatId(agent_url=DEFAULT_AGENT_URL, id="mixed_format"),
-            name="Mixed Format",
-            is_standard=True,
-            assets=[individual_asset, group_asset],
-        )
-
-        # Filter for "image" — should match via group nested asset
-        req = ListCreativeFormatsRequest(asset_types=["image"])
-        result = _call_impl([mixed_format], req)
-        assert len(result) == 1, "Mixed format should match image via group asset"
-
-        # Filter for "video" — should match via individual asset
-        req = ListCreativeFormatsRequest(asset_types=["video"])
-        result = _call_impl([mixed_format], req)
-        assert len(result) == 1, "Mixed format should match video via individual asset"
-
-        # Filter for "html" — should NOT match
-        req = ListCreativeFormatsRequest(asset_types=["html"])
-        result = _call_impl([mixed_format], req)
-        assert result == [], "Mixed format should not match html (not present)"
-
-
-# ---------------------------------------------------------------------------
-# LOW_RISK: Partition/boundary completeness
-# ---------------------------------------------------------------------------
-
-
-class TestPartitionFormatIdsNoMatch:
-    """T-UC-005-partition-format-ids: no match row."""
-
-    def test_format_ids_no_match_returns_empty(self):
-        """When format_ids contains only non-existent IDs, returns empty list."""
-        formats = [
-            _make_format("display_300x250", "Display 300x250"),
-            _make_format("display_728x90", "Display 728x90"),
-            _make_format("video_16x9", "Video 16:9"),
-        ]
-
-        non_existent_ids = [
-            FormatId(agent_url=DEFAULT_AGENT_URL, id="nonexistent_format"),
-        ]
-        req = ListCreativeFormatsRequest(format_ids=non_existent_ids)
-        result = _call_impl(formats, req)
-
-        assert result == [], f"Non-matching format_ids should return empty, got {len(result)}"
-
-
-class TestBoundaryDimensionExactMax:
-    """T-UC-005-boundary-dimension: exact max boundary (inclusive)."""
-
-    # test_boundary_dimension_exact_max_width and test_boundary_dimension_exact_min_width are
-    # REMOVED: both are graded by @T-UC-005-dim-boundary ("Dimension boundary - inclusive range
-    # at threshold"), MEASURED passed:3 (a2a/mcp/rest). That scenario puts a 728-wide render
-    # under min_width 728 AND max_width 728 and requires it returned, so it exercises
-    # inclusivity at both bounds at once -- an exclusive bound at either end would fail it.
-    #
-    # The two off-by-one siblings below are DELIBERATELY KEPT, and the reason is worth stating,
-    # because a passing scenario is not automatically a grading one. @T-UC-005-boundary-dimension
-    # (MEASURED passed:15) looks like it should cover them, but its Examples name no threshold
-    # ("width filter only", "height filter only", ...) and its Then is "the dimension handling
-    # should be valid", which routes to _assert_partition_outcome + _assert_filter_content in
-    # tests/bdd/steps/generic/then_payload.py: for expected="valid" that asserts only that no
-    # error came back, that .formats is a list, and that any format which survived narrowing has
-    # render dimensions. It never asserts that a render one pixel over the bound is EXCLUDED.
-    # @T-UC-005-inv-049-4-violated does assert exclusion, but with min_width 700 against renders
-    # of 300 and 320 -- a wide miss, which is exactly the case that cannot catch an off-by-one.
-
-    def test_boundary_dimension_off_by_one_max_width(self):
-        """Format with width=301 excluded when max_width=300."""
-        formats = [
-            _make_format(
-                "wide",
-                "Slightly Wide",
-                renders=[Renders(role="primary", dimensions=Dimensions(width=301, height=250))],
-            ),
-        ]
-
-        req = ListCreativeFormatsRequest(max_width=300)
-        result = _call_impl(formats, req)
-
-        assert result == [], "Width=301 should be excluded by max_width=300"
-
-    # test_boundary_dimension_exact_min_width is REMOVED: see the note above -- graded by
-    # @T-UC-005-dim-boundary, MEASURED passed:3.
-
-    def test_boundary_dimension_off_by_one_min_width(self):
-        """Format with width=299 excluded when min_width=300."""
-        formats = [
-            _make_format(
-                "narrow",
-                "Slightly Narrow",
-                renders=[Renders(role="primary", dimensions=Dimensions(width=299, height=250))],
-            ),
-        ]
-
-        req = ListCreativeFormatsRequest(min_width=300)
-        result = _call_impl(formats, req)
-
-        assert result == [], "Width=299 should be excluded by min_width=300"
-
-
-class TestBoundaryNameSearchEmptyString:
-    """T-UC-005-boundary-name-search: empty string boundary.
-
-    Code at creative_formats.py:272 uses 'if req.name_search:' — Python
-    falsy check — so empty string is treated as no filter (all returned).
-    Per architect review, assert should be 'returns all formats'.
-    """
-
-    def test_empty_string_name_search_returns_all(self):
-        """Empty string name_search is treated as no filter (all formats returned)."""
-        formats = [
-            _make_format("d1", "Alpha Display"),
-            _make_format("v1", "Beta Video"),
-            _make_format("n1", "Gamma Native"),
-        ]
-
-        req = ListCreativeFormatsRequest(name_search="")
-        result = _call_impl(formats, req)
-
-        assert len(result) == 3, f"Empty name_search should return all formats, got {len(result)}"
-
-
-# ---------------------------------------------------------------------------
-# Enhancement: asset_types exclusion — T-UC-005-inv4-violated
-# ---------------------------------------------------------------------------
-
-
-class TestAssetTypesFilterExclusion:
-    """T-UC-005-inv4-violated: format with non-matching asset types excluded."""
-
-    def test_format_with_non_matching_assets_excluded(self):
-        """Format with assets that do not match any requested type is excluded."""
-        # adcp 3.6.0: use typed asset classes - ImageFormatAsset (image), HtmlFormatAsset (html)
-        from adcp.types import HtmlFormatAsset
-
-        formats = [
-            _make_format(
-                "image_banner",
-                "Image Banner",
-                assets=[
-                    ImageFormatAsset(
-                        asset_id="main",
-                        required=True,
-                    ),
-                ],
-            ),
-            _make_format(
-                "html_widget",
-                "HTML Widget",
-                assets=[
-                    HtmlFormatAsset(
-                        asset_id="code",
-                        required=True,
-                    ),
-                ],
-            ),
-        ]
-
-        # Filter for video — neither format has video assets
-        req = ListCreativeFormatsRequest(asset_types=["video"])
-        result = _call_impl(formats, req)
-
-        assert result == [], "Formats with only image/html assets should be excluded by video filter"
-
-    def test_format_with_assets_of_wrong_type_excluded_while_match_kept(self):
-        """Only formats with at least one matching asset type are kept."""
-        # adcp 3.6.0: ImageFormatAsset (image), VideoFormatAsset (video)
-        formats = [
-            _make_format(
-                "image_only",
-                "Image Only",
-                assets=[
-                    ImageFormatAsset(
-                        asset_id="photo",
-                        required=True,
-                    ),
-                ],
-            ),
-            _make_format(
-                "video_format",
-                "Video Format",
-                assets=[
-                    VideoFormatAsset(
-                        asset_id="clip",
-                        required=True,
-                    ),
-                ],
-            ),
-        ]
-
-        req = ListCreativeFormatsRequest(asset_types=["video"])
-        result = _call_impl(formats, req)
-
-        assert len(result) == 1
-        assert result[0].name == "Video Format"
-
-
 class TestBroadstreetTemplateAssetParsing:
     """Regression: Broadstreet templates must parse with real assets.
 
-    The production code uses _make_asset() to construct the correct format asset
-    variant class (ImageFormatAsset for image, VideoFormatAsset for video, etc.) for each
-    template asset. Previously, the code used ImageFormatAsset(asset_type=AssetContentType(...))
-    which failed because ImageFormatAsset.asset_type is Literal['image'], not an enum.
+    The pinned ``Format.assets`` variants carry a Literal ``asset_type`` discriminator,
+    so the CLASS is the asset type; the code once passed
+    ``ImageFormatAsset(asset_type=AssetContentType(...))`` for every asset and nothing
+    constructed.
+
+    BOTH TESTS NOW CALL PRODUCTION. They used to re-run the production loop against
+    ``creative_formats._make_asset``, assembling their own ``Format`` -- so an adapter
+    that stopped building assets at all would not have reddened either of them. The
+    builder moved to ``BroadstreetAdapter.creative_formats`` (salesagent-zthsk) and these
+    assert on what it answers.
     """
 
     def test_all_broadstreet_templates_produce_formats_with_assets(self):
         """Every Broadstreet template must produce a Format with non-empty assets."""
+        from src.adapters.broadstreet import BroadstreetAdapter
         from src.adapters.broadstreet.config_schema import BROADSTREET_TEMPLATES
-        from src.core.tools.creative_formats import _infer_asset_type, _make_asset
+
+        by_id = {f.format_id.id: f for f in BroadstreetAdapter.creative_formats("test")}
 
         for tid, tmpl in BROADSTREET_TEMPLATES.items():
-            assets_list = []
-            for asset_id in tmpl.get("required_assets", []):
-                at = _infer_asset_type(asset_id)
-                assets_list.append(_make_asset(asset_id, at, required=True))
-            for asset_id in tmpl.get("optional_assets", []):
-                at = _infer_asset_type(asset_id)
-                assets_list.append(_make_asset(asset_id, at, required=False))
-
-            fmt = Format(
-                format_id=FormatId(id=f"broadstreet_{tid}", agent_url="broadstreet://test"),
-                name=str(tmpl["name"]),
-                assets=assets_list if assets_list else None,
-                is_standard=False,
-            )
+            fmt = by_id[f"broadstreet_{tid}"]
             assert fmt.assets, f"Template {tid} must have non-empty assets list"
             assert len(fmt.assets) == len(tmpl.get("required_assets", [])) + len(tmpl.get("optional_assets", [])), (
                 f"Template {tid} asset count mismatch"
             )
 
     def test_asset_type_literals_match_inferred_type(self):
-        """Each constructed asset must have asset_type matching the inferred string."""
-        from src.core.tools.creative_formats import _infer_asset_type, _make_asset
+        """Each constructed asset carries the asset_type its id names."""
+        from src.adapters.broadstreet import BroadstreetAdapter
+
+        # One format per asset id below, chosen so each id appears in it.
+        asset_types = {
+            a.asset_id: a.asset_type for f in BroadstreetAdapter.creative_formats("test") for a in (f.assets or [])
+        }
 
         for asset_id, expected_type in [
             ("front_image", "image"),
@@ -458,11 +104,8 @@ class TestBroadstreetTemplateAssetParsing:
             ("headline", "text"),
             ("html", "html"),
         ]:
-            inferred = _infer_asset_type(asset_id)
-            assert inferred == expected_type, f"{asset_id}: expected {expected_type}, got {inferred}"
-            asset = _make_asset(asset_id, inferred, required=True)
-            assert asset.asset_type == expected_type, (
-                f"{asset_id}: asset_type should be '{expected_type}', got '{asset.asset_type}'"
+            assert asset_types[asset_id] == expected_type, (
+                f"{asset_id}: asset_type should be '{expected_type}', got '{asset_types[asset_id]}'"
             )
 
 
@@ -476,145 +119,15 @@ class TestMCPWrapperStringCoercion:
     """
 
 
-def _call_impl_raw(
-    formats: list[Format],
-    registry_side_effect: Exception | None = None,
-    errors: list | None = None,
-    agents: list | None = None,
-):
-    """Call _list_creative_formats_impl and return the full response (not just formats).
-
-    Args:
-        formats: Formats returned by healthy agents.
-        registry_side_effect: If set, get_creative_agent_registry() raises this.
-        errors: List of AdCP Error objects to include as per-agent failures.
-        agents: CreativeAgent instances returned by _get_tenant_agents (referrals).
-    """
-    from src.core.creative_agent_registry import FormatFetchResult
-    from src.core.tools.creative_formats import _list_creative_formats_impl
-
-    req = ListCreativeFormatsRequest()
-    identity = PrincipalFactory.make_public_identity(tenant=MOCK_TENANT)
-
-    if registry_side_effect:
-        with patch(
-            "src.core.creative_agent_registry.get_creative_agent_registry",
-            side_effect=registry_side_effect,
-        ):
-            with patch("src.core.tools.creative_formats.get_audit_logger") as mock_audit:
-                mock_audit.return_value = MagicMock()
-                return _list_creative_formats_impl(req, identity)
-
-    with (
-        patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_registry,
-        patch("src.core.tools.creative_formats.get_audit_logger") as mock_audit,
-    ):
-        mock_reg = MagicMock()
-        fetch_result = FormatFetchResult(formats=list(formats), errors=errors or [])
-
-        async def mock_list_formats_with_errors(**kwargs):
-            return fetch_result
-
-        async def mock_list_formats(**kwargs):
-            return list(formats)
-
-        mock_reg.list_all_formats_with_errors = mock_list_formats_with_errors
-        mock_reg.list_all_formats = mock_list_formats
-        mock_reg._get_tenant_agents = MagicMock(return_value=agents or [])
-        mock_registry.return_value = mock_reg
-        mock_audit.return_value = MagicMock()
-
-        return _list_creative_formats_impl(req, identity)
-
-
-class TestPartialAgentFailureReturnsFormatsAndErrors:
-    """UC-005-EXT-C-01: Partial agent failure returns formats from healthy agents plus errors.
-
-    Decision: docs/design/error-propagation-in-format-discovery.md (FD-ERR-01)
-    """
-
-    def test_partial_agent_failure_returns_formats_and_errors(self):
-        """Covers: UC-005-EXT-C-01
-
-        Given two registered creative agents, one healthy and one unreachable,
-        when list_creative_formats is called,
-        then the response contains formats from the healthy agent
-        and an errors[] entry for the failed agent.
-        """
-        from src.core.schemas import Error as AdCPResponseError
-
-        healthy_formats = [
-            _make_format("display_300x250", "Display 300x250"),
-        ]
-        # The fixture carries only the CODE. It used to hand-build "Creative agent
-        # at <url> is unreachable: Connection refused" — a leaking message pinned
-        # as the expected shape. Message, suggestion and recovery are now derived
-        # from the code by the Error model itself (read-only, from CODE_TABLE),
-        # so the fixture cannot author a sentence and no assertion compares one:
-        # with the code asserted below, a message assert would grade the table
-        # against itself.
-        agent_errors = [
-            AdCPResponseError(code="AGENT_UNREACHABLE"),
-        ]
-        response = _call_impl_raw(healthy_formats, errors=agent_errors)
-
-        # Formats from healthy agent should be present
-        assert len(response.formats) >= 1
-
-        # Errors should report the failed agent
-        assert response.errors is not None, "Response must include errors[] for failed agents, not silently drop them"
-        assert len(response.errors) == 1
-        assert response.errors[0].code == "AGENT_UNREACHABLE"
-        # NOTE (honest limit): these fixtures are fed straight to _call_impl_raw,
-        # so they grade the _impl's error PROPAGATION, never the registry's
-        # message construction. The construction site is graded by
-        # tests/integration/test_creative_formats_payload_error_wire_safety.py.
-        assert "Connection refused" not in response.errors[0].message
-        assert "https://" not in response.errors[0].message
-
-
-class TestAllAgentsFailReturnsEmptyFormatsAndErrors:
-    """UC-005-EXT-C-02: All agents fail returns empty formats plus errors.
-
-    Decision: docs/design/error-propagation-in-format-discovery.md (FD-ERR-02)
-    """
-
-    def test_all_agents_fail_returns_empty_formats_and_errors(self):
-        """Covers: UC-005-EXT-C-02
-
-        Given all registered creative agents are unreachable,
-        when list_creative_formats is called,
-        then the response contains an empty formats array
-        and errors[] with one entry per failed agent.
-        """
-        from src.core.schemas import Error as AdCPResponseError
-
-        # Simulate all agents failing — registry returns no formats but reports
-        # errors. Same conversion as UC-005-EXT-C-01 above: the fixtures carry
-        # only the code; the Error model derives the buyer-facing text from it.
-        agent_errors = [
-            AdCPResponseError(code="AGENT_UNREACHABLE"),
-            AdCPResponseError(code="AGENT_UNREACHABLE"),
-        ]
-        response = _call_impl_raw(formats=[], errors=agent_errors)
-
-        assert response.formats == []
-        assert response.errors is not None, (
-            "Total agent failure must return errors[], not bare empty formats. "
-            "An empty formats[] without errors[] means 'no formats configured', "
-            "not 'agents are down'."
-        )
-        assert len(response.errors) == 2
-        for err in response.errors:
-            assert err.code == "AGENT_UNREACHABLE"
-
-
 class TestRegistryCreationFailureRaisesServiceUnavailable:
     """UC-005-EXT-C-03: Registry creation failure raises AdCPServiceUnavailableError.
 
     Per AdCP 3.0.1 error-handling: operation-level failures (registry init) raise,
     so the boundary translator produces a two-layer envelope. Per-item advisory
     errors (partial-agent failure inside a successful discovery) stay in errors[].
+
+    Reachable without a database: the registry is created before the tenant's products
+    are read, so the refusal is decided first.
     """
 
     def test_registry_creation_failure_raises(self):
@@ -626,123 +139,18 @@ class TestRegistryCreationFailureRaisesServiceUnavailable:
         builds a spec-compliant two-layer envelope.
         """
         from src.core.exceptions import AdCPServiceUnavailableError
-
-        with pytest.raises(AdCPServiceUnavailableError) as _ei:
-            _call_impl_raw(
-                formats=[],
-                registry_side_effect=RuntimeError("Cannot connect to agent registry"),
-            )
-        # The old pattern matched the AUTHORED sentence; the sentence is the
-        # code's table entry now, so assert it exactly.
-
-
-class TestErrorEntriesFollowAdCPSchema:
-    """UC-005-EXT-C-04: Error entries follow AdCP error.json schema.
-
-    Decision: docs/design/error-propagation-in-format-discovery.md (FD-ERR-04)
-    """
-
-    def test_error_entries_have_code_and_message(self):
-        """Covers: UC-005-EXT-C-04
-
-        Given a list_creative_formats response with partial-agent errors,
-        when the Buyer inspects the errors[] array,
-        then each error has code (string) and message (string) at minimum,
-        conforming to error.json schema.
-        """
-        from src.core.schemas import Error
-
-        agent_errors = [Error(code="AGENT_UNREACHABLE")]
-        response = _call_impl_raw(formats=[], errors=agent_errors)
-
-        assert response.errors is not None
-        for err in response.errors:
-            assert isinstance(err, Error), f"Error must be an AdCP Error instance, got {type(err)}"
-            assert err.code == "AGENT_UNREACHABLE"
-            # The "and message" half of the obligation is structural now: the Error
-            # model derives message from the code at validation and CodeEntry refuses
-            # an empty one, so a constructed Error cannot lack a message.
-
-
-class TestSuccessfulDiscoveryHasNoErrors:
-    """UC-005-EXT-C-05: Successful discovery has no errors.
-
-    Decision: docs/design/error-propagation-in-format-discovery.md (FD-ERR-05)
-    """
-
-    def test_successful_discovery_has_no_errors(self):
-        """Covers: UC-005-EXT-C-05
-
-        Given all registered creative agents are healthy,
-        when list_creative_formats is called,
-        then the response contains formats from all agents
-        and the errors field is absent or an empty array.
-        """
-        formats = [
-            _make_format("display_300x250", "Display 300x250"),
-            _make_format("video_16x9", "Video 16:9"),
-        ]
-
-        response = _call_impl_raw(formats)
-
-        assert len(response.formats) == 2
-        assert response.errors is None or response.errors == [], (
-            f"Successful discovery must have no errors, got {response.errors}"
-        )
-
-
-class TestAgentReferralFailureLogsWarning:
-    """Agent referral building errors must be logged, not silently swallowed.
-
-    CLAUDE.md: No Quiet Failures pattern. If _get_tenant_agents raises,
-    creative_agents_list should remain None (non-critical) but a warning
-    must be logged so operators can diagnose the issue.
-    """
-
-    def test_referral_error_logs_warning(self, caplog):
-        """When _get_tenant_agents raises, a warning is logged (not silent pass)."""
-        import logging
-
-        from src.core.creative_agent_registry import FormatFetchResult
         from src.core.tools.creative_formats import _list_creative_formats_impl
-
-        formats = [_make_format("display_300x250", "Display 300x250")]
-        mock_reg = MagicMock()
-        mock_reg._get_tenant_agents = MagicMock(side_effect=RuntimeError("Agent DB connection refused"))
-        fetch_result = FormatFetchResult(formats=list(formats), errors=[])
-
-        async def mock_list_formats_with_errors(**kwargs):
-            return fetch_result
-
-        async def mock_list_formats(**kwargs):
-            return list(formats)
-
-        mock_reg.list_all_formats_with_errors = mock_list_formats_with_errors
-        mock_reg.list_all_formats = mock_list_formats
 
         identity = PrincipalFactory.make_public_identity(tenant=MOCK_TENANT)
 
         with (
             patch(
                 "src.core.creative_agent_registry.get_creative_agent_registry",
-                return_value=mock_reg,
+                side_effect=RuntimeError("Cannot connect to agent registry"),
             ),
-            patch(
-                "src.core.tools.creative_formats.get_audit_logger",
-                return_value=MagicMock(),
-            ),
-            caplog.at_level(logging.WARNING, logger="src.core.tools.creative_formats"),
+            pytest.raises(AdCPServiceUnavailableError),
         ):
-            _list_creative_formats_impl(
-                req=ListCreativeFormatsRequest(),
-                identity=identity,
-            )
-
-        # After fix: should log a warning about the referral failure
-        warning_msgs = [r.message for r in caplog.records if r.levelno >= logging.WARNING]
-        assert any("referral" in msg.lower() or "agent" in msg.lower() for msg in warning_msgs), (
-            f"Expected a warning about agent referral failure, got: {warning_msgs}"
-        )
+            _list_creative_formats_impl(ListCreativeFormatsRequest(), identity)
 
 
 class TestReferralCapabilitiesAreCommitments:
@@ -753,6 +161,12 @@ class TestReferralCapabilitiesAreCommitments:
     the agent to variant-level delivery reporting via a `get_creative_delivery`
     task. This agent does not implement that task, so `delivery` must not
     appear in the referral capabilities.
+
+    The policy is anchored here, hardcoded. That every referral on the wire carries
+    exactly ``ADVERTISED_CREATIVE_AGENT_CAPABILITIES`` is graded by
+    @T-UC-005-main-referrals ("each referral should include the agent URL and supported
+    capabilities") on a2a, mcp, rest and e2e_rest, which compares each referral against the
+    constant. Driving the listing here would read the tenant's products.
     """
 
     def test_referral_capabilities_exclude_delivery_while_unimplemented(self):
@@ -762,32 +176,74 @@ class TestReferralCapabilitiesAreCommitments:
         registry, the hasattr assertion below fails, prompting re-evaluation
         of the advertised set alongside the exclusion assertion.
         """
-        from src.core.creative_agent_registry import CreativeAgent, CreativeAgentRegistry
+        from src.core.creative_agent_registry import CreativeAgentRegistry
+        from src.core.tools.creative_formats import ADVERTISED_CREATIVE_AGENT_CAPABILITIES
 
         assert not hasattr(CreativeAgentRegistry, "get_creative_delivery"), (
             "get_creative_delivery is now implemented — re-evaluate whether "
             "`delivery` should be added back to ADVERTISED_CREATIVE_AGENT_CAPABILITIES"
         )
 
-        formats = [_make_format("display_300x250", "Display 300x250")]
-        agents = [
-            CreativeAgent(
-                agent_url=DEFAULT_AGENT_URL,
-                name="AdCP Standard Creative Agent",
-                enabled=True,
-                priority=1,
-            )
-        ]
+        cap_values = {c.value for c in ADVERTISED_CREATIVE_AGENT_CAPABILITIES}
+        assert "delivery" not in cap_values, (
+            f"`delivery` advertised without a get_creative_delivery task (capabilities are commitments): {cap_values}"
+        )
+        assert cap_values == {"validation", "assembly", "preview"}, (
+            f"Advertised capabilities must be exactly the backed set, got {cap_values}"
+        )
 
-        response = _call_impl_raw(formats, agents=agents)
 
-        assert response.creative_agents, "Expected creative_agents referrals in response"
-        for referral in response.creative_agents:
-            cap_values = {c.value for c in referral.capabilities}
-            assert "delivery" not in cap_values, (
-                f"`delivery` advertised without a get_creative_delivery task "
-                f"(capabilities are commitments): {cap_values}"
-            )
-            assert cap_values == {"validation", "assembly", "preview"}, (
-                f"Advertised capabilities must be exactly the backed set, got {cap_values}"
-            )
+class TestAgentInventedKeysNeverReachTheBuyer:
+    """A creative agent's undeclared keys must not travel through this seller onto the wire.
+
+    ``Format`` is built from a COUNTERPARTY's payload
+    (``creative_agent_registry._fetch_formats_raw_mcp`` validates a creative agent's reply
+    into it) and then serialized to buyers by ``list_creative_formats``. The GENERATED parent
+    sets ``extra="allow"``, which stores an unknown key and then emits it -- so without the
+    local class's ``extra="ignore"`` every key an agent invented appeared in this seller's
+    response under the pinned ``Format`` name, where no buyer could validate it.
+
+    Measured counterfactual, not a hypothesis: ``LegacyFormat.model_validate`` of the payload
+    below retains the undeclared keys and the local class dumps two, which is what the second
+    test here pins.
+
+    This is also what makes DELETING an internal field mean what it says.
+    ``iab_specification``, ``accepts_3p_tags`` and ``category`` were removed from ``Format``
+    as unused; under the parent's "allow" an agent still sending one would have had it
+    PROMOTED from a field that could never reach the wire (``exclude=True``) to an extra that
+    always does.
+    """
+
+    _AGENT_PAYLOAD = {
+        "format_id": {"agent_url": DEFAULT_AGENT_URL, "id": "display_300x250"},
+        "name": "Agent-supplied format",
+        # The three deleted internal fields, plus an invented one.
+        "iab_specification": "IAB-SOMETHING",
+        "accepts_3p_tags": True,
+        "category": "standard",
+        "agent_invented_key": "should never be echoed",
+    }
+
+    def test_undeclared_keys_are_dropped_at_construction(self):
+        fmt = Format.model_validate(self._AGENT_PAYLOAD)
+
+        assert sorted(fmt.model_dump(exclude_none=True)) == ["format_id", "name"]
+
+    def test_the_generated_parent_would_have_echoed_them(self):
+        """The positive control: proves the assertion above is the local config's doing.
+
+        Without it, a parent that happened to be strict would make the test above pass for a
+        reason that has nothing to do with the ``model_config`` it exists to grade.
+        """
+        from adcp.types.legacy import LegacyFormat
+
+        echoed = LegacyFormat.model_validate(self._AGENT_PAYLOAD).model_dump(exclude_none=True)
+
+        assert "agent_invented_key" in echoed, (
+            "the generated parent no longer retains unknown keys, so this seller's "
+            "extra='ignore' may have become redundant -- re-read it before deleting"
+        )
+
+    def test_the_deleted_internal_fields_are_not_declared(self):
+        for name in ("iab_specification", "accepts_3p_tags", "category"):
+            assert name not in Format.model_fields

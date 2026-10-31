@@ -27,10 +27,13 @@ only inside the stack, which is the whole point of running the suite there.
 from __future__ import annotations
 
 import re
+from urllib.parse import urlsplit
 
 import pytest
 import yaml
 
+from src.core.config import IntegrationSettings
+from src.core.creative_agent_registry import PUBLIC_DEFAULT_AGENT_URL
 from src.core.webhook_validator import WebhookURLValidator
 from tests.unit._architecture_helpers import repo_root
 
@@ -38,18 +41,32 @@ _COMPOSE = "docker-compose.e2e.yml"
 _WORKFLOW = ".github/workflows/ci.yml"
 
 
-def _configured_creative_agent_urls() -> list[tuple[str, str]]:
-    """Every literal ``CREATIVE_AGENT_URL`` the e2e compose stack sets."""
+#: Where the pinned reference creative agent serves MCP: ``POST <base>/api/creative-agent/mcp``
+#: (adcp ``server/src/creative-agent/index.ts``). The bare ``/api/creative-agent`` is refused
+#: by its CSRF check, so a stack naming it spends every call's retry budget before the client's
+#: ``/mcp`` fallback.
+_REFERENCE_AGENT_MCP_PATH = "/api/creative-agent/mcp"
+
+
+def _service_environments() -> dict[str, dict[str, str]]:
+    """Each e2e compose service's environment, as a mapping."""
     compose = yaml.safe_load((repo_root() / _COMPOSE).read_text())
-    found: list[tuple[str, str]] = []
+    environments: dict[str, dict[str, str]] = {}
     for service_name, service in (compose.get("services") or {}).items():
         env = (service or {}).get("environment") or {}
         if isinstance(env, list):  # `- KEY=value` form
             env = dict(item.split("=", 1) for item in env if "=" in item)
-        url = env.get("CREATIVE_AGENT_URL")
-        if url:
-            found.append((service_name, str(url)))
-    return found
+        environments[service_name] = {str(key): str(value) for key, value in env.items()}
+    return environments
+
+
+def _configured_creative_agent_urls() -> list[tuple[str, str]]:
+    """Every literal ``CREATIVE_AGENT_URL`` the e2e compose stack sets."""
+    return [
+        (service_name, env["CREATIVE_AGENT_URL"])
+        for service_name, env in _service_environments().items()
+        if env.get("CREATIVE_AGENT_URL")
+    ]
 
 
 def test_compose_sets_at_least_one_creative_agent_url() -> None:
@@ -67,12 +84,10 @@ def test_compose_sets_at_least_one_creative_agent_url() -> None:
 def test_configured_destination_passes_the_armed_gate(service: str, url: str) -> None:
     """The URL handed to the gated fetch path must survive the gate's shape checks.
 
-    ``_fetch_formats_via_raw_mcp`` appends ``/mcp`` before validating, so that
-    exact string is what has to pass — not the bare base URL.
+    ``CREATIVE_AGENT_URL`` is the MCP endpoint and is dialled as given, so that exact
+    string is what has to pass.
     """
-    mcp_url = url.rstrip("/") + "/mcp"
-
-    is_safe, error = WebhookURLValidator.validate_webhook_url_registration(mcp_url)
+    is_safe, error = WebhookURLValidator.validate_webhook_url_registration(url)
 
     assert is_safe, (
         f"{_COMPOSE} points service {service!r} at {url!r}, which the armed "
@@ -82,6 +97,33 @@ def test_configured_destination_passes_the_armed_gate(service: str, url: str) ->
         f"service name on the stack's own network — do NOT add a testing "
         f"carve-out to the gate, and do NOT publish a host port."
     )
+
+
+@pytest.mark.parametrize("service, url", _configured_creative_agent_urls())
+def test_configured_destination_is_the_reference_agents_mcp_endpoint(service: str, url: str) -> None:
+    """The stack dials the endpoint itself: MCP mandates no path, so nothing may be appended."""
+    assert urlsplit(url).path == _REFERENCE_AGENT_MCP_PATH, (
+        f"{_COMPOSE} points service {service!r} at {url!r}. CREATIVE_AGENT_URL is the MCP "
+        f"endpoint the seller dials, and the pinned reference agent serves MCP only at "
+        f"{_REFERENCE_AGENT_MCP_PATH!r}."
+    )
+
+
+@pytest.mark.parametrize("service, url", _configured_creative_agent_urls())
+def test_every_endpoint_comes_with_the_identity_it_stands_in_for(service: str, url: str) -> None:
+    """A service that dials the stack's agent also names whose identity that agent carries.
+
+    The in-network agent stands in for the PUBLIC reference agent: every reference the stack
+    seeds or serves names it. The identity must load as a settings value, which refuses
+    anything but an origin.
+    """
+    origin = _service_environments()[service].get("CREATIVE_AGENT_ORIGIN")
+
+    assert origin == PUBLIC_DEFAULT_AGENT_URL, (
+        f"{_COMPOSE} service {service!r} dials {url!r} but sets CREATIVE_AGENT_ORIGIN={origin!r}; "
+        f"the stack's agent stands in for {PUBLIC_DEFAULT_AGENT_URL!r}."
+    )
+    assert IntegrationSettings(creative_agent_origin=origin).creative_agent_origin == origin
 
 
 def test_ci_workflow_does_not_hardcode_a_creative_agent_url() -> None:

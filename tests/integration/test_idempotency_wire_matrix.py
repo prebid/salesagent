@@ -290,44 +290,36 @@ class TestCaptureUniformity:
 class TestHashInputIsTheValidatedRequest:
     """The digest is taken over the validated REQUEST MODEL, uniformly on every transport.
 
-    This is a KNOWN DIVERGENCE from the pinned prose, recorded here rather than hidden.
-    L1/security.mdx ("Payload equivalence") says: "'Equivalent' means identical canonical
-    JSON form, not field-by-field semantic comparison. Sellers MUST determine equivalence by
-    hashing the canonical form and comparing hashes." Read strictly, the canonical form is
-    taken over the request body AS SENT, so two spellings of one instant ("...Z" versus
-    "...+00:00") are different JSON strings, different hashes, and a retry that changes only
-    the spelling is IDEMPOTENCY_CONFLICT.
+    L1/security.mdx ("Payload equivalence"): "'Equivalent' means identical canonical JSON form,
+    not field-by-field semantic comparison. Sellers MUST determine equivalence by hashing the
+    canonical form and comparing hashes." The canonical form is taken over the request as sent,
+    so two spellings of one instant ("...Z" versus "...+00:00") are different JSON strings,
+    different hashes, and a retry that changes only the spelling is IDEMPOTENCY_CONFLICT.
 
-    This seller hashes ``req.model_dump(mode="json")`` instead, so pydantic has already
-    normalised the datetime and the two spellings replay. The reason is that the strict
-    reading requires wire bytes inside business logic, and threading them there is what
-    produced the defect this test module was written around: each transport captured its own
-    bytes, MCP threaded them and REST did not, so "the same request" had a per-transport
-    answer and replay was silently dead on the transport that forgot (#2214). One digest
-    input, taken after validation, is what makes the four transports agree at all.
+    This seller hashes the validated request (``canonical_request_hash``), so that one digest
+    input, taken after validation, makes the four transports agree (#2214: per-transport byte
+    capture left replay silently dead on the transport that forgot). For timestamps that now
+    matches the strict reading, because the pinned SDK validates a date-time into a value that
+    keeps the spelling it was sent in and dumps it back unchanged.
 
-    The divergence is WIDER than the re-encoding this test exercises, and the wider half is
-    not obviously safe. Production runs ``extra="ignore"`` (critical pattern #7) and every
-    pinned AdCP request schema sets ``additionalProperties: true``, so a field the DTO does
-    not declare is dropped by validation BEFORE the hash is taken. Two payloads differing
-    only in such a field hash equal, and the second replays the first:
+    One divergence remains, and it is not obviously safe. Production runs ``extra="ignore"``
+    (critical pattern #7) and every pinned AdCP request schema sets
+    ``additionalProperties: true``, so a field the DTO does not declare is dropped by validation
+    BEFORE the hash is taken. Two payloads differing only in such a field hash equal, and the
+    second replays the first:
 
         ENVIRONMENT=production, same key, ``some_future_field`` ALPHA vs BETA
         -> canonical_request_hash equal -> the second request replays
 
-    For a re-encoded timestamp the two requests are semantically identical and replaying is
-    harmless. For an undeclared field they are identical only to THIS seller, today: the
-    buyer meant two different things, and a later version that implements the field would
-    read the same two payloads as genuinely different -- with cache rows written under the
-    old reading still in the window.
-
-    Closing either half properly means canonicalising the received body BEFORE validation, at
-    a seam that does not exist. Recorded rather than narrowed, because a test that claims a
-    smaller divergence than production has is worse than one that names the whole of it.
+    The buyer meant two different things, and a later version that implements the field would
+    read the same two payloads as genuinely different -- with cache rows written under the old
+    reading still in the window. Closing it means canonicalising the received body BEFORE
+    validation, at a seam that does not exist. Recorded rather than narrowed, because a test
+    that claims a smaller divergence than production has is worse than one that names it.
     """
 
-    def test_a_re_encoded_but_equivalent_retry_replays(self, integration_db):
-        """Same instant, different spelling, same key: the retry replays rather than conflicting."""
+    def test_a_re_encoded_timestamp_is_a_different_canonical_payload(self, integration_db):
+        """Same instant, different spelling, same key: a different canonical form, so a conflict."""
         key = f"wire-enc-{uuid.uuid4().hex}"
 
         with MediaBuyCreateEnv() as env:
@@ -340,15 +332,12 @@ class TestHashInputIsTheValidatedRequest:
             # Same instant, different wire encoding: +00:00 instead of Z.
             reencoded = dict(kwargs)
             reencoded["start_time"] = reencoded["start_time"].replace("Z", "+00:00")
+            assert reencoded["start_time"] != kwargs["start_time"], "the fixture must carry a Z to re-encode"
 
             second = env.call_via(Transport.MCP, **reencoded)
 
-        assert second.is_success, f"a re-encoded but equivalent retry must replay: {second.error}"
-        assert second.payload.replayed is True, (
-            "the digest is taken after validation, so the two spellings are one payload -- "
-            "see this class's docstring for the divergence from the strict wire reading"
-        )
-        assert second.payload.media_buy_id == first.payload.media_buy_id
+        assert second.is_error, "a different canonical JSON form must not replay"
+        second.assert_wire_error("IDEMPOTENCY_CONFLICT", recovery="correctable")
 
     def test_a_genuinely_different_payload_still_conflicts(self, integration_db):
         """The permissive reading is about ENCODING only -- a real field change still conflicts.

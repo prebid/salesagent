@@ -82,16 +82,56 @@ def _has_xfail_reason(call: ast.Call) -> bool:
     return reason is not None
 
 
-def _ucs_missing_not_wired_row(source: str) -> list[str]:
-    """UCs that split on ext scenarios but have no xfail-carrying fallback row."""
+#: UCs whose fallback row runs every scenario it claims, because each failing one is named in
+#: an explicit ledger instead of a blanket xfail_reason. The value is the ledger's module-level
+#: name in the BDD conftest. The UC-002 and UC-003 catch-alls drained into it, measured on
+#: measure_innet_291026_1202. A UC listed here still needs its fallback ROW -- the seeded env
+#: every unclaimed scenario runs in -- and the ledger has to exist, or the exemption is
+#: exactly the regression this guard was written for.
+_LEDGERED_UCS: dict[str, str] = {
+    "UC-002": "_UC002_UC003_LEDGER",
+    "UC-003": "_UC002_UC003_LEDGER",
+}
+
+
+def _is_catch_all(call: ast.Call) -> bool:
+    """Does this row's predicate claim every scenario of its UC (``_uc(UC, lambda m: True)``)?"""
+    when = _kwarg(call, "when")
+    if not isinstance(when, ast.Call) or len(when.args) < 2:
+        return False
+    predicate = when.args[1]
+    return (
+        isinstance(predicate, ast.Lambda) and isinstance(predicate.body, ast.Constant) and predicate.body.value is True
+    )
+
+
+def _module_names(source: str) -> set[str]:
+    """Names assigned at the conftest's module level."""
+    names: set[str] = set()
+    for node in ast.parse(source).body:
+        targets = (
+            node.targets if isinstance(node, ast.Assign) else [node.target] if isinstance(node, ast.AnnAssign) else []
+        )
+        names.update(t.id for t in targets if isinstance(t, ast.Name))
+    return names
+
+
+def _ucs_missing_not_wired_row(source: str, ledgered: dict[str, str] | None = None) -> list[str]:
+    """UCs that split on ext scenarios but have neither an xfail-carrying fallback row nor a
+    fallback row whose failures an explicit ledger names."""
+    ledgered = _LEDGERED_UCS if ledgered is None else ledgered
     rows = _route_rows(source)
     ext_ucs = {uc for call in rows if _splits_on_ext(call) and (uc := _uc_of(call)) is not None}
     fallback_ucs = {uc for call in rows if _has_xfail_reason(call) and (uc := _uc_of(call)) is not None}
-    return sorted(ext_ucs - fallback_ucs)
+    catch_all_ucs = {uc for call in rows if _is_catch_all(call) and (uc := _uc_of(call)) is not None}
+    defined = _module_names(source)
+    ledger_ucs = {uc for uc, name in ledgered.items() if uc in catch_all_ucs and name in defined}
+    return sorted(ext_ucs - fallback_ucs - ledger_ucs)
 
 
 def test_ext_split_ucs_keep_a_not_wired_row():
-    """Production conftest: every ext-splitting UC still xfails its unwired scenarios."""
+    """Production conftest: every ext-splitting UC still xfails its unwired scenarios, or runs
+    them through a fallback row whose failures an explicit ledger names (``_LEDGERED_UCS``)."""
     source = _CONFTEST.read_text()
 
     # Sanity: the pattern actually exists (the guard is not vacuously passing).
@@ -105,7 +145,8 @@ def test_ext_split_ucs_keep_a_not_wired_row():
 
     missing = _ucs_missing_not_wired_row(source)
     assert missing == [], (
-        f"{missing} split on extension scenarios but carry no row with an xfail_reason. "
+        f"{missing} split on extension scenarios but carry no row with an xfail_reason, and no "
+        "ledgered fallback row (_LEDGERED_UCS). "
         "Every unwired scenario in those UCs would route into a real harness env and hard-fail "
         "instead of xfailing — the exact regression this guard exists to prevent."
     )
@@ -123,6 +164,31 @@ ENV_ROUTES = [
 ]
 """
     assert _ucs_missing_not_wired_row(source) == ["UC-002"]
+
+
+def test_a_ledgered_uc_needs_both_its_fallback_row_and_its_ledger():
+    """The ledger exemption holds only with the seeded fallback row AND the named ledger."""
+    ext_row = """
+    EnvRoute(
+        tag="uc002-ext",
+        when=_uc("UC-002", lambda m: any(t.startswith("T-UC-002-ext-") for t in m)),
+        env_builder=_env("x.Y"),
+    ),"""
+    fallback_row = """
+    EnvRoute(
+        tag="uc002-not-wired",
+        when=_uc("UC-002", lambda m: True),
+        env_builder=_env("x.Y"),
+    ),"""
+    ledger = "\n_LEDGER = ()\n"
+    exempt = {"UC-002": "_LEDGER"}
+    healthy = f"{ledger}ENV_ROUTES = [{ext_row}{fallback_row}\n]\n"
+    assert _ucs_missing_not_wired_row(healthy, exempt) == []
+    no_fallback = f"{ledger}ENV_ROUTES = [{ext_row}\n]\n"
+    assert _ucs_missing_not_wired_row(no_fallback, exempt) == ["UC-002"]
+    no_ledger = f"ENV_ROUTES = [{ext_row}{fallback_row}\n]\n"
+    assert _ucs_missing_not_wired_row(no_ledger, exempt) == ["UC-002"]
+    assert _ucs_missing_not_wired_row(healthy, {}) == ["UC-002"]
 
 
 def test_guard_passes_when_the_fallback_row_is_present():

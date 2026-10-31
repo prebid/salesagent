@@ -12,8 +12,8 @@ look for the removed brand_manifest attribute.
 
 from datetime import UTC, datetime
 
-from adcp.types import CreateMediaBuyRequest as LibraryCreateMediaBuyRequest
-from adcp.types import PackageRequest as LibraryPackageRequest
+from adcp.types import LegacyCreateMediaBuyRequest as LibraryCreateMediaBuyRequest
+from adcp.types import LegacyPackageRequest as LibraryPackageRequest
 
 from src.core.utils.naming import (
     _extract_brand_name,

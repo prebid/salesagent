@@ -16,7 +16,10 @@ import logging
 from adcp import EventType, TimeUnit
 from adcp.types import ReportingCapabilities as LibraryReportingCapabilities
 from adcp.types._generated import MediaChannel
-from adcp.types.generated_poc.pricing_options.time_option import Parameters as TimeParameters
+from adcp.types.domains.core.reporting_capabilities import DateRangeSupport
+from adcp.types.domains.enums.available_metric import AvailableMetric
+from adcp.types.domains.enums.reporting_frequency import ReportingFrequency
+from adcp.types.domains.pricing_options.time_option import Parameters as TimeParameters
 
 # Import our extended Product (includes implementation_config) and the local
 # pricing member subclasses (our extra policy + internal adapter annotations)
@@ -189,7 +192,7 @@ def convert_pricing_option_to_adcp(
         # CPCV (Cost Per Completed View) - typically fixed rate
         if not rate:
             raise ValueError(f"CPCV pricing option {pricing_option_id} requires rate")
-        # AdCP 3.1.1 pricing-options/cpcv-option.json declares NO parameters
+        # pricing-options/cpcv-option.json declares NO parameters
         # property (completion is definitional for CPCV). Stored parameters
         # cannot be expressed on the wire — fail loud rather than silently
         # dropping seller-configured data (no-quiet-failures). They previously
@@ -197,7 +200,7 @@ def convert_pricing_option_to_adcp(
         if parameters:
             raise ValueError(
                 f"CPCV pricing option {pricing_option_id} has parameters {parameters!r}, "
-                f"but AdCP 3.1.1 cpcv-option.json defines no parameters property. "
+                f"but cpcv-option.json defines no parameters property. "
                 f"Remove them from the pricing option record."
             )
         return CpcvPricingOption(
@@ -240,7 +243,7 @@ def convert_pricing_option_to_adcp(
             "fixed_price": float(rate),
         }
         # Flat rate may have optional parameters (DOOH venue packages, SOV, etc.)
-        # adcp 3.10: Parameters requires type="dooh" discriminator
+        # the pinned SDK: Parameters requires type="dooh" discriminator
         if parameters:
             if isinstance(parameters, dict) and "type" not in parameters:
                 parameters = {**parameters, "type": "dooh"}
@@ -248,7 +251,7 @@ def convert_pricing_option_to_adcp(
         return FlatRatePricingOption(**result_fields)
 
     elif pricing_model == "cpa":
-        # CPA (Cost Per Acquisition) - AdCP v3.1 pricing model for affiliate/conversion pricing.
+        # CPA (Cost Per Acquisition) - pricing model for affiliate/conversion pricing.
         # event_type is required per cpa-option.json; no default — an unknown value is a mispricing.
         if not rate:
             raise ValueError(f"CPA pricing option {pricing_option_id} requires rate")
@@ -280,7 +283,7 @@ def convert_pricing_option_to_adcp(
         )
 
     elif pricing_model == "time":
-        # Time-Based pricing - AdCP v3.1 model where rate scales with campaign duration.
+        # Time-Based pricing - model where rate scales with campaign duration.
         # fixed_price is the cost per time_unit; parameters.time_unit is required.
         # Supports both fixed (fixed_price) and auction (floor_price) variants.
         if not parameters or not isinstance(parameters, dict) or "time_unit" not in parameters:
@@ -329,28 +332,6 @@ def convert_pricing_option_to_adcp(
         )
 
 
-def _normalize_legacy_placement(placement: dict) -> dict:
-    """Bring a stored (possibly pre-3.1.1) placement dict up to the spec 3.1.1 shape.
-
-    Defaults kind="seller_inline" / mode="targetable" for legacy rows (see the
-    call-site comment for the spec grounding). seller_inline additionally
-    REQUIRES ``name`` (placement.json allOf); most legacy rows carry it, but a
-    row missing it must not silently emit a schema-invalid placement
-    (no-quiet-failures). Defined fallback: derive ``name`` from
-    ``placement_id``; if neither exists the row is unidentifiable — fail loud.
-    """
-    normalized = {"kind": "seller_inline", "mode": "targetable", **placement}
-    if normalized["kind"] == "seller_inline" and not normalized.get("name"):
-        placement_id = normalized.get("placement_id")
-        if not placement_id:
-            raise ValueError(
-                "Legacy placement row carries neither 'name' nor 'placement_id' — cannot emit a "
-                f"spec-3.1.1-valid seller_inline placement (row: {placement!r})"
-            )
-        normalized["name"] = placement_id
-    return normalized
-
-
 def default_reporting_capabilities() -> LibraryReportingCapabilities:
     """The reporting_capabilities a row that stores NULL is served with.
 
@@ -360,17 +341,25 @@ def default_reporting_capabilities() -> LibraryReportingCapabilities:
     products by hand -- never on the wire model. A fresh instance per call, so no lists
     are shared between products. Retired by salesagent-3cs7o.21 (NOT NULL with a backfill).
     """
+    # THE PINNED VOCABULARIES, by member rather than by string. Each of these three fields
+    # is typed with a closed enum, so pydantic coerced the literals and they worked -- which
+    # is exactly why they survived: a string that happens to be a member looks identical to
+    # one that is not until the value changes. ``AvailableMetric`` alone has 49 members, and
+    # this seller referenced it nowhere while naming one of them by hand.
     return LibraryReportingCapabilities(
-        available_reporting_frequencies=["daily"],
+        available_reporting_frequencies=[ReportingFrequency.daily],
         expected_delay_minutes=1440,
         timezone="UTC",
         supports_webhooks=False,
-        available_metrics=["impressions"],
-        date_range_support="date_range",
+        available_metrics=[AvailableMetric.impressions],
+        date_range_support=DateRangeSupport.date_range,
     )
 
 
-def convert_product_model_to_schema(product_model, adapter_type: str | None = None) -> Product:
+def convert_product_model_to_schema(
+    product_model,
+    adapter_type: str | None = None,
+) -> Product:
     """Convert database Product model to Product schema.
 
     Args:
@@ -395,18 +384,37 @@ def convert_product_model_to_schema(product_model, adapter_type: str | None = No
     product_data["description"] = product_model.description
     product_data["delivery_type"] = product_model.delivery_type
 
-    # format_ids: Use effective_format_ids which auto-resolves from profile if set
-    # Products must have at least one format_id to be valid for media buys
-    effective_formats = product_model.effective_format_ids or []
-    if not effective_formats:
-        raise ValueError(
-            f"Product {product_model.product_id} has no format_ids configured. "
-            f"Products must specify supported creative formats to be available for purchase. "
-            f"Configure format_ids on the product or its inventory profile."
-        )
-    product_data["format_ids"] = effective_formats
+    # The two format arms of core/product.json's root anyOf, from the ONE contract the
+    # product carries (`Product.format_contract`). A canonical product's `format_ids` is the
+    # projection its declarations assert through `v1_format_ref`, derived there and never
+    # read from a stored column -- canonical-formats.mdx, Producer rules: "Compatibility
+    # format_ids MUST be derived from them rather than maintained as a second authored
+    # catalog." A legacy-only product serves the arm it authored.
+    #
+    # Each key is omitted rather than emitted empty. An empty `format_ids` would be worse
+    # than absence: the deprecated branch requires only the KEY, so `format_ids: []`
+    # satisfies it by presence while declaring no format at all. `format_options` is handed
+    # through as the stored documents; the DTO validates each into its `format_kind` arm.
+    contract = product_model.format_contract
+    if contract.format_ids:
+        product_data["format_ids"] = list(contract.format_ids)
+    if contract.format_options:
+        product_data["format_options"] = list(contract.format_options)
 
-    # publisher_properties: Use effective_properties which returns AdCP 2.0.0 discriminated union format
+    # The anyOf itself, refused once rather than per-arm. "Products MUST carry `format_ids`,
+    # `format_options`, or both during the 3.x migration window" -- so the error case is
+    # NEITHER arm, not a missing legacy arm. This check used to fire on an absent
+    # `format_ids` alone, which made a canonically-authored product unservable: the very
+    # shape the 3.2 spec tells new products to use was rejected for lacking the field it
+    # tells them to stop using.
+    if "format_ids" not in product_data and "format_options" not in product_data:
+        raise ValueError(
+            f"Product {product_model.product_id} declares no creative format. "
+            f"core/product.json requires format_ids, format_options, or both; configure "
+            f"canonical format_options on the product or its inventory profile."
+        )
+
+    # publisher_properties: Use effective_properties which returns discriminated union format
     effective_props = product_model.effective_properties
     if not effective_props:
         raise ValueError(
@@ -479,14 +487,9 @@ def convert_product_model_to_schema(product_model, adapter_type: str | None = No
     if product_model.product_card_detailed:
         product_data["product_card_detailed"] = product_model.product_card_detailed
     if product_model.placements:
-        # adcp 6.6 (spec 3.1.1) makes Placement.kind and Placement.mode required. Placements
-        # stored before these fields existed carry seller-defined metadata (name/description)
-        # inline, so they are seller_inline, not publisher_ref: default kind="seller_inline"
-        # (spec requires publisher_domain for publisher_ref, which legacy rows lack, but name
-        # for seller_inline, which they usually carry) and mode="targetable".
-        product_data["placements"] = [
-            _normalize_legacy_placement(p) if isinstance(p, dict) else p for p in product_model.placements
-        ]
+        # Served as stored: ck_products_placements_explicit makes every stored placement state
+        # its kind and mode, so nothing is filled in here.
+        product_data["placements"] = product_model.placements
     # core/product.json requires reporting_capabilities; the column is still nullable
     # (salesagent-3cs7o.21 makes it NOT NULL with a backfill). The default is supplied HERE,
     # at the row-to-model edge, never by the wire model: Product inherits the field as
@@ -496,7 +499,7 @@ def convert_product_model_to_schema(product_model, adapter_type: str | None = No
     # Default is_custom to False if not set
     product_data["is_custom"] = product_model.is_custom if product_model.is_custom else False
 
-    # AdCP 3.6.0 fields — direct attribute access on typed Mapped[] columns
+    # fields — direct attribute access on typed Mapped[] columns
     if product_model.property_targeting_allowed is not None:
         product_data["property_targeting_allowed"] = product_model.property_targeting_allowed
     if product_model.signal_targeting_allowed is not None:
@@ -518,13 +521,16 @@ def convert_product_model_to_schema(product_model, adapter_type: str | None = No
         product_data["expires_at"] = product_model.expires_at
 
     # Internal fields (not in AdCP spec, but in our extended Product schema)
-    # Use effective_implementation_config to auto-resolve from inventory profile if set
-    if hasattr(product_model, "effective_implementation_config"):
-        product_data["implementation_config"] = product_model.effective_implementation_config
-    elif hasattr(product_model, "implementation_config"):
-        product_data["implementation_config"] = product_model.implementation_config
-    else:
-        product_data["implementation_config"] = None
+    # ``effective_implementation_config`` resolves from the inventory profile when one is
+    # set and falls back to the product's own column when it is not, so it is the whole
+    # answer. It is an unconditional ``@property`` on the ORM model
+    # (``database/models.py``:594), and all three callers pass an ORM row, so the two
+    # ``hasattr`` fallbacks this replaced could never run: a raw-column branch and a
+    # ``None`` branch, both unreachable. Asking a model we declare whether it has an
+    # attribute we declared is a data-model smell — and worse than dead here, because
+    # ``hasattr`` swallows an ``AttributeError`` raised INSIDE the getter, so a genuine
+    # fault in the property would have been masked by silently reading the raw column.
+    product_data["implementation_config"] = product_model.effective_implementation_config
 
     # Principal access control (internal field)
     product_data["allowed_principal_ids"] = getattr(product_model, "allowed_principal_ids", None)

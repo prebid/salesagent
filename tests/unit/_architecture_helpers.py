@@ -18,11 +18,13 @@ from __future__ import annotations
 import ast
 import functools
 import importlib.util
+import json
 import os
 import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import uuid
 import warnings
 from collections.abc import Callable, Iterable, Iterator
@@ -87,7 +89,7 @@ def iter_module_trees(scan_dirs: list[Path]) -> Iterator[tuple[ast.Module, str]]
         if not scan_dir.exists():
             continue
         for py_file in sorted(scan_dir.rglob("*.py")):
-            if "__pycache__" in str(py_file):
+            if is_untracked_repo_file(py_file):
                 continue
             try:
                 tree = parse_module(py_file)
@@ -407,7 +409,7 @@ def read_source_roots(roots: Iterable[str]) -> dict[str, str]:
     sources: dict[str, str] = {}
     for root in roots:
         for path in sorted((REPO_ROOT / root).rglob("*.py")):
-            if "__pycache__" in str(path):
+            if is_untracked_repo_file(path):
                 continue
             sources[str(path.relative_to(REPO_ROOT))] = path.read_text(encoding="utf-8")
     return sources
@@ -824,32 +826,46 @@ def iter_architecture_guard_trees(
 # ---------------------------------------------------------------------------
 
 
-#: Third-party source copied into the tree. Excluded from every structural scan
-#: because these guards grade AUTHORSHIP decisions -- which repository to reach
-#: through, which error type to raise, whether a URL was rebuilt -- and nobody
-#: here made those decisions. ``src/vendor/__init__.py`` forbids editing the
-#: files, so a violation flagged in one could not be fixed anyway; the only
-#: honest response would be an allowlist entry, and these guards deliberately
-#: have none.
-#:
-#: This code was ALREADY in the dependency tree and already unscanned when it
-#: lived in site-packages. Copying it under ``src/`` for a version pin does not
-#: make it ours, and should not silently enrol it in checks it never passed.
-#: ``test_architecture_vendored_code.py`` keeps the exclusion from becoming a
-#: hiding place.
-VENDOR_DIR = "vendor"
+def src_python_files(repo: Path) -> tuple[Path, ...]:
+    """Every .py file under src/, and never zero of them.
 
+    There is no exclusion. ``src/vendor/`` held a verbatim copy of the SDK's URL
+    canonicalizer, carried because the then-pinned adcp 6.6.0 failed 14 of the 37
+    published canonicalization vectors. The pin is now 9.0.0b1, which passes all 37
+    (measured), so the copy is gone and with it the one region of ``src/`` the
+    architecture guards did not grade.
 
-def src_python_files(repo: Path) -> Iterator[Path]:
-    """Every .py file under src/, EXCEPT vendored third-party source.
+    IT REFUSES AN EMPTY SCAN, and that is the whole reason it is not a generator
+    any more. THIRTY-TWO call sites across the architecture guards consume this,
+    and every one of them sweeps for a violation and asserts there are none — so a
+    scan that finds no files makes all thirty-two PASS. Not a skip, not a moved
+    item count: a clean green pass that neither a per-nodeid delta nor a
+    reconciled total can see, because every item still runs and still passes.
 
-    See :data:`VENDOR_DIR`.
+    Measured (salesagent-kdkbo): 341 files at a correct ``repo``, 0 and no error at
+    a wrong one. A ``repo_root()`` that resolved wrong, or ``src/`` renamed, would
+    switch the whole guard layer off silently. The sibling precedent is
+    ``tests/unit/_storyboard_guard_env.py``'s Finding 12 — ``ADCP_HOME=/nonexistent``
+    once gave "670 passed, 25 skipped, exit 0" with twenty-five guards switched off —
+    and its answer is the one applied here: a MISCONFIGURED instrument must fail,
+    where only a genuinely unprovisioned one may opt out.
+
+    Returning a tuple rather than yielding is deliberate. A generator could only
+    discover emptiness at exhaustion, so the refusal would land at the end of
+    whatever loop consumed it, attributed to that caller; and a generator created
+    and never consumed would not check at all. Checked at the call, the refusal
+    names the real fault. No caller uses generator semantics — verified across all
+    32 sites, every one is plain iteration.
     """
-    vendor_root = repo / "src" / VENDOR_DIR
-    for path in (repo / "src").rglob("*.py"):
-        if vendor_root in path.parents:
-            continue
-        yield path
+    files = tuple((repo / "src").rglob("*.py"))
+    assert files, (
+        f"src_python_files({repo}) found no .py files under {repo / 'src'}. "
+        "Every architecture guard reached through this helper sweeps for violations and asserts "
+        "there are none, so an empty scan makes all 32 of them pass green with nothing graded "
+        "(salesagent-kdkbo). This is a misconfigured instrument, not a clean tree: check that "
+        "repo_root() resolves to the repository and that src/ exists under it."
+    )
+    return files
 
 
 def iter_workflow_files(repo: Path) -> Iterator[Path]:
@@ -864,6 +880,43 @@ def iter_workflow_files(repo: Path) -> Iterator[Path]:
 # that ``git ls-files`` never reports. In a clean checkout this mirrors the ignored
 # set closely enough that the fallback matches the tracked set. ``.github`` is
 # intentionally NOT excluded: the version-anchor guards scan ``.github/workflows/``.
+@functools.lru_cache(maxsize=1)
+def _tracked_repo_files() -> frozenset[Path]:
+    """Every tracked file in the repo. Cached: ~150 guards ask, each ask is a subprocess."""
+    return frozenset(iter_git_tracked_files(REPO_ROOT))
+
+
+def is_untracked_repo_file(path: Path) -> bool:
+    """Is *path* inside this repo but not tracked by git?
+
+    This is the question every filesystem walk here needs, and "our source" has exactly
+    one correct definition: what git tracks. The walks used to ``rglob`` and prune
+    ``__pycache__``, so their population was whatever happened to be ON DISK -- which is
+    not the same set on a developer's machine and on the CI box. The gap was not
+    theoretical: the storyboard tox env runs ``npm ci`` inside
+    ``tests/storyboard/runner/``, that directory is not gitignored, and npm ships Python
+    inside it. A guard scanning ``tests/`` therefore read third-party sources on the box
+    and none locally -- passing where it was written and failing where it was graded, for
+    a reason in neither the guard nor the code it grades.
+
+    Deciding by tracked-ness rather than by a denylist of build directories is the point.
+    A denylist only approximates the answer and goes stale the first time a tool invents a
+    new cache dir; nothing untracked can enter the tracked set, so ``node_modules``,
+    ``.tox``, ``.venv`` and a CI runner's dropped artifacts are all excluded by
+    construction. :data:`_FALLBACK_PRUNE_DIRS` keeps its one legitimate caller, the
+    git-unreachable fallback inside :func:`iter_git_tracked_files`, which warns when it
+    degrades.
+
+    A path OUTSIDE the repo is never "untracked" by this rule: the helpers here take
+    arbitrary ``scan_dirs``, and the contract suite exercises them against synthetic trees
+    under ``tmp_path``, which is what makes the detectors falsifiable at all. For those the
+    caller's directory is the whole universe and git has no opinion.
+    """
+    if not path.is_relative_to(REPO_ROOT):
+        return False
+    return path not in _tracked_repo_files()
+
+
 _FALLBACK_PRUNE_DIRS = frozenset(
     {
         ".claude",
@@ -1801,15 +1854,7 @@ def scan_src(
     suppressed_exempt: dict[str, list[int]] = {}
     suppressed_prefix: dict[str, list[int]] = {}
 
-    vendor_prefix = f"src/{VENDOR_DIR}/"
     for tree, rel_path in iter_module_trees(scan_dirs if scan_dirs is not None else [root]):
-        # Vendored third-party source is out of scope for EVERY src-scanning guard, for
-        # the reasons on VENDOR_DIR. Silent rather than a `skip_prefixes` entry: that axis
-        # raises when a prefix flags nothing, which would force each guard to declare a
-        # boundary only some of them actually need. Bounded by
-        # tests/unit/test_architecture_vendored_code.py.
-        if rel_path.replace("\\", "/").startswith(vendor_prefix):
-            continue
         lines = detector(tree)
         if not lines:
             continue
@@ -1945,3 +1990,131 @@ def write_ast_grep_probe(root: Path, rel_dir: str, source: str, *, stem: str = "
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(source)
     return rel_path
+
+
+# ---------------------------------------------------------------------------
+# The one BDD collection that yields MARKER SETS (D25 helper home)
+#
+# Two guards need it and must not each have their own: test_architecture_env_route_agreement
+# grades whether the two env-route resolvers agree per collected scenario, and
+# test_architecture_route_xfail_census counts how many scenarios each setup-xfail route
+# claims. A second collector would drift about the ``BDD_E2E_ENABLED`` pop below, which
+# decides the SCOPE every count derived from it is quoted against (salesagent-8qela.151) --
+# three in-process transports or four.
+#
+# It lives here rather than in either test module because a module whose job is to BE a test
+# must not also be a helper library (test_architecture_no_cross_test_module_imports).
+# ---------------------------------------------------------------------------
+_BDD_SUITE_DIR = Path("tests/bdd")
+
+# The nested collection yields ~7.2k items today (7223 at authoring time).
+_MINIMUM_COLLECTED_ITEMS = 6000
+
+# BDD modules whose scenarios carry NO ``T-`` identity tag. They are outside the
+# join by construction — ``scenario_liveness._scenario_identifier`` returns None,
+# so no artifact record is ever written for them and no verdict is ever
+# published. Pinned as an exact set rather than skipped silently: a module
+# sliding into this bucket is a scenario losing its identity, which is a
+# regression, not a shrug.
+_MODULES_WITHOUT_SCENARIO_IDENTITY = frozenset(
+    {
+        "tests/bdd/test_get_products_inventory_profile.py",
+    }
+)
+
+# A pytest plugin, written to a tmp dir and loaded with -p, that dumps every
+# collected item's marker set — and, once the pinned accessor exists, the set
+# that accessor derives for the same node. `pytest_collection_finish` runs after
+# every `pytest_collection_modifyitems`, so the auto-applied entity markers
+# (tests/conftest.py) and conftest's own deselection are already reflected.
+_COLLECTOR_PLUGIN = """
+import importlib
+import json
+import os
+
+
+def pytest_collection_finish(session):
+    dotted = os.environ.get("LANE_F_ACCESSOR_MODULE") or ""
+    accessor = getattr(importlib.import_module(dotted), os.environ["LANE_F_ACCESSOR_NAME"]) if dotted else None
+    rows = []
+    for item in session.items:
+        rows.append(
+            {
+                "nodeid": item.nodeid,
+                "markers": sorted({m.name for m in item.iter_markers()}),
+                "derived": None if accessor is None else sorted(accessor(item)),
+            }
+        )
+    with open(os.environ["LANE_F_DUMP"], "w", encoding="utf-8") as handle:
+        json.dump(rows, handle)
+"""
+
+
+@functools.lru_cache(maxsize=1)
+def collect_bdd_items_with_markers() -> tuple[dict[str, Any], ...]:
+    """Every collected ``tests/bdd`` item with its marker set, from a real run.
+
+    PUBLIC because a second guard consumes it: ``test_architecture_route_xfail_census``
+    counts how many scenarios each setup-xfail route claims, and it needs the same
+    (nodeid, derived marker set) rows this already produces. A second collector would
+    drift about the ``BDD_E2E_ENABLED`` pop below, which decides the scope every count
+    is quoted against (salesagent-8qela.151).
+    """
+    repo = repo_root()
+    # A private dir per invocation: under xdist each worker runs its own nested
+    # collection, and two workers sharing one dump would race.
+    plugin_dir = Path(tempfile.mkdtemp(prefix="lane_f_collect_"))
+    (plugin_dir / "lane_f_collector.py").write_text(_COLLECTOR_PLUGIN, encoding="utf-8")
+    dump = plugin_dir / "collected.json"
+
+    env = dict(os.environ)
+    # The nested collection must not inherit the outer suite's e2e switch: with
+    # it on, scenarios additionally parametrize over e2e_rest and the collected
+    # marker sets stop being the in-process ones this grader reasons about.
+    env.pop("BDD_E2E_ENABLED", None)
+    env["PYTHONPATH"] = os.pathsep.join(filter(None, [str(plugin_dir), env.get("PYTHONPATH", "")]))
+    env["LANE_F_DUMP"] = str(dump)
+    from tests.unit._liveness_contract_pins import DERIVATION_ACCESSOR, accessor_dotted_module
+
+    env["LANE_F_ACCESSOR_NAME"] = DERIVATION_ACCESSOR
+    dotted = accessor_dotted_module()
+    if dotted is not None:
+        env["LANE_F_ACCESSOR_MODULE"] = dotted
+    env.setdefault("ADCP_TESTING", "true")
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            str(_BDD_SUITE_DIR),
+            "--collect-only",
+            "-q",
+            "-p",
+            "no:cacheprovider",
+            "-p",
+            "no:randomly",
+            "-p",
+            "lane_f_collector",
+        ],
+        cwd=repo,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=600,
+    )
+    context = f"stdout:\n{result.stdout[-4000:]}\nstderr:\n{result.stderr[-4000:]}"
+    assert result.returncode == 0, (
+        f"the nested `pytest --collect-only {_BDD_SUITE_DIR}` exited {result.returncode}. A partial collection would "
+        f"silently shrink this grader's input.\n{context}"
+    )
+    assert dump.is_file(), f"the nested `pytest --collect-only {_BDD_SUITE_DIR}` did not write {dump}.\n{context}"
+    rows = json.loads(dump.read_text(encoding="utf-8"))
+    shutil.rmtree(plugin_dir, ignore_errors=True)
+    # The suite collects ~7.2k items today. A floor well under that still catches
+    # a truncated collection, which would make every verdict below vacuous.
+    assert len(rows) > _MINIMUM_COLLECTED_ITEMS, (
+        f"the nested collection produced only {len(rows)} items (expected > {_MINIMUM_COLLECTED_ITEMS}) — "
+        f"the grader would be reasoning about a truncated suite.\n{context}"
+    )
+    return tuple(rows)

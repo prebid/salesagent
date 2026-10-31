@@ -16,14 +16,25 @@ from pathlib import Path
 from scripts.audit.storyboard_run_diff import _steps, main
 
 
-def _record(path: Path, steps: list[tuple[str, str, str, bool]], *, with_ids: bool = True) -> None:
+def _record(
+    path: Path,
+    steps: list[tuple[str, str, str, bool] | tuple[str, str, str, bool, str]],
+    *,
+    with_ids: bool = True,
+) -> None:
     """Write a runner-shaped record holding exactly *steps* (track, scenario, task, passed).
 
     Each step gets a distinct ``step_id`` unless *with_ids* is False, which is how a record
     predating the id field is simulated.
+
+    A fifth element is the step's ``skip_reason``, written the way the runner writes one:
+    ``skipped: true`` alongside it, and ``passed`` left as given -- the runner marks a
+    skipped step passed, which is exactly why a skip must never be read as a graded pass.
     """
     tracks: dict[str, dict] = {}
-    for index, (track, scenario, task, passed) in enumerate(steps):
+    for index, entry in enumerate(steps):
+        track, scenario, task, passed = entry[:4]
+        skip_reason = entry[4] if len(entry) > 4 else None
         t = tracks.setdefault(track, {"track": track, "scenarios": []})
         sc = next((s for s in t["scenarios"] if s["scenario"] == scenario), None)
         if sc is None:
@@ -32,6 +43,9 @@ def _record(path: Path, steps: list[tuple[str, str, str, bool]], *, with_ids: bo
         step: dict = {"task": task, "passed": passed}
         if with_ids:
             step["step_id"] = f"s{index}"
+        if skip_reason is not None:
+            step["skipped"] = True
+            step["skip_reason"] = skip_reason
         sc["steps"].append(step)
     path.write_text(json.dumps({"tracks": list(tracks.values())}))
 
@@ -67,6 +81,55 @@ def test_a_lost_pass_exits_nonzero(tmp_path: Path, monkeypatch, capsys) -> None:
     assert main() == 1, "a step that passed on the base and fails on the head is the regression this catches"
     # The second step's id, which is what the key names now.
     assert "core::s::s1" in capsys.readouterr().out
+
+
+def test_a_lost_pass_names_which_of_the_three_things_the_head_did(tmp_path: Path, monkeypatch, capsys) -> None:
+    """A lost pass was SKIPPED, FAILED or is ABSENT, and the three get different fixes.
+
+    The set difference renders all three identically, and the skip is the one that hides:
+    it removes its own failing item, so a tree that skipped more reports fewer failures.
+    On the 3.1.1 -> 3.2.1 corpus bump that read as a production regression for a day --
+    the cause was ``prerequisites.controller_seeding: true`` arriving on 19 storyboards
+    against an agent that does not expose ``comply_test_controller``.
+
+    One record carrying all three at once, because the property under test is that the tool
+    DISTINGUISHES them: a classifier that answered "skip" for everything would satisfy any
+    single-case assertion.
+    """
+    base, head = tmp_path / "base", tmp_path / "head"
+    base.mkdir()
+    head.mkdir()
+    _record(
+        base / "storyboard_run_mcp.json",
+        [
+            ("core", "s", "skipped_on_head", True),
+            ("core", "s", "failed_on_head", True),
+            ("core", "s", "absent_on_head", True),
+        ],
+    )
+    _record(
+        head / "storyboard_run_mcp.json",
+        [
+            ("core", "s", "skipped_on_head", True, "missing_test_controller"),
+            ("core", "s", "failed_on_head", False),
+        ],
+    )
+
+    monkeypatch.setattr("sys.argv", ["diff", str(base), str(head), "--protocol", "mcp", "--json"])
+    assert main() == 1
+    cause = json.loads(capsys.readouterr().out)["mcp"]["lost_cause"]
+
+    assert cause["core::s::s0"] == "skip:missing_test_controller", (
+        "a step the head run SKIPPED must report the runner's own skip_reason. Reported as "
+        f"failed or absent, this sends the reader hunting a production regression. got {cause}"
+    )
+    assert cause["core::s::s1"] == "failed", (
+        f"a step the head run GRADED and failed is the one case that is a real regression. got {cause}"
+    )
+    assert cause["core::s::s2"] == "absent", (
+        "a step with no record on the head side is usually a phase the corpus deleted, which "
+        f"is not a defect at all. got {cause}"
+    )
 
 
 def test_gaining_passes_is_not_a_failure(tmp_path: Path, monkeypatch) -> None:

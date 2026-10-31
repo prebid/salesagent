@@ -38,7 +38,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from src.core.creative_agent_registry import CreativeAgent, CreativeAgentRegistry
+from src.core.creative_agent_registry import CreativeAgent, CreativeAgentRegistry, PeerCatalog
 from src.core.exceptions import AdCPConfigurationError
 
 
@@ -115,7 +115,7 @@ class TestOperatorDialMustRaiseOnUnparseablePayload:
         every test above would still pass.
         """
         with _seam_answers({"formats": []}):
-            assert await registry._fetch_formats_operator(agent, tenant_id=None) == []
+            assert await registry._fetch_formats_operator(agent, tenant_id=None) == PeerCatalog(formats=[])
 
 
 class TestListAllFormatsErrorPropagation:

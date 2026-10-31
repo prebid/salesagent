@@ -268,7 +268,7 @@ class TestSyncCreativesResponseShape:
         assert c["action"] == "created"
 
     def test_sync_response_internal_fields_excluded(self):
-        """Internal fields (internal_status, review_feedback) are excluded; spec status is derived."""
+        """The internal ``internal_status`` is excluded; the spec status is derived from it."""
         from adcp.types import CreativeAction
 
         from src.core.schemas import SyncCreativeResult, SyncCreativesResponse
@@ -277,7 +277,6 @@ class TestSyncCreativesResponseShape:
             creative_id="creative_002",
             action=CreativeAction.updated,
             internal_status="approved",
-            review_feedback="Looks good",
         )
         resp = SyncCreativesResponse(creatives=[result], dry_run=False)  # type: ignore[call-arg]
         data = resp.model_dump(mode="json")
@@ -285,7 +284,6 @@ class TestSyncCreativesResponseShape:
         c = data["creatives"][0]
         assert c["status"] == "approved", "The spec per-creative status is the row's review state"
         assert "internal_status" not in c, "Internal 'internal_status' field should be excluded"
-        assert "review_feedback" not in c, "Internal 'review_feedback' field should be excluded"
 
     def test_sync_response_failed_creative_has_errors(self):
         """Failed creative includes errors list."""
@@ -546,12 +544,18 @@ class TestUpdateMediaBuyResponseShape:
     # test_internal_fields_excluded stays: changes_applied and buyer_package_ref are ours,
     # declared with Field(exclude=True), and their absence from the dump is our behavior.
 
-    def test_internal_fields_excluded(self):
-        """Internal fields (changes_applied, buyer_package_ref) are excluded.
+    def test_deleted_fields_do_not_return_as_extras(self):
+        """``changes_applied`` and ``buyer_package_ref`` are deleted, and stay off the wire.
 
-        ``workflow_step_id`` is no longer declared on this model -- see the create-side
-        case of the same name: passing it grades ``extra="ignore"``, which is what keeps
-        the deleted field off the wire rather than storing it as an extra.
+        This test IS the positive control for that deletion, and it earned the role: when
+        the two declarations were removed under salesagent-gweku and nothing else changed,
+        it went RED with both names present in the dumped package. The SDK parent carries
+        ``extra="allow"``, so removing a declaration PROMOTES the value to an extra that
+        serializes to the buyer -- the deletion only lands because ``AffectedPackage`` now
+        carries ``extra="ignore"`` as well.
+
+        ``workflow_step_id`` is the create-side case of the same name, and it is passed
+        here for the same reason: it grades the envelope's own ``extra="ignore"``.
         """
         from src.core.schemas import AffectedPackage, UpdateMediaBuySuccess
 
@@ -572,8 +576,13 @@ class TestUpdateMediaBuyResponseShape:
         assert "workflow_step_id" not in data
 
         pkg = data["affected_packages"][0]
-        assert "changes_applied" not in pkg, "Internal 'changes_applied' field should be excluded"
-        assert "buyer_package_ref" not in pkg, "Internal 'buyer_package_ref' field should be excluded"
+        assert "changes_applied" not in AffectedPackage.model_fields
+        assert "buyer_package_ref" not in AffectedPackage.model_fields
+        assert "changes_applied" not in pkg, "deleted 'changes_applied' came back as an extra"
+        assert "buyer_package_ref" not in pkg, "deleted 'buyer_package_ref' came back as an extra"
+        # The pinned members DO travel, so the absences above are a strip, not an empty dump.
+        assert pkg["package_id"] == "pkg_002"
+        assert pkg["paused"] is True
 
 
 # ===========================================================================

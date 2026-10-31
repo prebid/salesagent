@@ -140,8 +140,8 @@ def stub_account_for(account_ref: Any, tenant_id: str, principal: Any) -> Any:
     """
     from src.core.schemas.account import Account
 
-    inner = account_ref.root
-    account_id = getattr(inner, "account_id", None) or "acct_stub"
+    # adcp 9: AccountReference IS the two-arm union, so there is no wrapper to unwrap.
+    account_id = getattr(account_ref, "account_id", None) or "acct_stub"
     return Account(account_id=account_id, name=f"Stub account {account_id}", status="active")
 
 

@@ -24,7 +24,7 @@ DEFAULT_AGENT_URL = "https://creative.adcontextprotocol.org"
 # ── Helpers ──────────────────────────────────────────────────────────
 
 
-def _call(ctx: dict, req: ListCreativeFormatsRequest | None = None) -> None:
+def _call(ctx: dict, req: ListCreativeFormatsRequest | None = None, **extra: Any) -> None:
     """Dispatch through ctx['transport'] (a wire transport: a2a/mcp/rest).
 
     IMPL was dropped from the BDD default parametrization (#1417), so a
@@ -36,7 +36,7 @@ def _call(ctx: dict, req: ListCreativeFormatsRequest | None = None) -> None:
             "when_request._call: ctx['transport'] is unset. BDD scenarios must dispatch "
             "through a wire transport (a2a/mcp/rest); the IMPL call_impl fallback was removed."
         )
-    _call_via(ctx, transport, req=req)
+    _call_via(ctx, transport, req=req, **extra)
 
 
 def _call_via(
@@ -176,25 +176,43 @@ def when_request_unfiltered(ctx: dict) -> None:
     Serves both the generic 'requests/sends a list_creative_formats request'
     When phrasings and the UC-005 baseline Given 'the Buyer Agent calls
     list_creative_formats without filters' (single canonical dispatch step).
+
+    Names the account an earlier Given seeded (``ctx["account_ref"]``, written by "the
+    request targets a sandbox/production account"), because that is what makes the
+    sentence true: sandbox.mdx makes sandbox account-level -- "Once a request references
+    a sandbox account, the entire request is treated as sandbox" -- so a request that
+    names no account is a production request whatever rows exist.
     """
-    _call(ctx)
+    _call(ctx, **_named_account(ctx))
+
+
+def _named_account(ctx: dict) -> dict[str, Any]:
+    """``{"account": <ref>}`` for the account an earlier Given seeded, else nothing."""
+    account = ctx.get("account_ref")
+    return {"account": account} if account is not None else {}
 
 
 @when("the Buyer Agent sends a list_creative_formats request with invalid dimension filters")
 def when_send_request_invalid_dimensions(ctx: dict) -> None:
-    # min_width=-1 violates the schema's Ge(0) — the SELLER must say so.
-    _call_raw(ctx, min_width=-1)
+    """A dimension filter of the wrong JSON type, which the SELLER must refuse.
+
+    The pinned request declares ``min_width`` as ``{"type": "integer"}`` with no
+    ``minimum``, so a negative width is a valid request and cannot stand for an invalid
+    one; a non-integer is the schema violation the sentence names. The request names the
+    account the scenario seeded, so a sandbox scenario grades a sandbox request.
+    """
+    _call_raw(ctx, min_width="wide", **_named_account(ctx))
 
 
-# ── Filter: type + asset_types combined ──────────────────────────────
+@when(parsers.parse("the Buyer Agent sends a list_creative_formats request with asset_types {asset_types}"))
+def when_send_request_asset_types(ctx: dict, asset_types: str) -> None:
+    _call_raw(ctx, asset_types=json.loads(asset_types))
 
 
-@when(parsers.parse('the Buyer Agent requests formats with type "{fmt_type}" and asset_types {asset_types}'))
-def when_request_type_and_asset(ctx: dict, fmt_type: str, asset_types: str) -> None:
-    # type filter was removed from ListCreativeFormatsRequest in adcp 3.12;
-    # only asset_types filter is applied
-    parsed_assets = json.loads(asset_types)
-    _call_raw(ctx, asset_types=parsed_assets)
+# There is no "type + asset_types" step. It parsed a `type` the request does not
+# declare, dropped it, and sent asset_types alone -- so BR-RULE-031's AND semantics
+# were stated over one filter. The two scenarios now use the asset_types +
+# name_search step below, which sends two filters production actually applies.
 
 
 # ── Filter: asset_types + name_search combined ──────────────────────
@@ -206,14 +224,10 @@ def when_request_asset_types_and_name_search(ctx: dict, asset_types: str, name_s
     _call_raw(ctx, asset_types=parsed_assets, name_search=name_search)
 
 
-# ── Filter: type only ────────────────────────────────────────────────
-
-
-@when(parsers.parse('the Buyer Agent requests formats with type filter "{fmt_type}"'))
-@when(parsers.parse('the Buyer Agent requests formats with type "{fmt_type}"'))
-def when_request_type_filter(ctx: dict, fmt_type: str) -> None:
-    # type filter was removed from ListCreativeFormatsRequest in adcp 3.12
-    _call(ctx)
+# There is no "type only" step. It accepted a type value and then dispatched an
+# UNFILTERED request, so every sentence naming a type filter was a no-op that the
+# matching Then then certified. `type` is not a parameter of the media-buy
+# list-creative-formats request.
 
 
 # ── Filter: format_ids ───────────────────────────────────────────────
@@ -225,6 +239,22 @@ def when_request_format_ids(ctx: dict, filter_value: str) -> None:
     # Plain dicts, not FormatId: a bad id must be rejected by the seller, and
     # constructing FormatId here would reject it in the test process instead.
     _call_raw(ctx, format_ids=[{"agent_url": DEFAULT_AGENT_URL, "id": fid} for fid in parsed])
+
+
+@when(
+    parsers.re(
+        r'the Buyer Agent requests formats filtered by format_id "(?P<fmt_id>[^"]+)" '
+        r'declared by agent "(?P<agent_url>[^"]+)"'
+    )
+)
+def when_request_format_id_at_agent(ctx: dict, fmt_id: str, agent_url: str) -> None:
+    """One format_ids reference naming *agent_url* exactly as the scenario spells it.
+
+    Worded apart from ``requests formats with format_ids filter``, whose ``{filter_value}``
+    would otherwise swallow this sentence too. A plain dict, not ``FormatId``, so the SELLER
+    parses and canonicalizes the spelling rather than the test process.
+    """
+    _call_raw(ctx, format_ids=[{"agent_url": agent_url, "id": fmt_id}])
 
 
 # ── Filter: asset_types ─────────────────────────────────────────────
@@ -242,6 +272,11 @@ def when_request_asset_types(ctx: dict, filter_value: str) -> None:
 @when(parsers.parse("the Buyer Agent requests formats with min_width {min_w:d}"))
 def when_request_min_width(ctx: dict, min_w: int) -> None:
     _call(ctx, req=ListCreativeFormatsRequest(min_width=min_w))
+
+
+@when(parsers.parse("the Buyer Agent requests formats with max_width {max_w:d}"))
+def when_request_max_width(ctx: dict, max_w: int) -> None:
+    _call(ctx, req=ListCreativeFormatsRequest(max_width=max_w))
 
 
 @when(parsers.parse("the Buyer Agent requests formats with min_width {min_w:d} and max_width {max_w:d}"))
@@ -265,13 +300,18 @@ def when_request_name_search(ctx: dict, search: str) -> None:
     _call(ctx, req=ListCreativeFormatsRequest(name_search=search))
 
 
-# ── Filter: disclosure_positions ─────────────────────────────────────
+# ── Filter: disclosure_positions / disclosure_persistence ────────────
 
 
-@when(parsers.parse("the Buyer Agent requests formats with disclosure_positions filter {filter_value}"))
-def when_request_disclosure_positions(ctx: dict, filter_value: str) -> None:
-    parsed = json.loads(filter_value)
-    _call_raw(ctx, disclosure_positions=parsed)
+@when(
+    parsers.re(
+        r"the Buyer Agent requests formats with "
+        r"(?P<field>disclosure_positions|disclosure_persistence) filter (?P<filter_value>.+)"
+    )
+)
+def when_request_disclosure_filter(ctx: dict, field: str, filter_value: str) -> None:
+    """Send one of the two disclosure filters verbatim, so the SELLER grades the members."""
+    _call_raw(ctx, **{field: json.loads(filter_value)})
 
 
 # ── Filter: output_format_ids ────────────────────────────────────────
@@ -295,15 +335,6 @@ def when_request_input_format_ids(ctx: dict, filter_value: str) -> None:
 # ── Partition dispatch steps ──────────────────────────────────────────
 # Each partition When step maps the semantic label to an actual filter
 # and calls production code through the harness.
-
-
-def _partition_type(ctx: dict, partition: str) -> None:
-    """Map type partition label to filter and call harness.
-
-    type filter was removed from ListCreativeFormatsRequest in adcp 3.12.
-    All partitions now dispatch an unfiltered request.
-    """
-    _call(ctx)
 
 
 def _partition_format_ids(ctx: dict, partition: str) -> None:
@@ -408,47 +439,67 @@ def _partition_wcag(ctx: dict, partition: str) -> None:
         _call_raw(ctx, wcag_level=partition)
 
 
-def _partition_disclosure(ctx: dict, partition: str) -> None:
-    """Map disclosure_positions partition label to filter and call harness."""
+def _partition_enum_list(ctx: dict, field: str, partition: str, valid: dict[str, list[str]]) -> None:
+    """Shared body for the two disclosure filters, both arrays of one enum.
+
+    ``disclosure_positions`` and ``disclosure_persistence`` partition the same way: a label
+    in *valid* names the members a typed request carries; ``omitted`` sends no filter;
+    ``empty_array`` and ``duplicate_*`` break the request schema's ``minItems: 1`` and
+    ``uniqueItems: true`` (duplicating the first valid row's first member); and any other
+    label goes out raw as the one member, so the SELLER refuses an unknown value.
+
+    The requested members are recorded under ``requested_<field>`` (``None`` when the
+    filter is absent or invalid), so a Then can compute what the filter must keep.
+    """
+    ctx[f"requested_{field}"] = valid.get(partition)
     if partition == "omitted":
         _call(ctx)
-    elif partition == "single_position":
-        _call(ctx, req=ListCreativeFormatsRequest(disclosure_positions=["prominent"]))
-    elif partition == "multiple_positions_all_match":
-        _call(ctx, req=ListCreativeFormatsRequest(disclosure_positions=["prominent", "footer"]))
-    elif partition == "all_positions":
-        # All 8 values of the DisclosurePosition enum (adcp library):
-        # prominent, footer, audio, subtitle, overlay, end_card, pre_roll,
-        # companion. Earlier wiring used stale literals (corner/inline/
-        # before/after) that no longer exist in the enum, so the request
-        # never built and the scenario passed vacuously under a blanket
-        # strict=False marker — a broken step, not a production gap.
-        _call(
-            ctx,
-            req=ListCreativeFormatsRequest(
-                disclosure_positions=[
-                    "prominent",
-                    "footer",
-                    "audio",
-                    "subtitle",
-                    "overlay",
-                    "end_card",
-                    "pre_roll",
-                    "companion",
-                ]
-            ),
-        )
-    elif partition == "no_matching_formats":
-        # "subtitle" is a valid DisclosurePosition the seeded formats
-        # (prominent-ad → ["prominent"], footer-ad → ["footer"]) do not
-        # support, so a working filter would yield zero matches.
-        _call(ctx, req=ListCreativeFormatsRequest(disclosure_positions=["subtitle"]))
+    elif partition in valid:
+        _call(ctx, req=ListCreativeFormatsRequest(**{field: valid[partition]}))
     elif partition == "empty_array":
-        _call_raw(ctx, disclosure_positions=[])
-    elif partition == "duplicate_positions":
-        _call_raw(ctx, disclosure_positions=["prominent", "prominent"])
+        _call_raw(ctx, **{field: []})
+    elif partition.startswith("duplicate_"):
+        first = next(iter(valid.values()))[0]
+        _call_raw(ctx, **{field: [first, first]})
     else:
-        _call_raw(ctx, disclosure_positions=[partition])
+        _call_raw(ctx, **{field: [partition]})
+
+
+#: ``disclosure_positions`` partitions over the "various disclosure positions" seller
+#: (prominent-ad -> ["prominent"], footer-ad -> ["footer"]).
+_DISCLOSURE_POSITION_PARTITIONS: dict[str, list[str]] = {
+    "single_position": ["prominent"],
+    "multiple_positions_all_match": ["prominent", "footer"],
+    # All 8 values of the DisclosurePosition enum. Earlier wiring used stale literals
+    # (corner/inline/before/after) that no longer exist in the enum, so the request never
+    # built and the scenario passed vacuously under a blanket strict=False marker.
+    "all_positions": ["prominent", "footer", "audio", "subtitle", "overlay", "end_card", "pre_roll", "companion"],
+    # A valid position neither seeded format supports, so a working filter yields nothing.
+    "no_matching_formats": ["subtitle"],
+}
+
+#: ``disclosure_persistence`` partitions over the "various disclosure persistence
+#: capabilities" seller (given_entities.given_seller_various_persistence).
+_DISCLOSURE_PERSISTENCE_PARTITIONS: dict[str, list[str]] = {
+    "single_mode": ["continuous"],
+    # Satisfied only by split-ad, whose two positions declare one mode each.
+    "multiple_modes_satisfied_across_positions": ["continuous", "initial"],
+    "all_modes": ["continuous", "initial", "flexible"],
+    # Each mode is declared somewhere, but no one format declares both.
+    "no_matching_formats": ["initial", "flexible"],
+    # positions-only declares a position and no disclosure_capabilities, so it drops out.
+    "format_without_disclosure_capabilities": ["continuous"],
+}
+
+
+def _partition_disclosure(ctx: dict, partition: str) -> None:
+    """Map disclosure_positions partition label to filter and call harness."""
+    _partition_enum_list(ctx, "disclosure_positions", partition, _DISCLOSURE_POSITION_PARTITIONS)
+
+
+def _partition_persistence(ctx: dict, partition: str) -> None:
+    """Map disclosure_persistence partition label to filter and call harness."""
+    _partition_enum_list(ctx, "disclosure_persistence", partition, _DISCLOSURE_PERSISTENCE_PARTITIONS)
 
 
 def _partition_format_id_list(ctx: dict, partition: str, direction: str) -> None:
@@ -488,6 +539,9 @@ def _partition_format_id_list(ctx: dict, partition: str, direction: str) -> None
         _call_raw(ctx, **{field: [{"id": "some-id"}]})
     elif partition == "invalid_format_id_missing_id":
         _call_raw(ctx, **{field: [{"agent_url": DEFAULT_AGENT_URL}]})
+    elif partition == "invalid_format_id_width_only":
+        # core/format-id.json: "dependencies": {"width": ["height"], ...}
+        _call_raw(ctx, **{field: [{"agent_url": DEFAULT_AGENT_URL, "id": "display_static", "width": 300}]})
     else:
         _call_raw(ctx, **{field: [{"agent_url": DEFAULT_AGENT_URL, "id": partition}]})
 
@@ -500,11 +554,6 @@ def _partition_output_format_ids(ctx: dict, partition: str) -> None:
 def _partition_input_format_ids(ctx: dict, partition: str) -> None:
     """Map input_format_ids partition label to filter and call harness."""
     _partition_format_id_list(ctx, partition, "input")
-
-
-@when(parsers.parse('the Buyer Agent requests creative formats with type filter "{partition}"'))
-def when_partition_type_filter(ctx: dict, partition: str) -> None:
-    _partition_type(ctx, partition)
 
 
 @when(parsers.parse('the Buyer Agent requests creative formats with format_ids "{partition}"'))
@@ -542,6 +591,11 @@ def when_partition_disclosure(ctx: dict, partition: str) -> None:
     _partition_disclosure(ctx, partition)
 
 
+@when(parsers.parse('the Buyer Agent requests creative formats with disclosure_persistence "{partition}"'))
+def when_partition_persistence(ctx: dict, partition: str) -> None:
+    _partition_persistence(ctx, partition)
+
+
 @when(parsers.parse('the Buyer Agent requests creative formats with output_format_ids "{partition}"'))
 def when_partition_output_ids(ctx: dict, partition: str) -> None:
     _partition_output_format_ids(ctx, partition)
@@ -555,18 +609,6 @@ def when_partition_input_ids(ctx: dict, partition: str) -> None:
 # ── Boundary dispatch steps ──────────────────────────────────────────
 # Boundary steps reuse the same partition mapping — the boundary_point
 # label is just a more descriptive partition label.
-
-
-@when(parsers.parse('the Buyer Agent requests creative formats at type boundary "{boundary_point}"'))
-def when_boundary_type(ctx: dict, boundary_point: str) -> None:
-    # Map human-readable boundary labels to partition labels
-    mapping = {
-        "display (valid enum)": "display",
-        "video (valid enum)": "video",
-        "omitted (no filter)": "omitted",
-        "invalid type (rejected)": "invalid_type",
-    }
-    _partition_type(ctx, mapping.get(boundary_point, boundary_point))
 
 
 @when(parsers.parse('the Buyer Agent requests creative formats at format_ids boundary "{boundary_point}"'))
@@ -625,6 +667,8 @@ def when_boundary_name_search(ctx: dict, boundary_point: str) -> None:
         "case-insensitive match": "case_insensitive",
         "omitted (no filter)": "omitted",
         "no match (empty result)": "no_match",
+        # Sent verbatim: an unrecognized partition is the name_search value itself.
+        "empty string (filters nothing)": "",
     }
     _partition_name_search(ctx, mapping.get(boundary_point, boundary_point))
 
@@ -652,6 +696,28 @@ def when_boundary_disclosure(ctx: dict, boundary_point: str) -> None:
         "duplicate positions ['prominent','prominent']": "duplicate_positions",
     }
     _partition_disclosure(ctx, mapping.get(boundary_point, boundary_point))
+
+
+@when(parsers.parse('the Buyer Agent requests creative formats at persistence boundary "{boundary_point}"'))
+def when_boundary_persistence(ctx: dict, boundary_point: str) -> None:
+    mapping = {
+        "single mode ['continuous'] (min array size)": "single_mode",
+        "all 3 modes (max array size)": "all_modes",
+        "two modes satisfied by different positions": "multiple_modes_satisfied_across_positions",
+        "omitted (no filter)": "omitted",
+        "format has no disclosure_capabilities (excluded)": "format_without_disclosure_capabilities",
+        "no format covers all requested modes": "no_matching_formats",
+        "empty array []": "empty_array",
+        "unknown mode string 'permanent'": "permanent",
+        "duplicate modes ['continuous','continuous']": "duplicate_modes",
+    }
+    _partition_persistence(ctx, mapping.get(boundary_point, boundary_point))
+
+
+@when("the Buyer Agent requests creative formats for that format")
+def when_request_that_format(ctx: dict) -> None:
+    """Request the format an earlier Given named (``ctx["target_format"]``) by its format_id."""
+    _call(ctx, req=ListCreativeFormatsRequest(format_ids=[ctx["target_format"].format_id]))
 
 
 @when(parsers.parse('the Buyer Agent requests creative formats at output_format_ids boundary "{boundary_point}"'))
@@ -685,26 +751,10 @@ def when_boundary_input_ids(ctx: dict, boundary_point: str) -> None:
 
 
 # ── Creative agent format queries (partition / boundary) ─────────────
-# These test creative-agent-specific format filtering through the same
-# list_creative_formats harness. Type filter was removed in adcp 3.12
-# so type partitions dispatch unfiltered. Asset type partitions map to
-# the asset_types filter on ListCreativeFormatsRequest.
-
-
-def _partition_agent_type(ctx: dict, partition: str) -> None:
-    """Creative agent type filter — REMOVED in adcp 3.12, all dispatch unfiltered.
-
-    ``ListCreativeFormatsRequest`` has no ``type`` field (the creative-agent-type
-    filter was excised in adcp 3.12), so EVERY type partition — including the
-    former 'unknown_value'/'native' rejection cases — carries no field to land on
-    and dispatches the same unfiltered request through the wire. Production no
-    longer rejects any value; it returns the full catalog. The previous code
-    constructed a test-side ``ValueError`` to fake a rejection production never
-    performs. Per the schema hierarchy (3.12 authoritative), these reconcile to
-    SUCCESS: dispatch unfiltered via the wire (_call) and let production emit the
-    real result. #1417.
-    """
-    _call(ctx)
+# Asset type partitions map to the ``asset_types`` filter on
+# ``ListCreativeFormatsRequest``, which the media-buy variant this seller binds
+# does declare. The TYPE partitions are gone with their outlines — see
+# tests/bdd/conftest.py's UC-005 record.
 
 
 def _partition_agent_asset_types(ctx: dict, partition: str) -> None:
@@ -724,25 +774,9 @@ def _partition_agent_asset_types(ctx: dict, partition: str) -> None:
         _call_raw(ctx, asset_types=[partition])
 
 
-@when(parsers.parse('the Buyer Agent queries creative agent formats with type "{partition}"'))
-def when_query_agent_type(ctx: dict, partition: str) -> None:
-    _partition_agent_type(ctx, partition)
-
-
 @when(parsers.parse('the Buyer Agent queries creative agent formats with asset_types "{partition}"'))
 def when_query_agent_asset_types(ctx: dict, partition: str) -> None:
     _partition_agent_asset_types(ctx, partition)
-
-
-@when(parsers.parse('the Buyer Agent queries creative agent formats at type boundary "{boundary_point}"'))
-def when_boundary_agent_type(ctx: dict, boundary_point: str) -> None:
-    mapping = {
-        "audio (first enum value)": "audio",
-        "dooh (last enum value)": "dooh",
-        "Not provided (no filter)": "not_provided",
-        "native (valid in media-buy variant but not in creative agent)": "native",
-    }
-    _partition_agent_type(ctx, mapping.get(boundary_point, boundary_point))
 
 
 @when(parsers.parse('the Buyer Agent queries creative agent formats at asset_types boundary "{boundary_point}"'))

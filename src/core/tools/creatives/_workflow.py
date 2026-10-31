@@ -63,8 +63,8 @@ def _create_sync_workflow_steps(
         else:
             comment = f"Creative '{creative_info['name']}' (format: {creative_info['format']}) requires review"
 
-        # Create workflow step for creative approval. The format is a FormatId model;
-        # the JSON column type serializes it at flush.
+        # Create workflow step for creative approval. The format is the creative identity's
+        # ``label`` -- the asserted id, or the canonical kind when the buyer sent format_kind.
         request_data_for_workflow = {
             "creative_id": creative_info["creative_id"],
             "format": creative_info["format"],

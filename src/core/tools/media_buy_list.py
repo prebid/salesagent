@@ -55,7 +55,7 @@ from sqlalchemy.orm import Session
 from src.core.errors.codes import ErrorCode
 from src.core.errors.details import ConfigurationDetails, ValidationDetails
 from src.core.resolved_identity import ResolvedIdentity
-from src.core.tools._media_buy_status import resolve_canonical_status
+from src.core.tools._media_buy_status import resolve_canonical_status, seller_valid_actions
 
 logger = logging.getLogger(__name__)
 
@@ -99,10 +99,12 @@ class _MediaBuyData:
     # the build loop a projector: it cannot recompute what it was handed, because it no
     # longer holds anything to recompute it from.
     wire_status: MediaBuyStatus
-    # Spec-required on media_buys[] at AdCP 3.1.1; carried through this row object so
+    # Spec-required on media_buys[] at AdCP; carried through this row object so
     # the response is built from persisted values rather than defaults.
     confirmed_at: datetime | None
     revision: int
+    # Optional on media_buys[]; NULL when the adapter reported no deadline on create.
+    creative_deadline: datetime | None
 
 
 @dataclass
@@ -116,7 +118,6 @@ class _PackageData:
     bid_price: Decimal | None
 
 
-from adcp.server.helpers import valid_actions_for_status
 from adcp.types import MediaBuyStatus
 
 from src.core.database.models import CreativeAssignment, MediaBuy
@@ -341,6 +342,9 @@ def _get_media_buys_impl(
                     start_time=_blob("start_time"),
                     end_time=_blob("end_time"),
                     paused=_blob("paused"),
+                    # Absent means the buy-level creative_deadline applies
+                    # (get-media-buys-response.json, packages[].creative_deadline).
+                    creative_deadline=_blob("creative_deadline"),
                     targeting_overlay=targeting_overlay,
                     creative_approvals=approvals if approvals else None,
                     snapshot=snapshot,
@@ -367,13 +371,13 @@ def _get_media_buys_impl(
                 media_buy_id=buy.media_buy_id,
                 buyer_campaign_ref=buyer_campaign_ref,
                 status=status,
-                valid_actions=valid_actions_for_status(status.value),
+                valid_actions=seller_valid_actions(status.value),
                 currency=buy.currency or "USD",
                 total_budget=total_budget,
                 packages=response_packages,
                 created_at=buy.created_at,
                 updated_at=buy.updated_at,
-                # Both spec-required on media_buys[] at AdCP 3.1.1, and both read
+                # Both spec-required on media_buys[] at and both read
                 # straight off the persisted columns rather than defaulted here.
                 # Neither is produced at this site: MediaBuyRepository owns both
                 # writes — `_stamp_confirmation_if_needed` writes confirmed_at once,
@@ -383,6 +387,7 @@ def _get_media_buys_impl(
                 # decided.
                 confirmed_at=buy.confirmed_at,
                 revision=buy.revision,
+                creative_deadline=buy.creative_deadline,
             )
         )
 
@@ -574,6 +579,7 @@ def _fetch_target_media_buys(
                 wire_status=wire_status,
                 confirmed_at=buy.confirmed_at,
                 revision=revision,
+                creative_deadline=buy.creative_deadline,
             )
         )
     return renderable

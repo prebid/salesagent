@@ -12,7 +12,7 @@ This service implements the AdCP webhook specification from PR #86:
 RFC 9421 (#1291): WHETHER a 9421 signature is applied is decided inside the egress
 boundary and NOT here — ``webhook_egress._headers_for`` keys the arm on the ABSENCE
 of an ``authentication`` block, which is the pinned schema's own selector
-(``security.mdx`` @ v3.1.1 :1424), and applies it as ``outbound_http.send``'s
+(``security.mdx`` :1424), and applies it as ``outbound_http.send``'s
 ``sign=`` hook, invoked once PER ATTEMPT over ``request.content``. That is what keeps
 the ``nonce`` fresh across a retry and the signature over the exact bytes sent, while
 this sender never holds a signature and never opens a second HTTP client.
@@ -357,9 +357,29 @@ class WebhookDeliveryService:
             if not is_final and next_expected_interval_seconds:
                 next_expected_at = (datetime.now(UTC) + timedelta(seconds=next_expected_interval_seconds)).isoformat()
 
+            # The per-buy entry is composed FIRST, and completely, so nothing has to index
+            # back into the report below to finish it. A heterogeneous dict literal gives
+            # mypy a joined value type, which is why reaching back in for
+            # ``["media_buy_deliveries"][0]["totals"]`` could not be typed at all.
+            totals: dict[str, Any] = {
+                "impressions": impressions,
+                "spend": round(spend, 2),
+            }
+            if clicks is not None:
+                totals["clicks"] = clicks
+            if ctr is not None:
+                totals["ctr"] = ctr
+
+            media_buy_delivery: dict[str, Any] = {
+                "media_buy_id": media_buy_id,
+                "status": status,
+                "totals": totals,
+                "by_package": by_package or [],
+            }
+
             # The delivery REPORT -- the inner ``result``, shaped by
             # media-buy-delivery-webhook-result.json. It is not the POST body: the envelope
-            # below is (AdCP 3.1.1 L3/webhooks.mdx :217, ":254 is the counter-example").
+            # below is (L3/webhooks.mdx :217, ":254 is the counter-example").
             delivery_result = {
                 "adcp_version": get_adcp_spec_version(),
                 "notification_type": notification_type,
@@ -370,31 +390,12 @@ class WebhookDeliveryService:
                     "end": reporting_period_end.isoformat(),
                 },
                 "currency": currency,
-                "media_buy_deliveries": [
-                    {
-                        "media_buy_id": media_buy_id,
-                        "status": status,
-                        "totals": {
-                            "impressions": impressions,
-                            "spend": round(spend, 2),
-                        },
-                        "by_package": by_package or [],
-                    }
-                ],
+                "media_buy_deliveries": [media_buy_delivery],
             }
 
             # Add optional fields
             if next_expected_at:
                 delivery_result["next_expected_at"] = next_expected_at
-
-            # Add optional metrics to totals dict
-            # We know structure is valid as we just created it above
-            media_buy_delivery = delivery_result["media_buy_deliveries"][0]  # type: ignore[index]
-            totals: dict[str, Any] = media_buy_delivery["totals"]
-            if clicks is not None:
-                totals["clicks"] = clicks
-            if ctr is not None:
-                totals["ctr"] = ctr
 
             logger.info(
                 f"📤 Delivery webhook #{sequence_number} for {media_buy_id}: "
@@ -655,7 +656,7 @@ class WebhookDeliveryService:
         # WHICH TENANT'S KEY -- the one input the egress boundary cannot derive for
         # itself. WHETHER a 9421 signature is applied at all remains that boundary's
         # decision (``_headers_for`` keys the arm on the ABSENCE of an ``authentication``
-        # block, security.mdx @ v3.1.1 :1424); this only says which key would sign if it
+        # block, security.mdx :1424); this only says which key would sign if it
         # is, so a legacy-registered receiver is unaffected by what is resolved here.
         # Read off the DEQUEUED ENTRY rather than a tenant threaded down in parallel, so
         # the key that signs is the one the item being delivered names.
@@ -723,7 +724,7 @@ class WebhookDeliveryService:
         # unsigned on another, and matched nothing on a third.
         #
         # The credential-length rule that used to be argued about here now lives at
-        # the seam, applied to every sender at once. Pinned AdCP 3.1.1
+        # the seam, applied to every sender at once. Pinned AdCP.1
         # (core/push-notification-config.json) requires authentication.credentials
         # with minLength 32, and owner ruling #2 for Epic D says a present-but
         # -non-conforming block REFUSES rather than silently downgrading to a plain

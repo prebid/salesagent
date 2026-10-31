@@ -344,22 +344,40 @@ Feature: BR-UC-019 Query Media Buys
 
     Examples: Valid partitions
       | partition                | creative_id | internal_status | extra_condition                              | expected_approval | rejection_check                                     |
-      | approved_creative        | cr-001      | approved        |                                              | approved          | rejection_reason should be absent                   |
+      | approved_creative        | cr-001      | approved        | and no rejection_reason in data              | approved          | rejection_reason should be absent                   |
       | rejected_with_reason     | cr-002      | rejected        | and rejection_reason "Image too dark"        | rejected          | rejection_reason should be "Image too dark"         |
       | rejected_without_reason  | cr-003      | rejected        | and no rejection_reason in data              | rejected          | rejection_reason should be absent |
-      | pending_review_explicit  | cr-004      | submitted       |                                              | pending_review    | rejection_reason should be absent                   |
-      | pending_review_catchall  | cr-005      | processing      |                                              | pending_review    | rejection_reason should be absent                   |
+      | pending_review_explicit  | cr-004      | submitted       | and no rejection_reason in data              | pending_review    | rejection_reason should be absent                   |
+      | pending_review_catchall  | cr-005      | processing      | and no rejection_reason in data              | pending_review    | rejection_reason should be absent                   |
+    # The three extra_condition cells that were EMPTY now name the state their own
+    # rejection_check column grades. An empty cell rendered the Given as
+    # `... has internal status "approved" ` with a trailing space, and a parse-parser field
+    # matches no empty string, so that line bound NO step definition: three of the five rows
+    # were dormant while reading as graded. Naming the condition is also the stronger
+    # scenario -- a row that asserts "rejection_reason should be absent" should say that its
+    # creative has none, rather than leaving it to whatever the factory defaults to.
 
-  @T-UC-019-partition-approval-invalid @partition @approval_status
-  Scenario: Creative approval mapping - no_creative_found (silent skip)
-    Given the principal "buyer-001" owns media buy "mb-001" with package "pkg-001"
-    And package "pkg-001" has a creative assignment with creative_id "cr-999"
-    And no creative with id "cr-999" exists in the tenant
-    When the Buyer Agent sends a get_media_buys request for media_buy_ids ["mb-001"]
-    Then the response is compliant with the get_media_buys spec
-    And the creative approvals for package "pkg-001" should not include an entry for "cr-999"
-    And no error should be raised for the missing creative
-    # BR-RULE-152 INV-4: Nonexistent creative silently omitted from approvals
+  # RETIRED SCENARIO: T-UC-019-partition-approval-invalid, "Creative approval mapping -
+  # no_creative_found (silent skip)" (BR-RULE-152 INV-4). It asked for a package whose
+  # creative assignment names a creative that does not exist, and for get_media_buys to
+  # leave that creative out of creative_approvals.
+  #
+  # The pin does not state that obligation. get-media-buys-response.json describes
+  # packages[].creative_approvals as "Approval status for each creative assigned to this
+  # package", and get_media_buys.mdx lists it as "Array of creative approval states". Both
+  # speak only about creatives that are assigned, so the pin has no rule for an assignment
+  # whose creative is missing.
+  #
+  # This seller cannot reach that state either. creative_assignments carries a composite
+  # ForeignKeyConstraint (creative_id, tenant_id, principal_id) -> creatives with no
+  # ondelete (src/core/database/models.py), so that row can't be inserted, and the creative
+  # can't be deleted while an assignment still points at it. The scenario's own Given had
+  # to seed cr-999 and then assert that it existed, which is the opposite of what the step
+  # text says. Its Then then found cr-999 in the approvals, which is correct for an
+  # assigned creative. The every-assigned-creative obligation the pin does state is graded
+  # by @T-UC-019-partition-approval and @T-UC-019-boundary-approval above.
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-media-buys-response.json pointer=/properties/media_buys/items/properties/packages/items/properties/creative_approvals
+  # @source repo=adcp ref=v3.2.7 path=docs/media-buy/task-reference/get_media_buys.mdx
 
   @T-UC-019-boundary-approval @boundary @approval_status
   Scenario Outline: Creative approval status boundary - <boundary_point>
@@ -377,9 +395,22 @@ Feature: BR-UC-019 Query Media Buys
       | creative.status exactly 'rejected'                | internal status "rejected" with rejection data | approval_status should be "rejected" with rejection_reason                   |
       | creative.status exactly 'rejected' with no data   | internal status "rejected" and empty data       | approval_status should be "rejected" with null rejection_reason              |
       | creative.status is empty string                   | internal status ""                             | approval_status should be "pending_review"                                   |
-      | creative.status is null                           | internal status null                           | approval_status should be "pending_review"                                   |
+      | creative.status is null                           | internal status "null"                         | approval_status should be "pending_review"                                   |
       | creative.status is 'APPROVED' (case mismatch)    | internal status "APPROVED"                     | approval_status should be "pending_review"                                   |
-      | creative not found for assignment                 | a nonexistent creative_id                      | the approval entry should be silently omitted                                |
+    # `internal status "null"` is QUOTED. The cell is the literal four-character string
+    # "null" -- what a NOT NULL status column can actually hold -- and production's
+    # _map_creative_status treats it as unrecognized, hence pending_review; the sibling
+    # Given `package "<pkg>" has a creative with internal status "<status>"` records the
+    # same convention. Unquoted, the line matched no step definition at all, which stayed
+    # invisible for as long as an earlier Given aborted the scenario before it ran.
+    #
+    # The row `creative not found for assignment / a nonexistent creative_id` is DELETED.
+    # It asked for an assignment referencing a creative row that does not exist, and
+    # creative_assignments carries a composite ForeignKeyConstraint
+    # (creative_id, tenant_id, principal_id) -> creatives with no ondelete, so that state
+    # can neither be created nor arise. Its sibling scenario for BR-RULE-152 INV-4
+    # (T-UC-019-partition-approval-invalid) is retired too, for the same reason; the note
+    # where it stood, above, records that the pin states no rule for that state.
 
   @T-UC-019-inv-152-5 @invariant @BR-RULE-152
   Scenario: INV-5 holds - rejection_reason absent when not rejected
@@ -615,7 +646,7 @@ Feature: BR-UC-019 Query Media Buys
     Then the response is compliant with the get_media_buys spec
     And the media buy "mb-001" should have status "paused"
     # BR-RULE-150 INV-6: is_paused=true overrides the flight-window refinement to paused
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buys-response.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-media-buys-response.json
 
   @T-UC-019-inv-150-7 @invariant @BR-RULE-150 @schema-v3.1
   Scenario Outline: INV-7 holds - terminal persisted status passes through unchanged
@@ -626,7 +657,7 @@ Feature: BR-UC-019 Query Media Buys
     Then the response is compliant with the get_media_buys spec
     And the media buy "mb-001" should have status "<expected>"
     # BR-RULE-150 INV-7: terminal lifecycle states pass through; no flight-window refinement
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buys-response.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-media-buys-response.json
 
     Examples:
       | persisted | expected  |
@@ -646,7 +677,7 @@ Feature: BR-UC-019 Query Media Buys
     # assigned, so it is pending_creatives ("approved but has no creatives"), NOT pending_start
     # ("ready to serve, waiting for its flight date"). pending / pending_approval are pre-serving
     # ready states -> pending_start.
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buys-response.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-media-buys-response.json
 
     Examples:
       | persisted        | expected          |
@@ -661,7 +692,7 @@ Feature: BR-UC-019 Query Media Buys
     Then the response is compliant with the get_media_buys spec
     And the media buy "mb-001" should have status "rejected"
     # BR-RULE-150 INV-9: persisted 'failed' has no v3.1 wire equivalent; maps to closest terminal 'rejected'
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buys-response.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-media-buys-response.json
 
   @T-UC-019-inv-150-10 @invariant @BR-RULE-150 @schema-v3.1
   Scenario Outline: INV-10 holds - pending_creatives and pending_start pass through unchanged
@@ -670,7 +701,7 @@ Feature: BR-UC-019 Query Media Buys
     Then the response is compliant with the get_media_buys spec
     And the media buy "mb-001" should have status "<persisted>"
     # BR-RULE-150 INV-10: pending_creatives/pending_start pass through; no flight refinement
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buys-response.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-media-buys-response.json
     # RETIRED SCENARIO (T-UC-019-inv-150-11): "unknown persisted status defaults to
     # active then flight-refines". It graded the defensive default-to-active path, and
     # that path is deleted.
@@ -741,8 +772,11 @@ Feature: BR-UC-019 Query Media Buys
     When the Buyer Agent sends a get_media_buys request with <request_form>
     Then the response is compliant with the get_media_buys spec
     And <expected_outcome>
-    # BR-RULE-289: include_history bounded 0..1000; default 0; history[] absent unless > 0
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buys-response.json
+    # BR-RULE-289: include_history bounded 0..1000; default 0; history[] absent unless > 0.
+    # The bounds and default are the REQUEST's (get-media-buys-request.json); the absence
+    # and min(N, available) most-recent-first are the response's.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-media-buys-request.json pointer=/properties/include_history
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-media-buys-response.json pointer=/properties/media_buys/items/properties/history
 
     Examples: Valid partitions
       | partition                       | history_state                                 | request_form                          | expected_outcome                                                                                |
@@ -758,18 +792,25 @@ Feature: BR-UC-019 Query Media Buys
     When the Buyer Agent sends a get_media_buys request with <request_form>
     Then the response is compliant with the get_media_buys spec
     And <expected_outcome>
-    # BR-RULE-289: range [0, 1000] integer; below or above is INVALID_REQUEST
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buys-response.json
+    # BR-RULE-289: get-media-buys-request.json types include_history {"type": "integer",
+    # "minimum": 0, "maximum": 1000, "default": 0}, so 1001, -1 and 5.5 each violate a
+    # schema constraint -- and enums/error-code.json gives every schema-constraint
+    # violation one code: INVALID_REQUEST, "Request is malformed, missing required fields,
+    # or violates schema constraints". VALIDATION_ERROR is the other bucket, "invalid
+    # field values or violates business rules BEYOND schema validation", so the
+    # non-integer row is INVALID_REQUEST like its two siblings.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-media-buys-request.json pointer=/properties/include_history
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json
 
     Examples: Boundary values
-      | boundary_point                            | request_form                  | expected_outcome                                                                          |
-      | include_history omitted                   | no include_history parameter | the history field should be absent on each media buy entry                                |
-      | include_history = 0 (lower bound inclusive) | include_history 0           | the history field should be absent on each media buy entry                                |
-      | include_history = 1                       | include_history 1            | the history array should contain 1 entry                                                  |
-      | include_history = 1000 (upper bound inclusive) | include_history 1000     | the history array should contain 10 entries (min of include_history and available)        |
-      | include_history = 1001                    | include_history 1001         | error code "INVALID_REQUEST" with suggestion mentioning range "[0, 1000]"                |
-      | include_history = -1                      | include_history -1           | error code "INVALID_REQUEST" with suggestion mentioning range "[0, 1000]"                |
-      | include_history = 5.5 (non-integer)       | include_history 5.5          | error code "VALIDATION_ERROR" with suggestion mentioning integer                          |
+      | boundary_point                                 | request_form                 | expected_outcome                                                                   |
+      | include_history omitted                        | no include_history parameter | the history field should be absent on each media buy entry                         |
+      | include_history = 0 (lower bound inclusive)    | include_history 0            | the history field should be absent on each media buy entry                         |
+      | include_history = 1                            | include_history 1            | the history array should contain 1 entry                                           |
+      | include_history = 1000 (upper bound inclusive) | include_history 1000         | the history array should contain 10 entries (min of include_history and available) |
+      | include_history = 1001                         | include_history 1001         | error code "INVALID_REQUEST" with suggestion mentioning range "[0, 1000]"          |
+      | include_history = -1                           | include_history -1           | error code "INVALID_REQUEST" with suggestion mentioning range "[0, 1000]"          |
+      | include_history = 5.5 (non-integer)            | include_history 5.5          | error code "INVALID_REQUEST" with suggestion mentioning integer                    |
 
   @T-UC-019-inv-289-3 @invariant @BR-RULE-289 @schema-v3.1
   Scenario: INV-3 holds - response returns min(include_history, available) most recent entries
@@ -779,7 +820,7 @@ Feature: BR-UC-019 Query Media Buys
     And the response media buy "mb-001" history array should contain 5 entries
     And the history entries should be ordered most recent first
     # BR-RULE-289 INV-3: min(include_history, available) most recent first
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buys-response.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-media-buys-response.json
 
   @T-UC-019-inv-289-5 @invariant @BR-RULE-289 @schema-v3.1
   Scenario: INV-5 holds - history entries are append-only and byte-identical across queries
@@ -788,7 +829,7 @@ Feature: BR-UC-019 Query Media Buys
     Then the response is compliant with the get_media_buys spec
     And the entry at revision 3 from the t1 response should be byte-identical to the entry at revision 3 from the t2 response
     # BR-RULE-289 INV-5: sellers MUST NOT modify or delete previously emitted entries
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buys-response.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-media-buys-response.json
 
   @T-UC-019-inv-289-6 @invariant @BR-RULE-289 @schema-v3.1
   Scenario: INV-6 holds - history entry actor is derived from authentication context
@@ -799,7 +840,7 @@ Feature: BR-UC-019 Query Media Buys
     And the new history entry actor should reflect the authenticated identity "buyer-001"
     And the actor value should not be derived from any caller-supplied field
     # BR-RULE-289 INV-6: actor derived from auth context; never caller-provided
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buys-response.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-media-buys-response.json
 
   @T-UC-019-inv-289-9 @invariant @BR-RULE-289 @schema-v3.1
   Scenario: INV-9 holds - package-targeted history entries carry package_id
@@ -819,7 +860,7 @@ Feature: BR-UC-019 Query Media Buys
     Then the response is compliant with the get_media_buys spec
     And the media buy "mb-001" valid_actions should equal <expected_actions>
     # BR-RULE-290: valid_actions deterministically derived from wire status via MEDIA_BUY_STATE_MACHINE
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buys-response.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-media-buys-response.json
 
     Examples: Valid partitions
       | partition                  | status            | expected_actions                                                                          |
@@ -836,8 +877,14 @@ Feature: BR-UC-019 Query Media Buys
     Then the response is compliant with the get_media_buys spec
     And every value in media buy "mb-001" valid_actions should be drawn from the media-buy-valid-action enum
     And the action set should match the state-machine table for status "<status>"
-    # BR-RULE-290: closed enum {pause, resume, cancel, update_budget, update_dates, update_packages, add_packages, sync_creatives}
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buys-response.json
+    # BR-RULE-290: every value is a member of enums/media-buy-valid-action.json AS PINNED --
+    # read from the pin, not restated here. It has 24 members; four of the coarse ones this
+    # seller emits (update_budget, update_dates, update_packages, sync_creatives) are in its
+    # x-deprecated-enum-values, retained for 3.x compatibility. valid_actions itself is
+    # deprecated in favour of available_actions[] ("Sellers SHOULD populate both during the
+    # 3.x deprecation window").
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/media-buy-valid-action.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-media-buys-response.json pointer=/properties/media_buys/items/properties/valid_actions
 
     Examples: Boundary values
       | status            |
@@ -857,7 +904,7 @@ Feature: BR-UC-019 Query Media Buys
     And the media buy "mb-001" valid_actions should include "pause"
     And the media buy "mb-001" valid_actions should not include "resume"
     # BR-RULE-290 INV-3: active -> pause yes, resume no
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buys-response.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-media-buys-response.json
 
   @T-UC-019-inv-290-4 @invariant @BR-RULE-290 @schema-v3.1
   Scenario: INV-4 holds - paused status includes resume and excludes pause/update_packages/add_packages
@@ -869,7 +916,7 @@ Feature: BR-UC-019 Query Media Buys
     And the media buy "mb-001" valid_actions should not include "update_packages"
     And the media buy "mb-001" valid_actions should not include "add_packages"
     # BR-RULE-290 INV-4: paused -> resume yes; pause/update_packages/add_packages no
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buys-response.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-media-buys-response.json
 
   @T-UC-019-inv-290-5 @invariant @BR-RULE-290 @schema-v3.1
   Scenario Outline: INV-5 holds - terminal statuses emit empty valid_actions array (not omitted)
@@ -893,7 +940,7 @@ Feature: BR-UC-019 Query Media Buys
     Then the response is compliant with the get_media_buys spec
     And the media buy "mb-001" revision should be <expected>
     # BR-RULE-291: revision >= 1, per-buy monotonic counter
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buys-response.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-media-buys-response.json
 
     Examples: Valid partitions
       | partition         | revision_state                                                       | expected               |
@@ -912,7 +959,7 @@ Feature: BR-UC-019 Query Media Buys
     # below that minimum is NOT publishable — the seller must not put it on the wire.
     # The two defective rows grade that refusal by the code the buyer receives:
     # CONFIGURATION_ERROR / terminal — see the note under this outline.
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buys-response.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-media-buys-response.json
     # WHY THE TWO DEFECTIVE ROWS NAME CONFIGURATION_ERROR (T-UC-019-boundary-revision)
     # The obligation is that a media buy whose persisted revision is below the pinned
     # minimum is NEVER published to the buyer — and that the refusal names the code the
@@ -972,7 +1019,7 @@ Feature: BR-UC-019 Query Media Buys
     # they own over one corrupt row. Request shape is the discriminator — see
     # _buyer_named_rows in src/core/tools/media_buy_list.py.
     #
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buys-response.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-media-buys-response.json
     # Verified at that ref AND in the installed SDK's 3.1/ tree, which is what
     # validate_against_pinned_schema reads: media_buys[].revision is
     # {"type":"integer","minimum":1} and sits in the item's `required`, so persisted 0
@@ -988,7 +1035,7 @@ Feature: BR-UC-019 Query Media Buys
     And every returned media buy should include an integer revision field
     And every revision should be >= 1
     # BR-RULE-291 INV-1: revision is always present, integer, minimum 1
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buys-response.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-media-buys-response.json
 
   @T-UC-019-inv-291-4 @invariant @BR-RULE-291 @schema-v3.1
   Scenario: INV-4 holds - two reads with no intervening write return the same revision
@@ -999,7 +1046,7 @@ Feature: BR-UC-019 Query Media Buys
     Then the response is compliant with the get_media_buys spec
     And the revision at t1 should equal the revision at t2
     # BR-RULE-291 INV-4: no intervening write -> revision unchanged across reads
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buys-response.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-media-buys-response.json
 
   @T-UC-019-inv-291-5 @invariant @BR-RULE-291 @schema-v3.1
   Scenario: INV-5 holds - intervening successful write monotonically increases revision
@@ -1019,7 +1066,7 @@ Feature: BR-UC-019 Query Media Buys
     And the media buy "mb-001" should include a confirmed_at field
     And the confirmed_at value should be the ISO 8601 timestamp "2026-05-01T12:00:00Z"
     # POST-S6 / INT-006: confirmed_at is set when the buy transitions out of pre-create state and is exposed on every read
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buys-response.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-media-buys-response.json
 
   @T-UC-019-inv-confirmed-at-stable @invariant @confirmed_at @schema-v3.1
   Scenario: confirmed_at stable across subsequent reads - timestamp does not drift with later writes
@@ -1031,7 +1078,7 @@ Feature: BR-UC-019 Query Media Buys
     And the confirmed_at at t1 should equal "2026-05-01T12:00:00Z"
     And the confirmed_at at t2 should equal "2026-05-01T12:00:00Z"
     # POST-S6 / INT-006: confirmed_at reflects the original confirmation moment; revision updates do not rewrite it
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buys-response.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-media-buys-response.json
 
   @T-UC-019-partition-confirmed-at @partition @confirmed_at @schema-v3.1
   Scenario Outline: confirmed_at - <partition>
@@ -1098,9 +1145,6 @@ Feature: BR-UC-019 Query Media Buys
       | confirmed_buy_carries_timestamp | a successful create stamping confirmed_at "2026-05-01T12:00:00Z" | the media buy "mb-001" confirmed_at should equal "2026-05-01T12:00:00Z"                          |
       | confirmed_at_includes_timezone  | confirmed_at "2026-05-01T12:00:00+00:00"                   | the media buy "mb-001" confirmed_at should be an ISO 8601 string with a timezone designator       |
 
-    Examples: Invalid partitions
-      | partition                       | buy_state                                                  | expected_outcome                                                                                  |
-      | confirmed_at_missing_on_buy     | persisted store missing confirmed_at (defective seller)    | the response should be flagged as schema-invalid for "mb-001" with code "SCHEMA_VIOLATION"        |
 
   @T-UC-019-partition-package-creative-deadline @partition @creative_deadline @schema-v3.1
   Scenario Outline: package creative_deadline - <partition>
@@ -1111,7 +1155,27 @@ Feature: BR-UC-019 Query Media Buys
     Then the response is compliant with the get_media_buys spec
     And <expected_outcome>
     # POST-S2 / INT-002: package-level creative_deadline; when absent, the buy-level creative_deadline applies
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buys-response.json
+    # get_media_buys.mdx lists media_buys[].creative_deadline as "Creative upload deadline
+    # (ISO 8601)" and packages[].creative_deadline as "Per-package creative deadline (ISO
+    # 8601). When absent, the media buy's creative_deadline applies." Neither is in its
+    # item's `required`, so every Valid row is a schema-legal document.
+    #
+    # THE INVALID ROWS MOVED. They asked for the whole request to be refused with
+    # CONFIGURATION_ERROR when the stored package creative_deadline is not a date-time,
+    # citing the ruling under T-UC-019-boundary-revision. That ruling covers a REQUIRED
+    # field (revision), which has no legal absent rendering. packages[].creative_deadline
+    # is OPTIONAL, so the policy for it is the blob rule: the package renders without the
+    # field and errors[] carries one CONFIGURATION_ERROR / terminal advisory naming it.
+    # The "next Friday" row is now the creative_deadline row of
+    # @T-UC-019-blob-degraded-package-field, which grades exactly that.
+    #
+    # The integer row (1747094400) is gone. The blob rule resolves a stored value through
+    # the pinned field type, and an integer epoch resolves to a valid instant, which the
+    # response then carries as an ISO 8601 string. The wire document is schema-valid, so
+    # the pin gives no defect to report for it.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-media-buys-response.json pointer=/properties/media_buys/items/properties/packages/items/properties/creative_deadline
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-media-buys-response.json pointer=/properties/media_buys/items/properties/creative_deadline
+    # @source repo=adcp ref=v3.2.7 path=docs/media-buy/task-reference/get_media_buys.mdx
 
     Examples: Valid partitions
       | partition                                  | buy_state                                            | package_state                                            | expected_outcome                                                                                                                                                |
@@ -1119,11 +1183,6 @@ Feature: BR-UC-019 Query Media Buys
       | package_level_absent_inherits_from_buy     | buy creative_deadline "2026-04-15T00:00:00Z"        | no package creative_deadline                              | the package "pkg-001" creative_deadline should be omitted and the effective deadline should be the buy-level "2026-04-15T00:00:00Z"                              |
       | both_levels_absent_is_legal                | no buy creative_deadline                              | no package creative_deadline                              | the media buy "mb-001" should omit creative_deadline and the package "pkg-001" should omit creative_deadline (no error)                                          |
       | package_level_set_buy_level_absent         | no buy creative_deadline                              | package creative_deadline "2026-04-10T00:00:00Z"        | the package "pkg-001" creative_deadline should equal "2026-04-10T00:00:00Z" and the buy-level field should be omitted                                            |
-
-    Examples: Invalid partitions
-      | partition                                  | buy_state                                            | package_state                                            | expected_outcome                                                                                                                                                |
-      | package_creative_deadline_not_iso8601     | buy creative_deadline "2026-04-15T00:00:00Z"        | package creative_deadline "next Friday"                  | the response should be flagged as schema-invalid for "mb-001" with code "SCHEMA_VIOLATION"                                                                      |
-      | package_creative_deadline_wrong_type       | no buy creative_deadline                              | package creative_deadline 1747094400 (integer not string)| the response should be flagged as schema-invalid for "mb-001" with code "SCHEMA_VIOLATION"                                                                      |
 
   @T-UC-019-inv-package-creative-deadline-inheritance @invariant @creative_deadline @schema-v3.1
   Scenario: package creative_deadline overrides buy-level when set, otherwise inherits
@@ -1143,8 +1202,20 @@ Feature: BR-UC-019 Query Media Buys
     When the Buyer Agent sends a get_media_buys request for media_buy_ids ["mb-001"]
     Then the response is compliant with the get_media_buys spec
     And <expected_outcome>
-    # BR-RULE-292: block presence iff terminal flag true; required {canceled_at, canceled_by}; optional reason<=500
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buys-response.json
+    # BR-RULE-292: the response schema says the block is "Present only when status is
+    # 'canceled'", and media-buy-status.json's canceled member says "Check
+    # cancellation.canceled_by", so a canceled buy carries it; required {canceled_at,
+    # canceled_by}; optional reason<=500; additionalProperties false.
+    # THE INVALID ROWS NAME CONFIGURATION_ERROR, by the ruling recorded under
+    # T-UC-019-boundary-revision: a value in the SELLER's store that the pinned response
+    # schema refuses is never published, and the refusal is the pin's code for a seller-side
+    # defect the buyer cannot fix -- CONFIGURATION_ERROR, recovery terminal. They used to
+    # name SCHEMA_VIOLATION, which is not in enums/error-code.json at the pin. A row whose
+    # premise was the seller EMITTING an invalid value (rather than storing one) is gone:
+    # it needed production patched to set up, and the pin's obligation it stood for -- the
+    # document is schema-valid -- is the first Then of every row.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-media-buys-response.json pointer=/properties/media_buys/items/properties/cancellation
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/media-buy-status.json
 
     Examples: Valid partitions
       | partition                     | buy_state                                                                                              | expected_outcome                                                                                                  |
@@ -1155,11 +1226,10 @@ Feature: BR-UC-019 Query Media Buys
       | not_canceled                  | status active                                                                                          | the media buy "mb-001" should not carry a cancellation block                                                       |
 
     Examples: Invalid partitions
-      | partition                       | buy_state                                                                                                  | expected_outcome                                                                                            |
-      | present_without_terminal_flag   | status active but seller emits cancellation block                                                          | the response should be flagged as schema-invalid for "mb-001" with code "SCHEMA_VIOLATION"                  |
-      | missing_required_field          | status canceled and cancellation {canceled_at:'2026-05-01T12:00:00Z'} (canceled_by missing)                | the response should be flagged as schema-invalid for "mb-001" with code "SCHEMA_VIOLATION"                  |
-      | invalid_canceled_by             | status canceled and cancellation {canceled_at:'2026-05-01T12:00:00Z', canceled_by:'operator'}              | the response should be flagged as schema-invalid for "mb-001" with code "SCHEMA_VIOLATION"                  |
-      | additional_property             | status canceled and cancellation {canceled_at:..., canceled_by:'buyer', refund_status:'pending'}           | the response should be flagged as schema-invalid for "mb-001" with code "SCHEMA_VIOLATION"                  |
+      | partition              | buy_state                                                                                        | expected_outcome                                                                 |
+      | missing_required_field | status canceled and cancellation {canceled_at:'2026-05-01T12:00:00Z'} (canceled_by missing)      | the request should be refused for "mb-001" with error code "CONFIGURATION_ERROR" |
+      | invalid_canceled_by    | status canceled and cancellation {canceled_at:'2026-05-01T12:00:00Z', canceled_by:'operator'}    | the request should be refused for "mb-001" with error code "CONFIGURATION_ERROR" |
+      | additional_property    | status canceled and cancellation {canceled_at:..., canceled_by:'buyer', refund_status:'pending'} | the request should be refused for "mb-001" with error code "CONFIGURATION_ERROR" |
 
   @T-UC-019-boundary-cancellation @boundary @cancellation @schema-v3.1
   Scenario Outline: cancellation boundary - <boundary_point>
@@ -1168,18 +1238,24 @@ Feature: BR-UC-019 Query Media Buys
     Then the response is compliant with the get_media_buys spec
     And <expected_outcome>
     # BR-RULE-292: boundary - reason length, terminal-flag toggle, additionalProperties
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buys-response.json
+    # THE INVALID ROWS NAME CONFIGURATION_ERROR, by the ruling recorded under
+    # T-UC-019-boundary-revision: a value in the SELLER's store that the pinned response
+    # schema refuses is never published, and the refusal is the pin's code for a seller-side
+    # defect the buyer cannot fix -- CONFIGURATION_ERROR, recovery terminal. They used to
+    # name SCHEMA_VIOLATION, which is not in enums/error-code.json at the pin. A row whose
+    # premise was the seller EMITTING an invalid value (rather than storing one) is gone:
+    # it needed production patched to set up, and the pin's obligation it stood for -- the
+    # document is schema-valid -- is the first Then of every row.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-media-buys-response.json pointer=/properties/media_buys/items/properties/cancellation
 
     Examples: Boundary values
-      | boundary_point                                         | buy_state                                                                       | expected_outcome                                                                            |
-      | status=canceled, block present with required fields    | status canceled and cancellation {canceled_at:'2026-05-01T12:00:00Z', canceled_by:'buyer'} | the media buy "mb-001" cancellation block with required fields should be accepted          |
-      | status=canceled, block present with reason at 500 chars | status canceled and cancellation reason exactly 500 characters                  | the media buy "mb-001" cancellation reason should be accepted                              |
-      | status=canceled, block present with reason at 501 chars | status canceled and cancellation reason exactly 501 characters                  | the response should be flagged as schema-invalid for "mb-001" with code "SCHEMA_VIOLATION"  |
-      | status=active, no block                                 | status active                                                                  | the media buy "mb-001" should not carry a cancellation block                                |
-      | status=active, block present                            | status active but seller emits cancellation block                              | the response should be flagged as schema-invalid for "mb-001" with code "SCHEMA_VIOLATION"  |
-      | package canceled=true, block present                    | status active and packages[1].canceled true with cancellation                  | the packages[1] should carry a cancellation block                                          |
-      | package canceled=false, block present                   | status active and packages[1].canceled false but emits cancellation             | the response should be flagged as schema-invalid for "mb-001" with code "SCHEMA_VIOLATION"  |
-      | canceled_by='operator'                                  | status canceled and cancellation canceled_by 'operator' (not in enum)           | the response should be flagged as schema-invalid for "mb-001" with code "SCHEMA_VIOLATION"  |
+      | boundary_point                                          | buy_state                                                                                  | expected_outcome                                                                  |
+      | status=canceled, block present with required fields     | status canceled and cancellation {canceled_at:'2026-05-01T12:00:00Z', canceled_by:'buyer'} | the media buy "mb-001" cancellation block with required fields should be accepted |
+      | status=canceled, block present with reason at 500 chars | status canceled and cancellation reason exactly 500 characters                             | the media buy "mb-001" cancellation reason should be accepted                     |
+      | status=canceled, block present with reason at 501 chars | status canceled and cancellation reason exactly 501 characters                             | the request should be refused for "mb-001" with error code "CONFIGURATION_ERROR"  |
+      | status=active, no block                                 | status active                                                                              | the media buy "mb-001" should not carry a cancellation block                      |
+      | package canceled=true, block present                    | status active and packages[1].canceled true with cancellation                              | the packages[1] should carry a cancellation block                                 |
+      | canceled_by='operator'                                  | status canceled and cancellation canceled_by 'operator' (not in enum)                      | the request should be refused for "mb-001" with error code "CONFIGURATION_ERROR"  |
 
   @T-UC-019-inv-292-1 @invariant @BR-RULE-292 @schema-v3.1
   Scenario: INV-1 holds - canceled status MUST carry cancellation block
@@ -1189,7 +1265,7 @@ Feature: BR-UC-019 Query Media Buys
     And the media buy "mb-001" should include a cancellation block
     And the cancellation block should include canceled_at and canceled_by
     # BR-RULE-292 INV-1: status==canceled -> cancellation block MUST be present
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buys-response.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-media-buys-response.json
 
   @T-UC-019-inv-292-2 @invariant @BR-RULE-292 @schema-v3.1
   Scenario: INV-2 holds - non-canceled status MUST NOT carry cancellation block
@@ -1198,17 +1274,7 @@ Feature: BR-UC-019 Query Media Buys
     Then the response is compliant with the get_media_buys spec
     And the media buy "mb-001" should not include a cancellation block
     # BR-RULE-292 INV-2: status!=canceled -> cancellation block MUST be absent
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buys-response.json
-
-  @T-UC-019-inv-292-7 @invariant @BR-RULE-292 @schema-v3.1
-  Scenario: INV-7 holds - additional properties in cancellation block are forbidden
-    Given the principal "buyer-001" owns media buy "mb-001" with status "canceled"
-    And the seller emits cancellation block with an extra field "refund_status"
-    When the Buyer Agent sends a get_media_buys request for media_buy_ids ["mb-001"]
-    Then the error is compliant with the AdCP error spec
-    And the response should be flagged as schema-invalid for "mb-001" with code "SCHEMA_VIOLATION"
-    And the validation message should reference cancellation.additionalProperties
-    # BR-RULE-292 INV-7: additionalProperties:false on cancellation; ride-along metadata belongs in ext
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-media-buys-response.json
 
   @T-UC-019-inv-293-2 @invariant @BR-RULE-293 @error @ext-e @schema-v3.1
   Scenario: INV-2 holds - v3.x account (AccountReference) triggers UNSUPPORTED_FEATURE before any DB read
@@ -1226,7 +1292,7 @@ Feature: BR-UC-019 Query Media Buys
     # UNSUPPORTED_FEATURE also misdescribes it. It means the seller does not do
     # accounts; this seller requires them on create_media_buy, update_media_buy and
     # sync_creatives, and resolves them centrally at the boundary for every tool.
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buys-response.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-media-buys-response.json
 
   @T-UC-019-inv-293-5 @invariant @BR-RULE-293 @error @schema-v3.1
   Scenario: INV-5 holds - account-filter validation failure yields empty media_buys with no DB query
@@ -1251,7 +1317,7 @@ Feature: BR-UC-019 Query Media Buys
     Then the response is compliant with the get_media_buys spec
     And <expected_outcome>
     # BR-RULE-294: per-package fail-soft; TypeError caught narrowly; ValidationError NOT caught
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buys-response.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-media-buys-response.json
     # graded: unit — tests/unit/test_get_media_buys.py (BDD errors[] steps not wired; scenario dormant/xfail)
 
     Examples: Valid partitions
@@ -1280,7 +1346,7 @@ Feature: BR-UC-019 Query Media Buys
     And the package "pkg-001" targeting_overlay should be null
     And the error should include a "suggestion" field
     # BR-RULE-294 INV-3: narrow TypeError catch -> warn + non-fatal Error + null overlay
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buys-response.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-media-buys-response.json
     # SUPERSEDED CODE: this scenario is DORMANT — its Given has no
     # step definition, so every parametrization reports xfail "Step definition not found"
     # and none of the assertions below has ever executed. Its "SERVICE_UNAVAILABLE" is the
@@ -1328,7 +1394,7 @@ Feature: BR-UC-019 Query Media Buys
     And the package "pkg-002" targeting_overlay should carry geo_countries ["US"]
     And response.errors[] should carry exactly one advisory for package "pkg-001" field targeting_overlay with code "CONFIGURATION_ERROR" and recovery "terminal"
     # BR-RULE-294 INV-5: per-package failure isolation
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buys-response.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-media-buys-response.json
 
   @T-UC-019-inv-294-6 @invariant @BR-RULE-294 @error @schema-v3.1
   Scenario: INV-6 holds - one buy with a corrupted package does not break sibling buys
@@ -1350,7 +1416,7 @@ Feature: BR-UC-019 Query Media Buys
     And the package "pkg-002" targeting_overlay should carry geo_countries ["US"]
     And response.errors[] should carry exactly one advisory for package "pkg-001" field targeting_overlay with code "CONFIGURATION_ERROR" and recovery "terminal"
     # BR-RULE-294 INV-6: per-buy failure isolation across the response
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buys-response.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-media-buys-response.json
 
   # BOTH HALVES OF "ONLY", as two rows. The original single scenario asserted the
   # fallback fires when the modern key is absent and said nothing about the case its
@@ -1408,7 +1474,12 @@ Feature: BR-UC-019 Query Media Buys
     # enums/error-code.json gives CONFIGURATION_ERROR recovery "terminal", and
     # core/error.json makes the wire `recovery` authoritative with enumMetadata only its
     # documentary mirror — so the grader reads `recovery` off the wire.
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buys-response.json
+    #
+    # `creative_deadline` is a sixth blob-sourced package value, and the rule above
+    # applies to it unchanged. It is optional in packages.items, and "next Friday" is not
+    # a date-time. Its row came here from @T-UC-019-partition-package-creative-deadline,
+    # which now grades only the values that render.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-media-buys-response.json
 
     Examples:
       | field             | legacy_value          |
@@ -1417,6 +1488,7 @@ Feature: BR-UC-019 Query Media Buys
       | end_time          | "2026-01-31T00:00:00" |
       | paused            | "maybe"               |
       | targeting_overlay | "not a dict"          |
+      | creative_deadline | "next Friday"         |
 
   @T-UC-019-blob-rule-raw-request @invariant @BR-RULE-150 @schema-v3.1
   Scenario: a legacy-invalid buyer_campaign_ref in raw_request degrades that field alone
@@ -1448,8 +1520,14 @@ Feature: BR-UC-019 Query Media Buys
     When the Buyer Agent sends a get_media_buys request with include_snapshot true
     Then the response is compliant with the get_media_buys spec
     And the package "pkg-001" snapshot delivery_status should be <expected>
-    # BR-RULE-295: not_delivering forbidden until elapsed >= staleness_seconds since activation
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buys-response.json
+    # BR-RULE-295: not_delivering forbidden until elapsed >= staleness_seconds since activation.
+    # The response schema: "Implementers must not return 'not_delivering' until at least
+    # staleness_seconds have elapsed since package activation" -- an obligation on what the
+    # seller RETURNS, which the within_staleness_window rows grade. The two invalid rows that
+    # stood here demanded codes the pinned error-code enum does not have
+    # (STALENESS_GATE_VIOLATION, SCHEMA_VIOLATION) for a seller that had already emitted the
+    # forbidden value; a conforming seller never reaches that state, so they are gone.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-media-buys-response.json pointer=/properties/media_buys/items/properties/packages/items/properties/snapshot/properties/delivery_status
 
     Examples: Valid partitions
       | partition                       | elapsed_state | staleness_seconds | delivery_observation              | expected                                            |
@@ -1462,10 +1540,6 @@ Feature: BR-UC-019 Query Media Buys
       | terminal_flight_ended              | irrelevant timing             | 900 | reached end of flight             | "flight_ended"                                      |
       | terminal_goal_met                  | irrelevant timing             | 900 | reached optimization goal         | "goal_met"                                          |
 
-    Examples: Invalid partitions
-      | partition              | elapsed_state               | staleness_seconds | delivery_observation        | expected                                                                    |
-      | not_delivering_too_early | elapsed 300s since activation | 900             | has zero impressions so far | flagged with code "STALENESS_GATE_VIOLATION" because not_delivering forbidden before window elapsed |
-      | value_outside_enum       | elapsed 1800s since activation | 900            | has zero impressions so far | flagged with code "SCHEMA_VIOLATION" because the seller emitted "unknown" outside the enum         |
 
   @T-UC-019-boundary-delivery-status @boundary @delivery_status @snapshot @schema-v3.1
   Scenario Outline: snapshot.delivery_status boundary - <boundary_point>
@@ -1476,22 +1550,24 @@ Feature: BR-UC-019 Query Media Buys
     When the Buyer Agent sends a get_media_buys request with include_snapshot true
     Then the response is compliant with the get_media_buys spec
     And the result for "pkg-001" delivery_status should be <expected_outcome>
-    # BR-RULE-295: boundary at elapsed=staleness_seconds inclusive
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buys-response.json
+    # BR-RULE-295: boundary at elapsed=staleness_seconds inclusive. One second short of the
+    # window, a not_delivering candidate is not what the buyer receives -- the pin forbids
+    # returning it -- rather than something a code is invented for. The candidate='paused'
+    # rows are gone: paused is not a delivery_status member, and a seller producing it is a
+    # defect no request can set up.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-media-buys-response.json pointer=/properties/media_buys/items/properties/packages/items/properties/snapshot/properties/delivery_status
 
     Examples: Boundary values
-      | boundary_point                                        | elapsed | candidate         | expected_outcome                                                       |
-      | elapsed = staleness_seconds-1, candidate=not_delivering | 899     | not_delivering    | flagged with code "STALENESS_GATE_VIOLATION"                          |
-      | elapsed = staleness_seconds  (boundary), candidate=not_delivering | 900 | not_delivering    | accepted as "not_delivering"                                          |
-      | elapsed = staleness_seconds+1, candidate=not_delivering | 901     | not_delivering    | accepted as "not_delivering"                                          |
-      | elapsed < staleness_seconds, candidate=delivering       | 300     | delivering        | accepted as "delivering"                                              |
-      | elapsed < staleness_seconds, candidate omitted          | 300     | (omitted)         | the delivery_status field should be absent                            |
-      | candidate=completed at any time                          | 50      | completed         | accepted as "completed"                                               |
-      | candidate='paused' (not in enum)                         | 1800    | paused            | flagged with code "SCHEMA_VIOLATION"                                  |
-      | elapsed < staleness_seconds, delivery_status=delivering | 300     | delivering        | accepted as "delivering"                                              |
-      | elapsed < staleness_seconds, delivery_status omitted    | 300     | (omitted)         | the delivery_status field should be absent                            |
-      | delivery_status=completed (any time)                     | 50      | completed         | accepted as "completed"                                               |
-      | delivery_status='paused' (not in enum)                   | 1800    | paused            | flagged with code "SCHEMA_VIOLATION"                                  |
+      | boundary_point                                                    | elapsed | candidate      | expected_outcome                           |
+      | elapsed = staleness_seconds-1, candidate=not_delivering           | 899     | not_delivering | reported as anything but "not_delivering"  |
+      | elapsed = staleness_seconds  (boundary), candidate=not_delivering | 900     | not_delivering | accepted as "not_delivering"               |
+      | elapsed = staleness_seconds+1, candidate=not_delivering           | 901     | not_delivering | accepted as "not_delivering"               |
+      | elapsed < staleness_seconds, candidate=delivering                 | 300     | delivering     | accepted as "delivering"                   |
+      | elapsed < staleness_seconds, candidate omitted                    | 300     | (omitted)      | the delivery_status field should be absent |
+      | candidate=completed at any time                                   | 50      | completed      | accepted as "completed"                    |
+      | elapsed < staleness_seconds, delivery_status=delivering           | 300     | delivering     | accepted as "delivering"                   |
+      | elapsed < staleness_seconds, delivery_status omitted              | 300     | (omitted)      | the delivery_status field should be absent |
+      | delivery_status=completed (any time)                              | 50      | completed      | accepted as "completed"                    |
 
   @T-UC-019-inv-295-1 @invariant @BR-RULE-295 @schema-v3.1
   Scenario: INV-1 holds - not_delivering forbidden until elapsed >= staleness_seconds
@@ -1503,7 +1579,7 @@ Feature: BR-UC-019 Query Media Buys
     And the snapshot for "pkg-001" should NOT report delivery_status "not_delivering"
     And the snapshot should report delivery_status "delivering" or omit delivery_status
     # BR-RULE-295 INV-1: anti-flapping gate during staleness window
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buys-response.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-media-buys-response.json
 
   @T-UC-019-inv-295-2 @invariant @BR-RULE-295 @schema-v3.1
   Scenario: INV-2 holds - not_delivering permitted once elapsed >= staleness_seconds AND impressions=0
@@ -1521,20 +1597,24 @@ Feature: BR-UC-019 Query Media Buys
     When the Buyer Agent sends a get_media_buys request for media_buy_ids ["mb-001"]
     Then the response is compliant with the get_media_buys spec
     And <expected_outcome>
-    # BR-RULE-296: account+invoice_recipient echo with bank_details writeOnly redaction
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buys-response.json
+    # BR-RULE-296: account+invoice_recipient echo with writeOnly bank redaction. The
+    # invoice_recipient is a core/business-entity.json, whose write-only member is `bank`
+    # ("Write-only: included in requests ... MUST NOT be echoed in responses") and which
+    # declares additionalProperties false -- there is no `bank_details` member, so seeding
+    # one seeded a document the schema refuses and checking its absence checked nothing.
+    # The two invalid rows that stood here had the SELLER emit a leaked or empty block and
+    # named codes the pinned enum does not have (WRITE_ONLY_FIELD_LEAKED, SCHEMA_VIOLATION);
+    # the obligation they stood for is the bank omission the valid row grades.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-media-buys-response.json pointer=/properties/media_buys/items/properties/invoice_recipient
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/business-entity.json pointer=/properties/bank
 
     Examples: Valid partitions
-      | partition                 | persisted_billing                                                                                                                | expected_outcome                                                                                                                                              |
-      | override_echoed_no_bank   | explicit invoice_recipient override {legal_name:'Acme', vat_id:'DE123', address:{...}, bank_details:{iban:'...'}}                | the media buy "mb-001" invoice_recipient should include legal_name "Acme" and should omit bank_details                                                       |
-      | no_override_omitted       | no invoice_recipient override (inherits account default)                                                                          | the media buy "mb-001" should not include an invoice_recipient field                                                                                         |
-      | override_with_contacts    | explicit invoice_recipient override {legal_name:'Acme', contacts:[{role:'billing', name:'A. Person'}], address:{...}}            | the media buy "mb-001" invoice_recipient should include legal_name and a contacts array                                                                      |
-      | account_echoed            | persisted account binding {account_id:'acct_123'}                                                                                | the media buy "mb-001" should include an account snapshot with account_id "acct_123"                                                                         |
+      | partition               | persisted_billing                                                                                                                | expected_outcome                                                                               |
+      | override_echoed_no_bank | explicit invoice_recipient override {legal_name:'Acme', vat_id:'DE123', address:{...}, bank:{account_holder:'Acme', iban:'...'}} | the media buy "mb-001" invoice_recipient should include legal_name "Acme" and should omit bank |
+      | no_override_omitted     | no invoice_recipient override (inherits account default)                                                                         | the media buy "mb-001" should not include an invoice_recipient field                           |
+      | override_with_contacts  | explicit invoice_recipient override {legal_name:'Acme', contacts:[{role:'billing', name:'A. Person'}], address:{...}}            | the media buy "mb-001" invoice_recipient should include legal_name and a contacts array        |
+      | account_echoed          | persisted account binding {account_id:'acct_123'}                                                                                | the media buy "mb-001" should include an account snapshot with account_id "acct_123"           |
 
-    Examples: Invalid partitions
-      | partition              | persisted_billing                                                                                            | expected_outcome                                                                                                                              |
-      | bank_details_echoed    | seller defectively echoes bank_details on invoice_recipient                                                  | the response should be flagged as schema-invalid for "mb-001" with code "WRITE_ONLY_FIELD_LEAKED" because bank_details appeared in the response   |
-      | empty_echo             | seller emits invoice_recipient with no persisted content                                                     | the response should be flagged as schema-invalid for "mb-001" with code "SCHEMA_VIOLATION" because invoice_recipient must be omitted when empty   |
 
   @T-UC-019-inv-296-1 @invariant @BR-RULE-296 @schema-v3.1
   Scenario: INV-1 holds - buy bound to account MAY echo the account snapshot
@@ -1543,7 +1623,7 @@ Feature: BR-UC-019 Query Media Buys
     Then the response is compliant with the get_media_buys spec
     And the media buy "mb-001" account field if present should equal the current billing account "acct_123"
     # BR-RULE-296 INV-1: account snapshot reflects current billing target (not creation-time copy)
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buys-response.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-media-buys-response.json
 
   @T-UC-019-inv-296-2 @invariant @BR-RULE-296 @schema-v3.1
   Scenario: INV-2 holds - explicit invoice_recipient override at create echoes the persisted entity
@@ -1552,7 +1632,7 @@ Feature: BR-UC-019 Query Media Buys
     Then the response is compliant with the get_media_buys spec
     And the media buy "mb-001" should include an invoice_recipient field reflecting the persisted (post-transform) value
     # BR-RULE-296 INV-2: echo is descriptive; reflects what seller stored
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buys-response.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-media-buys-response.json
 
   @T-UC-019-inv-296-3 @invariant @BR-RULE-296 @schema-v3.1
   Scenario: INV-3 holds - no override at create -> invoice_recipient absent on the entry
@@ -1561,16 +1641,17 @@ Feature: BR-UC-019 Query Media Buys
     Then the response is compliant with the get_media_buys spec
     And the media buy "mb-001" should not include an invoice_recipient field
     # BR-RULE-296 INV-3: account-default inheritance -> field omitted
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buys-response.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-media-buys-response.json
 
   @T-UC-019-inv-296-4 @invariant @BR-RULE-296 @schema-v3.1
-  Scenario: INV-4 holds - bank_details MUST NOT appear in any echoed invoice_recipient (writeOnly redaction)
-    Given the principal "buyer-001" owns media buy "mb-001" with persisted invoice_recipient that includes bank_details
+  Scenario: INV-4 holds - bank MUST NOT appear in any echoed invoice_recipient (writeOnly redaction)
+    Given the principal "buyer-001" owns media buy "mb-001" with persisted invoice_recipient that includes bank
     When the Buyer Agent sends a get_media_buys request for media_buy_ids ["mb-001"]
     Then the response is compliant with the get_media_buys spec
     And the media buy "mb-001" invoice_recipient should be present
-    And the invoice_recipient should not include a bank_details sub-field
-    # BR-RULE-296 INV-4: bank_details is writeOnly per schema; seller stores it but never echoes it
+    And the invoice_recipient should not include a bank sub-field
+    # BR-RULE-296 INV-4: core/business-entity.json's bank is writeOnly; the seller stores it but never echoes it
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/business-entity.json pointer=/properties/bank
 
   @T-UC-019-partition-currency-budget @partition @currency @schema-v3.1
   Scenario Outline: media_buy currency + total_budget partitions - <partition>
@@ -1578,8 +1659,14 @@ Feature: BR-UC-019 Query Media Buys
     When the Buyer Agent sends a get_media_buys request for media_buy_ids ["mb-001"]
     Then the response is compliant with the get_media_buys spec
     And <expected_outcome>
-    # uc019_currency_and_budget: pure structural constraint (no BR-RULE); validated against v3.1 schema
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buys-response.json
+    # uc019_currency_and_budget: pure structural constraint (no BR-RULE); validated against the pinned schema
+    # THE INVALID ROWS NAME CONFIGURATION_ERROR, by the ruling recorded under
+    # T-UC-019-boundary-revision: a value in the SELLER's store that the pinned response
+    # schema refuses is never published, and the refusal is the pin's code for a seller-side
+    # defect the buyer cannot fix. They used to name SCHEMA_VIOLATION, which is not in
+    # enums/error-code.json at the pin.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-media-buys-response.json pointer=/properties/media_buys/items
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json
 
     Examples: Valid partitions
       | partition       | buy_state                                              | expected_outcome                                                          |
@@ -1588,12 +1675,12 @@ Feature: BR-UC-019 Query Media Buys
       | zero_budget     | currency "USD" and total_budget 0                      | the media buy "mb-001" should expose currency "USD" and total_budget 0    |
 
     Examples: Invalid partitions
-      | partition              | buy_state                                          | expected_outcome                                                                            |
-      | lowercase_currency     | currency "usd" and total_budget 10000              | the response should be flagged as schema-invalid for "mb-001" with code "SCHEMA_VIOLATION"   |
-      | wrong_length_currency  | currency "USDX" and total_budget 10000             | the response should be flagged as schema-invalid for "mb-001" with code "SCHEMA_VIOLATION"   |
-      | negative_budget        | currency "USD" and total_budget -1                 | the response should be flagged as schema-invalid for "mb-001" with code "SCHEMA_VIOLATION"   |
-      | missing_currency       | no currency field and total_budget 1000            | the response should be flagged as schema-invalid for "mb-001" with code "SCHEMA_VIOLATION"   |
-      | missing_budget         | currency "USD" and no total_budget field           | the response should be flagged as schema-invalid for "mb-001" with code "SCHEMA_VIOLATION"   |
+      | partition             | buy_state                                | expected_outcome                                                                 |
+      | lowercase_currency    | currency "usd" and total_budget 10000    | the request should be refused for "mb-001" with error code "CONFIGURATION_ERROR" |
+      | wrong_length_currency | currency "USDX" and total_budget 10000   | the request should be refused for "mb-001" with error code "CONFIGURATION_ERROR" |
+      | negative_budget       | currency "USD" and total_budget -1       | the request should be refused for "mb-001" with error code "CONFIGURATION_ERROR" |
+      | missing_currency      | no currency field and total_budget 1000  | the request should be refused for "mb-001" with error code "CONFIGURATION_ERROR" |
+      | missing_budget        | currency "USD" and no total_budget field | the request should be refused for "mb-001" with error code "CONFIGURATION_ERROR" |
 
   @T-UC-019-boundary-currency-budget @boundary @currency @schema-v3.1
   Scenario Outline: media_buy currency + total_budget boundary - <boundary_point>
@@ -1601,16 +1688,17 @@ Feature: BR-UC-019 Query Media Buys
     When the Buyer Agent sends a get_media_buys request for media_buy_ids ["mb-001"]
     Then the response is compliant with the get_media_buys spec
     And <expected_outcome>
-    # uc019_currency_and_budget: boundary values from constraint YAML
+    # uc019_currency_and_budget: boundary values from constraint YAML; invalid rows refuse
+    # CONFIGURATION_ERROR for the reason stated on the partition outline above.
 
     Examples: Boundary values
-      | boundary_point                              | buy_state                                       | expected_outcome                                                                            |
-      | currency='USD', total_budget=0 (lower bound) | currency "USD" and total_budget 0              | the media buy "mb-001" should expose currency "USD" and total_budget 0                       |
-      | currency='USD', total_budget=-0.01           | currency "USD" and total_budget -0.01          | the response should be flagged as schema-invalid for "mb-001" with code "SCHEMA_VIOLATION"   |
-      | currency='US' (2 chars)                      | currency "US" and total_budget 100             | the response should be flagged as schema-invalid for "mb-001" with code "SCHEMA_VIOLATION"   |
-      | currency='USDD' (4 chars)                    | currency "USDD" and total_budget 100           | the response should be flagged as schema-invalid for "mb-001" with code "SCHEMA_VIOLATION"   |
-      | currency='USD' (3 uppercase chars)           | currency "USD" and total_budget 100            | the media buy "mb-001" should expose currency "USD" and total_budget 100                     |
-      | currency='Usd' (mixed case)                  | currency "Usd" and total_budget 100            | the response should be flagged as schema-invalid for "mb-001" with code "SCHEMA_VIOLATION"   |
+      | boundary_point                               | buy_state                             | expected_outcome                                                                 |
+      | currency='USD', total_budget=0 (lower bound) | currency "USD" and total_budget 0     | the media buy "mb-001" should expose currency "USD" and total_budget 0           |
+      | currency='USD', total_budget=-0.01           | currency "USD" and total_budget -0.01 | the request should be refused for "mb-001" with error code "CONFIGURATION_ERROR" |
+      | currency='US' (2 chars)                      | currency "US" and total_budget 100    | the request should be refused for "mb-001" with error code "CONFIGURATION_ERROR" |
+      | currency='USDD' (4 chars)                    | currency "USDD" and total_budget 100  | the request should be refused for "mb-001" with error code "CONFIGURATION_ERROR" |
+      | currency='USD' (3 uppercase chars)           | currency "USD" and total_budget 100   | the media buy "mb-001" should expose currency "USD" and total_budget 100         |
+      | currency='Usd' (mixed case)                  | currency "Usd" and total_budget 100   | the request should be refused for "mb-001" with error code "CONFIGURATION_ERROR" |
 
   @T-UC-019-sandbox-happy @invariant @br-rule-209 @sandbox
   Scenario: Sandbox account get_media_buys returns simulated results with sandbox flag
@@ -1654,7 +1742,7 @@ Feature: BR-UC-019 Query Media Buys
     # member is the first. The invariant this scenario actually grades is INV-7 (the
     # sandbox error is REAL, not simulated), which the following two steps carry; the
     # code was incidental to it and is now stated instead of guessed.
-    # @source repo=adcp ref=v3.1.1 path=core/error.json (code enum + descriptions)
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json pointer=/enumDescriptions (code enum + descriptions)
 
   @T-UC-019-boundary-sandbox @boundary @sandbox @br-rule-209
   Scenario Outline: sandbox response semantics boundary - <boundary_point>
@@ -1710,7 +1798,34 @@ Feature: BR-UC-019 Query Media Buys
     # media_buy_id immediately on the same account; sellers that have eventual
     # consistency without a documented retry contract fail.
     # check_buy_status: post-create get_media_buys must resolve the freshly-created buy synchronously
-    # @source repo=adcp ref=v3.1.1 path=static/compliance/source/protocols/media-buy/index.yaml phase=create_buy step=check_buy_status
+    # @source repo=adcp ref=v3.2.7 path=static/compliance/source/protocols/media-buy/index.yaml phase=create_buy step=check_buy_status
+
+  @T-UC-019-manual-approval-keeps-creative-deadline @hand-edited @post-create-poll @creative_deadline @schema-v3.1
+  Scenario: a manually approved buy reports the creative_deadline its ad server set
+    Given the tenant requires manual approval
+    And the ad server reports creative_deadline "2026-12-01T17:00:00Z" on the orders it creates
+    And the buyer's create_media_buy request was parked for a human decision
+    And the publisher approved the parked buy
+    When the Buyer Agent calls get_media_buys for the approved buy
+    Then the response is compliant with the get_media_buys spec
+    And the approved buy's creative_deadline should equal "2026-12-01T17:00:00Z"
+    # HAND-EDITED: authored locally, not rendered from adcp-req.
+    #
+    # get-media-buys-response.json declares an optional buy-level creative_deadline
+    # ("ISO 8601 timestamp for creative upload deadline"), and create-media-buy-response.json
+    # carries the deadline the seller sets when it creates the order. Under manual approval
+    # the create parks the buy without calling the ad server; the order is created by the
+    # operator's approval (execute_approved_media_buy), so that is where the ad server's
+    # deadline has to be kept. The other creative_deadline scenarios in this file seed the
+    # column directly and cannot see a path that drops it.
+    #
+    # The ad server is the one patched system. The create crosses the scenario's transport,
+    # the approval runs the production approval call (the admin routes' call, which has no
+    # transport of its own), and the read crosses the transport again. On e2e_rest the
+    # approval runs in the test process against the live server's database, so the read is
+    # served by the deployed server from the row the approval wrote.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-media-buys-response.json pointer=/properties/media_buys/items/properties/creative_deadline
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/create-media-buy-response.json pointer=/oneOf/0/properties/creative_deadline
 
   @T-UC-019-confirmed-at-null-survives-exclude-none @hand-edited @BR-RULE-150 @schema-v3.1
   Scenario Outline: A buy that was never confirmed still carries confirmed_at as null

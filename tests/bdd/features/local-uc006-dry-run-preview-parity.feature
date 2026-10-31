@@ -27,7 +27,7 @@
 # scenario either; the other local dry_run feature grades out-of-transaction
 # effects, not the preview's content.
 #
-# @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/creative/sync-creatives-request.json pointer=/properties/dry_run
+# @source repo=adcp ref=v3.2.7 path=static/schemas/source/creative/sync-creatives-request.json pointer=/properties/dry_run
 Feature: UC-006 sync_creatives — a dry_run preview describes the outcome the live run produces (local)
 
   @T-UC-006-local-dryrun-parity @dry-run @invariant
@@ -43,6 +43,7 @@ Feature: UC-006 sync_creatives — a dry_run preview describes the outcome the l
       | case                                              |
       | two identical entries on one id                   |
       | two entries on one id that differ                 |
+      | two entries on one id differing only in an asset  |
       | third entry resolves against what the second left |
       | distinct creative ids are not collapsed           |
       | single entry update of a seeded creative          |

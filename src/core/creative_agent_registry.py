@@ -18,15 +18,14 @@ Testing:
 - This avoids timeouts in CI when external creative agents are unreachable
 """
 
-import copy
 import logging
-import typing
+from collections.abc import Collection
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
 # FIXME(#1388): ListCreativeFormatsRequest has a local subclass; import from src.core.schemas (Pattern #7/#4).
-from adcp import ListCreativeFormatsRequest
+from adcp import LegacyListCreativeFormatsRequest as ListCreativeFormatsRequest
 from adcp.types import AssetContentType as AssetType
 from pydantic import ValidationError
 
@@ -34,6 +33,7 @@ from src.core.config import get_settings
 from src.core.database.models import CreativeAgent as DBCreativeAgent
 from src.core.errors.codes import AppErrorCode
 from src.core.exceptions import AdCPConfigurationError, AdCPValidationError
+from src.core.format_cache import DEFAULT_AGENT_URL as REFERENCE_FORMATS_AGENT_URL
 from src.core.format_cache import load_reference_formats
 
 # The ONE home of the outbound request-signing posture gate, shared with
@@ -46,7 +46,7 @@ from src.core.format_cache import load_reference_formats
 from src.core.helpers.adapter_helpers import request_signer_for_tenant
 from src.core.helpers.outbound_error_mapping import raise_mapped_outbound_error
 from src.core.schemas import Error as AdCPResponseError
-from src.core.schemas import Format, FormatId, canonical_agent_url
+from src.core.schemas import Format, FormatId, PeerFormat, canonical_agent_url
 from src.core.security.outbound_http import (
     OutboundError,
     UrlProvenance,
@@ -54,104 +54,66 @@ from src.core.security.outbound_http import (
     is_counterparty,
     refusal_field,
 )
+from src.core.signing.canonical import TargetUriMalformedError, origin_of
 from src.core.utils.operator_mcp import ProbeResult, call_operator_mcp_tool, probe_failure
 
 logger = logging.getLogger(__name__)
 
 
-def _known_asset_types() -> frozenset[str]:
-    """Asset-type Literals adcp's closed discriminated union models.
+@dataclass(frozen=True)
+class DiscardedFormat:
+    """One entry of a peer's catalog that the pinned schema cannot validate. Internal only.
 
-    Derived dynamically from the adcp schema (not hardcoded) so the tolerant
-    ingestion stays correct across adcp version bumps — what counts as
-    "additive" is always "not in the union the pinned library knows about".
+    ``label`` names the entry for the operator's log (its ``format_id.id`` when it has one,
+    else its position). ``error`` is the validation failure itself. Neither reaches the
+    buyer: the advisory that reports a discard names the code and the response section, and
+    nothing a peer sent.
     """
-    literals: set[str] = set()
-    assets_field = Format.model_fields["assets"].annotation
-    # annotation shape: list[Union[ImageFormatAsset, VideoFormatAsset, ...]] | None
-    for outer in typing.get_args(assets_field):
-        for inner in typing.get_args(outer):  # the Union inside list[...]
-            for branch in typing.get_args(inner):
-                asset_type_field = getattr(branch, "model_fields", {}).get("asset_type")
-                if asset_type_field is not None:
-                    literals.update(typing.get_args(asset_type_field.annotation))
-    return frozenset(literals)
+
+    label: str
+    error: ValidationError
 
 
-_KNOWN_ASSET_TYPES = _known_asset_types()
+@dataclass(frozen=True)
+class PeerCatalog:
+    """What one creative agent answered: the formats that validate, and the entries that did not."""
+
+    formats: list[Format]
+    discarded: list[DiscardedFormat] = field(default_factory=list)
 
 
-def _unknown_asset_types(fmt_data: dict[str, Any]) -> set[str]:
-    """Asset-type values in a format dict that adcp's closed union does not model."""
-    unknown: set[str] = set()
-    for asset in fmt_data.get("assets") or []:
-        if isinstance(asset, dict):
-            asset_type = asset.get("asset_type")
-            if isinstance(asset_type, str) and asset_type not in _KNOWN_ASSET_TYPES:
-                unknown.add(asset_type)
-    return unknown
+def _entry_label(fmt_data: Any, index: int) -> str:
+    """The format id of a catalog entry, or its position when it carries none."""
+    format_id = fmt_data.get("format_id") if isinstance(fmt_data, dict) else None
+    entry_id = format_id.get("id") if isinstance(format_id, dict) else None
+    return entry_id if isinstance(entry_id, str) else f"#{index}"
 
 
-def _is_purely_additive_asset_type(fmt_data: dict[str, Any], unknown_types: set[str]) -> bool:
-    """True iff the ONLY reason fmt_data fails validation is an unknown additive asset_type.
+def _validate_formats_tolerant(format_dicts: list[Any]) -> PeerCatalog:
+    """Validate each entry of a peer's catalog on its own, through :class:`PeerFormat`.
 
-    Strategy (value-agnostic, robust to adcp's many-branched discriminated union):
-    substitute every unknown asset_type with a known sentinel and re-validate. If
-    it then validates cleanly, the format is well-formed apart from AdCP-additive
-    enum growth → safe to drop. If it still fails, there is a genuine structural
-    defect (or a mixed error) that must NOT be masked.
+    One entry that does not validate costs that entry, never the conforming remainder. The
+    function returns the facts and decides nothing: whether a discard is reported, logged or
+    cached is the caller's policy. Enum members the pin does not model are not a reason to
+    discard; :class:`PeerFormat` accepts and re-emits them.
     """
-    if not unknown_types:
-        return False
-    patched = copy.deepcopy(fmt_data)
-    for asset in patched.get("assets") or []:
-        if isinstance(asset, dict) and asset.get("asset_type") in unknown_types:
-            asset["asset_type"] = "image"  # known sentinel branch
-    try:
-        Format.model_validate(patched)
-    except ValidationError:
-        return False
-    return True
-
-
-def _validate_formats_tolerant(format_dicts: list[dict[str, Any]], logger: logging.Logger) -> list[Format]:
-    """Validate formats independently; tolerate ONLY AdCP-additive asset_type growth.
-
-    Postel / asymmetric strictness: strict on what we emit (adcp Literal untouched),
-    liberal on peer responses. A format whose sole defect is an unrecognized additive
-    asset_type is DROPPED (never mis-represented — we never model a creative we
-    cannot fully understand), aggregated into ONE structured WARNING. Any other
-    ValidationError still fails LOUD so real contract breakage is not masked.
-    """
-    validated: list[Format] = []
-    skipped_count = 0
-    skipped_asset_types: set[str] = set()
-    for fmt_data in format_dicts:
+    formats: list[Format] = []
+    discarded: list[DiscardedFormat] = []
+    for index, fmt_data in enumerate(format_dicts):
         try:
-            validated.append(Format.model_validate(fmt_data))
-        except ValidationError:
-            unknown_types = _unknown_asset_types(fmt_data)
-            if unknown_types and _is_purely_additive_asset_type(fmt_data, unknown_types):
-                skipped_count += 1
-                skipped_asset_types.update(unknown_types)
-                continue
-            raise
-    if skipped_count:
-        logger.warning(
-            "Skipped %d creative format(s) using unsupported additive asset_type(s) %s "
-            "(not modeled by the pinned adcp schema); returning the %d compatible format(s).",
-            skipped_count,
-            sorted(skipped_asset_types),
-            len(validated),
-        )
-    return validated
+            formats.append(PeerFormat.model_validate(fmt_data))
+        except ValidationError as exc:
+            discarded.append(DiscardedFormat(label=_entry_label(fmt_data, index), error=exc))
+    return PeerCatalog(formats=formats, discarded=discarded)
 
 
 @dataclass
 class FormatFetchResult:
     """Result from list_all_formats_with_errors() — formats + per-agent errors.
 
-    Decision: docs/design/error-propagation-in-format-discovery.md
+    Decision: docs/development/building-tools.md § "Batch tools have two levels of failure"
+    (a partial failure is a successful response; what failed is reported in ``errors``), and
+    docs/design/error-architecture.md for this tool's two advisory codes.
     """
 
     formats: list[Format]
@@ -167,7 +129,9 @@ class FormatFetchResult:
     #: Per list_creative_formats.mdx:654, a format_id REFERENCING an unavailable
     #: agent must be REFERENCE_NOT_FOUND with error.field naming the typed
     #: parameter, not the AGENT_UNREACHABLE advisory that covers the
-    #: seller-aggregation branch (salesagent-3dawm.16).
+    #: seller-aggregation branch (salesagent-3dawm.16). An agent that answered but whose
+    #: catalog was partly or wholly discarded is recorded here too, against its
+    #: AGENT_FORMATS_DISCARDED advisory.
     failed_agent_urls: list[str] = field(default_factory=list)
 
 
@@ -191,12 +155,38 @@ def _get_reference_formats() -> list[Format]:
 # Canonical URL of the AdCP standard creative agent. This is the FEDERATION
 # IDENTITY half of a format reference — (agent_url, id) — and must stay stable
 # across deployments; it is NOT necessarily where connections go (see
-# _connection_agent_url).
+# _connection_agent_url). It is also the operator agent's identity when
+# CREATIVE_AGENT_ORIGIN is unset.
 PUBLIC_DEFAULT_AGENT_URL = "https://creative.adcontextprotocol.org"
 
+# Where the public agent is DIALLED when CREATIVE_AGENT_URL is unset: its MCP endpoint.
+# Its identity above is an origin, and that origin serves a web page, not MCP; the AdCP
+# reference creative agent serves MCP only at <base>/api/creative-agent/mcp (the path
+# docs/deployment/environment-variables.md and every shipped config give CREATIVE_AGENT_URL).
+PUBLIC_DEFAULT_MCP_ENDPOINT = f"{PUBLIC_DEFAULT_AGENT_URL}/api/creative-agent/mcp"
 
-def _is_operator_agent(agent_url: str) -> bool:
-    """Whether *agent_url* names an agent THIS DEPLOYMENT stands behind.
+
+def agent_origin(agent_url: str) -> str | None:
+    """The origin of *agent_url* after the spec's canonicalization: a creative agent's identity.
+
+    The path is not part of an agent's identity, so ``https://x.org`` and
+    ``https://x.org/api/creative-agent`` name one agent. The URL is canonicalized first
+    (``canonical_agent_url``: scheme and host case, default port, userinfo), then reduced
+    to ``scheme://host[:port]``. Operator-agent recognition, the connection reroute and
+    reference-agent recognition (``format_resolver.names_reference_agent``) compare this;
+    a format reference's own identity
+    (``format_id_identity``, the cache key) keeps the canonical URL with its path.
+    """
+    return origin_of(canonical_agent_url(agent_url))
+
+
+def _operator_agent_origin() -> str | None:
+    """The identity of the agent THIS DEPLOYMENT stands behind: CREATIVE_AGENT_ORIGIN, else the public agent."""
+    return agent_origin(get_settings().integrations.creative_agent_origin or PUBLIC_DEFAULT_AGENT_URL)
+
+
+def is_operator_agent(agent_url: str) -> bool:
+    """Whether *agent_url* names the agent THIS DEPLOYMENT stands behind, compared by origin.
 
     A buyer naming the seller's own default agent — the overwhelmingly common
     case — is not choosing a destination; they are echoing back the one we
@@ -208,32 +198,86 @@ def _is_operator_agent(agent_url: str) -> bool:
     and an unrelated scenario failed on the seam's delivery error. The narrow
     rule keeps the short-circuit where it was designed to help while still
     letting a genuinely foreign destination reach the seam and be refused.
+
+    CREATIVE_AGENT_URL is not consulted here: it is the endpoint the seller dials, not
+    an identity a reference can name.
     """
-    known = {canonical_agent_url(PUBLIC_DEFAULT_AGENT_URL)}
-    configured = get_settings().integrations.creative_agent_url
-    if configured:
-        known.add(canonical_agent_url(configured))
-    return canonical_agent_url(agent_url) in known
+    return agent_origin(agent_url) == _operator_agent_origin()
+
+
+def names_listed_agent(agent_url: str, agent_urls: Collection[str]) -> bool:
+    """Whether *agent_url* names one of the agents *agent_urls* lists.
+
+    A listed URL matches as spelled; the caller puts both sides in one form. The operator
+    agent matches by ORIGIN instead: when *agent_url* and a listed URL both name it, they are
+    one agent whatever paths they carry, because its identity is an origin while the
+    references its catalog publishes carry the path it is mounted at (the reference agent's
+    are ``<origin>/api/creative-agent``). Every other agent keeps the exact comparison.
+    """
+    return agent_url in agent_urls or (is_operator_agent(agent_url) and any(map(is_operator_agent, agent_urls)))
+
+
+def _lists_as(fmt: Format, agent_url: str, format_id: str, stand_in_origin: str | None) -> bool:
+    """Whether catalogue entry *fmt* is the format *format_id* of the agent at canonical *agent_url*.
+
+    The entry's declaring agent names the requested one (:func:`names_listed_agent`), or the
+    entry is listed by the agent that answers in the operator agent's place, at
+    *stand_in_origin* (``CreativeAgentRegistry._operator_catalog_agent``). That agent lists
+    its formats under its own address, and an agent's identity is its origin, so its own
+    entries are the ones it serves for the operator; an entry it lists under any other
+    agent's URL still is not.
+
+    An entry whose own ``agent_url`` the canonicalization refuses names no agent, so it is
+    not the one asked for.
+    """
+    if fmt.format_id.id != format_id:
+        return False
+    try:
+        declared = canonical_agent_url(fmt.format_id.agent_url)
+    except TargetUriMalformedError:
+        return False
+    return names_listed_agent(agent_url, (declared,)) or (
+        stand_in_origin is not None and agent_origin(declared) == stand_in_origin
+    )
+
+
+def operator_agent_endpoint() -> str:
+    """The MCP endpoint the seller dials for the operator agent: CREATIVE_AGENT_URL, else the public one.
+
+    An agent's identity is its origin and is never dialled: the endpoint is a separate
+    fact. With CREATIVE_AGENT_URL unset the operator agent is the public agent
+    (CREATIVE_AGENT_ORIGIN unset too) and is dialled at :data:`PUBLIC_DEFAULT_MCP_ENDPOINT`.
+    A deployment that names another agent by CREATIVE_AGENT_ORIGIN and gives no endpoint
+    for it has nowhere to dial, so the dial is refused as a configuration error rather
+    than guessed at the identity origin.
+
+    Raises:
+        AdCPConfigurationError: CREATIVE_AGENT_ORIGIN is set and CREATIVE_AGENT_URL is not.
+    """
+    integrations = get_settings().integrations
+    if integrations.creative_agent_url:
+        return integrations.creative_agent_url
+    if integrations.creative_agent_origin is None:
+        return PUBLIC_DEFAULT_MCP_ENDPOINT
+    logger.error(
+        "CREATIVE_AGENT_ORIGIN=%s names the operator creative agent, but CREATIVE_AGENT_URL gives no "
+        "MCP endpoint to dial it at",
+        integrations.creative_agent_origin,
+    )
+    raise AdCPConfigurationError()
 
 
 def _connection_agent_url(agent_url: str) -> str:
     """Resolve the TRANSPORT url for an agent reference.
 
-    When CREATIVE_AGENT_URL is set (test/CI stacks run a pinned container
-    serving the standard catalog), references to the PUBLIC default agent
-    connect there instead of the live public host — which rate-limits under
-    CI load and must never be a test dependency (the catalog also drifts).
-    Only the connection reroutes: cache keys and format_id federation
-    identity stay on the canonical url. Non-default agents are untouched.
+    A reference to the operator agent (by origin, see :func:`is_operator_agent`) connects
+    to :func:`operator_agent_endpoint`, never to the origin the reference names. Test/CI
+    stacks set CREATIVE_AGENT_URL to reach a pinned container serving the standard catalog
+    instead of the live public host, which rate-limits under CI load and must never be a
+    test dependency (the catalog also drifts). Only the connection reroutes: cache keys and
+    format_id federation identity stay on the reference. Every other agent is untouched.
     """
-    configured = get_settings().integrations.creative_agent_url
-    if not configured:
-        return agent_url
-    if canonical_agent_url(agent_url) != canonical_agent_url(PUBLIC_DEFAULT_AGENT_URL):
-        return agent_url
-    if canonical_agent_url(configured) == canonical_agent_url(agent_url):
-        return agent_url
-    return configured
+    return operator_agent_endpoint() if is_operator_agent(agent_url) else agent_url
 
 
 # The format-discovery filter parameter names shared by every layer that
@@ -253,6 +297,11 @@ _FORMAT_FILTER_FIELDS = (
     "name_search",
 )
 
+# Every parameter that narrows a fetch and so keeps it out of the cache: the forwarded
+# filters, plus ``type_filter``, which the agent is not asked for but which still makes the
+# answer a subset.
+_CACHE_SENSITIVE_FILTERS = (*_FORMAT_FILTER_FIELDS, "type_filter")
+
 
 @dataclass
 class CreativeAgent:
@@ -269,9 +318,9 @@ class CreativeAgent:
 
 @dataclass
 class CachedFormats:
-    """Cached format list from a creative agent."""
+    """Cached catalog from a creative agent, discards included so a cache hit reports them too."""
 
-    formats: list[Format]
+    catalog: PeerCatalog
     fetched_at: datetime
     ttl_seconds: int = 3600  # 1 hour default
 
@@ -302,11 +351,12 @@ class CreativeAgentRegistry:
     def __init__(self):
         """Initialize registry with empty cache and the deployment's default agent."""
         self._format_cache: dict[str, CachedFormats] = {}  # Key: normalized agent_url
-        # Default creative agent (always available). agent_url is the base URL; the MCP
-        # endpoint (/mcp) is appended by the client. CREATIVE_AGENT_URL lets CI point it at
-        # a containerized agent.
+        # Default creative agent (always available). agent_url is its IDENTITY, the origin
+        # CREATIVE_AGENT_ORIGIN names (else the public agent): it keys the cache, is
+        # advertised as the creative_agents referral, and is what the registration check
+        # recognizes. Where it is dialled is _connection_agent_url's answer.
         self.DEFAULT_AGENT = CreativeAgent(
-            agent_url=get_settings().integrations.creative_agent_url or PUBLIC_DEFAULT_AGENT_URL,
+            agent_url=get_settings().integrations.creative_agent_origin or PUBLIC_DEFAULT_AGENT_URL,
             name="AdCP Standard Creative Agent",
             enabled=True,
             priority=1,
@@ -336,19 +386,21 @@ class CreativeAgentRegistry:
         """Get list of creative agents for a tenant.
 
         Returns:
-            List of CreativeAgent instances (default + tenant-specific)
+            List of CreativeAgent instances: the deployment's default agent unless the
+            tenant does not federate it (``tenants.use_default_creative_agent``), then the
+            tenant's own enabled agents.
         """
-        agents = [self.DEFAULT_AGENT]
-
         if not tenant_id:
-            return agents
+            return [self.DEFAULT_AGENT]
 
         # Load tenant-specific agents from database
         from src.core.database.database_session import get_db_session
         from src.core.database.repositories.agent import CreativeAgentRepository
 
         with get_db_session() as session:
-            db_agents = CreativeAgentRepository(session, tenant_id).get_enabled()
+            repo = CreativeAgentRepository(session, tenant_id)
+            agents = [self.DEFAULT_AGENT] if repo.federates_default_agent() else []
+            db_agents = repo.get_enabled()
 
             # config_for, not a second mapping: the inline block here also wrote an
             # auth["header"] key with ZERO readers in src/, while auth_header was
@@ -371,12 +423,12 @@ class CreativeAgentRegistry:
         asset_types: list[str] | None = None,
         name_search: str | None = None,
         tenant_id: str | None = None,
-    ) -> list[Format]:
-        """Fetch format list from an OPERATOR-configured creative agent, through the guarded MCP seam.
+    ) -> PeerCatalog:
+        """Fetch the catalog of an OPERATOR-configured creative agent, through the guarded MCP seam.
 
         Routes through ``call_operator_mcp_tool`` — a real MCP handshake, IP-pinned,
         redirect-refusing — rather than ``adcp.ADCPMultiAgentClient``, whose own
-        httpx stack no egress policy of ours could reach (adcp 6.6.0 exposes no
+        httpx stack no egress policy of ours could reach (the pinned SDK exposes no
         transport injection point; upstream adcp-client-python#1004).
         ``_connection_agent_url`` applies HERE
         (the pinned-container alias for the public default agent); a
@@ -394,7 +446,7 @@ class CreativeAgentRegistry:
         raises rather than downgrade, so this call site states what it wants signed
         and never how.
 
-        Spec grounding for signing THIS dial: pinned AdCP 3.1.1,
+        Spec grounding for signing THIS dial: pinned AdCP,
         ``docs/building/by-layer/L1/security.mdx`` §Request signing (the
         ``adcp/request-signing/v1`` profile). :1043 restricts the operation a
         signature may be attributed to to names "defined by the AdCP protocol
@@ -422,7 +474,7 @@ class CreativeAgentRegistry:
                 with no tenant in scope — dials unsigned, exactly as before.
 
         Returns:
-            List of Format objects from the agent
+            The agent's catalog: the formats that validate, and the entries that did not
 
         Raises:
             AdCPConfigurationError: the tenant is signing-capable but its key material
@@ -480,7 +532,7 @@ class CreativeAgentRegistry:
                 agent.agent_url,
             )
             raise AdCPConfigurationError()
-        return _validate_formats_tolerant(payload["formats"], logger)
+        return _validate_formats_tolerant(payload["formats"])
 
     @staticmethod
     def config_for(db_agent: DBCreativeAgent) -> CreativeAgent:
@@ -522,27 +574,32 @@ class CreativeAgentRegistry:
         """
         agent = self.config_for(db_agent)
         try:
-            formats = await self._fetch_formats_operator(agent, tenant_id=db_agent.tenant_id)
+            catalog = await self._fetch_formats_operator(agent, tenant_id=db_agent.tenant_id)
         except Exception as exc:  # noqa: BLE001 - an operator probe reports every failure, it never 500s
             return probe_failure(exc, logger=logger)
 
+        formats, discarded = catalog.formats, len(catalog.discarded)
+        # The operator sees a discard here, where a buyer sees an AGENT_FORMATS_DISCARDED
+        # advisory: an agent whose every entry failed validation did not "return no formats".
+        skipped = f"; {discarded} format(s) do not validate against the schema and were skipped" if discarded else ""
+
         if not formats:
-            return ProbeResult(ok=False, message="Agent returned no formats")
+            return ProbeResult(ok=False, message=f"Agent returned no formats{skipped}")
 
         return ProbeResult(
             ok=True,
-            message=f"Successfully connected to '{agent.name}'",
+            message=f"Successfully connected to '{agent.name}'{skipped}",
             count=len(formats),
             samples=tuple(f.name for f in formats[:5]),
         )
 
-    async def _fetch_formats_raw_mcp(self, agent: CreativeAgent, *, provenance: UrlProvenance) -> list[Format]:
+    async def _fetch_formats_raw_mcp(self, agent: CreativeAgent, *, provenance: UrlProvenance) -> PeerCatalog:
         """Fetch formats through the EGRESS SEAM, as a raw MCP tools/call.
 
         Its one caller today is every fetch of a COUNTERPARTY-SUPPLIED
         ``agent_url`` (always a :class:`CounterpartyUrl`), because the SDK client
         dials through its own httpx stack that no policy of ours can reach —
-        adcp 6.6.0 exposes no transport knob (upstream adcp-client-python#1004).
+        the pinned SDK exposes no transport knob (upstream adcp-client-python#1004).
         Measured: a buyer URL sent down the SDK path put 3 real requests on the
         wire against a destination egress policy forbids. Here the seam owns
         address, TLS, redirect and retry, so the request either goes to an
@@ -617,18 +674,18 @@ class CreativeAgentRegistry:
                 if line.startswith("data: "):
                     event_data = json.loads(line[6:])
                     if "result" in event_data:
-                        return self._parse_mcp_tool_result(event_data["result"], logger, field=field)
+                        return self._parse_mcp_tool_result(event_data["result"], field=field)
         else:
             data = result.json()
             if "result" in data:
-                return self._parse_mcp_tool_result(data["result"], logger, field=field)
+                return self._parse_mcp_tool_result(data["result"], field=field)
 
         # The endpoint stays OFF the wire: ``agent.agent_url`` is a URL this seller
         # does not publish (transport-errors.mdx § Security Considerations).
         # ``field`` is what the buyer needs.
         raise AdCPValidationError(field=field)
 
-    def _parse_mcp_tool_result(self, result: dict, logger: Any, *, field: str | None = None) -> list[Format]:
+    def _parse_mcp_tool_result(self, result: dict, *, field: str | None = None) -> PeerCatalog:
         """Parse formats from an MCP tools/call result.
 
         ``field`` names the BUYER input that supplied this agent_url, when there is
@@ -640,10 +697,9 @@ class CreativeAgentRegistry:
         for item in content_list:
             if item.get("type") == "text" and item.get("text"):
                 data = json.loads(item["text"])
-                formats_list = data.get("formats", [])
-                formats = _validate_formats_tolerant(formats_list, logger)
-                logger.info(f"_fetch_formats_raw_mcp: Parsed {len(formats)} formats from TextContent")
-                return formats
+                catalog = _validate_formats_tolerant(data.get("formats", []))
+                logger.info(f"_fetch_formats_raw_mcp: Parsed {len(catalog.formats)} formats from TextContent")
+                return catalog
         raise AdCPValidationError(field=field)
 
     async def get_formats_for_agent(
@@ -683,8 +739,25 @@ class CreativeAgentRegistry:
                 fact, not something a cache-keyed-by-agent-url could recover.
 
         Returns:
-            List of Format objects
+            The agent's formats. A discarded entry is not among them; the listing path
+            (:meth:`list_all_formats_with_errors`) is where a discard is reported.
         """
+        filters = {field: locals()[field] for field in _CACHE_SENSITIVE_FILTERS}
+        catalog = await self._agent_catalog(
+            agent, filters=filters, force_refresh=force_refresh, provenance=provenance, tenant_id=tenant_id
+        )
+        return catalog.formats
+
+    async def _agent_catalog(
+        self,
+        agent: CreativeAgent,
+        *,
+        filters: dict[str, Any],
+        force_refresh: bool,
+        provenance: UrlProvenance | None,
+        tenant_id: str | None,
+    ) -> PeerCatalog:
+        """One agent's catalog: the seam for a counterparty URL, else the override, else a dial."""
         # A COUNTERPARTY-supplied agent_url is judged before anything else, and is
         # NOT eligible for the testing short-circuit below.
         #
@@ -699,7 +772,7 @@ class CreativeAgentRegistry:
         # test — not whether it happens to carry a field — so a stored creative's
         # agent_url (``CounterpartyUrl(field=None)``, no canonical request path)
         # still takes this branch instead of falling through to the short-circuit.
-        if is_counterparty(provenance) and not _is_operator_agent(agent.agent_url):
+        if is_counterparty(provenance) and not is_operator_agent(agent.agent_url):
             # Straight to the seam: it refuses or it sends. Nothing is validated
             # first — a pre-check would add a TOCTOU window and a second copy of a
             # decision the seam already owns. The SDK client is not usable here at
@@ -709,46 +782,45 @@ class CreativeAgentRegistry:
                 agent, await self._fetch_formats_raw_mcp(agent, provenance=provenance), has_filters=False
             )
 
-        if (reference := self._operator_formats_override()) is not None:
-            return reference
+        # The override stands in for the OPERATOR agent only. A tenant's own configured agent
+        # is dialled on every path -- the listing and a single-format lookup alike -- so what
+        # the seller does with a real peer's catalog is what a test deployment grades.
+        if is_operator_agent(agent.agent_url) and (reference := self._operator_formats_override()) is not None:
+            return PeerCatalog(formats=reference)
 
-        # Check cache - only use cache if no filtering parameters provided
-        has_filters = any(
-            [
-                max_width is not None,
-                max_height is not None,
-                min_width is not None,
-                min_height is not None,
-                is_responsive is not None,
-                asset_types is not None,
-                name_search is not None,
-                type_filter is not None,
-            ]
-        )
+        return await self._dialled_catalog(agent, filters=filters, force_refresh=force_refresh, tenant_id=tenant_id)
 
-        cache_key = self._cache_key(agent.agent_url)
-        cached = self._format_cache.get(cache_key)
+    async def _dialled_catalog(
+        self, agent: CreativeAgent, *, filters: dict[str, Any], force_refresh: bool, tenant_id: str | None
+    ) -> PeerCatalog:
+        """Dial an operator agent, answering an unfiltered request from the cache while it is fresh."""
+        has_filters = any(value is not None for value in filters.values())
+
+        cached = self._format_cache.get(self._cache_key(agent.agent_url))
         if cached and not cached.is_expired() and not force_refresh and not has_filters:
-            return cached.formats
+            return cached.catalog
 
-        # Fetch from agent
-        filter_kwargs = {field: locals()[field] for field in _FORMAT_FILTER_FIELDS}
-        formats = await self._fetch_formats_operator(agent, tenant_id=tenant_id, **filter_kwargs)
+        dial_filters = {name: filters[name] for name in _FORMAT_FILTER_FIELDS}
+        catalog = await self._fetch_formats_operator(agent, tenant_id=tenant_id, **dial_filters)
 
-        return self._cache_formats(agent, formats, has_filters)
+        return self._cache_formats(agent, catalog, has_filters)
 
-    def _cache_formats(self, agent: CreativeAgent, formats: list[Format], has_filters: bool) -> list[Format]:
-        """Cache a full result set and return it; a filtered one is returned uncached.
+    def _cache_formats(self, agent: CreativeAgent, catalog: PeerCatalog, has_filters: bool) -> PeerCatalog:
+        """Cache a full catalog and return it; a filtered one, or one wholly discarded, is returned uncached.
 
         Only the unfiltered fetch may be cached — a filtered result is a subset,
         and storing it under the agent's key would serve that subset to the next
-        caller who asked for everything.
+        caller who asked for everything. A catalog whose every entry was discarded is
+        not cached either: the next request dials again rather than being served
+        nothing for an hour. A partly discarded catalog is cached WITH its discards, so
+        a cache hit reports them exactly as the fetch did.
         """
-        if not has_filters:
+        wholly_discarded = not catalog.formats and bool(catalog.discarded)
+        if not has_filters and not wholly_discarded:
             self._format_cache[self._cache_key(agent.agent_url)] = CachedFormats(
-                formats=formats, fetched_at=datetime.now(UTC), ttl_seconds=3600
+                catalog=catalog, fetched_at=datetime.now(UTC), ttl_seconds=3600
             )
-        return formats
+        return catalog
 
     async def list_all_formats(
         self,
@@ -797,18 +869,26 @@ class CreativeAgentRegistry:
     ) -> FormatFetchResult:
         """List all formats from all registered agents, with per-agent error reporting.
 
-        Decision: docs/design/error-propagation-in-format-discovery.md
+        Decision: docs/development/building-tools.md § "Batch tools have two levels of
+        failure" -- a partial failure is a successful response, and what failed is reported in
+        ``errors``.
 
         Returns FormatFetchResult with:
         - formats: Formats from all healthy agents
-        - errors: One AdCP error per failed agent (code + message)
+        - errors: One advisory per agent that failed (AGENT_UNREACHABLE) and one per agent
+          whose catalog was partly or wholly discarded (AGENT_FORMATS_DISCARDED)
 
         When all agents succeed, errors is empty.
         When some agents fail, returns partial results + errors for failed agents.
-        """
-        if (reference := self._operator_formats_override()) is not None:
-            return FormatFetchResult(formats=reference, errors=[])
 
+        AGENTS ONLY. The tenant's own ad-server adapter may serve formats too, and those
+        are NOT here: an agent is something this registry DIALS, and the whole point of an
+        adapter-served format is that its ``agent_url`` is a pseudo-URL with no host. A
+        caller that needs the seller's whole catalogue adds
+        ``adapter_served_creative_formats(tenant_id)``, which is what both consumers of
+        this method do (``_list_creative_formats_impl``, ``sync_creatives``).
+        """
+        filters = {field: locals()[field] for field in _CACHE_SENSITIVE_FILTERS}
         agents = self._get_tenant_agents(tenant_id)
         all_formats: list[Format] = []
         errors: list[AdCPResponseError] = []
@@ -819,19 +899,9 @@ class CreativeAgentRegistry:
         for agent in agents:
             logger.info(f"list_all_formats: Fetching from {agent.agent_url}")
             try:
-                # Delegates to get_formats_for_agent for the cache-check + fetch +
-                # cache-store logic (DRY — this loop used to reimplement it inline).
-                filter_kwargs = {field: locals()[field] for field in _FORMAT_FILTER_FIELDS}
-                formats = await self.get_formats_for_agent(
-                    agent,
-                    force_refresh=force_refresh,
-                    type_filter=type_filter,
-                    tenant_id=tenant_id,
-                    **filter_kwargs,
+                catalog = await self._agent_catalog(
+                    agent, filters=filters, force_refresh=force_refresh, provenance=None, tenant_id=tenant_id
                 )
-
-                logger.info(f"list_all_formats: Got {len(formats)} formats from {agent.agent_url}")
-                all_formats.extend(formats)
             except Exception as e:
                 logger.error(f"Failed to fetch formats from {agent.agent_url}: {e}", exc_info=True)
                 # errors[] on a SUCCESS payload is still buyer-facing — the
@@ -842,23 +912,49 @@ class CreativeAgentRegistry:
                 # ``agent.agent_url`` is interpolated. ``adcp.types.Error`` is
                 # an SDK model with no internal_detail slot; the raw cause is
                 # captured by the ``logger.error(..., exc_info=True)`` above.
-                errors.append(
-                    # field="formats" names the response section this advisory
-                    # degrades, which the open-vocabulary permission depends on:
-                    # a receiver decodes an unpublished code by reading recovery
-                    # (derived from the code by CODE_TABLE) and locating what it
-                    # affects. message/suggestion/recovery are NOT passed -- there
-                    # is no parameter for them (salesagent-3dawm.14).
-                    AdCPResponseError.of(AppErrorCode.AGENT_UNREACHABLE, field="formats")
-                )
-                # Kept parallel to ``errors`` and NOT serialized -- see the field
-                # note on FormatFetchResult. Appended in the same breath as the
-                # advisory so the two cannot drift out of correspondence.
-                failed_agent_urls.append(agent.agent_url)
+                #
+                # field="formats" names the response section this advisory
+                # degrades, which the open-vocabulary permission depends on:
+                # a receiver decodes an unpublished code by reading recovery
+                # (derived from the code by CODE_TABLE) and locating what it
+                # affects. message/suggestion/recovery are NOT passed -- there
+                # is no parameter for them (salesagent-3dawm.14).
+                self._report(errors, failed_agent_urls, AppErrorCode.AGENT_UNREACHABLE, agent)
                 continue
+
+            logger.info(f"list_all_formats: Got {len(catalog.formats)} formats from {agent.agent_url}")
+            all_formats.extend(catalog.formats)
+            if catalog.discarded:
+                # The same channel and the same rules as an unreachable agent: the
+                # advisory names the code and the section, the operator's log names the
+                # entries and why each one failed. Pinned
+                # media-buy/list-creative-formats-response.json declares ``errors`` for
+                # exactly this: "Task-specific errors and warnings (e.g., format
+                # availability issues)".
+                for dropped in catalog.discarded:
+                    logger.warning(
+                        "list_all_formats: discarded format %s from %s: %s",
+                        dropped.label,
+                        agent.agent_url,
+                        dropped.error,
+                    )
+                self._report(errors, failed_agent_urls, AppErrorCode.AGENT_FORMATS_DISCARDED, agent)
 
         logger.info(f"list_all_formats: Returning {len(all_formats)} formats, {len(errors)} errors")
         return FormatFetchResult(formats=all_formats, errors=errors, failed_agent_urls=failed_agent_urls)
+
+    @staticmethod
+    def _report(
+        errors: list[AdCPResponseError], failed_agent_urls: list[str], code: AppErrorCode, agent: CreativeAgent
+    ) -> None:
+        """Append one ``field="formats"`` advisory and the agent it belongs to, in one breath.
+
+        ``failed_agent_urls`` is kept parallel to ``errors`` and NOT serialized -- see the
+        field note on FormatFetchResult. Appending both here is what keeps the two from
+        drifting out of correspondence.
+        """
+        errors.append(AdCPResponseError.of(code, field="formats"))
+        failed_agent_urls.append(agent.agent_url)
 
     async def search_formats(
         self, query: str, tenant_id: str | None = None, type_filter: str | None = None
@@ -921,22 +1017,46 @@ class CreativeAgentRegistry:
             (``media_buy_create.py``) has one in scope; wiring it is a follow-up,
             not a downgrade introduced here.
         """
-        # Find agent
         agent = CreativeAgent(agent_url=agent_url, name="Unknown", enabled=True)
         formats = await self.get_formats_for_agent(agent, provenance=provenance)
+        # The (agent_url, id) PAIR, not the id: core/format-id.json identifies a format by its
+        # declaring agent and its id, and its agent_url description makes canonicalizing before
+        # treating two references as the same a MUST (v3.2.7). Matching the id alone accepted
+        # an entry the dialled agent lists under ANOTHER agent's URL as this agent's format
+        # (salesagent-ol033.20.23). The agent half is ``names_listed_agent``'s, the rule the
+        # registration check applies: the operator agent by origin, every other one by its
+        # canonical URL. The operator agent's catalogue is answered by another agent when
+        # one stands in for it, and that agent's own entries are the operator's.
+        requested = canonical_agent_url(agent_url)
+        return next((fmt for fmt in formats if self.lists_format(fmt, requested, format_id)), None)
 
-        # Find matching format
-        for fmt in formats:
-            # fmt.format_id is a FormatId object with .id attribute, format_id parameter is a string
-            if fmt.format_id.id == format_id:
-                return fmt
+    def lists_format(self, fmt: Format, agent_url: str, format_id: str) -> bool:
+        """Whether catalogue entry *fmt* is the format *format_id* of the agent at canonical *agent_url*.
 
-        return None
+        The one answer to "is this entry the format that reference names", read by
+        :meth:`get_format` and by ``list_creative_formats`` when it lists the formats the
+        seller's products declare: :func:`_lists_as`, with the agent that answers in the
+        operator agent's place (:meth:`_operator_catalog_agent`) when *agent_url* names it.
+        """
+        stand_in = self._operator_catalog_agent() if is_operator_agent(agent_url) else None
+        return _lists_as(fmt, agent_url, format_id, agent_origin(stand_in) if stand_in else None)
+
+    def _operator_catalog_agent(self) -> str | None:
+        """The agent whose catalogue answers for the operator agent in its place, or None.
+
+        CREATIVE_AGENT_URL when it is configured: :func:`_connection_agent_url` dials that
+        endpoint for every operator reference, and the agent there lists its formats under
+        its own address (the reference agent stamps ``<its origin>/api/creative-agent``),
+        not under the operator identity it stands in for. None when it is unset: the public
+        agent is then dialled at :data:`PUBLIC_DEFAULT_MCP_ENDPOINT`, on its own origin, so
+        its entries name the operator identity already.
+        """
+        return get_settings().integrations.creative_agent_url or None
 
     async def preview_creative(
         self,
         agent_url: str,
-        format_id: str,
+        format_id: str | None,
         creative_manifest: dict[str, Any],
         *,
         tenant_id: str | None = None,
@@ -945,13 +1065,17 @@ class CreativeAgentRegistry:
 
         Args:
             agent_url: URL of the creative agent
-            format_id: Format ID for the creative
-            creative_manifest: Complete creative manifest with all required assets.
+            format_id: The legacy format id the creative names, or ``None`` for a creative
+                identified by ``format_kind``. ``None`` sends no deprecated route at all; the
+                manifest then carries the canonical identity itself.
+            creative_manifest: Complete creative manifest with all required assets, without
+                its ``format_id`` (this method writes the ``{agent_url, id}`` object there
+                for a legacy creative). A canonical creative's manifest carries
+                ``format_kind`` and, when it has one, ``format_option_ref``.
                 Assets MUST be a dictionary keyed by asset_id from format's asset_requirements.
                 Example: {
                     "creative_id": "c123",
                     "name": "Banner Ad",
-                    "format_id": "display_300x250",
                     "assets": {
                         "main_image": {"asset_type": "image", "url": "https://..."},
                         "logo": {"asset_type": "image", "url": "https://..."}
@@ -982,20 +1106,38 @@ class CreativeAgentRegistry:
         # this seller has a ``TOOLS`` row for the name: that answers "does this seller
         # SERVE it", which is False for every tool we only ever CALL, ``get_signals``
         # included.
+        # The pinned reference agent's schema takes format_id as the federation-identity
+        # OBJECT {agent_url, id} -- the live public host tolerated a bare string, which masked
+        # this mismatch until connections were pinned in-network. The identity keeps the
+        # CANONICAL agent_url, not the connection alias. AnyUrl serialization yields the
+        # trailing-slash form for path-less URLs -- verified tolerated by the pinned reference
+        # agent (probe 2026-07-13).
+        #
+        # The MANIFEST names the same object. core/creative-manifest.json (v3.2.7) puts
+        # ``format_id`` on its named arm as a core/format-id.json object, so the bare id string
+        # callers used to write into the manifest satisfied neither arm.
+        #
+        # A CANONICAL creative sends no route of either generation. creative/preview-creative-
+        # request.json (v3.2.7) marks ``format_id`` deprecated and says new requests "carry
+        # portable format identity in creative_manifest.format_kind plus optional
+        # creative_manifest.format_option_ref". Writing a format_id for one would synthesize
+        # a legacy reference from a kind, which registries/v1-canonical-mapping.json forbids.
+        # ``target_capability_id`` is omitted as well, which the same schema permits: the
+        # agent then resolves the renderer only when exactly one advertised capability matches.
+        route = (
+            {}
+            if format_id is None
+            else {"format_id": FormatId(agent_url=agent_url, id=format_id).model_dump(mode="json")}
+        )
         return await call_operator_mcp_tool(
             _connection_agent_url(agent_url),
             "preview_creative",
             {
-                # The pinned reference agent's schema takes format_id as the
-                # federation-identity OBJECT {agent_url, id} — the live public
-                # host tolerated a bare string, which masked this mismatch
-                # until connections were pinned in-network.
-                # The identity keeps the CANONICAL agent_url, not the
-                # connection alias. AnyUrl serialization yields the
-                # trailing-slash form for path-less URLs — verified tolerated
-                # by the pinned reference agent (probe 2026-07-13).
-                "format_id": FormatId(agent_url=agent_url, id=format_id).model_dump(mode="json"),
-                "creative_manifest": creative_manifest,
+                # REQUIRED at the pin (preview-creative-request.json ``required: [request_type]``);
+                # this seller previews one creative per call.
+                "request_type": "single",
+                **route,
+                "creative_manifest": {**creative_manifest, **route},
             },
             label="the creative agent",
             sign=request_signer_for_tenant(tenant_id=tenant_id),
@@ -1066,12 +1208,23 @@ class CreativeAgentRegistry:
 
 # Global registry instance
 class ReferenceFormatsRegistry(CreativeAgentRegistry):
-    """The registry a test deployment runs: operator agents answer from the checked-in
-    reference catalog, so no test ever dials a creative agent and the in-process and e2e
-    servers agree by construction. Counterparty URLs still go through the egress seam."""
+    """The registry a test deployment runs: the operator's default agent answers from the
+    checked-in reference catalog, so no test dials the public creative agent and the
+    in-process and e2e servers agree by construction. Counterparty URLs still go through the
+    egress seam.
+
+    A tenant's OWN configured agents are dialled, on the listing path and on a single-agent
+    lookup (``get_formats_for_agent``, ``get_format``) alike: ``_agent_catalog`` applies the
+    override only to the operator agent. A ``creative_agents`` row is operator configuration
+    a deployment can hold, and dialling it is how a test grades what this seller does with a
+    real peer's catalog -- a reference catalog served in its place would ingest nothing."""
 
     def _operator_formats_override(self) -> list[Format] | None:
         return _get_reference_formats()
+
+    def _operator_catalog_agent(self) -> str | None:
+        """The reference agent the checked-in capture was taken from, whose URL its entries carry."""
+        return REFERENCE_FORMATS_AGENT_URL
 
 
 _registry: CreativeAgentRegistry | None = None

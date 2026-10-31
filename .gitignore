@@ -25,6 +25,16 @@ adcp-manager-key.json
 # validates against is incomplete on any fresh checkout, and the failure surfaces
 # as an unresolvable `$ref` far from its cause.
 !tests/fixtures/adcp_schemas_pinned/**/*-key.json
+# ...and the vendored conformance VECTORS, for the same reason with a different
+# spelling: 3.2.3's a2a request-signing family names three vectors after the
+# duplicate-key condition they test (014-duplicate-skill-key.json,
+# 021-escaped-duplicate-skill-key.json, 024-duplicate-method-key.json). They are
+# published upstream test inputs about repeated keys in a signature header, not
+# cryptographic material. Without this they are invisible to `git add -A` AND to
+# `git status`, so a re-vendor commits 30 of 33 files and reports a clean tree;
+# the drift then surfaces in a container as a FileNotFoundError under /app, one
+# layer away from the cause. The MANIFEST.json guard is what caught it.
+!tests/fixtures/adcp_conformance_vectors/**/*-key.json
 
 # Build artifacts
 *.egg-info/
@@ -171,6 +181,17 @@ docs/TRANSFORMATION_PRESENTATION.md
 
 # cassini run record, rewritten by every test slice — never a repo artifact
 manifest.json
+
+# ...but a vendored conformance-vector MANIFEST.json IS a repo artifact: it carries
+# the sha256 pins that tests/unit/test_adcp_conformance_vectors_pin.py grades the
+# vector files against. The bare pattern above matches it on a case-insensitive
+# filesystem (git sets core.ignoreCase=true on macOS), so `git add` skipped it
+# SILENTLY during the 3.2.1 re-vendor (7393f9b20): the 3.1.1 manifest was deleted,
+# 75 vector files were added, and the new manifest was dropped with no error. Three
+# tests then failed on every clean clone until someone ran the refresher locally,
+# and the tree stayed clean afterwards — a file that is generated, graded, and
+# unaddable. Keeping this negation is what makes it committable.
+!tests/fixtures/adcp_conformance_vectors/**/MANIFEST.json
 
 # adcp spec fetch cache (mirrored URL paths); no code reads the local copy
 /schemas/

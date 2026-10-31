@@ -11,15 +11,18 @@ from __future__ import annotations
 
 import asyncio
 import uuid
+from datetime import datetime
 from typing import Any, cast
 from unittest.mock import MagicMock
 
 from src.adapters.base import AdapterCreateResult, ResponsePackage
-from src.core.schemas import CreateMediaBuyRequest
+from src.adapters.mock_ad_server import MockAdServer
+from src.core.schemas import CreateMediaBuyRequest, Principal
 from src.core.schemas._base import CreateMediaBuyResult
 from tests.factories.mint import mint
 from tests.harness._base import IntegrationEnv, json_safe
-from tests.harness.egress import EgressHatchMixin
+from tests.harness._realize import realize_e2e
+from tests.harness.peer_agent import PeerCreativeAgentMixin
 from tests.harness.transport import DeliverResult
 
 # Sentinel for missing-key tests: pass idempotency_key=OMIT_IDEMPOTENCY_KEY to send a
@@ -36,6 +39,122 @@ OMIT_IDEMPOTENCY_KEY: Any = object()
 # kwarg -- omission is what every scenario that simply does not care about accounts also
 # looks like, and those get the seeded default. Same shape, same reason, as the key above.
 OMIT_ACCOUNT: Any = object()
+
+
+def _live_ad_server_on_the_live_stack(self: MediaBuyCreateEnv, adapter_type: str) -> None:
+    """Realize ``run_ad_server`` on the live e2e stack: the row, and only the row.
+
+    The live server runs with no patches, so the half of the in-process method that
+    hands the adapter decision back to production has nothing to undo there — the
+    decision was never taken away. The ``adapter_config`` row is written through the
+    same factory, against the shared database the live server reads, so the tenant
+    this env minted genuinely runs *adapter_type* on both sides.
+
+    Declared rather than left to the in-process branch: without it the in-process
+    ``self.mock[...]`` lookup would raise over e2e_rest (there is no mock registry),
+    and claiming to have set something in a process that is not the server's is the
+    silent lie :func:`realize_e2e` exists to prevent.
+    """
+    self._write_adapter_config(adapter_type)
+
+
+#: Audit operation the Mock adapter writes, one row per creative push, as
+#: ``"<adapter_name>.<operation>"`` — so the lookup below is a substring match.
+_CREATIVE_PUSH_OPERATION = "add_creative_assets"
+
+#: Audit operation ``MockAdServer`` writes once per ``create_media_buy`` it is handed.
+_ADAPTER_CREATE_OPERATION = "create_media_buy"
+
+
+def _adapter_operation_receipts(self: MediaBuyCreateEnv, operation: str) -> list[dict[str, Any]]:
+    """The ``details`` of every audit row the server's ad server wrote for *operation*.
+
+    THE ONE e2e READBACK, parameterised by the operation rather than copied per seam. Over
+    e2e_rest the adapter runs inside the server container, so a mock read in this process
+    would report nothing on every branch — which is worse than no evidence, because a
+    scenario asserting something did NOT happen would pass vacuously.
+
+    What the server leaves behind is a row. ``MockAdServer`` calls
+    ``audit_logger.log_operation(...)`` in production code for this operation,
+    on its own session, committed before the create response returns — so the receipt exists
+    by the time a Then runs, with no polling. (Same seam shape as
+    ``_e2e_slack_notified_creatives``: the server's durable trace, not the test rig's mock.)
+
+    THE RECORD IS THE CALL, not its success: ``log_operation`` runs before the work can
+    raise, exactly as an in-process ``call_args_list`` records a call whatever it returned.
+    The two branches therefore mean the same thing.
+
+    ``expire_all`` first, and ordered by ``log_id``: the server committed through its own
+    session, so rows written since this session last read are otherwise served from the
+    identity map, and ``find_by_operation`` imposes no order of its own.
+
+    ONLY THE AD SERVER'S OWN ROWS ARE RECEIPTS. The tool audits itself as
+    ``AdCP.create_media_buy`` and a failed call is audited again as
+    ``<TRANSPORT>.create_media_buy`` (``src/core/tool_error_logging.py``), so a bare
+    substring match would count that bookkeeping as an ad-server call. The adapter writes
+    under its own ``adapter_name`` (``AdServerAdapter.__init__``), which is the prefix kept.
+    """
+    from src.core.database.repositories.audit_log import AuditLogRepository
+
+    session = self.get_session()
+    session.expire_all()
+    rows = [
+        row
+        for row in AuditLogRepository(session, self.tenant_id).find_by_operation(operation)
+        if (row.operation or "").startswith(f"{MockAdServer.adapter_name}.")
+    ]
+    return [row.details or {} for row in sorted(rows, key=lambda r: r.log_id)]
+
+
+def _adapter_create_receipts_on_the_live_stack(self: MediaBuyCreateEnv) -> int:
+    """How many media buys the SERVER's ad server was handed, read off its receipts."""
+    return len(_adapter_operation_receipts(self, _ADAPTER_CREATE_OPERATION))
+
+
+def _inject_create_failure_on_the_live_stack(self: MediaBuyCreateEnv, error: Exception, **behavior: Any) -> None:
+    """Realize ``fail_adapter_create`` on the live stack: the ``test_behavior`` row.
+
+    The live server runs the real ``MockAdServer``, which reads injected faults from
+    ``AdapterConfig.config_json["test_behavior"]``. *error* is the in-process carrier and has
+    no meaning in another process; *behavior* names the same fault in the adapter's knobs.
+    """
+    from tests.factories.core import set_adapter_test_behavior
+
+    set_adapter_test_behavior(self, self.tenant_id, fail_on_create=True, manual_approval_required=False, **behavior)
+
+
+def _uploaded_assets_from_the_audit_trail(self: MediaBuyCreateEnv) -> list[dict[str, Any]]:
+    """The assets the SERVER's ad server was handed, read off the receipt it wrote.
+
+    Over e2e_rest the adapter runs inside the server container, so the mock the in-process
+    branch reads lives in the wrong process and would report an empty list on every branch —
+    which is worse than no evidence, because a scenario asserting that something was NOT
+    sent would pass vacuously.
+
+    What the server leaves behind is a row. ``MockAdServer._add_creative_assets_immediate``
+    calls ``audit_logger.log_operation(operation="add_creative_assets", ...)`` in production
+    code, on its own session, committed before the create response returns — so the receipt
+    exists by the time a Then runs, with no polling. That audit record carries the asset
+    dicts AS HANDED, which is why both branches of this seam return the same shape and one
+    assertion can read either. (Same seam shape as
+    ``_e2e_slack_notified_creatives``: the server's durable trace, not the test rig's mock.)
+
+    THE RECORD IS THE CALL, not its success. ``log_operation`` runs before the
+    media-buy-exists check raises, exactly as the in-process ``call_args_list`` records a
+    call whatever it returned. The two branches therefore mean the same thing.
+
+    That audit record carries the asset dicts AS HANDED, which is why both branches of this
+    seam return the same shape and one assertion can read either.
+
+    ONLY THE IMMEDIATE AND SYNC-DELAY MODES write it. ``_add_creative_assets_async`` parks
+    the request on a workflow step and audits nothing, so a scenario driving the async
+    upload mode needs its own seam rather than a widened one here — which path ran is part
+    of what such a scenario would be asserting.
+    """
+    uploaded: list[dict[str, Any]] = []
+    for details in _adapter_operation_receipts(self, _CREATIVE_PUSH_OPERATION):
+        uploaded.extend(details.get("assets") or [])
+    return uploaded
 
 
 def _restore_creative_ids(req: CreateMediaBuyRequest, flat: dict[str, Any]) -> None:
@@ -56,19 +175,20 @@ def _restore_creative_ids(req: CreateMediaBuyRequest, flat: dict[str, Any]) -> N
             flat_pkgs[i]["creative_ids"] = cids
 
 
-class MediaBuyCreateEnv(EgressHatchMixin, IntegrationEnv):
+class MediaBuyCreateEnv(PeerCreativeAgentMixin, IntegrationEnv):
     """Integration test environment for _create_media_buy_impl.
 
     Mocks external services (adapter, audit, slack, context manager).
     Everything else is real: DB, repositories, validation, schema processing —
     including the egress seam's ingest verdict on webhook URLs, which is why
     the env carries ``set_egress_hatches`` (the @egress ingest-twin scenarios
-    pin the hatch posture the refusal is graded under).
+    pin the hatch posture the refusal is graded under), and the dial to a
+    tenant-configured creative agent when a package's format_id names one, which
+    is why it carries ``serve_peer_catalog``.
     """
 
     EXTERNAL_PATCHES = {
         "adapter": "src.core.tools.media_buy_create.get_adapter",
-        "audit": "src.core.tools.media_buy_create.get_audit_logger",
         "slack": "src.core.tools.media_buy_create.get_slack_notifier",
         "context_mgr": "src.core.tools.media_buy_create.get_context_manager",
         "format_spec": "src.core.tools.media_buy_create._get_format_spec_sync",
@@ -85,6 +205,10 @@ class MediaBuyCreateEnv(EgressHatchMixin, IntegrationEnv):
         kwargs.setdefault("tenant_id", mint(f"mbcreate{suffix}"))
         kwargs.setdefault("principal_id", mint(f"agent{suffix}"))
         super().__init__(**kwargs)
+        # The buy-level deadline the fake ad server reports on every order it creates.
+        # None is what a real ad server that sets no deadline answers; see
+        # ``report_creative_deadline``.
+        self._reported_creative_deadline: datetime | None = None
 
     def setup_media_buy_data(self) -> tuple:
         """Create the full dependency chain needed for create_media_buy.
@@ -177,7 +301,17 @@ class MediaBuyCreateEnv(EgressHatchMixin, IntegrationEnv):
             self._seeded_all_inventory_tag = True
 
         if format_ids is None:
-            format_ids = [{"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"}]
+            # An id the PINNED CAPTURE actually serves. A creative referenced from a package
+            # must satisfy two conditions at once -- its claimed id resolves against the
+            # capture, AND its claimed identity equals this arm, which ``_legacy_lane``
+            # compares whole -- and with the arm pinned to the synthetic ``display_300x250``
+            # those were unsatisfiable together: the only id equal to the arm was the one the
+            # agent does not serve. Measured against
+            # tests/fixtures/creative_formats/reference_formats.json:
+            # ``display_300x250`` is ABSENT, ``display_300x250_image`` is PRESENT. This is
+            # also already ProductFactory's own default, for the reason written at
+            # tests/factories/product.py.
+            format_ids = [{"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250_image"}]
 
         product = ProductFactory(
             tenant=tenant,
@@ -293,6 +427,14 @@ class MediaBuyCreateEnv(EgressHatchMixin, IntegrationEnv):
             too, one response package per requested package, which is what keeps
             the tool's positional ``req.packages[i] -> response.packages[i]`` walk
             lined up.
+
+            ``paused`` is read off the CARRIER for the same reason, and that is what
+            makes it gradeable. ``Package.SELLER_DECIDED`` names ``paused``, so the tool
+            does not echo the request — it reports what the ad server answered. A real
+            adapter answers from ``MediaPackage.paused`` (every one of them through
+            ``AdServerAdapter._build_package_responses``), so this answers from the same
+            place. A seller that fails to put the buyer's ask on the carrier gets
+            ``False`` back here, exactly as it would from a real ad server.
             """
             # The tool calls adapter.create_media_buy(request, packages, ...)
             # positionally, so the MediaPackage list arrives as args[1].
@@ -300,24 +442,36 @@ class MediaBuyCreateEnv(EgressHatchMixin, IntegrationEnv):
 
             return AdapterCreateResult(
                 media_buy_id=mint(f"mb_{uuid.uuid4().hex[:8]}"),
-                packages=[ResponsePackage(package_id=pkg.package_id, paused=False) for pkg in media_packages],
+                packages=[ResponsePackage(package_id=pkg.package_id, paused=pkg.paused) for pkg in media_packages],
+                creative_deadline=self._reported_creative_deadline,
             )
 
         mock_adapter.create_media_buy.side_effect = _adapter_create_response
         # Save original side_effect so Given steps can restore it after error injection
         mock_adapter._original_create_side_effect = _adapter_create_response
-        mock_adapter.validate_media_buy_request.return_value = None
+        # The pre-creation check is the REAL mock ad server's, not a constant. It is a
+        # production step: ``_create_media_buy_impl`` asks the adapter for its problems and
+        # refuses with VALIDATION_ERROR when there are any, and the e2e_rest server runs
+        # ``MockAdServer`` unpatched. A ``return_value = None`` here answered "no problems"
+        # for every request, so the three in-process transports accepted creates the live
+        # seller refuses -- a CPA package among them, which ``get_supported_pricing_models``
+        # does not list. Only the ad-server CALLS are faked; the seller's own rules are not.
+        # The check reads nothing off the principal or the config, so the env's own ids
+        # and an empty config are all it needs.
+        mock_adapter.validate_media_buy_request.side_effect = MockAdServer(
+            config={},
+            principal=Principal(principal_id=self._principal_id, name=self._principal_id, platform_mappings={}),
+            tenant_id=self._tenant_id,
+        ).validate_media_buy_request
         mock_adapter.add_creative_assets.return_value = None
         mock_adapter.associate_creatives.return_value = None
         mock_adapter.manual_approval_required = False
         mock_adapter.manual_approval_operations = []
         self.mock["adapter"].return_value = mock_adapter
 
-        # Audit logger: no-op
-        mock_audit = MagicMock()
-        mock_audit.log_operation.return_value = None
-        mock_audit.log_security_violation.return_value = None
-        self.mock["audit"].return_value = mock_audit
+        # The audit logger is NOT patched: it is our own code, and the audit trail it writes
+        # (the audit_logs table) is what the audit scenarios grade on every transport --
+        # the live e2e_rest server writes the same rows.
 
         # Slack notifier: no-op
         mock_slack = MagicMock()
@@ -331,32 +485,28 @@ class MediaBuyCreateEnv(EgressHatchMixin, IntegrationEnv):
 
         # Setup checklist: pass by default
 
-        # Format spec: mock _get_format_spec_sync to avoid asyncio.run() inside
-        # running event loop. Returns a valid format keyed by format_id. Tests
-        # for format mismatch (ext-p) override via mock["format_spec"].side_effect.
-        from tests.helpers.adcp_factories import create_test_format
-
-        self._format_specs: dict[str, Any] = {
-            "display_300x250": create_test_format(
-                format_id="display_300x250",
-                name="Display 300x250",
-                type="display",
-            ),
-        }
-
+        # Format spec: mock _get_format_spec_sync to avoid asyncio.run() inside a running
+        # event loop. Resolution itself is NOT faked -- it reads the same pinned capture the
+        # live server reads under ADCP_TESTING, so in-process and e2e agree about which
+        # format ids exist. Tests for format mismatch (ext-p) override via
+        # mock["format_spec"].side_effect.
+        #
+        # THERE IS NO PER-ID STUB DICT, and that is the point. A one-entry dict consulted
+        # BEFORE the capture used to sit here, keyed ``display_300x250`` -- a synthetic id
+        # the agent does not serve, made resolvable in process and only in process. It was
+        # the single counterexample to the two sentences this comment used to end with
+        # ("in-process and e2e format resolution agree by construction. Synthetic ids stay
+        # unresolvable (None), matching the server"), and it is why three transports
+        # answered one way and e2e_rest the other. Re-adding a stub re-creates that
+        # blindness; a scenario needing a format the capture lacks wants its own finding
+        # filed, not a stand-in.
         def _format_spec_side_effect(agent_url: str, format_id: str, *, provenance: Any = None) -> Any:
-            spec = self._format_specs.get(format_id)
-            if spec is not None:
-                return spec
-            # Fall back to the 54-format reference catalog — the SAME fixture the
-            # live server resolves under ADCP_TESTING (format_cache), so
-            # in-process and e2e format resolution agree by construction.
-            # Synthetic ids stay unresolvable (None), matching the server.
             from src.core.format_cache import load_reference_formats
 
             for fmt in load_reference_formats():
                 if fmt.format_id.id == format_id:
                     return fmt
+            # Unresolvable, exactly as the live server answers for an id it does not serve.
             return None
 
         self.mock["format_spec"].side_effect = _format_spec_side_effect
@@ -394,6 +544,160 @@ class MediaBuyCreateEnv(EgressHatchMixin, IntegrationEnv):
             # names a MISSING account still missing it.
             self._seed_named_account_ref(kwargs["account"])
         return kwargs
+
+    @realize_e2e(_uploaded_assets_from_the_audit_trail)
+    def uploaded_adapter_assets(self) -> list[dict[str, Any]]:
+        """The asset dicts the create or update path handed the ad server, in :meth:`adapter_mocks` order.
+
+        A NAMED SEAM instead of a step reaching into ``env.mock``: the escape-hatch guard
+        refuses that reach in a step because it "works in-process, cannot work on e2e_rest,
+        and is declarable nowhere". Declaring it here is what gives it a fourth-transport
+        answer -- :func:`_uploaded_assets_from_the_audit_trail` reads the receipt the
+        server's own ad server wrote -- rather than an ``e2e_unsupported`` row in a pinned
+        allowlist that may only shrink.
+
+        What a scenario asks of this is what the ad server RECEIVED, which for several
+        fields is the only place they are observable at all: the click destination appears
+        in no response the buyer sees, which is precisely why dropping it is silent.
+
+        Reads ``adapter.add_creative_assets``, the spelling the SYNCHRONOUS create path
+        uses. The approval and retroactive-push paths go through
+        ``adapter.creatives_manager.add_creative_assets`` instead; a scenario wanting those
+        needs its own seam rather than a widened one here, because which path ran is part of
+        what it is asserting.
+
+        Every adapter in :meth:`adapter_mocks` is read: an upload the update path makes lands
+        on the update module's adapter and nowhere else, so reading only the create module's
+        would report an empty list for every update. The order is NOT newest-last across
+        adapters: each adapter's calls are in call order, and the adapters follow
+        :meth:`adapter_mocks`, so every create-module upload precedes every update-module one
+        whenever they happened. A Then reading ``[-1]`` gets the newest update upload in a
+        scenario that updates, and the newest create upload in one that only creates.
+        """
+        uploaded: list[dict[str, Any]] = []
+        for adapter in self.adapter_mocks():
+            for call in adapter.add_creative_assets.call_args_list:
+                assets = call.args[1] if len(call.args) > 1 else call.kwargs.get("assets")
+                uploaded.extend(assets or [])
+        return uploaded
+
+    def adapter_mocks(self) -> list[MagicMock]:
+        """Every ad-server adapter this env patches, one entry per production ``get_adapter``.
+
+        The one list a Given configuring the adapter and a Then reading what it received
+        both walk, so a module that gains its own patched ``get_adapter`` is added here once
+        and both sides see it. This env patches the create module's; a subclass that patches
+        another module's overrides this and appends its own.
+        """
+        return [self.mock["adapter"].return_value]
+
+    def report_creative_deadline(self, deadline: datetime) -> None:
+        """Make the ad server report *deadline* as the creative_deadline of every order it creates.
+
+        ``AdapterCreateResult.creative_deadline`` is the buy-level deadline an adapter hands
+        back from ``create_media_buy``, and the create tool persists it on the
+        ``media_buys.creative_deadline`` column on both approval paths. The ad server is a
+        system this repo does not own, so its answer is the one thing a scenario may fake.
+
+        WHO READS IT: the adapter mock in THIS process. That is every create on the
+        in-process transports, and on every transport the manual-approval execution the
+        operator step runs (``run_approval`` calls ``execute_approved_media_buy`` here,
+        with the env's adapter patch in force). A create that reaches the ad server inside
+        the e2e_rest container is served by ``MockAdServer``, which reports no deadline, so
+        a scenario reading this value off an AUTO-approved create on e2e_rest would need a
+        live-stack realization this method does not have.
+        """
+        self._reported_creative_deadline = deadline
+
+    @realize_e2e(_adapter_create_receipts_on_the_live_stack)
+    def adapter_create_calls(self) -> int:
+        """How many times the create path handed the ad server a media buy.
+
+        The fourth-transport answer is the receipt the server's ``MockAdServer`` writes per
+        ``create_media_buy`` it is handed, for the reason ``uploaded_adapter_assets`` reads
+        one: a mock in this process cannot see a call made in the server container, so a
+        scenario asserting the ad server was NOT reached would pass vacuously over e2e_rest.
+
+        One asymmetry, so a caller does not lean on it: ``MockAdServer`` raises a
+        ``test_behavior`` fault BEFORE it writes the receipt, so after ``fail_adapter_create``
+        the live count is 0 where the in-process count is 1. Count only creates that reached
+        the ad server unfaulted.
+        """
+        return int(self.mock["adapter"].return_value.create_media_buy.call_count)
+
+    @realize_e2e(_inject_create_failure_on_the_live_stack)
+    def fail_adapter_create(self, error: Exception, **behavior: Any) -> None:
+        """Make the ad server refuse ``create_media_buy`` with *error*.
+
+        *behavior* is the same fault spelled in ``MockAdServer``'s ``test_behavior`` knobs,
+        which is how the live stack's real adapter is told to raise it.
+        """
+        self.mock["adapter"].return_value.create_media_buy.side_effect = error
+
+    @realize_e2e(_live_ad_server_on_the_live_stack)
+    def run_ad_server(self, adapter_type: str) -> None:
+        """Give the tenant a REAL ad-server configuration of *adapter_type*.
+
+        Two halves, and the second is the reason this is not just a factory call.
+
+        1. The ``adapter_config`` row, so ``resolve_tenant_adapter_type`` answers
+           *adapter_type* instead of the ``tenant.ad_server`` default. For
+           ``google_ad_manager`` a network code goes with it: without one,
+           selection refuses at its own ``network_code is required`` check and the
+           scenario would grade a half-configured tenant rather than a reachable
+           ad server. No credential is seeded, and that is the point — the one
+           thing a deployment with no GAM credential can honestly do with a live
+           GAM selection is refuse it:
+           ``GoogleAdManager.__init__`` raises
+           ``AdCPConfigurationError(field="authentication")``
+           (google_ad_manager.py:176) before it builds a client manager, so the
+           refusal reaches the wire as CONFIGURATION_ERROR and costs no network
+           call at all.
+
+        2. The fake adapter STOPS answering. ``EXTERNAL_PATCHES`` replaces
+           ``media_buy_create.get_adapter`` wholesale, so by default no scenario in
+           this env can see which adapter production would have chosen — the
+           decision is the thing being faked. Pointing the patched name's
+           ``side_effect`` at the real :func:`get_adapter` hands the decision back
+           to production while leaving the patch in place for the rest of the env.
+           A scenario that says the tenant runs google_ad_manager and is then
+           served by a MagicMock is not running that ad server, so the two halves
+           have to move together.
+
+        The e2e branch does only half 1: the live server patches nothing, so the
+        decision is already production's there.
+        """
+        from src.core.helpers.adapter_helpers import get_adapter
+
+        self._write_adapter_config(adapter_type)
+        self.mock["adapter"].side_effect = get_adapter
+
+    def get_currency_limit(self, currency: str) -> Any:
+        """The tenant's ``CurrencyLimit`` row for ``currency``. Raises when there is none.
+
+        The row the create path reads for the tenant's minimum package budget and daily
+        cap, so a Given that changes either edits this row rather than adding one.
+        """
+        from sqlalchemy import select
+
+        from src.core.database.models import CurrencyLimit
+
+        stmt = select(CurrencyLimit).filter_by(tenant_id=self._tenant_id, currency_code=currency)
+        return self.get_session().scalars(stmt).one()
+
+    def _write_adapter_config(self, adapter_type: str) -> None:
+        """The ``adapter_config`` row naming *adapter_type*, committed."""
+        from tests.factories import AdapterConfigFactory
+
+        tenant, _principal = self.setup_default_data()
+        AdapterConfigFactory(
+            tenant=tenant,
+            adapter_type=adapter_type,
+            # Only read on the GAM branch; harmless on the others, and spelling it
+            # unconditionally keeps one call site rather than a per-adapter kwargs dict.
+            gam_network_code="123456789",
+        )
+        self._commit_factory_data()
 
     def _default_account_id(self) -> str:
         """The seeded account's id, or a literal when there is no DB bound.

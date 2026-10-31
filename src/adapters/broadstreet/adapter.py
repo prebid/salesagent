@@ -17,6 +17,16 @@ import logging
 from datetime import UTC, datetime
 from typing import Any
 
+from adcp.types import (
+    AudioFormatAsset,
+    HtmlFormatAsset,
+    ImageFormatAsset,
+    TextFormatAsset,
+    UrlFormatAsset,
+    VideoFormatAsset,
+)
+from adcp.types.domains.core.canonical_projection_ref import CanonicalProjectionReference
+
 from src.adapters.base import (
     AdapterCapabilities,
     AdapterCreateRequest,
@@ -38,9 +48,16 @@ from src.adapters.broadstreet.managers import (
 from src.adapters.broadstreet.schemas import BroadstreetConnectionConfig, BroadstreetProductConfig
 from src.adapters.constants import require_supported_update_action
 from src.core.errors.codes import AppErrorCode
-from src.core.errors.details import AdapterFailureDetails, EntityRefDetails, ErrorProblem, ValidationDetails
+from src.core.errors.details import (
+    AdapterFailureDetails,
+    ConfigurationDetails,
+    EntityRefDetails,
+    ErrorProblem,
+    ValidationDetails,
+)
 from src.core.exceptions import (
     AdCPBulkUpdateError,
+    AdCPConfigurationError,
     AdCPPackageNotFoundError,
     AdCPValidationError,
 )
@@ -50,12 +67,60 @@ from src.core.schemas import (
     AssetStatus,
     CheckMediaBuyStatusResponse,
     DeliveryTotals,
+    Format,
+    FormatId,
     MediaPackage,
     Principal,
     ReportingPeriod,
 )
 
 logger = logging.getLogger(__name__)
+
+# Each pinned ``Format.assets`` variant carries a Literal ``asset_type`` discriminator, so
+# the class IS the asset type and there is no enum to pass. Six of the twenty-one the union
+# models: the ones Broadstreet's templates name.
+_ASSET_TYPE_TO_CLASS: dict[str, type] = {
+    "image": ImageFormatAsset,
+    "video": VideoFormatAsset,
+    "audio": AudioFormatAsset,
+    "text": TextFormatAsset,
+    "html": HtmlFormatAsset,
+    "url": UrlFormatAsset,
+}
+
+
+def _infer_asset_type(asset_id: str) -> str:
+    """The asset type a Broadstreet template's asset id names.
+
+    Broadstreet templates carry asset ids, not types (``front_image``, ``youtube_url``,
+    ``headline``), so the type is read off the id's naming convention. Order matters:
+    ``youtube_url`` is a video, not a url.
+    """
+    asset_lower = asset_id.lower()
+    if "image" in asset_lower or "logo" in asset_lower:
+        return "image"
+    elif "video" in asset_lower or "youtube" in asset_lower:
+        return "video"
+    elif "url" in asset_lower or "click" in asset_lower:
+        return "url"
+    elif "html" in asset_lower:
+        return "html"
+    else:
+        return "text"  # Default to text for headlines, body, captions, etc.
+
+
+def _make_format_asset(
+    asset_id: str, *, required: bool
+) -> ImageFormatAsset | VideoFormatAsset | AudioFormatAsset | TextFormatAsset | HtmlFormatAsset | UrlFormatAsset:  # type: ignore[valid-type]
+    """The pinned ``Format.assets`` variant for one Broadstreet template asset."""
+    asset_type = _infer_asset_type(asset_id)
+    cls = _ASSET_TYPE_TO_CLASS.get(asset_type, TextFormatAsset)  # default to text
+    return cls(
+        item_type="individual",
+        asset_id=asset_id,
+        asset_type=asset_type,
+        required=required,
+    )
 
 
 class BroadstreetAdapter(AdServerAdapter):
@@ -596,12 +661,7 @@ class BroadstreetAdapter(AdServerAdapter):
                 else:
                     self.log(f"[yellow]No Broadstreet advertisement IDs found for {media_buy_id}[/yellow]")
 
-                affected = [
-                    AffectedPackage(
-                        package_id=pkg.package_id, paused=is_pause, changes_applied=None, buyer_package_ref=None
-                    )
-                    for pkg in db_packages
-                ]
+                affected = [AffectedPackage(package_id=pkg.package_id, paused=is_pause) for pkg in db_packages]
 
                 return AdapterUpdateResult(media_buy_id=media_buy_id, affected_packages=affected)
 
@@ -645,11 +705,7 @@ class BroadstreetAdapter(AdServerAdapter):
 
                 return AdapterUpdateResult(
                     media_buy_id=media_buy_id,
-                    affected_packages=[
-                        AffectedPackage(
-                            package_id=package_id, paused=is_pause, changes_applied=None, buyer_package_ref=None
-                        )
-                    ],
+                    affected_packages=[AffectedPackage(package_id=package_id, paused=is_pause)],
                 )
 
         # Budget update: persist to database (Broadstreet has no budget API)
@@ -673,11 +729,7 @@ class BroadstreetAdapter(AdServerAdapter):
 
             return AdapterUpdateResult(
                 media_buy_id=media_buy_id,
-                affected_packages=[
-                    AffectedPackage(
-                        package_id=package_id, paused=False, changes_applied={"budget": budget}, buyer_package_ref=None
-                    )
-                ],
+                affected_packages=[AffectedPackage(package_id=package_id, paused=False)],
             )
         # Impressions update: persist to database (Broadstreet has no impressions API)
         if action == "update_package_impressions":
@@ -702,14 +754,7 @@ class BroadstreetAdapter(AdServerAdapter):
 
             return AdapterUpdateResult(
                 media_buy_id=media_buy_id,
-                affected_packages=[
-                    AffectedPackage(
-                        package_id=package_id,
-                        paused=False,
-                        changes_applied={"impressions": budget},
-                        buyer_package_ref=None,
-                    )
-                ],
+                affected_packages=[AffectedPackage(package_id=package_id, paused=False)],
             )
 
         # Should not reach here - all actions are handled above
@@ -724,82 +769,61 @@ class BroadstreetAdapter(AdServerAdapter):
         self.log("Fetching available inventory from Broadstreet")
         return self.inventory_manager.build_inventory_response()
 
-    def get_creative_formats(self) -> list[dict[str, Any]]:
-        """Return Broadstreet templates as AdCP creative formats.
+    @classmethod
+    def creative_formats(cls, tenant_id: str) -> list[Format]:
+        """Broadstreet's templates as this tenant's adapter-served AdCP formats.
 
-        Converts Broadstreet template definitions to AdCP Format schema.
-        These formats are included in list_creative_formats responses when
-        Broadstreet is acting as both sales and creative agent.
+        THE ONE BUILDER. ``list_creative_formats`` used to compose these inline
+        (``src/core/tools/creative_formats.py``) while this adapter composed them again as
+        dicts nothing read, and the two had drifted: the dicts carried a pre-3.2
+        ``type: "display"`` key the pinned ``Format`` does not declare, and NEITHER set
+        ``canonical``. The catalogue is built here once now, and both consumers of one --
+        discovery and ``sync_creatives`` -- read it through
+        ``adapter_served_creative_formats``, so the formats this seller advertises are
+        exactly the formats a creative may name (salesagent-zthsk).
 
-        Returns:
-            List of format dictionaries matching AdCP Format schema
+        ``canonical.kind`` comes from the template's own ``canonical_kind``, which is the
+        adapter declaring its own projection in process -- see ``BROADSTREET_TEMPLATES``
+        for why each template projects where it does. A template missing it is REFUSED:
+        the base-class contract says a format whose canonical kind the adapter cannot name
+        must not be served, and omitting it silently would serve a format no creative can
+        then sync.
         """
         from src.adapters.broadstreet.config_schema import BROADSTREET_TEMPLATES
 
-        formats = []
-        # Use tenant subdomain or adapter name for agent URL
-        agent_url = f"broadstreet://{self.tenant_id or 'default'}"
+        agent_url = f"broadstreet://{tenant_id}"
+        formats: list[Format] = []
 
         for template_id, template in BROADSTREET_TEMPLATES.items():
-            # Build assets list from required and optional assets
-            assets = []
-
-            # Required assets
-            for asset_id in template.get("required_assets", []):
-                asset_type = self._infer_asset_type(asset_id)
-                assets.append(
-                    {
-                        "item_type": "individual",
-                        "asset_id": asset_id,
-                        "asset_type": asset_type,
-                        "required": True,
-                        "name": asset_id.replace("_", " ").title(),
-                    }
+            kind = template.get("canonical_kind")
+            if not kind:
+                raise AdCPConfigurationError(
+                    details=ConfigurationDetails(tenant_id=tenant_id, format_id=f"broadstreet_{template_id}")
                 )
-
-            # Optional assets
-            for asset_id in template.get("optional_assets", []):
-                asset_type = self._infer_asset_type(asset_id)
-                assets.append(
-                    {
-                        "item_type": "individual",
-                        "asset_id": asset_id,
-                        "asset_type": asset_type,
-                        "required": False,
-                        "name": asset_id.replace("_", " ").title(),
-                    }
-                )
-
+            assets = [
+                _make_format_asset(asset_id, required=required)
+                for required, key in ((True, "required_assets"), (False, "optional_assets"))
+                for asset_id in template.get(key, [])
+            ]
             formats.append(
-                {
-                    "format_id": {"id": f"broadstreet_{template_id}", "agent_url": agent_url},
-                    "name": template["name"],
-                    "type": "display",  # All Broadstreet formats are display
-                    "description": template.get("description", ""),
-                    "assets": assets,
-                    "is_standard": False,  # These are Broadstreet-specific formats
-                }
+                Format(
+                    format_id=FormatId(
+                        id=f"broadstreet_{template_id}",
+                        # The WIRE STRING, not an AnyUrl: the pinned SDK (#1396, "keep the
+                        # format-reference agent_url as the wire string") types
+                        # FormatReferenceStructuredObject.agent_url as ``str``, so an
+                        # AnyUrl is refused and its normalisation (a trailing slash on a
+                        # bare origin) is no longer applied on this field.
+                        agent_url=agent_url,
+                    ),
+                    name=str(template["name"]),
+                    description=str(template["description"]) if template.get("description") else None,
+                    assets=assets or None,
+                    canonical=CanonicalProjectionReference(kind=str(kind)),
+                    is_standard=False,  # These are Broadstreet-specific formats
+                    platform_config=None,
+                    requirements=None,
+                )
             )
 
         return formats
-
-    def _infer_asset_type(self, asset_id: str) -> str:
-        """Infer asset type from asset ID naming convention.
-
-        Args:
-            asset_id: Asset identifier (e.g., "front_image", "youtube_url", "headline")
-
-        Returns:
-            Asset type string (image, video, text, url)
-        """
-        asset_lower = asset_id.lower()
-        if "image" in asset_lower or "logo" in asset_lower:
-            return "image"
-        elif "video" in asset_lower or "youtube" in asset_lower:
-            return "video"
-        elif "url" in asset_lower or "click" in asset_lower:
-            return "url"
-        elif "html" in asset_lower:
-            return "html"
-        else:
-            return "text"  # Default to text for headlines, body, captions, etc.

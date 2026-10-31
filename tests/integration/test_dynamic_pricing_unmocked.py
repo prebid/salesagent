@@ -43,7 +43,9 @@ class TestDynamicPricingUnmocked:
             product = response.products[0]
             # Original fixed pricing should be intact
             assert len(product.pricing_options) >= 1
-            cpm_option = product.pricing_options[0].root
+            # The element IS the arm: adcp 9 types pricing_options as a discriminated
+            # union, not a RootModel wrapping it.
+            cpm_option = product.pricing_options[0]
             assert cpm_option.fixed_price == 10.0
 
     @pytest.mark.asyncio
@@ -87,7 +89,7 @@ class TestDynamicPricingUnmocked:
             product = response.products[0]
 
             # Find the CPM option
-            cpm_options = [po.root for po in product.pricing_options if po.root.pricing_model.upper() == "CPM"]
+            cpm_options = [po for po in product.pricing_options if po.pricing_model.upper() == "CPM"]
             assert len(cpm_options) >= 1
 
             cpm = cpm_options[0]

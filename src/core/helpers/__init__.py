@@ -11,42 +11,36 @@ from src.core.enum_helpers import enum_value
 from src.core.helpers.activity_helpers import log_tool_activity
 from src.core.helpers.adapter_helpers import get_adapter
 from src.core.helpers.creative_helpers import (
-    CLICKTHROUGH_ASSET_IDS,
-    IMPRESSION_TRACKER_ASSET_IDS,
     MEDIA_ASSET_FALLBACK_IDS,
     MEDIA_ASSET_TYPES,
-    FormatInfo,
-    FormatParameters,
     _detect_snippet_type,
-    _extract_format_info,
     _extract_format_namespace,
     _normalize_format_value,
     _validate_creative_assets,
     extract_click_url,
     extract_impression_tracker_url,
     extract_media_url_and_dimensions,
-    validate_creative_format_against_product,
+    media_asset_requires_dimensions,
+    unidentified_url_asset_reason,
+    url_asset_identification,
 )
 
 __all__ = [
     "get_adapter",
     "log_tool_activity",
     "enum_value",
-    "_extract_format_info",
     "_extract_format_namespace",
     "_normalize_format_value",
     "_validate_creative_assets",
     "_detect_snippet_type",
-    "validate_creative_format_against_product",
-    "FormatInfo",
-    "FormatParameters",
     # URL extraction helpers
     "extract_media_url_and_dimensions",
+    "media_asset_requires_dimensions",
     "extract_click_url",
     "extract_impression_tracker_url",
+    "url_asset_identification",
+    "unidentified_url_asset_reason",
     # Constants
     "MEDIA_ASSET_TYPES",
     "MEDIA_ASSET_FALLBACK_IDS",
-    "CLICKTHROUGH_ASSET_IDS",
-    "IMPRESSION_TRACKER_ASSET_IDS",
 ]

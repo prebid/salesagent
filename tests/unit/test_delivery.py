@@ -174,6 +174,15 @@ def _standard_patches(
     mock_uow.__exit__ = MagicMock(return_value=False)
     mock_uow.media_buys = MagicMock()
 
+    # ``get_max_sequence_number`` is typed ``-> int`` and the response field is
+    # ``sequence_number: int | None``, so production can only ever put an int there.
+    # A bare MagicMock made ``max_seq + 1`` another MagicMock, which adcp 6.6.0's lax
+    # ``int | None`` coerced through ``__int__`` and adcp 9's ``Strict(strict=True)``
+    # refuses -- correctly, since get-media-buy-delivery-response.json types the field
+    # ``integer``. The fixture now answers with the shape production produces.
+    mock_delivery_repo = MagicMock()
+    mock_delivery_repo.get_max_sequence_number.return_value = 0
+
     return {
         "adapter": patch(
             f"{_PATCH_PREFIX}.get_adapter",
@@ -198,6 +207,10 @@ def _standard_patches(
         "uow": patch(
             f"{_PATCH_PREFIX}.MediaBuyUoW",
             return_value=mock_uow,
+        ),
+        "delivery_repo": patch(
+            f"{_PATCH_PREFIX}.DeliveryRepository",
+            return_value=mock_delivery_repo,
         ),
     }
 
@@ -230,6 +243,7 @@ def _run_impl_with_patches(
         patches["target_buys"],
         patches["pricing_options"],
         patches["uow"],
+        patches["delivery_repo"],
     ):
         return _get_media_buy_delivery_impl(req, identity)
 
@@ -551,6 +565,7 @@ class TestDeliveryStatusFilter:
             patches["target_buys"] as mock_target,
             patches["pricing_options"],
             patches["uow"],
+            patches["delivery_repo"],
         ):
             _get_media_buy_delivery_impl(req, identity)
 
@@ -1275,6 +1290,7 @@ class TestDeliveryInvalidDateRange:
             patches["target_buys"] as mock_target,
             patches["pricing_options"],
             patches["uow"],
+            patches["delivery_repo"],
         ):
             with pytest.raises(AdCPValidationError):
                 _get_media_buy_delivery_impl(req, identity)

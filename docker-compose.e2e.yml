@@ -179,7 +179,19 @@ services:
       # which rate-limits under CI load. The runner service
       # already sets the same value for the direct integration tests.
       # https, via the shared tls-proxy front below.
-      CREATIVE_AGENT_URL: https://creative-agent.adcp.test:8443/api/creative-agent
+      #
+      # Two settings, two meanings. CREATIVE_AGENT_URL is
+      # the MCP endpoint dialled, and the reference agent serves MCP only at
+      # POST <base>/api/creative-agent/mcp; the bare /api/creative-agent is
+      # refused (CSRF 403), and dialling it spent call_mcp_tool's whole retry
+      # budget before the '/mcp' fallback on every call. CREATIVE_AGENT_ORIGIN
+      # is the operator agent's identity, and here it is the PUBLIC agent's
+      # origin: this container stands in for it. Every reference this stack
+      # serves or seeds names the public agent (the reference-formats capture
+      # is normalized to it, the factories default to it), so that is the
+      # origin a reference must be recognized by and rerouted from.
+      CREATIVE_AGENT_URL: https://creative-agent.adcp.test:8443/api/creative-agent/mcp
+      CREATIVE_AGENT_ORIGIN: https://creative.adcontextprotocol.org
       CREATE_DEMO_TENANT: "true"
       # The LIVE server needs the same signing KEK the dev stack has (#1291 D1).
       # A scenario's Given mints a tenant signing key through production, which
@@ -277,12 +289,13 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-      # 60s, not creative-agent's 30s (below) -- adcp-server does more work
-      # at startup (DB migrations, etc.) and is the service that actually
-      # showed this bug live: marked genuinely UNHEALTHY (not just
-      # `starting`) under heavy concurrent test-suite load, because there
-      # was no grace period for Docker to report `starting` during
-      start_period: 60s
+      # adcp-server replays the whole migration chain on a fresh database before it
+      # listens: about 120s from container start on the CI box (2026-10-29), against
+      # a 60s grace period plus three 30s probes. One run crossed that 150s line and
+      # failed the stack as unhealthy. The grace period now covers the replay, and the
+      # 5s start_interval marks a ready server healthy without waiting out a 30s interval.
+      start_period: 300s
+      start_interval: 5s
 
   # ─── The agent the STORYBOARD grades, and only the storyboard ───────────────
   #
@@ -392,10 +405,12 @@ services:
   # alias per origin, chosen by the nginx `map $ssl_server_name` in the shared
   # template — across BOTH namespaces the generated leaf covers:
   #   *.adcp.test     proxy, creative-agent, webhooks (the seller-side fronts)
-  #   *.adcp-e2e.dev  webhooks, counterparty (origins the SERVER dials outbound,
-  #                   where a REGISTRABLE domain is required: the outbound
-  #                   webhook path's reserved-TLD gate refuses .test, and the
-  #                   counterparty walk's eTLD+1 match needs a real one).
+  #   *.adcp-e2e.dev  webhooks, counterparty, seller (every name whose eTLD+1 has
+  #                   to resolve in the Public Suffix List: the outbound webhook
+  #                   path's reserved-TLD gate refuses .test, the counterparty
+  #                   walk's eTLD+1 match needs a real one, and so does the
+  #                   runner's walk of the SELLER's own trust root — which is why
+  #                   this namespace is no longer only "dialed outbound").
   # Adding an origin is one alias here plus one map line there — NOT a new
   # service: a compose service's `aliases` list can carry any number of names,
   # so fronting a second upstream never required a second container. Exactly one
@@ -462,6 +477,16 @@ services:
           # which needs a registrable domain; the generated leaf carries
           # *.adcp-e2e.dev as a SAN for exactly this.
           - counterparty.adcp-e2e.dev
+          # The SELLER, under the same wildcard and for the same reason, routed to
+          # the SAME upstream as proxy.adcp.test — a second name, not a move. The
+          # runner walks our own published trust root through the SDK resolver
+          # (tests/e2e/test_trust_root_e2e.py), and security.mdx step 3 binds the
+          # agent url to brand_json_url by eTLD+1 off a pinned Public Suffix List
+          # snapshot. `.test` is not in that list, so the walk refuses
+          # proxy.adcp.test with request_signature_brand_origin_mismatch however
+          # correct our documents are. Every other seller-side front keeps its
+          # *.adcp.test name; only the one a buyer RESOLVES us by needs this.
+          - seller.adcp-e2e.dev
           # The storyboard agent, fronted here for A2A's sake. A2A is card-first:
           # the runner reads the RPC endpoint off /.well-known/agent-card.json, and
           # the card renders https for any non-loopback host (src/app.py
@@ -494,12 +519,17 @@ services:
     # reading `<!doctype html>` off the MCP endpoint, which is what nginx serves when it
     # cannot reach the upstream. A front that is not probed is a front whose failure
     # arrives as someone else's mystery. The boot-delay cost is real and is the price.
+    #
+    # seller.adcp-e2e.dev reaches the SAME upstream as proxy.adcp.test, so its row adds
+    # nothing about the upstream and everything about the NAME: that the leaf's
+    # *.adcp-e2e.dev SAN covers it and the SNI map routes it. Without the row, a missing
+    # alias or map line surfaces as one e2e test failing to connect.
 
     healthcheck:
       test:
         [
           "CMD-SHELL",
-          "curl -fsS --cacert /app/.test-tls/ca.pem https://proxy.adcp.test:8443/health && curl -fsS --cacert /app/.test-tls/ca.pem https://creative-agent.adcp.test:8443/api/creative-agent/health && curl -fsS --cacert /app/.test-tls/ca.pem https://webhooks.adcp.test:8443/health && curl -fsS --cacert /app/.test-tls/ca.pem https://webhooks.adcp-e2e.dev:8443/health && curl -fsS --cacert /app/.test-tls/ca.pem https://counterparty.adcp-e2e.dev:8443/health && curl -fsS --cacert /app/.test-tls/ca.pem https://storyboard.adcp.test:8443/health",
+          "curl -fsS --cacert /app/.test-tls/ca.pem https://proxy.adcp.test:8443/health && curl -fsS --cacert /app/.test-tls/ca.pem https://creative-agent.adcp.test:8443/api/creative-agent/health && curl -fsS --cacert /app/.test-tls/ca.pem https://webhooks.adcp.test:8443/health && curl -fsS --cacert /app/.test-tls/ca.pem https://webhooks.adcp-e2e.dev:8443/health && curl -fsS --cacert /app/.test-tls/ca.pem https://counterparty.adcp-e2e.dev:8443/health && curl -fsS --cacert /app/.test-tls/ca.pem https://storyboard.adcp.test:8443/health && curl -fsS --cacert /app/.test-tls/ca.pem https://seller.adcp-e2e.dev:8443/health",
         ]
       interval: 10s
       timeout: 5s
@@ -689,8 +719,10 @@ services:
       # https, via the shared tls-proxy front above — the runner dials the same
       # origin the SERVER does, and a `*.adcp.test` value that is not
       # https://...:8443 is a guard failure
-      # (tests/unit/test_architecture_e2e_compose_tls_origins.py).
-      CREATIVE_AGENT_URL: https://creative-agent.adcp.test:8443/api/creative-agent
+      # (tests/unit/test_architecture_e2e_compose_tls_origins.py). The endpoint
+      # and the identity are separate settings; see the adcp-server entry.
+      CREATIVE_AGENT_URL: https://creative-agent.adcp.test:8443/api/creative-agent/mcp
+      CREATIVE_AGENT_ORIGIN: https://creative.adcontextprotocol.org
       # PLAYWRIGHT_BROWSERS_PATH used to sit here, overriding Dockerfile.test's
       # baked /ms-playwright; it was DELETED (not moved) when the `user:` pin
       # went away -- see the HOME/UV_CACHE_DIR note at the top of this block.
@@ -928,11 +960,13 @@ services:
   # would be real — that service's other mode records raw bytes for the signing
   # suite and its do_POST semantics must not bleed into an identity origin.
   #
-  # Serves the three hops async_resolve_agent walks (capabilities ->
-  # brand_json_url -> brand.json -> jwks_uri -> JWKS) as plain GETs, because
-  # _fetch_capabilities does a raw GET with follow_redirects=False and demands a
-  # 200 JSON object — which is exactly why the seller's OWN trust root cannot
-  # stand in as the counterparty: our /mcp answers GET with an SSE redirect.
+  # Serves the three hops async_resolve_agent walks: capabilities over an MCP
+  # tools/call of get_adcp_capabilities (AdCP 3.1.1 L1/security.mdx:1142 — the
+  # agent's declared transport, never a raw GET), then brand_json_url ->
+  # brand.json -> jwks_uri -> JWKS as plain GETs. The seller's OWN trust root
+  # cannot stand in as the counterparty: /mcp is the seller's own tool surface,
+  # /a2a is JSON-RPC with an agent card, and the listed/unlisted pair this origin
+  # publishes needs an origin of its own to mean anything.
   counterparty-origin:
     image: python:3.12-slim
     working_dir: /app

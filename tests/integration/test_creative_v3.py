@@ -20,8 +20,8 @@ from unittest.mock import patch
 from uuid import uuid4
 
 import pytest
-from adcp.types import AccountReference
-from adcp.types.generated_poc.creative.sync_creatives_request import Assignment
+from adcp.types import AccountReferenceById
+from adcp.types.domains.creative.sync_creatives_request import Assignment
 from sqlalchemy import select
 
 from src.core.database.database_session import get_db_session
@@ -34,7 +34,8 @@ from src.core.database.models import (
 )
 from src.core.database.models import Product as DBProduct
 from src.core.schemas import CreativeStatusEnum, SyncCreativesRequest, SyncCreativesResponse
-from tests.factories.creative_asset import build_assets, image_spec
+from tests.factories.creative import DEFAULT_CREATIVE_AGENT_URL
+from tests.factories.creative_asset import named_format_assets
 from tests.factories.principal import plaintext_token_for
 from tests.helpers.credentials import credential_headers
 from tests.helpers.envelope_assertions import raises_adcp
@@ -45,8 +46,15 @@ pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
-DEFAULT_AGENT_URL = "https://test-agent.example.com"
+# The reference agent's origin, because DEFAULT_FORMAT_ID is a v1 name: the SDK upgrades it
+# to a canonical kind only for a reference at that origin, and the write gate refuses a
+# creative whose reference projects to none (format_resolver.creative_identity_of). At the
+# made-up agent that stood here every sync in this file failed per creative.
+DEFAULT_AGENT_URL = DEFAULT_CREATIVE_AGENT_URL
 DEFAULT_FORMAT_ID = "display_300x250_image"
+# A registry literal (registries/v1-canonical-mapping.json -> video_hosted), so the
+# video-only product names a legacy reference that maps, not an id nothing maps.
+VIDEO_FORMAT_ID = "video_15s"
 
 
 # ---------------------------------------------------------------------------
@@ -79,8 +87,9 @@ def _make_creative_dict(
         # the media reference inside ``assets``. They survived only because nothing built
         # the request model on the sync path; every transport does now. Backwards
         # compatibility, where wanted, belongs in RequestCompatMiddleware -- not in the
-        # tool signature or _impl.
-        "assets": build_assets(image_spec("banner")),
+        # tool signature or _impl. The assets are the ones the named format requires: the
+        # seller holds a legacy manifest to them.
+        "assets": named_format_assets(format_id),
     }
 
 
@@ -108,17 +117,19 @@ def _seed_account_for(tenant_id: str, principal_ids: tuple[str, ...]) -> None:
 
 @pytest.fixture(autouse=True)
 def mock_format_registry():
-    """Mock creative agent format registry to avoid real HTTP calls."""
+    """Mock creative agent format registry to avoid real HTTP calls.
+
+    The display format is the capture's own declaration, not an invented one: the seller
+    holds a creative's manifest to the assets the format it names requires, so the format
+    served here has to be the one :func:`_make_creative_dict` builds its assets from.
+    """
+    from src.core.format_cache import load_reference_formats
     from tests.helpers.adcp_factories import create_test_format
 
     mock_formats = {
-        DEFAULT_FORMAT_ID: create_test_format(
-            format_id=DEFAULT_FORMAT_ID,
-            name="Display 300x250 Image",
-            type="display",
-        ),
-        "video_instream_15s": create_test_format(
-            format_id="video_instream_15s",
+        DEFAULT_FORMAT_ID: next(fmt for fmt in load_reference_formats() if fmt.format_id.id == DEFAULT_FORMAT_ID),
+        VIDEO_FORMAT_ID: create_test_format(
+            format_id=VIDEO_FORMAT_ID,
             name="Video Instream 15s",
             type="video",
         ),
@@ -223,7 +234,7 @@ class TestCrossPrincipalIsolation:
             # reused one key across two payloads -- correctly an IDEMPOTENCY_CONFLICT now
             # that sync_creatives honours the key.
             idempotency_key=f"sync-{uuid4().hex}",
-            account=AccountReference(root={"account_id": ACCOUNT_ID}),
+            account=AccountReferenceById(account_id=ACCOUNT_ID),
             headers=_headers(self.TENANT_ID, principal_id),
         )
 
@@ -333,7 +344,7 @@ class TestApprovalWorkflow:
             # SyncCreativesRequest now, so omitting either is a rejected request rather than
             # a call that reaches the impl.
             idempotency_key=f"sync-{uuid4().hex}",
-            account=AccountReference(root={"account_id": ACCOUNT_ID}),
+            account=AccountReferenceById(account_id=ACCOUNT_ID),
             headers=_headers(tenant_id, principal_id),
         )
 
@@ -452,7 +463,7 @@ class TestBatchSync:
             creatives=creatives,
             # Both are in sync-creatives-request.json /required.
             idempotency_key=f"sync-{uuid4().hex}",
-            account=AccountReference(root={"account_id": ACCOUNT_ID}),
+            account=AccountReferenceById(account_id=ACCOUNT_ID),
             headers=self._creds(),
         )
 
@@ -481,7 +492,7 @@ class TestBatchSync:
             creatives=[_make_creative_dict(creative_id="c_upsert", name="Original Name")],
             # Both are in sync-creatives-request.json /required.
             idempotency_key=f"sync-{uuid4().hex}",
-            account=AccountReference(root={"account_id": ACCOUNT_ID}),
+            account=AccountReferenceById(account_id=ACCOUNT_ID),
             headers=headers,
         )
         action1 = result1.creatives[0].action
@@ -494,7 +505,7 @@ class TestBatchSync:
             creatives=[_make_creative_dict(creative_id="c_upsert", name="Updated Name")],
             # Both are in sync-creatives-request.json /required.
             idempotency_key=f"sync-{uuid4().hex}",
-            account=AccountReference(root={"account_id": ACCOUNT_ID}),
+            account=AccountReferenceById(account_id=ACCOUNT_ID),
             headers=headers,
         )
         action2 = result2.creatives[0].action
@@ -556,14 +567,14 @@ class TestFormatCompatibility:
                     platform_mappings={"mock": {"id": "fmt_adv"}},
                 )
             )
-            # Product that only supports video_instream_15s
+            # Product that only supports a video format
             product = DBProduct(
                 tenant_id=self.TENANT_ID,
                 product_id="prod_video_only",
                 name="Video Only Product",
                 description="Only supports video",
                 format_ids=[
-                    {"agent_url": DEFAULT_AGENT_URL, "id": "video_instream_15s"},
+                    {"agent_url": DEFAULT_AGENT_URL, "id": VIDEO_FORMAT_ID},
                 ],
                 targeting_template={},
                 delivery_type="non_guaranteed",
@@ -616,7 +627,7 @@ class TestFormatCompatibility:
             creatives=[_make_creative_dict(creative_id="c_display")],
             # Both are in sync-creatives-request.json /required.
             idempotency_key=f"sync-{uuid4().hex}",
-            account=AccountReference(root={"account_id": ACCOUNT_ID}),
+            account=AccountReferenceById(account_id=ACCOUNT_ID),
             headers=headers,
         )
 
@@ -642,7 +653,7 @@ class TestFormatCompatibility:
                 validation_mode="strict",
                 # Both are in sync-creatives-request.json /required.
                 idempotency_key=f"sync-{uuid4().hex}",
-                account=AccountReference(root={"account_id": ACCOUNT_ID}),
+                account=AccountReferenceById(account_id=ACCOUNT_ID),
                 headers=headers,
             )
 
@@ -751,7 +762,7 @@ class TestMediaBuyStatusTransition:
             assignments=[Assignment(creative_id="c_transition", package_id="pkg_draft")],
             # Both are in sync-creatives-request.json /required.
             idempotency_key=f"sync-{uuid4().hex}",
-            account=AccountReference(root={"account_id": ACCOUNT_ID}),
+            account=AccountReferenceById(account_id=ACCOUNT_ID),
             headers=_headers(self.TENANT_ID, self.PRINCIPAL_ID),
         )
 

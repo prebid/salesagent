@@ -18,6 +18,7 @@ from pytest_bdd import given, parsers, then, when
 from src.core.schemas._base import GetMediaBuysRequest
 from tests.bdd.steps._outcome_helpers import (
     WIRE_MISSING,
+    parked_media_buy,
     payload_or_none,
     require_payload,
     wire_dict,
@@ -129,6 +130,27 @@ def _patch_adapter_with_snapshot(ctx: dict, snapshot_data: dict) -> None:
     patcher.start()
     ctx.setdefault("_patchers", []).append(patcher)
     ctx["adapter_snapshot_data"] = snapshot_data
+
+
+def _seed_package(ctx: dict, media_buy: Any, pkg_id: str, *, budget: float, **config: Any) -> None:
+    """Seed one named package on *media_buy* and record which buy owns it.
+
+    The one package seeder for this module's Givens. ``**config`` adds keys to the
+    persisted ``package_config`` blob (``creative_deadline``, for example), which is
+    where get_media_buys reads the optional package fields from. The caller commits.
+    """
+    MediaPackageFactory(
+        media_buy=media_buy,
+        package_id=pkg_id,
+        package_config={
+            "package_id": pkg_id,
+            "product_id": "guaranteed_display",
+            "budget": budget,
+            "status": "active",
+            **config,
+        },
+    )
+    ctx.setdefault("seeded_packages", {})[pkg_id] = media_buy
 
 
 def _find_media_buy_for_package(ctx: dict, pkg_id: str) -> Any:
@@ -543,19 +565,9 @@ def given_principal_owns_mb_with_named_package(ctx: dict, principal_id: str, mb_
         media_buy_id=real_id,
         status="active",
     )
-    MediaPackageFactory(
-        media_buy=mb,
-        package_id=pkg_id,
-        package_config={
-            "package_id": pkg_id,
-            "product_id": "guaranteed_display",
-            "budget": 5000.0,
-            "status": "active",
-        },
-    )
+    _seed_package(ctx, mb, pkg_id, budget=5000.0)
     env._commit_factory_data()
     _register_media_buy(ctx, mb_id, mb)
-    ctx.setdefault("seeded_packages", {})[pkg_id] = mb
 
 
 @given(parsers.parse('the principal "{principal_id}" owns media buy "{mb_id}" with packages "{pkg1}" and "{pkg2}"'))
@@ -571,17 +583,7 @@ def given_principal_owns_mb_with_two_packages(ctx: dict, principal_id: str, mb_i
         status="active",
     )
     for pkg_id in [pkg1, pkg2]:
-        MediaPackageFactory(
-            media_buy=mb,
-            package_id=pkg_id,
-            package_config={
-                "package_id": pkg_id,
-                "product_id": "guaranteed_display",
-                "budget": 3000.0,
-                "status": "active",
-            },
-        )
-        ctx.setdefault("seeded_packages", {})[pkg_id] = mb
+        _seed_package(ctx, mb, pkg_id, budget=3000.0)
     env._commit_factory_data()
     _register_media_buy(ctx, mb_id, mb)
 
@@ -629,80 +631,145 @@ def given_package_creative_rejected(ctx: dict, pkg_id: str, status: str, reason:
     env._commit_factory_data()
 
 
+def _seeded_creative(ctx: dict, creative_id: str) -> Any:
+    """The creative this scenario seeded under *creative_id*, or a loud failure.
+
+    The two-step Given shape of the approval outlines -- "package has a creative
+    assignment with creative_id X" and then "the creative X has internal status Y" --
+    means the second step has to find what the first one created. Recorded on ctx by
+    id rather than re-queried, because the composite PK is
+    (creative_id, tenant_id, principal_id) and a re-query would have to reproduce all
+    three; the step that made the row already holds it.
+    """
+    seeded = ctx.get("seeded_creatives", {})
+    creative = seeded.get(creative_id)
+    assert creative is not None, (
+        f"No creative seeded for {creative_id!r}. The scenario must carry a "
+        f'\'package "<pkg>" has a creative assignment with creative_id "{creative_id}"\' '
+        f"Given before naming its status; seeded so far: {sorted(seeded)}"
+    )
+    return creative
+
+
 @given(parsers.parse('package "{pkg_id}" has a creative assignment with creative_id "{creative_id}"'))
 def given_package_creative_assignment(ctx: dict, pkg_id: str, creative_id: str) -> None:
-    """Record creative assignment — cannot seed real DB records.
+    """Seed a creative under *creative_id* and assign it to *pkg_id*.
 
-    FIXME: When CreativeAssignmentFactory exists, seed real DB records.
+    The reason this step used to carry -- "No CreativeAssignmentFactory -- cannot seed
+    creative assignment ... FIXME: Create factory to seed real DB records" -- was FALSE
+    when written and false since: CreativeAssignmentFactory is imported at the top of this
+    module and ``given_package_creative_status`` / ``given_package_creative_rejected``
+    directly above both use it. This is the same seeding, with the creative_id the
+    scenario names, and it recorded nothing in the DB only because ``pytest.xfail()``
+    raised before it could.
+
+    It also aborted every scenario that reached it, which is why four further inline
+    xfails below it were dead code: the first one always won.
+
+    The creative starts in ``submitted`` (production maps that to pending_review); the
+    status rows that follow move it. The literal creative_id is safe under xdist because
+    the creatives PK is composite and each env owns a freshly-minted tenant.
     """
-    import pytest
-
-    pytest.xfail(
-        f"SPEC-PRODUCTION GAP: No CreativeAssignmentFactory — cannot seed creative assignment "
-        f"for '{creative_id}' on package '{pkg_id}'. "
-        f"FIXME: Create factory to seed real DB records."
+    env = ctx["env"]
+    media_buy = _find_media_buy_for_package(ctx, pkg_id)
+    creative = CreativeFactory(
+        tenant=ctx["tenant"],
+        principal=ctx["principal"],
+        creative_id=creative_id,
+        status="submitted",
     )
+    CreativeAssignmentFactory(
+        creative=creative,
+        media_buy=media_buy,
+        package_id=pkg_id,
+    )
+    env._commit_factory_data()
+    ctx.setdefault("seeded_creatives", {})[creative_id] = creative
 
 
-@given(parsers.parse('the creative "{creative_id}" has internal status "{status}" and rejection_reason "{reason}"'))
-def given_creative_status_with_reason(ctx: dict, creative_id: str, status: str, reason: str) -> None:
-    """Update creative status/reason — cannot update real DB records.
+#: ``rejection_reason`` sentinel for "the cell named no reason at all, so do not touch the
+#: stored data". Distinct from ``None``, which means "the cell asked for NO reason" and
+#: clears it: a row that grades an absent reason and a row that is silent about reasons are
+#: different obligations, and collapsing them would let one pass on the other's state.
+_LEAVE_DATA_ALONE = object()
 
-    FIXME: When CreativeAssignmentFactory exists, update real DB records.
+
+def _set_creative_state(ctx: dict, creative_id: str, status: str, *, rejection_reason: Any) -> None:
+    """Move the seeded creative to *status*, writing *rejection_reason* into its data.
+
+    One writer for the status Givens below -- they differ only in where the rejection
+    reason comes from, so the write itself is named once. ``status`` is stored verbatim,
+    including the literal "null" and the empty string the boundary rows use: the column is
+    NOT NULL and production's ``_map_creative_status`` treats anything it does not
+    recognize as pending_review, which is the behaviour those rows grade.
     """
-    import pytest
+    creative = _seeded_creative(ctx, creative_id)
+    creative.status = status
+    if rejection_reason is not _LEAVE_DATA_ALONE:
+        data = dict(creative.data or {})
+        if rejection_reason is None:
+            data.pop("rejection_reason", None)
+        else:
+            data["rejection_reason"] = rejection_reason
+        creative.data = data
+    ctx["env"]._commit_factory_data()
 
-    pytest.xfail(
-        f"SPEC-PRODUCTION GAP: No CreativeAssignmentFactory — cannot update creative "
-        f"'{creative_id}' with status='{status}', rejection_reason='{reason}' in DB. "
-        f"FIXME: Create factory to seed/update real DB records."
-    )
+
+#: The extra-condition clause of ``the creative "<id>" has internal status "<s>" <extra>``
+#: that names the rejection reason explicitly, e.g. ``and rejection_reason "Image too dark"``.
+_REJECTION_REASON_CLAUSE = re.compile(r'^and rejection_reason "(?P<reason>.*)"$')
 
 
 @given(parsers.parse('the creative "{creative_id}" has internal status "{status}" {extra_condition}'))
 def given_creative_status_extra(ctx: dict, creative_id: str, status: str, extra_condition: str) -> None:
-    """Update creative status with extra conditions — cannot update real DB records.
+    """Move the seeded creative to *status* under the extra condition the Examples cell names.
 
-    FIXME: When CreativeAssignmentFactory exists, update real DB records.
+    THIS STEP OWNS EVERY VARIANT, including the explicit ``and rejection_reason "..."``
+    one. A separate, narrower step for that sentence was written first and never ran:
+    pytest-bdd matched this more general pattern, so the narrow step was dead and its
+    scenario rows failed here instead (box run, ValueError on cr-002). One pattern that
+    can match is one pattern that must handle them all.
+
+    Recognized clauses, which is exactly what the approval outlines write:
+      ``and rejection_reason "<text>"``       record that reason
+      ``and no rejection_reason in data``     clear it
+      ``and empty data``                      clear it
+      ``with rejection data``                 record a reason (the cell names none)
+      empty                                   the status alone; data untouched
+    Anything else is refused by name rather than silently treated as "no reason": a new
+    Examples cell must not quietly grade a state this step did not establish.
     """
-    import pytest
+    condition = extra_condition.strip()
+    if not condition:
+        _set_creative_state(ctx, creative_id, status, rejection_reason=_LEAVE_DATA_ALONE)
+    elif match := _REJECTION_REASON_CLAUSE.match(condition):
+        _set_creative_state(ctx, creative_id, status, rejection_reason=match["reason"])
+    elif condition in ("and no rejection_reason in data", "and empty data"):
+        _set_creative_state(ctx, creative_id, status, rejection_reason=None)
+    elif condition == "with rejection data":
+        _set_creative_state(ctx, creative_id, status, rejection_reason="Image too dark")
+    else:
+        raise ValueError(
+            f"Unknown creative-state extra condition {condition!r} for creative {creative_id!r}. "
+            "Add it here deliberately — an unrecognized condition must not fall through to "
+            "'no rejection reason', which is itself a graded state."
+        )
 
-    pytest.xfail(
-        f"SPEC-PRODUCTION GAP: No CreativeAssignmentFactory — cannot update creative "
-        f"'{creative_id}' status to '{status}' with '{extra_condition}' in DB. "
-        f"FIXME: Create factory to seed/update real DB records."
-    )
 
-
-@given(parsers.parse('the creative "{creative_id}" has internal status "{status}"'))
+@given(parsers.re(r'the creative "(?P<creative_id>[^"]*)" has internal status "(?P<status>[^"]*)"$'))
 def given_creative_status_simple(ctx: dict, creative_id: str, status: str) -> None:
-    """Set creative internal status — cannot update real DB records.
+    """Move the seeded creative to *status*, leaving its data untouched.
 
-    FIXME: When CreativeAssignmentFactory exists, update real DB records.
+    ``parsers.re``, not ``parsers.parse``, for ONE reason: a ``parse`` field does not match
+    the empty string, and the boundary outline has a row whose cell is literally
+    ``internal status ""`` -- the empty status a NOT NULL column can still hold, which
+    production maps to pending_review. Under ``parse`` that line matched no step at all and
+    the row was reported as dormant rather than graded. The ``$`` anchor keeps this pattern
+    off the lines that carry an extra condition, which belong to the step above.
     """
-    import pytest
-
-    pytest.xfail(
-        f"SPEC-PRODUCTION GAP: No CreativeAssignmentFactory — cannot update creative "
-        f"'{creative_id}' status to '{status}' in DB. "
-        f"FIXME: Create factory to seed/update real DB records."
-    )
-
-
-@given(parsers.parse('no creative with id "{creative_id}" exists in the tenant'))
-def given_no_creative_exists(ctx: dict, creative_id: str) -> None:
-    """Mark creative as nonexistent — cannot verify or enforce DB absence.
-
-    FIXME: When CreativeAssignmentFactory exists, verify actual
-    DB absence rather than relying on ctx-only sentinels.
-    """
-    import pytest
-
-    pytest.xfail(
-        f"SPEC-PRODUCTION GAP: Cannot enforce DB absence for creative '{creative_id}' — "
-        f"no CreativeAssignmentFactory to verify or control DB state. "
-        f"FIXME: Verify actual DB absence."
-    )
+    creative = _seeded_creative(ctx, creative_id)
+    creative.status = status
+    ctx["env"]._commit_factory_data()
 
 
 @given(parsers.parse('no snapshot data is available for package "{pkg_id}"'))
@@ -1766,104 +1833,128 @@ def then_errors_name_omitted_media_buy(ctx: dict, mb_id: str) -> None:
     )
 
 
+def _response_approvals(ctx: dict) -> list[Any]:
+    """Every creative_approvals entry on every package of every returned media buy.
+
+    One walk, named once. Four Then steps below each wrote the same
+    buys -> packages -> creative_approvals triple loop inline, and the boundary outline
+    needs it a fifth time; a fifth copy is where the versions start to disagree about
+    what "no approvals at all" means.
+    """
+    return [
+        approval
+        for buy in _get_media_buys(ctx)
+        for pkg in getattr(buy, "packages", []) or []
+        for approval in getattr(pkg, "creative_approvals", None) or []
+    ]
+
+
+def _approval_status(approval: Any) -> str:
+    """The approval_status as a plain string, whether the payload parsed it to an enum."""
+    value = getattr(approval, "approval_status", None)
+    return value.value if hasattr(value, "value") else str(value)
+
+
+def _assert_some_approval_has_status(ctx: dict, status: str) -> Any:
+    """Return an approval whose status is *status*, or fail naming what was there instead."""
+    approvals = _response_approvals(ctx)
+    for approval in approvals:
+        if _approval_status(approval) == status:
+            return approval
+    raise AssertionError(
+        f"No creative approval with approval_status={status!r} in the response; "
+        f"found {[(getattr(a, 'creative_id', None), _approval_status(a)) for a in approvals]}"
+    )
+
+
 @then(parsers.parse('the creative approval for "{creative_id}" should have approval_status "{status}"'))
 def then_creative_approval_status(ctx: dict, creative_id: str, status: str) -> None:
-    """Assert a specific creative's approval status in the response.
-
-    Searches ALL packages across ALL media buys for a creative_approvals
-    entry matching creative_id, then asserts approval_status.
-    """
-
-    buys = _get_media_buys(ctx)
-    for buy in buys:
-        for pkg in getattr(buy, "packages", []) or []:
-            approvals = getattr(pkg, "creative_approvals", None) or []
-            for approval in approvals:
-                aid = getattr(approval, "creative_id", None)
-                if aid == creative_id:
-                    actual = getattr(approval, "approval_status", None)
-                    actual_str = actual.value if hasattr(actual, "value") else str(actual)
-                    assert actual_str == status, (
-                        f"Expected approval_status '{status}' for creative '{creative_id}', got '{actual_str}'"
-                    )
-                    return
-    raise AssertionError(f"No approval entry found for creative '{creative_id}' across {len(buys)} media buy(s)")
+    """Assert a NAMED creative's approval status in the response."""
+    approvals = _response_approvals(ctx)
+    for approval in approvals:
+        if getattr(approval, "creative_id", None) == creative_id:
+            actual = _approval_status(approval)
+            assert actual == status, f"Expected approval_status '{status}' for creative '{creative_id}', got '{actual}'"
+            return
+    raise AssertionError(
+        f"No approval entry found for creative '{creative_id}'; "
+        f"the response carried {[getattr(a, 'creative_id', None) for a in approvals]}"
+    )
 
 
 @then(parsers.parse('the creative approval should have approval_status "{status}"'))
+@then(parsers.parse('approval_status should be "{status}"'))
 def then_any_creative_approval_status(ctx: dict, status: str) -> None:
-    """Assert creative approval status on any package (any creative matches)."""
+    """Assert creative approval status on any package (any creative matches).
 
-    buys = _get_media_buys(ctx)
-    for buy in buys:
-        for pkg in getattr(buy, "packages", []) or []:
-            approvals = getattr(pkg, "creative_approvals", None) or []
-            for approval in approvals:
-                actual = getattr(approval, "approval_status", None)
-                actual_str = actual.value if hasattr(actual, "value") else str(actual)
-                if actual_str == status:
-                    return  # Found a matching approval
-    raise AssertionError(f"No approval with status='{status}' found across {len(buys)} media buy(s)")
+    TWO step texts, ONE body. The invariant scenarios write the sentence in full and the
+    boundary outline writes the bare outcome in its Examples column, but the obligation is
+    the same one -- BR-RULE-152's mapping of internal status to the AdCP enum -- so the
+    two sentences are registered on this function rather than on a second function with an
+    identical body.
+    """
+    _assert_some_approval_has_status(ctx, status)
+
+
+@then(parsers.parse('approval_status should be "{status}" with rejection_reason'))
+def then_boundary_approval_status_with_reason(ctx: dict, status: str) -> None:
+    """The mapped status AND a non-empty rejection_reason on the SAME approval entry.
+
+    Both on one entry, not one assertion each: a response carrying a rejected entry with
+    no reason and a different entry with a reason would satisfy two independent checks
+    while failing the obligation (BR-RULE-152: the reason belongs to the rejection).
+    """
+    approval = _assert_some_approval_has_status(ctx, status)
+    reason = getattr(approval, "rejection_reason", None)
+    assert reason, (
+        f"Expected a rejection_reason on the {status!r} approval for "
+        f"{getattr(approval, 'creative_id', None)!r}, got {reason!r}"
+    )
+
+
+@then(parsers.parse('approval_status should be "{status}" with null rejection_reason'))
+def then_boundary_approval_status_null_reason(ctx: dict, status: str) -> None:
+    """The mapped status, and rejection_reason ABSENT on that same entry.
+
+    The row that binds this seeds a rejected creative with empty ``data``, so the
+    obligation is that a missing stored reason is reported as absent rather than as an
+    empty string -- ``""`` would pass a truthiness check written the other way round.
+    """
+    approval = _assert_some_approval_has_status(ctx, status)
+    reason = getattr(approval, "rejection_reason", None)
+    assert reason is None, (
+        f"Expected rejection_reason to be absent on the {status!r} approval for "
+        f"{getattr(approval, 'creative_id', None)!r}, got {reason!r}"
+    )
 
 
 @then(parsers.parse('the rejection_reason should be "{reason}"'))
+@then(parsers.parse('rejection_reason should be "{reason}"'))
 def then_rejection_reason(ctx: dict, reason: str) -> None:
-    """Assert rejection_reason matches expected value on any approval."""
+    """Assert rejection_reason matches expected value on any approval.
 
-    buys = _get_media_buys(ctx)
-    for buy in buys:
-        for pkg in getattr(buy, "packages", []) or []:
-            approvals = getattr(pkg, "creative_approvals", None) or []
-            for approval in approvals:
-                actual_reason = getattr(approval, "rejection_reason", None)
-                if actual_reason is not None:
-                    assert str(actual_reason) == reason, f"Expected rejection_reason '{reason}', got '{actual_reason}'"
-                    return
-    raise AssertionError(
-        f"No approval with rejection_reason found across {len(buys)} media buy(s), expected '{reason}'"
-    )
+    Both spellings, one body. The invariant scenarios write "the rejection_reason should
+    be ..." and the partition outline's rejection_check column writes it without the
+    article; only the first was registered, so that Examples cell bound no step and the row
+    was dormant while looking like a graded assertion.
+    """
+    approvals = _response_approvals(ctx)
+    for approval in approvals:
+        actual_reason = getattr(approval, "rejection_reason", None)
+        if actual_reason is not None:
+            assert str(actual_reason) == reason, f"Expected rejection_reason '{reason}', got '{actual_reason}'"
+            return
+    raise AssertionError(f"No approval with rejection_reason found in the response, expected '{reason}'")
 
 
 @then(parsers.parse("rejection_reason should be absent"))
 def then_rejection_reason_absent(ctx: dict) -> None:
     """Assert rejection_reason is absent on ALL approvals when not rejected."""
-
-    buys = _get_media_buys(ctx)
-    checked = 0
-    for buy in buys:
-        for pkg in getattr(buy, "packages", []) or []:
-            approvals = getattr(pkg, "creative_approvals", None) or []
-            for approval in approvals:
-                checked += 1
-                actual_reason = getattr(approval, "rejection_reason", None)
-                assert actual_reason is None, f"Expected rejection_reason to be absent, got '{actual_reason}'"
-    assert checked > 0, "No approval entries found in response — cannot verify rejection_reason absence"
-
-
-@then(parsers.parse('the creative approvals for package "{pkg_id}" should not include an entry for "{creative_id}"'))
-def then_no_approval_for_creative(ctx: dict, pkg_id: str, creative_id: str) -> None:
-    """Assert missing creative is not in approvals (INV-152-4).
-
-    The package MUST be found in the response — if it's missing, that's a hard
-    failure, not an xfail.
-    """
-    buys = _get_media_buys(ctx)
-    for buy in buys:
-        for pkg in getattr(buy, "packages", []) or []:
-            if getattr(pkg, "package_id", None) == pkg_id:
-                approvals = getattr(pkg, "creative_approvals", None) or []
-                approval_ids = [getattr(a, "creative_id", None) for a in approvals]
-                assert creative_id not in approval_ids, (
-                    f"Expected creative '{creative_id}' to NOT appear in approvals for package '{pkg_id}', but found it"
-                )
-                return
-    raise AssertionError(f"Package '{pkg_id}' not found in response — cannot verify creative '{creative_id}' omission")
-
-
-@then(parsers.parse("no error should be raised for the missing creative"))
-def then_no_error_for_missing_creative(ctx: dict) -> None:
-    """Assert no error raised for missing creative."""
-    assert "error" not in ctx or ctx.get("error") is None, f"Unexpected error for missing creative: {ctx.get('error')}"
+    approvals = _response_approvals(ctx)
+    for approval in approvals:
+        actual_reason = getattr(approval, "rejection_reason", None)
+        assert actual_reason is None, f"Expected rejection_reason to be absent, got '{actual_reason}'"
+    assert approvals, "No approval entries found in response — cannot verify rejection_reason absence"
 
 
 @then(parsers.parse('package "{pkg_id}" should not have a snapshot field'))
@@ -2932,11 +3023,20 @@ def given_captured_media_buy_id_from_create(ctx: dict) -> None:
     the create response in ctx, the When's query would early-return, and the Then
     steps would grade the WRONG document.
     """
-    kwargs = build_create_request_kwargs(ctx, po_number="PO-UC019-POST-CREATE-POLL")
-    dispatch_request(ctx, **kwargs)
-
-    assert ctx.get("error") is None, f"create_media_buy failed, so nothing was captured: {ctx.get('error')!r}"
+    _dispatch_create(ctx, po_number="PO-UC019-POST-CREATE-POLL")
     ctx["created_media_buy_id"] = wire_field(ctx, "media_buy_id")
+
+
+def _dispatch_create(ctx: dict, *, po_number: str) -> None:
+    """Send a REAL create_media_buy through the scenario's transport and require it accepted.
+
+    The one create dispatch for the @post-create-poll scenarios, which differ only in what
+    they read off the accepted create. The assertion is not optional: without it a refused
+    create leaves its envelope in ctx and the later get_media_buys grades the wrong document.
+    """
+    kwargs = build_create_request_kwargs(ctx, po_number=po_number)
+    dispatch_request(ctx, **kwargs)
+    assert ctx.get("error") is None, f"create_media_buy was refused, so nothing was created: {ctx.get('error')!r}"
 
 
 @when("the Buyer Agent calls get_media_buys with that media_buy_id under the same account")
@@ -3070,6 +3170,7 @@ _VALID_BLOB_SIBLINGS = {
     "end_time": "2026-03-31T00:00:00Z",
     "paused": False,
     "targeting_overlay": {"geo_countries": ["US"]},
+    "creative_deadline": "2026-02-20T00:00:00Z",
 }
 
 
@@ -3256,6 +3357,15 @@ def _wire_package(ctx: dict, pkg_id: str, *, mb_id: str | None = None) -> dict:
     return matching[0]
 
 
+def _reported_creative_ids(ctx: dict, pkg_id: str) -> list[str]:
+    """The creatives a package's ``creative_approvals`` name on the get_media_buys wire, sorted.
+
+    ``get_media_buys`` reports one ``creative_approvals`` entry per creative assigned to the
+    package, so this is the seller's record of the package's creatives as the buyer reads it.
+    """
+    return sorted(approval["creative_id"] for approval in _wire_package(ctx, pkg_id).get("creative_approvals") or [])
+
+
 def _wire_advisories(ctx: dict) -> list[dict]:
     """Return the non-fatal ``errors[]`` advisories carried by the 200-OK document.
 
@@ -3397,3 +3507,237 @@ def then_no_advisory_with_code(ctx: dict, code: str) -> None:
         f"expected no errors[] advisory with code {code!r} — its pinned recovery advises a retry "
         f"that can never repair a seller-side defect; got {offending!r}"
     )
+
+
+# ── creative_deadline: buy level and package level ────────────────────
+#
+# get-media-buys-response.json (pinned) declares an optional ``creative_deadline`` on
+# ``media_buys[]`` and on ``packages[]``, and get_media_buys.mdx says the package value
+# applies when present and "When absent, the media buy's creative_deadline applies."
+# The buy-level value is the ``media_buys.creative_deadline`` column; the package-level
+# value is a key of the package's ``package_config`` blob, which is where get_media_buys
+# reads the optional package fields from. Every Given writes the persisted row, so it
+# is the same state on every transport, including the live server on e2e_rest.
+
+
+def _set_buy_creative_deadline(ctx: dict, mb_id: str, timestamp: str | None) -> None:
+    """Write the buy's persisted ``creative_deadline`` column (None clears it) and commit."""
+    row = _resolve_media_buy_row(ctx, mb_id)
+    row.creative_deadline = None if timestamp is None else _parse_iso8601(timestamp)
+    ctx["env"]._session.commit()
+
+
+def _assert_wire_creative_deadline(entry: dict, expected: str | None, subject: str) -> None:
+    """Grade one wire entry's ``creative_deadline``: the instant *expected*, or the key absent.
+
+    Absent means the KEY is absent. The pinned field is a non-nullable string, so the only
+    legal rendering of "no deadline" is omission. Instants are compared parsed, because
+    "...Z" and "...+00:00" are the same deadline.
+    """
+    if expected is None:
+        assert "creative_deadline" not in entry, (
+            f"expected {subject} to omit creative_deadline; got {entry.get('creative_deadline')!r}"
+        )
+        return
+    actual = entry.get("creative_deadline")
+    assert actual is not None, f"expected {subject} creative_deadline {expected!r}; the key is absent"
+    assert _parse_iso8601(actual) == _parse_iso8601(expected), (
+        f"expected {subject} creative_deadline {expected!r}; got {actual!r}"
+    )
+
+
+@given(parsers.parse('the principal "{principal_id}" owns media buy "{mb_id}" with creative_deadline "{timestamp}"'))
+def given_owns_media_buy_with_creative_deadline(ctx: dict, principal_id: str, mb_id: str, timestamp: str) -> None:
+    """Seed a buy whose persisted creative_deadline column carries *timestamp*.
+
+    Like the confirmed_at Givens above, this sentence ends in a quoted literal, so it
+    exists to keep the generic ``owns media buy "{mb_id}"`` Given from binding it.
+    """
+    _seed_simple_media_buy(ctx, principal_id, mb_id, creative_deadline=_parse_iso8601(timestamp))
+
+
+@given(parsers.parse('media buy "{mb_id}" has package "{pkg_id}" with creative_deadline "{timestamp}"'))
+def given_media_buy_package_with_creative_deadline(ctx: dict, mb_id: str, pkg_id: str, timestamp: str) -> None:
+    """Seed a package on the buy whose package_config carries *timestamp* as its deadline."""
+    _seed_package(ctx, _resolve_media_buy_row(ctx, mb_id), pkg_id, budget=3000.0, creative_deadline=timestamp)
+    ctx["env"]._commit_factory_data()
+
+
+@given(parsers.parse('media buy "{mb_id}" has package "{pkg_id}" with no creative_deadline'))
+def given_media_buy_package_without_creative_deadline(ctx: dict, mb_id: str, pkg_id: str) -> None:
+    """Seed a package on the buy whose package_config carries no creative_deadline key."""
+    _seed_package(ctx, _resolve_media_buy_row(ctx, mb_id), pkg_id, budget=3000.0)
+    ctx["env"]._commit_factory_data()
+
+
+@given(parsers.parse('media buy "{mb_id}" carries buy creative_deadline "{timestamp}"'))
+def given_buy_carries_creative_deadline(ctx: dict, mb_id: str, timestamp: str) -> None:
+    """Set the seeded buy's persisted creative_deadline."""
+    _set_buy_creative_deadline(ctx, mb_id, timestamp)
+
+
+@given(parsers.parse('media buy "{mb_id}" carries no buy creative_deadline'))
+def given_buy_carries_no_creative_deadline(ctx: dict, mb_id: str) -> None:
+    """Clear the seeded buy's persisted creative_deadline."""
+    _set_buy_creative_deadline(ctx, mb_id, None)
+
+
+@given(parsers.parse('package "{pkg_id}" carries package creative_deadline "{timestamp}"'))
+def given_package_carries_creative_deadline(ctx: dict, pkg_id: str, timestamp: str) -> None:
+    """Write *timestamp* into the package's package_config as its creative_deadline."""
+    _set_package_config(ctx, pkg_id, {"creative_deadline": timestamp})
+
+
+@given(parsers.parse('package "{pkg_id}" carries no package creative_deadline'))
+def given_package_carries_no_creative_deadline(ctx: dict, pkg_id: str) -> None:
+    """Remove any creative_deadline key from the package's package_config."""
+    _set_package_config(ctx, pkg_id, {}, drop=("creative_deadline",))
+
+
+# ── creative_deadline through the operator's approval ───────────────
+#
+# The Givens above write the column. The steps below reach it the way production does: the
+# ad server reports a deadline when it creates the order, the create tool stores it, and
+# get_media_buys reads it back. Under manual approval the ad server is first called by the
+# operator's approval (execute_approved_media_buy), not by the create, so this is the path
+# where a dropped deadline would otherwise go unseen. The ad server is the one patched
+# system; the create, the approval and the read run production code.
+
+
+@given(parsers.parse('the ad server reports creative_deadline "{timestamp}" on the orders it creates'))
+def given_ad_server_reports_creative_deadline(ctx: dict, timestamp: str) -> None:
+    """Make the ad server hand back *timestamp* as the buy-level creative_deadline.
+
+    create-media-buy-response.json (adcp v3.2.7) carries the deadline the seller sets when
+    it creates the order; this is the adapter's half of that, ``AdapterCreateResult``.
+    """
+    ctx["env"].report_creative_deadline(_parse_iso8601(timestamp))
+
+
+@given("the buyer's create_media_buy request was parked for a human decision")
+def given_create_parked_for_approval(ctx: dict) -> None:
+    """Send the create and require it parked: the submitted envelope AND a pending_approval row.
+
+    The parked check is the format-satisfaction feature's own, reused so the two features
+    hold "parked" to one definition.
+    """
+    from tests.bdd.steps.domain.uc_format_satisfaction import then_buy_is_parked
+
+    _dispatch_create(ctx, po_number="PO-UC019-MANUAL-APPROVAL")
+    then_buy_is_parked(ctx)
+
+
+@given("the publisher approved the parked buy")
+def given_publisher_approved_parked_buy(ctx: dict) -> None:
+    """Run the operator's approval for real and require that it executed the order.
+
+    The same call the admin approval routes make (``run_approval``), through the step the
+    format-satisfaction feature already uses. An approval that failed would leave the buy
+    with no deadline for a reason that has nothing to do with keeping one, so the outcome
+    is checked here rather than left for the Then to misreport.
+    """
+    from tests.bdd.steps.domain.uc_format_satisfaction import assert_approval_executed, when_publisher_approves
+
+    when_publisher_approves(ctx)
+    assert_approval_executed(ctx)
+
+
+@when("the Buyer Agent calls get_media_buys for the approved buy")
+def when_query_approved_buy(ctx: dict) -> None:
+    """Query get_media_buys by the approved buy's id, on the scenario's transport.
+
+    The id comes from the stored row because the submitted envelope the buyer got carries
+    none (``parked_media_buy``); a buyer learns it when the task completes.
+    """
+    _dispatch_query(ctx, req=GetMediaBuysRequest(media_buy_ids=[parked_media_buy(ctx).media_buy_id]))
+
+
+@then(parsers.parse('the approved buy\'s creative_deadline should equal "{timestamp}"'))
+def then_approved_buy_creative_deadline_equals(ctx: dict, timestamp: str) -> None:
+    """The approved buy carries the ad server's deadline on the wire, as the same instant."""
+    media_buy_id = parked_media_buy(ctx).media_buy_id
+    _assert_wire_creative_deadline(
+        _wire_media_buy(ctx, media_buy_id), timestamp, f"approved media buy {media_buy_id!r}"
+    )
+
+
+@then(parsers.parse('the package "{pkg_id}" creative_deadline should equal "{timestamp}"'))
+def then_package_creative_deadline_equals(ctx: dict, pkg_id: str, timestamp: str) -> None:
+    """The package carries its own deadline on the wire."""
+    _assert_wire_creative_deadline(_wire_package(ctx, pkg_id), timestamp, f"package {pkg_id!r}")
+
+
+@then(parsers.parse('the package "{pkg_id}" creative_deadline should be omitted'))
+def then_package_creative_deadline_omitted(ctx: dict, pkg_id: str) -> None:
+    """The package carries no deadline of its own on the wire."""
+    _assert_wire_creative_deadline(_wire_package(ctx, pkg_id), None, f"package {pkg_id!r}")
+
+
+@then(parsers.parse('the effective deadline for "{pkg_id}" should be the buy-level "{timestamp}"'))
+@then(
+    parsers.parse(
+        'the package "{pkg_id}" creative_deadline should be omitted and the effective deadline '
+        'should be the buy-level "{timestamp}"'
+    )
+)
+def then_effective_deadline_is_buy_level(ctx: dict, pkg_id: str, timestamp: str) -> None:
+    """The package inherits the buy's deadline: it omits its own, and the buy carries *timestamp*.
+
+    That is the pinned rule read off the wire. A buyer resolves the package's deadline as
+    "the package value when present, otherwise the media buy's", so the effective value is
+    the buy-level one exactly when both halves below hold.
+    """
+    label = _sole_seeded_label(ctx)
+    _assert_wire_creative_deadline(_wire_package(ctx, pkg_id, mb_id=label), None, f"package {pkg_id!r}")
+    _assert_wire_creative_deadline(_wire_media_buy(ctx, label), timestamp, f"media buy {label!r}")
+
+
+@then(
+    parsers.parse(
+        'the package "{pkg_id}" creative_deadline should equal "{timestamp}" and override the buy-level value'
+    )
+)
+def then_package_creative_deadline_overrides_buy(ctx: dict, pkg_id: str, timestamp: str) -> None:
+    """The package's own deadline is on the wire, and the buy carries a different one.
+
+    The buy-level value has to be present and different, or "override" is not observable:
+    a package that echoed the buy's value would pass a check of the package alone.
+    """
+    label = _sole_seeded_label(ctx)
+    _assert_wire_creative_deadline(_wire_package(ctx, pkg_id, mb_id=label), timestamp, f"package {pkg_id!r}")
+    buy_deadline = _wire_media_buy(ctx, label).get("creative_deadline")
+    assert buy_deadline is not None, f"expected media buy {label!r} to carry the buy-level deadline being overridden"
+    assert _parse_iso8601(buy_deadline) != _parse_iso8601(timestamp), (
+        f"the buy-level creative_deadline {buy_deadline!r} equals the package's {timestamp!r}, so no "
+        "override is observable"
+    )
+
+
+@then(
+    parsers.parse(
+        'the package "{pkg_id}" creative_deadline should equal "{timestamp}" and the buy-level field should be omitted'
+    )
+)
+def then_package_creative_deadline_without_buy_level(ctx: dict, pkg_id: str, timestamp: str) -> None:
+    """The package carries its own deadline and the buy carries none."""
+    label = _sole_seeded_label(ctx)
+    _assert_wire_creative_deadline(_wire_package(ctx, pkg_id, mb_id=label), timestamp, f"package {pkg_id!r}")
+    _assert_wire_creative_deadline(_wire_media_buy(ctx, label), None, f"media buy {label!r}")
+
+
+@then(
+    parsers.parse(
+        'the media buy "{mb_id}" should omit creative_deadline and the package "{pkg_id}" '
+        "should omit creative_deadline (no error)"
+    )
+)
+def then_no_creative_deadline_at_either_level(ctx: dict, mb_id: str, pkg_id: str) -> None:
+    """Neither level carries a deadline, and the response carries no advisory about it.
+
+    Both fields are optional, so a buy with no deadline anywhere is a clean document:
+    ``errors[]`` must be empty, not merely free of a refusal.
+    """
+    _assert_wire_creative_deadline(_wire_package(ctx, pkg_id, mb_id=mb_id), None, f"package {pkg_id!r}")
+    _assert_wire_creative_deadline(_wire_media_buy(ctx, mb_id), None, f"media buy {mb_id!r}")
+    advisories = _wire_advisories(ctx)
+    assert advisories == [], f"expected no errors[] advisories for a buy with no deadline; got {advisories!r}"

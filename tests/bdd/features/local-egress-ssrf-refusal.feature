@@ -491,3 +491,73 @@ Feature: Egress refusal of a buyer-supplied URL (local, L1 SSRF)
   # green here can never be the SSRF gate firing by luck, and the exact-field
   # assertion is what rules out the A2A `_invalid_params_from_ssrf_error` funnel
   # re-enveloping this as a URL refusal.
+
+  # ── The CORRELATION half of the same registration ────────────────────
+  #
+  # A registration has a third refusable property beyond its URL and its
+  # credential: whether a webhook built from it can carry the buyer's own
+  # correlation id back.
+  #
+  # Spec grounding — AdCP 3.2.1, the version this repo PINS (see
+  # docs/adcp-spec-version.md; the writing is not vendored, read it with
+  # `gh api repos/adcontextprotocol/adcp/contents/docs/building/by-layer/L3/webhooks.mdx
+  #  --jq '.content' | base64 -d`), § "Operation IDs and URL templates":
+  #   :141 "Buyers SHOULD supply `operation_id` to the seller for every webhook
+  #        registration ... Sellers MAY reject a webhook registration that omits
+  #        `operation_id` with `INVALID_REQUEST`."
+  #   :142 "Sellers MUST echo the buyer-supplied `operation_id` value in every
+  #        webhook payload exactly as received."
+  #   :143 "Sellers MUST NOT derive `operation_id` by parsing
+  #        `push_notification_config.url`."
+  # and core/mcp-webhook-payload.json, where `operation_id` is REQUIRED.
+  #
+  # Those four facts leave the seller exactly two options and no third. The field
+  # is optional on the REGISTRATION and required on the ENVELOPE, and the one
+  # bridge between them — reading it off the receiver URL — is forbidden. So a
+  # registration without it is a webhook whose conformant body cannot be built,
+  # ever. The seller either says so at registration (:141's MAY) or accepts and
+  # refuses every later delivery.
+  #
+  # THIS SELLER TAKES THE MAY, and the alternative is why: it HAD the other
+  # behaviour and it was permanent silence. `build_webhook_envelope` refused each
+  # delivery correctly, and both senders logged the refusal and continued — so a
+  # buyer registered a webhook, received a success, and was never told that
+  # nothing would ever arrive on it. The refusal existed; it just went to a log
+  # line the buyer cannot read. Nothing graded any of this, which is how it
+  # survived.
+  #
+  # The refusal is INVALID_REQUEST, which is the code :141 itself names — not
+  # VALIDATION_ERROR, the code the URL half above carries. The split is the
+  # pinned enum's own: VALIDATION_ERROR is a well-formed value the seller refuses
+  # on a business rule (a public https URI landing in a blocked range), while
+  # INVALID_REQUEST is "missing required fields" — and from this seller's side
+  # that is exactly what an absent correlation id is, since the envelope it feeds
+  # requires it. `correctable` comes with the code from the pin's own
+  # enumMetadata; the step asserting the code defaults recovery from CODE_TABLE,
+  # so a pin that reclassifies it reddens here.
+  #
+  # UNGRADED BY STORYBOARD, the same standing as every other scenario in this
+  # file: the conformance runner emits only schema-valid payloads, and a
+  # registration omitting an OPTIONAL field is schema-valid, so nothing under
+  # dist/compliance/ sends one. Reconcile upstream in adcp-req, then retire this
+  # for the regenerated scenario.
+  #
+  # ONE SURFACE, deliberately: the refusal is raised in the ONE gate body every
+  # registration surface calls (`_accept` in src/core/webhooks/registration.py),
+  # so a second scenario at update or sync ingest would re-grade the same `if`
+  # through a different wrapper. What the four transports DO differ on is whether
+  # the refusal survives enveloping, and that is what this scenario runs on all
+  # of them for.
+  #
+  # The REPORTING route's registration takes the opposite shape and is graded
+  # separately: `core/reporting-webhook.json` does not define `operation_id` at
+  # the 3.2 pin (it rides `additionalProperties: true` as the interim agreement
+  # of :656-673), so refusing a create over its absence would refuse a document
+  # the published schema accepts. :666 asks for flag-and-suppress there instead.
+  @T-EGRESS-OPID-create-media-buy @egress_create @invariant
+  Scenario: a registration with no operation_id is refused at create ingest
+    When the buyer creates a media buy registering a webhook with no operation_id
+    Then the error is compliant with the AdCP error spec
+    And the response arrives
+    And the response contains error code INVALID_REQUEST
+    And the response error field is push_notification_config.operation_id

@@ -374,6 +374,13 @@ class TestDeclaredAlgorithmsEqualTheEmittedOne:
                         task_type=DELIVERY_PAYLOAD_TASK_TYPE,
                         status="completed",
                         result={"adcp_version": "3.1.1"},
+                        # REQUIRED on core/mcp-webhook-payload.json, and adcp 9 types the
+                        # parameter ``str`` where 6.6.0 typed it ``str | None``. A real
+                        # value is BUYER-generated at registration and echoed verbatim.
+                        # This test compares the DECLARED algorithms against the
+                        # delivery's signature, so the payload only has to be
+                        # constructible and the value stands in for a registration.
+                        operation_id="op-capability-honesty-fixture",
                     ),
                     # The TYPED context. ``send_notification`` takes
                     # ``task: WebhookTaskContext`` and reads it as an object

@@ -69,6 +69,55 @@ STORYBOARD_TOKEN = "storyboard-test-token"
 #: relative to the bundle's ``compliance/`` root.
 STORYBOARD_TEST_KIT = "test-kits/acme-outdoor.yaml"
 
+#: The kit ``universal/billing-gate-dispatch.yaml`` names: the coordination contract for
+#: the per-buyer-agent billing gate. Its ``commercial_relationship`` is the onboarding state
+#: the seller records for the calling agent before the storyboard runs.
+BILLING_GATE_TEST_KIT = "test-kits/billing-gate-runner.yaml"
+
+
+def _kit(name: str) -> dict:
+    """The pinned test kit at ``compliance/<name>``. RAISES when the bundle does not resolve.
+
+    A missing kit is a refusal, not a default: every fact read from one is a fact the
+    runner grades, so seeding without it moves the failure into the run and makes it look
+    like a conformance gap.
+    """
+    import yaml
+
+    from scripts.audit import storyboard_spec
+
+    version = storyboard_spec.pinned_version(project_root)
+    kit_path = storyboard_spec.adcp_home(project_root, version) / "compliance" / name
+    if not kit_path.is_file():
+        raise FileNotFoundError(
+            f"pinned test kit not found at {kit_path}. The storyboard tenant is READ from the bundle, "
+            f"so there is nothing to seed without it — run .github/actions/_adcp-bundle."
+        )
+    return yaml.safe_load(kit_path.read_text(encoding="utf-8")) or {}
+
+
+def kit_declares_sandbox() -> bool:
+    """Whether ``acme-outdoor.yaml`` is a SANDBOX kit, and so whether this seller must accept
+    sandbox provisioning (``Tenant.account_sandbox``).
+
+    The storyboards that name the kit provision ``sandbox: true`` accounts through
+    ``sync_accounts`` (``notification_config_*``), and the provisioning gate refuses a
+    sandbox entry for a seller that has not declared ``account.sandbox``. The column
+    defaults FALSE, so a tenant that does not say it answers UNSUPPORTED_FEATURE to every
+    one of them.
+    """
+    return bool(_kit(STORYBOARD_TEST_KIT).get("sandbox"))
+
+
+def kit_runner_is_passthrough_only() -> bool:
+    """Whether the billing-gate kit declares the calling agent passthrough-only.
+
+    The kit's own words: "the seller-under-test records the test caller's commercial state
+    in its onboarding system before the storyboard runs". That record is
+    ``Principal.billing_passthrough_only``, and the runner's principal is the caller.
+    """
+    return _kit(BILLING_GATE_TEST_KIT).get("commercial_relationship") == "passthrough_only"
+
 
 def kit_property_domains() -> tuple[str, ...]:
     """The domains ``acme-outdoor.yaml`` says this seller's inventory must contain.
@@ -83,24 +132,11 @@ def kit_property_domains() -> tuple[str, ...]:
     does not carry resolves to a truthful ZERO, so seeding those would break the scenario
     that needs them absent.
 
-    RAISES when the bundle does not resolve. On this path that is a hard prerequisite, not
-    a degradation: the suite's own ``_bundle_gate`` already FAILS rather than skips when the
-    bundle is missing, so seeding silently without inventory would just move the same
-    failure later and make it look like a conformance gap.
+    RAISES when the bundle does not resolve (``_kit``). On this path that is a hard
+    prerequisite, not a degradation: the suite's own ``_bundle_gate`` already FAILS rather
+    than skips when the bundle is missing.
     """
-    import yaml
-
-    from scripts.audit import storyboard_spec
-
-    version = storyboard_spec.pinned_version(project_root)
-    kit_path = storyboard_spec.adcp_home(project_root, version) / "compliance" / STORYBOARD_TEST_KIT
-    if not kit_path.is_file():
-        raise FileNotFoundError(
-            f"pinned test kit not found at {kit_path}. The storyboard tenant's inventory is READ from "
-            f"the bundle, so there is nothing to seed without it — run .github/actions/_adcp-bundle."
-        )
-
-    kit = yaml.safe_load(kit_path.read_text(encoding="utf-8"))
+    kit = _kit(STORYBOARD_TEST_KIT)
     identifiers = ((kit.get("inventory_targets") or {}).get("matching_properties") or {}).get(
         "expected_identifiers"
     ) or []
@@ -195,7 +231,7 @@ def seed_storyboard_tenant() -> str:
     from adcp.types import BrandReference
     from sqlalchemy import select
 
-    from scripts.setup.seed_products import seed_product
+    from scripts.setup.seed_products import canonical_declaration, seed_product
     from src.core.credentials import hash_token
     from src.core.database.database_session import get_db_session
     from src.core.database.models import (
@@ -219,11 +255,15 @@ def seed_storyboard_tenant() -> str:
         raise FileNotFoundError(failure)
     domains = kit_property_domains()
     accounts = kit_account_references()
+    account_sandbox = kit_declares_sandbox()
+    passthrough_only = kit_runner_is_passthrough_only()
 
     print("=" * 60)
     print(f"Seeding storyboard conformance tenant ({STORYBOARD_SUBDOMAIN}) at {STORYBOARD_VIRTUAL_HOST}")
     print(f"Inventory from the pinned bundle's {STORYBOARD_TEST_KIT}: {len(domains)} properties")
     print(f"Accounts derived from the bundle's storyboards: {len(accounts)}")
+    print(f"account.sandbox from {STORYBOARD_TEST_KIT}: {account_sandbox}")
+    print(f"Runner passthrough-only from {BILLING_GATE_TEST_KIT}: {passthrough_only}")
     print("=" * 60)
 
     with get_db_session() as session:
@@ -238,6 +278,7 @@ def seed_storyboard_tenant() -> str:
                 existing.virtual_host = STORYBOARD_VIRTUAL_HOST
                 session.flush()
                 print(f"  ✓ Re-asserted virtual_host: {STORYBOARD_VIRTUAL_HOST}")
+            existing.account_sandbox = account_sandbox
             print(f"  ✓ Tenant already exists (ID: {tenant_id})")
         else:
             tenant_id = str(uuid.uuid4())
@@ -250,6 +291,7 @@ def seed_storyboard_tenant() -> str:
                     # The whole reason this tenant exists: tenant detection matches Host
                     # exactly, and canonical_agent_url publishes this string on the card.
                     virtual_host=STORYBOARD_VIRTUAL_HOST,
+                    account_sandbox=account_sandbox,
                     billing_plan="test",
                     ad_server="mock",
                     enable_axe_signals=False,
@@ -286,6 +328,7 @@ def seed_storyboard_tenant() -> str:
                 principal_id=principal_id,
                 name="Storyboard Conformance Principal",
                 platform_mappings={"mock": {"advertiser_id": "storyboard-advertiser"}},
+                billing_passthrough_only=passthrough_only,
             )
             try:
                 session.commit()
@@ -296,6 +339,7 @@ def seed_storyboard_tenant() -> str:
                 principal_id = find_principal_by_token_hash(session, hash_token(STORYBOARD_TOKEN)).principal_id
         else:
             principal_id = existing_principal.principal_id
+            existing_principal.billing_passthrough_only = passthrough_only
             print(f"  ✓ Principal already exists (ID: {principal_id})")
 
         # THE ACCOUNTS THE RUNNER WILL ASK FOR, and a grant for each. Resolution is
@@ -395,9 +439,9 @@ def seed_storyboard_tenant() -> str:
                 "product_id": "storyboard_display_premium",
                 "name": "Premium Display Advertising",
                 "description": "High-impact display ads across premium content",
-                "formats": [
-                    {"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250_image"},
-                    {"agent_url": "https://creative.adcontextprotocol.org", "id": "display_728x90_image"},
+                "format_options": [
+                    canonical_declaration("image", "display_300x250_image", width=300, height=250),
+                    canonical_declaration("image", "display_728x90_image", width=728, height=90),
                 ],
                 "targeting_template": {"geo": ["US"], "device_type": "any"},
                 "delivery_type": "guaranteed",
@@ -407,8 +451,8 @@ def seed_storyboard_tenant() -> str:
                 "product_id": "storyboard_video_premium",
                 "name": "Premium Video Advertising",
                 "description": "Pre-roll video ads with guaranteed completion rates",
-                "formats": [
-                    {"agent_url": "https://creative.adcontextprotocol.org", "id": "video_standard_30s"},
+                "format_options": [
+                    canonical_declaration("video_hosted", "video_standard_30s", duration_ms_exact=30000),
                 ],
                 "targeting_template": {"geo": ["US"], "device_type": "any"},
                 "delivery_type": "guaranteed",

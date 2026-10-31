@@ -67,7 +67,14 @@ class TestMCPContractValidation:
         assert request.brand is None
 
     def test_activate_signal_minimal(self):
-        """Test activate_signal with required fields."""
+        """Test activate_signal with required fields.
+
+        ``campaign_id`` and ``media_buy_id`` are no longer asserted: the DTO declared both
+        as local extensions, ``signals/activate-signal-request.json`` declares neither, and
+        they are deleted. The two assertions this replaces read them back as ``None`` —
+        which graded the DEFAULT of a non-spec field rather than anything the pin asks for.
+        Their absence is what the request shape now says, so it is asserted directly.
+        """
         request = ActivateSignalRequest(
             signal_agent_segment_id="test_signal_123",
             destinations=[{"platform": "google_ad_manager", "type": "platform"}],
@@ -75,8 +82,8 @@ class TestMCPContractValidation:
         )
 
         assert request.signal_agent_segment_id == "test_signal_123"
-        assert request.campaign_id is None
-        assert request.media_buy_id is None
+        for undeclared in ("campaign_id", "media_buy_id"):
+            assert undeclared not in ActivateSignalRequest.model_fields
 
     def test_create_media_buy_minimal(self):
         """Test create_media_buy with minimal required fields per AdCP v3.12 spec."""

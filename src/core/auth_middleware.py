@@ -70,7 +70,7 @@ def _challenge_for_code(code: str | None) -> str | None:
     what keeps a fourth from starting -- there is nothing importable to build one from.
 
     TWO SCHEMES, one renderer. A bearer refusal answers ``Bearer`` per RFC 6750 §3; a request
-    -signature refusal answers ``Signature error="<code>"`` per security.mdx @ v3.1.1
+    -signature refusal answers ``Signature error="<code>"`` per security.mdx
     § "``WWW-Authenticate`` format", which additionally requires no ``realm`` and no other
     parameters. They are different mechanisms with different codes, and the reason ONE
     function answers both is that both now arrive here the same way: as an AdCP code on a

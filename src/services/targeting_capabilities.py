@@ -1,139 +1,49 @@
+"""Targeting validation helpers: property_list support, geo overlap, overlay violations.
+
+WHAT THIS MODULE NO LONGER CONTAINS, because none of it ran. Three top-level objects
+are deleted and the reach of each was measured, not assumed:
+
+* ``TARGETING_CAPABILITIES``, a 29-row table of ``TargetingCapability`` rows, read by
+  exactly one function -- ``get_overlay_dimensions`` in this module;
+* ``get_overlay_dimensions``, called from nowhere. The identically-named function at
+  ``src/services/targeting_dimensions.py:344`` is a DIFFERENT function with a different
+  signature, which is what made this one look reachable;
+* ``FIELD_TO_DIMENSION``, a 29-entry map from ``Targeting`` field name to capability
+  dimension, referenced nowhere in ``src/``, ``tests/`` or ``scripts/``.
+
+The ``TargetingCapability`` schema class goes with them: the deleted table was its only
+constructor anywhere.
+
+Deleting the map matters beyond the dead lines, and that is why it is recorded here. Its
+comment read "Both inclusion and exclusion variants map to the same capability dimension",
+and the old module docstring said the seller's extension dimensions are ones "that adapters
+actively support". Together those were the only statements in the repo about whether the
+eighteen seller targeting dimensions are honoured -- and they are false for half of them:
+no adapter and no tool reads ANY ``*_none_of`` field, or either ``connection_type_*``
+field. A dead map asserting a capability that nothing checks is worse than no map, because
+it answers the question the next reader would otherwise measure. salesagent-lh23b carries
+the per-dimension table and the apply-exactly-or-reject decision it needs.
 """
-Targeting capabilities configuration.
 
-Defines which targeting dimensions are available for overlay vs managed-only access.
-This is critical for AEE (Ad Effectiveness Engine) integration.
-
-AdCP TargetingOverlay defines: geo_countries, geo_regions, geo_metros,
-geo_postal_areas, frequency_cap, property_list, axe_include_segment,
-axe_exclude_segment.  Everything else here is a seller extension — standard
-ad-server dimensions (device, OS, browser, media type, audience) that AdCP
-does not yet define but that adapters actively support.  These are candidates
-for upstream inclusion in AdCP.
-"""
-
-from typing import TYPE_CHECKING, Any
+from collections import Counter
+from collections.abc import Sequence
+from typing import TYPE_CHECKING, Any, Final
 
 from src.core.enum_helpers import enum_value
 from src.core.errors.codes import ErrorCode
 from src.core.errors.details import CapabilityRefusalDetails, ValidationDetails
-from src.core.exceptions import AdCPValidationError
-from src.core.schemas import Error, Targeting, TargetingCapability
-from src.core.validation_helpers import PACKAGES_FIELD
+from src.core.exceptions import AdCPCapabilityNotSupportedError, AdCPInvalidRequestError, AdCPValidationError
+from src.core.schemas import AnyTargeting, Error
+from src.core.validation_helpers import PACKAGES_FIELD, campaign_interval_violated, package_field_path
 
 if TYPE_CHECKING:
     from src.core.database.models import Product
 
-# Define targeting capabilities for the platform
-TARGETING_CAPABILITIES: dict[str, TargetingCapability] = {
-    # ── AdCP-defined dimensions ──────────────────────────────────────────
-    # These map directly to fields on adcp.types.TargetingOverlay.
-    "geo_country": TargetingCapability(
-        dimension="geo_country", access="overlay", description="Country-level targeting using ISO 3166-1 alpha-2 codes"
-    ),
-    "geo_region": TargetingCapability(dimension="geo_region", access="overlay", description="State/province targeting"),
-    "geo_metro": TargetingCapability(dimension="geo_metro", access="overlay", description="Metro/DMA targeting"),
-    "geo_zip": TargetingCapability(dimension="geo_zip", access="overlay", description="Postal code targeting"),
-    "frequency_cap": TargetingCapability(
-        dimension="frequency_cap", access="overlay", description="Impression frequency limits"
-    ),
-    "device_platform": TargetingCapability(
-        dimension="device_platform",
-        access="overlay",
-        description="OS-level platform targeting (Sec-CH-UA-Platform values)",
-        allowed_values=[
-            "ios",
-            "android",
-            "windows",
-            "macos",
-            "linux",
-            "chromeos",
-            "tvos",
-            "tizen",
-            "webos",
-            "fire_os",
-            "roku_os",
-        ],
-    ),
-    # ── Seller extensions ────────────────────────────────────────────────
-    # Standard ad-server dimensions not yet in AdCP TargetingOverlay.
-    # Adapters (GAM, Kevel, Triton, Xandr) actively consume these.
-    # Candidates for upstream AdCP inclusion.
-    "device_type": TargetingCapability(
-        dimension="device_type",
-        access="overlay",
-        description="Device type targeting",
-        allowed_values=["mobile", "desktop", "tablet", "ctv", "dooh", "audio"],
-    ),
-    "device_make": TargetingCapability(
-        dimension="device_make", access="overlay", description="Device manufacturer targeting"
-    ),
-    "os": TargetingCapability(dimension="os", access="overlay", description="Operating system targeting"),
-    "browser": TargetingCapability(dimension="browser", access="overlay", description="Browser targeting"),
-    "content_category": TargetingCapability(
-        dimension="content_category", access="overlay", description="IAB content category targeting"
-    ),
-    "content_language": TargetingCapability(
-        dimension="content_language", access="overlay", description="Content language targeting"
-    ),
-    "content_rating": TargetingCapability(
-        dimension="content_rating", access="overlay", description="Content rating targeting"
-    ),
-    "media_type": TargetingCapability(
-        dimension="media_type",
-        access="overlay",
-        description="Media type targeting",
-        allowed_values=["video", "display", "native", "audio", "dooh"],
-    ),
-    "audience_segment": TargetingCapability(
-        dimension="audience_segment", access="overlay", description="Third-party audience segments"
-    ),
-    "custom": TargetingCapability(dimension="custom", access="both", description="Platform-specific custom targeting"),
-}
-
-
-def get_overlay_dimensions() -> list[str]:
-    """Get list of dimensions available for overlay targeting."""
-    return [name for name, cap in TARGETING_CAPABILITIES.items() if cap.access in ["overlay", "both"]]
-
-
-# Explicit mapping from Targeting field names to capability dimension names.
-# Both inclusion and exclusion variants map to the same capability dimension.
-#
-# AdCP TargetingOverlay defines only the geo fields, frequency_cap, axe
-# segments, and property_list.  The device/OS/browser/media/audience fields
-# are seller extensions carried forward from the original seller engine —
-# standard ad-server dimensions that adapters actively support but AdCP has
-# not yet adopted.  See module docstring for details.
-FIELD_TO_DIMENSION: dict[str, str] = {
-    # ── AdCP-defined fields (from adcp.types.TargetingOverlay) ───────────
-    "geo_countries": "geo_country",
-    "geo_regions": "geo_region",
-    "geo_metros": "geo_metro",
-    "geo_postal_areas": "geo_zip",
-    "frequency_cap": "frequency_cap",
-    # ── Geo exclusion extensions (PR #1006, not yet in AdCP) ─────────────
-    "geo_countries_exclude": "geo_country",
-    "geo_regions_exclude": "geo_region",
-    "geo_metros_exclude": "geo_metro",
-    "geo_postal_areas_exclude": "geo_zip",
-    # ── AdCP device_platform (OS-level, converted to device_type internally) ──
-    "device_platform": "device_platform",
-    # ── Seller extensions (not in AdCP, consumed by adapters) ────────────
-    "device_type_any_of": "device_type",
-    "device_type_none_of": "device_type",
-    "os_any_of": "os",
-    "os_none_of": "os",
-    "browser_any_of": "browser",
-    "browser_none_of": "browser",
-    "content_cat_any_of": "content_category",
-    "content_cat_none_of": "content_category",
-    "media_type_any_of": "media_type",
-    "media_type_none_of": "media_type",
-    "audiences_any_of": "audience_segment",
-    "audiences_none_of": "audience_segment",
-    "custom": "custom",
-}
+#: Whether a buyer can sync catalogs to this seller. False until a sync_catalogs tool
+#: ships. ONE fact with two readers: get_adcp_capabilities declares it as
+#: ``catalog_management``, and :func:`raise_if_undeclared_overlay_dimension` refuses
+#: ``store_catchments`` -- a dimension that references a synced catalog -- while it is False.
+CATALOG_MANAGEMENT_SUPPORTED: Final[bool] = False
 
 
 def supports_property_list_filtering(adapter: object | type | None) -> bool:
@@ -158,9 +68,37 @@ def supports_property_list_filtering(adapter: object | type | None) -> bool:
     return bool(getattr(adapter_class, "supports_property_list_filtering", False))
 
 
+def _unsupported_package_member(
+    member_path: str, capability: str, package_index: int
+) -> AdCPCapabilityNotSupportedError:
+    """The one UNSUPPORTED_FEATURE refusal for a package member this seller cannot apply.
+
+    ``field`` is the indexed pointer to the member (``packages[0].targeting_overlay.x``) and
+    ``details`` names the capability the seller lacks and the package that asked, so every
+    refusal of this request phase -- an unapplied package field on update, an undeclared
+    overlay dimension on create or update -- has the same shape.
+    """
+    return AdCPCapabilityNotSupportedError(
+        details=CapabilityRefusalDetails(capability=capability, package_index=package_index),
+        field=package_field_path(member_path, package_index),
+    )
+
+
+def refuse_unsupported_package_members(packages: Sequence[Any] | None, names: Sequence[str]) -> None:
+    """Refuse the first package that sets one of ``names``, a package field this seller cannot apply.
+
+    Callers raise it before a unit of work opens, so nothing is persisted. Names are read
+    without a default, so a pin that renames one fails loudly instead of never matching.
+    """
+    for index, package in enumerate(packages or ()):
+        for name in names:
+            if getattr(package, name) is not None:
+                raise _unsupported_package_member(name, name, index)
+
+
 # ─── property_list targeting helpers ────────────────────────────────────
 #
-# Spec scope: these helpers only handle ``property_list``. The AdCP 3.0.0
+# Spec scope: these helpers only handle ``property_list``. The AdCP.0
 # spec governs ``property_list`` via a per-product flag
 # (``Product.property_targeting_allowed``) and a per-capability declaration
 # (``MediaBuyFeatures.property_list_filtering``). ``collection_list`` and
@@ -168,8 +106,8 @@ def supports_property_list_filtering(adapter: object | type | None) -> bool:
 # only — declared in ``get_adcp_capabilities`` per
 # ``core/targeting.json:collection_list``: "Seller must declare support in
 # get_adcp_capabilities." There is no per-product flag for collection_list,
-# so the asymmetry below is spec-defined, not an oversight. Collection-list
-# capability infrastructure lands separately.
+# so the asymmetry below is spec-defined, not an oversight. This seller declares
+# neither, so :func:`raise_if_undeclared_overlay_dimension` refuses both.
 
 
 def build_property_list_unsupported_advisories(
@@ -178,7 +116,7 @@ def build_property_list_unsupported_advisories(
 ) -> list[Error]:
     """Build per-package ``UNSUPPORTED_FEATURE`` advisories for property_list use.
 
-    AdCP spec 3.0.0 ``error-handling.mdx`` describes non-fatal errors as
+    ``error-handling.mdx`` describes non-fatal errors as
     "populate only the payload... MUST NOT populate ``adcp_error``" — i.e.
     advisories ride on the success envelope. Buyers see the silent-drop
     window during the rollout of property_list round-trip and adapter
@@ -227,10 +165,12 @@ def property_list_unsupported_advisories(
     return advisories or None
 
 
-def validate_property_targeting_allowed(product: "Product | None", targeting_overlay: Targeting | None) -> str | None:
+def validate_property_targeting_allowed(
+    product: "Product | None", targeting_overlay: AnyTargeting | None
+) -> str | None:
     """Reject property_list targeting against products that disallow it.
 
-    AdCP 3.0.0 (core/product.json ``property_targeting_allowed``): "Sellers
+    (core/product.json ``property_targeting_allowed``): "Sellers
     SHOULD return a validation error if the product has
     property_targeting_allowed: false."
 
@@ -276,6 +216,25 @@ def raise_if_property_targeting_violations(violations: list[str]) -> None:
             # overlay sites pass is a different shape under the same old name.
             details=ValidationDetails(reasons=violations),
         )
+
+
+def raise_if_campaign_frequency_cap_invalid(overlays: Sequence[AnyTargeting | None]) -> None:
+    """Refuse a package frequency cap whose ``suppress`` or ``window`` is a campaign Duration
+    with ``interval != 1`` (core/duration.json, see ``campaign_interval_violated``).
+
+    *overlays* are the packages' ``targeting_overlay`` values in request order, so the pointer
+    names the package and the Duration at fault. :func:`refuse_invalid_package_overlays` calls
+    it for both create_media_buy and update_media_buy, before anything is written.
+    """
+    for index, overlay in enumerate(overlays):
+        cap = overlay.frequency_cap if overlay is not None else None
+        if cap is None:
+            continue
+        for slot in ("suppress", "window"):
+            if campaign_interval_violated(getattr(cap, slot)):
+                raise AdCPValidationError(
+                    field=package_field_path(f"targeting_overlay.frequency_cap.{slot}.interval", index)
+                )
 
 
 # Geo inclusion/exclusion field pairs for same-value overlap detection.
@@ -332,7 +291,7 @@ def _extract_system_values(items: list) -> dict[str, set[str]]:
     return by_system
 
 
-def collect_targeting_violations(targeting: Targeting) -> dict[str, object]:
+def collect_targeting_violations(targeting: AnyTargeting) -> dict[str, object]:
     """Assemble every targeting-overlay violation into buyer-facing ``details``.
 
     THE one place the per-dimension validators are composed. Both tools that validate an
@@ -346,6 +305,7 @@ def collect_targeting_violations(targeting: Targeting) -> dict[str, object]:
 
         geo_overlaps              {include, exclude, values} per conflicting field pair,
                                   plus `system` for metro/postal pairs
+        keyword_duplicates        {keyword, match_type} per pair keyword_targets repeats
 
     Empty mapping means the overlay is clean, so the caller can branch on truthiness.
 
@@ -367,11 +327,92 @@ def collect_targeting_violations(targeting: Targeting) -> dict[str, object]:
     """
     candidates: dict[str, object] = {
         "geo_overlaps": geo_overlap_conflicts(targeting),
+        "keyword_duplicates": keyword_duplicate_pairs(targeting),
     }
     return {key: value for key, value in candidates.items() if value}
 
 
-def geo_overlap_conflicts(targeting: Targeting) -> list[dict[str, object]]:
+def keyword_duplicate_pairs(targeting: AnyTargeting) -> list[dict[str, str]]:
+    """The (keyword, match_type) pairs ``keyword_targets`` carries more than once.
+
+    core/targeting.json keyword_targets: "Each keyword is identified by the tuple (keyword,
+    match_type) ... Sellers SHOULD reject duplicate (keyword, match_type) pairs within a single
+    request." A shape rule, so it is checked before :func:`raise_if_undeclared_overlay_dimension`
+    asks whether this seller applies keywords at all.
+    """
+    pairs = Counter((target.keyword, enum_value(target.match_type)) for target in targeting.keyword_targets or ())
+    return [{"keyword": keyword, "match_type": match_type} for (keyword, match_type), n in pairs.items() if n > 1]
+
+
+#: Overlay dimensions this seller refuses wherever they are sent. Each one's pinned description
+#: (core/targeting.json) says "Seller must declare support in get_adcp_capabilities"; each is
+#: declared there under media_buy.execution.targeting
+#: (protocol/get-adcp-capabilities-response.json); this seller's capabilities builder emits none
+#: of them (src/services/seller_capabilities.py builds geo_countries, geo_regions,
+#: geo_metros and geo_postal_areas only, and no collection_list or collection_list_exclude
+#: flag); no product carries overlay_support; and no adapter under src/adapters reads them.
+#: Accepting one answers success for targeting nothing applies, which the same file's "A fresh
+#: create/update request MUST be applied exactly or rejected" forbids.
+#:
+#: A deliberate hand list with a known ceiling: when an adapter learns to apply one of these and
+#: the builder declares it (#1857), the refusal must consult that declaration instead.
+UNDECLARED_OVERLAY_DIMENSIONS: tuple[str, ...] = (
+    "geo_proximity",
+    "keyword_targets",
+    "negative_keywords",
+    "collection_list",
+    "collection_list_exclude",
+)
+
+
+def raise_if_undeclared_overlay_dimension(targeting: AnyTargeting, package_index: int) -> None:
+    """Refuse an overlay carrying a dimension this seller cannot apply (UNSUPPORTED_FEATURE).
+
+    The one refusal for both tools that accept an overlay, so create and update cannot answer
+    the same targeting differently. ``field`` names the dimension on the package that sent it;
+    ``details.capability`` names the declaration the seller lacks.
+
+    Two sources of "cannot apply": the :data:`UNDECLARED_OVERLAY_DIMENSIONS`, each its own
+    capability, and ``store_catchments`` while :data:`CATALOG_MANAGEMENT_SUPPORTED` is False.
+    A store_catchments entry targets stores "from a synced store catalog", its ``catalog_id``
+    being a "Synced store-type catalog ID from sync_catalogs" (core/targeting.json); with no
+    catalog management no such catalog exists. ``targeting.mdx``: "unsupported dimensions ...
+    produce ``UNSUPPORTED_FEATURE``" with an exact ``error.field``.
+    """
+    refused = [
+        (dimension, dimension)
+        for dimension in UNDECLARED_OVERLAY_DIMENSIONS
+        if getattr(targeting, dimension) is not None
+    ]
+    if targeting.store_catchments and not CATALOG_MANAGEMENT_SUPPORTED:
+        refused.append(("store_catchments", "catalog_management"))
+    if refused:
+        dimension, capability = refused[0]
+        raise _unsupported_package_member(f"targeting_overlay.{dimension}", capability, package_index)
+
+
+def refuse_invalid_package_overlays(overlays: Sequence[AnyTargeting | None]) -> None:
+    """Refuse the packages' overlays, in package order: request faults first, then capability gaps.
+
+    THE one overlay check for create_media_buy and update_media_buy, so the two tools answer
+    the same overlay with the same code. ``overlays[i]`` is package ``i``'s overlay (``None``
+    when it sent none). Every overlay is checked for a request fault before any is asked
+    whether this seller applies what it names, so a request fault outranks a capability gap.
+    The first package with a fault is the one refused, with that package's violations. The
+    request faults are the shape rules (INVALID_REQUEST), then a campaign frequency-cap
+    Duration whose interval is not 1 (VALIDATION_ERROR).
+    """
+    sent = [(index, overlay) for index, overlay in enumerate(overlays) if overlay is not None]
+    for _, overlay in sent:
+        violations = collect_targeting_violations(overlay)
+        if violations:
+            raise AdCPInvalidRequestError(details=ValidationDetails(**violations), field="targeting_overlay")
+    raise_if_campaign_frequency_cap_invalid(overlays)
+    for index, overlay in sent:
+        raise_if_undeclared_overlay_dimension(overlay, index)
+
+
+def geo_overlap_conflicts(targeting: AnyTargeting) -> list[dict[str, object]]:
     """Reject same-value overlap between geo inclusion and exclusion fields.
 
     Per AdCP spec (adcp PR #1010): sellers SHOULD reject requests where the

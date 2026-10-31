@@ -12,7 +12,7 @@ the Given step actually builds (via the factory) and confirms the payload stays 
 Part of #1391 SDK 5.7 creative-asset-shape migration.
 """
 
-from adcp.types import CreativeAsset
+from adcp.types import LegacyCreativeAsset as CreativeAsset
 
 from tests.bdd.steps.domain.uc006_sync_creatives import given_asset_with_provenance_source_type
 from tests.factories.creative_asset import build_assets, image_spec

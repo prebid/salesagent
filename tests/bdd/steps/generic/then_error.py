@@ -13,6 +13,7 @@ from pytest_bdd import parsers, then
 
 from tests.bdd.steps._outcome_helpers import (
     payload_or_none,
+    wire_advisory_errors,
     wire_entry_errors,
     wire_error_dict,
     wire_error_envelope_or_none,
@@ -414,9 +415,15 @@ def then_response_error_issue(ctx: dict, keyword: str, field: str) -> None:
      ``ValidationError`` -- including one synthesised in the test process --
      satisfied an isinstance check.
 
-     *field* is matched against the issue POINTER by trailing segment, so
-     ``billing`` matches ``/accounts/0/Accounts/billing`` without the scenario
-     having to spell out pydantic's union-branch naming.
+     *field* is matched against the issue POINTER by trailing segment, so a scenario
+     naming ``billing`` is satisfied by ``/accounts/0/billing`` without having to
+     restate the whole request-rooted path it already established in its Given.
+
+     It used to read "so ``billing`` matches ``/accounts/0/Accounts/billing`` without
+     the scenario having to spell out pydantic's union-branch naming" -- the tolerance
+     was for a pointer segment that was a UNION ARM NAME, not a member of the buyer's
+     document at all. The pointer no longer carries one (salesagent-lkgmg), so the
+     suffix match is back to being what it says it is: a scenario naming the leaf.
     """
     from tests.helpers.envelope_assertions import locate_envelope_error
 
@@ -469,6 +476,21 @@ def then_operation_fails(ctx: dict) -> None:
         "Expected the operation to fail but no error was recorded. "
         f"ctx keys: {list(ctx.keys())}, response: {payload_or_none(ctx)!r}"
     )
+
+
+@then('the response should have an "errors" array')
+@then('the response should contain an "errors" array')
+def then_response_has_errors_array(ctx: dict) -> None:
+    """Assert the wire rejection carries a non-empty, conformant errors array.
+
+    The helper asserts the array is non-empty and validates every entry against pinned
+    ``core/error.json``, which subsumes the per-entry code-and-message checks the two
+    hand-rolled versions of this step used to spell out.
+
+    Moved here from ``then_media_buy.py``, which is not a registered step module, so both
+    sentences had no live definition and every scenario using one stopped at it.
+    """
+    ctx["result"].assert_wire_error_is_schema_conformant()
 
 
 @then("the entire sync operation fails")
@@ -937,8 +959,15 @@ def then_no_error_returned(ctx: dict) -> None:
 
 @then(parsers.parse('no error should be raised for "{value}"'))
 def then_no_error_for_value(ctx: dict, value: str) -> None:
-    """Assert no error was raised for a specific value (silent exclusion)."""
-    assert "error" not in ctx, f"Expected no error for '{value}' but got: {ctx.get('error')}"
+    """The request succeeded and its response reports nothing about *value*: silent exclusion.
+
+    Read on the wire. ``ctx["error"]`` sees only a refusal, and a seller that answered with
+    the match plus a ``REFERENCE_NOT_FOUND`` advisory for the unmatched member did not
+    exclude it silently. The success guard behind ``wire_advisory_errors`` refuses a
+    refused request, and an empty top-level ``errors[]`` is the absence of any report.
+    """
+    advisories = wire_advisory_errors(ctx)
+    assert advisories == [], f"Expected '{value}' to be excluded silently, but the response reports {advisories}"
 
 
 # ── Validation error (sandbox) ───────────────────────────────────────
@@ -1139,7 +1168,11 @@ def then_wire_error_details_include(ctx: dict, key: str, value: str) -> None:
     Accepts a scalar (equality) or a list (membership), because a details value that
     names several offending items — duplicate ids, unsupported values — is naturally
     an array and the scenario names ONE of them.
+
+    A media buy LABEL (``"mb_existing"``) is resolved to the id the scenario seeded: the
+    Background registers the label, and the seller can only report the real id.
     """
+    value = ctx.get("media_buy_labels", {}).get(value, value)
     error_object = ctx["result"].wire_error_object()
     assert error_object is not None, "no wire error object captured"
     details = error_object.get("details") or {}
@@ -1291,6 +1324,23 @@ def then_field_matches_iso4217(ctx: dict, field: str) -> None:
         f"Expected '{field}' value '{actual}' to match ISO 4217 alphabetic format "
         "(exactly 3 uppercase ASCII letters, e.g., USD)"
     )
+
+
+# ── Correctable / transient failure ─────────────────────────────────
+
+
+@then(parsers.re(r"the response should indicate a (?P<recovery>correctable|transient) failure"))
+def then_recoverable_failure(ctx: dict, recovery: str) -> None:
+    """Assert the wire error's recovery is ``recovery``, on both envelope layers.
+
+    The code is read from the wire because the sentence names none; what it claims is the
+    recovery class, which ``assert_wire_error`` pins against the envelope. Wire only: a
+    dispatch that produced no envelope fails here rather than grading a reconstruction.
+    """
+    result = ctx.get("result")
+    code = result.wire_error_code() if result is not None else None
+    assert code is not None, f"Expected a {recovery} failure on the wire, but no wire error was captured: {result!r}"
+    result.assert_wire_error(code, recovery=recovery)
 
 
 # ── Terminal failure ────────────────────────────────────────────────

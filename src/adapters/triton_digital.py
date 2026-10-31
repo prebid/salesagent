@@ -202,6 +202,9 @@ class TritonDigital(AdServerAdapter):
                 "rateType": "CPM",
                 "startDate": start_time.date().isoformat(),
                 "endDate": end_time.date().isoformat(),
+                # The create-time pause, through the same flag ``pause_package`` flips
+                # below: a flight created with active=false does not deliver.
+                "active": not package.paused,
             }
 
             # Add targeting if provided (from package-level targeting_overlay per AdCP spec)
@@ -450,8 +453,6 @@ class TritonDigital(AdServerAdapter):
                         AffectedPackage(
                             package_id=package_id,
                             paused=not is_resume,
-                            changes_applied=None,
-                            buyer_package_ref=None,
                         )
                     ],
                 )
@@ -492,7 +493,7 @@ class TritonDigital(AdServerAdapter):
             from src.core.helpers.outbound_error_mapping import raise_mapped_outbound_error
 
             # The vendor's URL/response body is an upstream API response from a
-            # seller-internal integration; AdCP 3.1.1 transport-errors.mdx
+            # seller-internal integration; transport-errors.mdx
             # § Security Considerations forbids it on the buyer wire. The mapper
             # keeps it off: it names only the OperatorEndpoint role and chains the
             # OutboundError as ``__cause__`` for the log, never the buyer envelope.

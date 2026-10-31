@@ -10,14 +10,12 @@ Uses historical GAM reporting data aggregated by country + creative format.
 import logging
 from datetime import UTC, datetime, timedelta
 
-# FIXME(#1388): FormatId has a local subclass; import from src.core.schemas (Pattern #7/#4).
-from adcp import FormatId
 from sqlalchemy import and_, select
 from sqlalchemy.orm import Session
 
 from src.core.database.models import FormatPerformanceMetrics
 from src.core.schemas import CpmPricingOption, PriceGuidance, Product
-from src.core.schemas.pricing import PricingOption
+from src.services.gam_product_config_service import product_gam_slots
 
 logger = logging.getLogger(__name__)
 
@@ -89,31 +87,28 @@ class DynamicPricingService:
         cutoff_date,
     ) -> dict:
         """Calculate pricing for a single product based on its formats."""
-        # Extract creative sizes from product format IDs
-        # Format IDs like "display_300x250" -> "300x250"
-        creative_sizes = []
-        for format_id in product.format_ids or []:  # adcp 6.6: Product.format_ids is now Optional (spec 3.1.1)
-            # Handle FormatId objects (dict or object with .id attribute)
-            # Pydantic validation may return dict, object, or string depending on context
-            if isinstance(format_id, dict):
-                format_id_str = format_id.get("id", "")
-            elif isinstance(format_id, FormatId):
-                format_id_str = format_id.id
-            else:
-                format_id_str = str(format_id)
-
-            # Extract size from format_id (e.g., "display_300x250" -> "300x250")
-            parts = format_id_str.split("_")
-            if len(parts) >= 2:
-                # Look for dimensions pattern (NxM)
-                for part in parts:
-                    if "x" in part.lower():
-                        creative_sizes.append(part)
-                        break
+        # The sizes this product's format declarations STATE, as the "<w>x<h>" strings the
+        # metrics rows are keyed on. Asked of the one reader of that question
+        # (``gam_product_config_service.product_gam_slots``), which consults the canonical
+        # ``format_options[]`` arm first and the deprecated one only when the canonical
+        # declarations state no slot.
+        #
+        # THE SUBSTRING SCAN THIS REPLACES read the size out of the ID STRING -- it split on
+        # "_" and took the first part containing an "x" -- so it priced a product on whatever
+        # its format happened to be NAMED. That reaches a size for 22 of the 71 ids in the
+        # reference catalogue and none at all for a canonically-authored product, which has no
+        # legacy arm to scan (salesagent-lyh1i's measurement; salesagent-ol033.8, A6). It also
+        # over-matched: any part with an "x" qualified, so "display_flex_300x250" yielded
+        # "flex".
+        creative_sizes = [
+            f"{slot['width']}x{slot['height']}"
+            for slot in product_gam_slots(product.format_ids, product.format_options)
+        ]
 
         if not creative_sizes:
             logger.warning(
-                f"Product {product.product_id} has no recognizable creative sizes in format_ids: {product.format_ids}"
+                f"Product {product.product_id} declares no creative slot size on either format arm, "
+                f"so no performance metric can be matched to it; using default pricing."
             )
             return self._default_pricing()
 
@@ -232,7 +227,8 @@ class DynamicPricingService:
         # so the writes below are plain declared-field assignments.
         cpm_option: CpmPricingOption | None = None
         for option in product.pricing_options:
-            inner = option.root
+            # The element IS the member (Product.pricing_options holds the arms).
+            inner = option
             if isinstance(inner, CpmPricingOption):
                 cpm_option = inner
                 break
@@ -278,7 +274,8 @@ class DynamicPricingService:
                 price_guidance=price_guidance_obj,
                 min_spend_per_package=None,
             )
-            # Wrap in the local RootModel so the list stays homogeneous — every
-            # element supports .root exactly like options built at conversion time.
-            product.pricing_options.append(PricingOption(new_option))
+            # The MEMBER, unwrapped: Product.pricing_options holds the arms from the pinned SDK on
+            # (the SDK deleted the RootModel wrapper), so appending one keeps the list
+            # homogeneous with what conversion builds.
+            product.pricing_options.append(new_option)
             logger.debug(f"Created new CPM pricing option for {product.product_id}")

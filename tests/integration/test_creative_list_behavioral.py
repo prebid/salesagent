@@ -17,8 +17,9 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from adcp.types import CreativeFilters, PaginationRequest
-from adcp.types.generated_poc.creative.list_creatives_request import Sort
+from adcp.types import LegacyCreativeFilters as CreativeFilters
+from adcp.types import PaginationRequest
+from adcp.types.domains.creative.list_creatives_request import Sort
 
 from tests.factories import (
     CreativeAssignmentFactory,
@@ -431,7 +432,7 @@ class TestListStructuredFilters:
 
     def test_structured_filters_merge_with_flat(self, integration_db):
         """Spec: list_creatives structured filters merge with flat params in request."""
-        from adcp import CreativeFilters
+        from adcp.types import LegacyCreativeFilters as CreativeFilters
 
         with CreativeListEnv() as env:
             tenant = TenantFactory(tenant_id="test_tenant")
@@ -590,7 +591,7 @@ class TestListQuerySummary:
 
 
 class TestListResponseShape:
-    """Creative response object construction — format_parameters, snippet, etc."""
+    """Creative response object construction — format_id parameters, snippet, etc."""
 
     def test_format_parameters_extracted(self, integration_db):
         """Spec: list_creatives format_id includes width/height/duration_ms."""
@@ -602,7 +603,7 @@ class TestListResponseShape:
                 tenant=tenant,
                 principal=principal,
                 creative_id="c_fmt_params",
-                format_parameters={"width": 300, "height": 250, "duration_ms": 15000},
+                format_params={"width": 300, "height": 250, "duration_ms": 15000},
             )
 
             response = env.call_impl()
@@ -836,7 +837,7 @@ class TestListCreativeObjectConstruction:
         assert response.creatives[0].creative_id == "c_normal"
 
     def test_format_parameters_width_height(self, integration_db):
-        """Spec: format_parameters populates FormatId width/height/duration_ms."""
+        """Spec: the retained reference's parameters populate FormatId width/height/duration_ms."""
         with CreativeListEnv() as env:
             tenant = TenantFactory(tenant_id="test_tenant")
             principal = PrincipalFactory(tenant=tenant, principal_id="test_principal")
@@ -844,7 +845,7 @@ class TestListCreativeObjectConstruction:
                 tenant=tenant,
                 principal=principal,
                 creative_id="c_format_params",
-                format_parameters={"width": 728, "height": 90, "duration_ms": 15000},
+                format_params={"width": 728, "height": 90, "duration_ms": 15000},
             )
             response = env.call_impl()
 
@@ -854,23 +855,18 @@ class TestListCreativeObjectConstruction:
         assert creative.format_id.height == 90
         assert creative.format_id.duration_ms == 15000
 
-    def test_format_parameters_partial(self, integration_db):
-        """Spec: format_parameters with only width still populates correctly."""
-        with CreativeListEnv() as env:
-            tenant = TenantFactory(tenant_id="test_tenant")
-            principal = PrincipalFactory(tenant=tenant, principal_id="test_principal")
-            CreativeFactory(
-                tenant=tenant,
-                principal=principal,
-                creative_id="c_partial_params",
-                format_parameters={"width": 300},
-            )
-            response = env.call_impl()
-
-        assert len(response.creatives) == 1
-        creative = response.creatives[0]
-        assert creative.format_id.width == 300
-        assert creative.format_id.height is None
+    # test_format_parameters_partial is DELETED. Its docstring read "Spec: a reference
+    # pinning only width still populates correctly" and cited no section, and the
+    # pinned schema says the opposite: core/format-id.json declares
+    #     "dependencies": {"width": ["height"], "height": ["width"], "pixel_ratio": ["width", "height"]}
+    # so a reference pinning width alone is not a document AdCP 3.2.1 admits. The
+    # previous SDK's exported class carried no root dependencies and accepted it; the
+    # rebuilt one compiles them and refuses it (salesagent-8qela.121).
+    #
+    # The reachable case — a reference carrying a complete pair — is graded directly
+    # above by test_format_parameters_full, so nothing is left unasserted. The
+    # factory is not at fault: it spreads format_params onto the reference, which is
+    # exactly what a parameterized format_id is; this test handed it half a pair.
 
     def test_unparseable_status_is_placeheld_and_surfaced(self, integration_db):
         """An unreadable stored status renders as ``processing`` AND raises an advisory.

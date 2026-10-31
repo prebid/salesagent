@@ -43,7 +43,7 @@ from src.core.schemas import (
     SyncCreativesRequest,
     UpdateMediaBuyRequest,
 )
-from src.core.schemas._base import AdcpResponse, BuyerRequest
+from src.core.schemas._base import BuyerRequest, SalesAgentAdcpResponse
 from src.core.tools.accounts import _list_accounts_impl, _sync_accounts_impl
 from src.core.tools.capabilities import _get_adcp_capabilities_impl
 from src.core.tools.creative_formats import _list_creative_formats_impl
@@ -102,7 +102,7 @@ class ToolImpl[Req: BuyerRequest, Id: PublicIdentity](Protocol):
     ``identity`` declared Optional or defaulted, and an extra defaulted parameter.
     """
 
-    def __call__(self, *, req: Req, identity: Id) -> AdcpResponse | Awaitable[AdcpResponse]: ...
+    def __call__(self, *, req: Req, identity: Id) -> SalesAgentAdcpResponse | Awaitable[SalesAgentAdcpResponse]: ...
 
 
 _IDENTITY_TYPES: tuple[type[PublicIdentity], ...] = (PublicIdentity, ResolvedIdentity, AccountIdentity)
@@ -130,6 +130,12 @@ class ToolSpec[Req: BuyerRequest, Id: PublicIdentity]:
     impl: ToolImpl[Req, Id]
     rest: RestBinding | None
     a2a: bool = True
+    #: This seller serves the tool only as a deprecated compatibility surface beside the
+    #: canonical one that replaces it, so it is advertised as the pin describes it rather
+    #: than as the SDK does (:meth:`advertised_description`). A seller decision, not a
+    #: reading of ``deprecated``: create_media_buy and update_media_buy are deprecated at
+    #: the pin too, and this seller serves none of the tasks that replace them.
+    deprecated_compatibility: bool = False
 
     def __post_init__(self) -> None:
         """Refuse, at load, an identity annotation that disagrees with the DTO about the account.
@@ -152,6 +158,30 @@ class ToolSpec[Req: BuyerRequest, Id: PublicIdentity]:
                 f"{self.impl!r} declares identity: {declared.__name__} but {self.dto.__name__} "
                 f"{'requires' if self.requires_account() else 'does not require'} account; annotate {expected}"
             )
+
+    def advertised_description(self, sdk_description: str | None) -> str | None:
+        """The description every transport advertises for this tool: MCP's and the A2A skill's.
+
+        *sdk_description* is what the pinned SDK publishes for the tool, and it is the answer
+        unless the row is a :attr:`deprecated_compatibility` surface. Then it is the pinned
+        request schema's own description, which says the task is deprecated and names the
+        surfaces that replace it. The SDK's sentence for list_creative_formats ("Returns
+        format_ids needed for sync_creatives") presents the task as a prerequisite, where
+        creative/task-reference/list_creative_formats.mdx says "Sales agents MUST NOT use an
+        agent-global format list as a purchasability promise" and new implementations "MUST
+        use the canonical surfaces".
+        """
+        if not self.deprecated_compatibility:
+            return sdk_description
+        from src.core.schemas._pinned_fields import request_schema_description
+        from src.core.tools._announced_shape import sdk_grounding
+
+        if not issubclass(self.dto, BaseModel):
+            raise TypeError(f"{self.dto!r} is not a pydantic model")
+        grounding = sdk_grounding(self.dto)
+        if grounding is None:
+            raise TypeError(f"{self.dto.__name__} inherits no SDK request model to read a pinned description for")
+        return request_schema_description(grounding)
 
     def requires_account(self) -> bool:
         """Whether every request to this tool names an account: the DTO declares it required."""
@@ -187,7 +217,7 @@ class ToolSpec[Req: BuyerRequest, Id: PublicIdentity]:
         refuses a rejected credential on every row. What this policy decides is the ABSENT
         credential only -- a protected tool refuses it (AUTH_MISSING), a public tool serves
         the caller anonymously, which is the case
-        ``dist/compliance/3.1.1/universal/security.yaml`` sets aside ("public tasks like
+        ``dist/compliance/<pin>/universal/security.yaml`` sets aside ("public tasks like
         get_adcp_capabilities return 200 without credentials by design").
         """
         if issubclass(_declared_identity_type(self.impl), ResolvedIdentity):
@@ -213,10 +243,42 @@ _TOOLS: dict[str, ToolSpec] = {
         impl=_get_products_impl,
         rest=RestBinding("POST", "/products"),
     ),
+    # DEPRECATED FOR A SALES AGENT since 3.2 (the pinned list-creative-formats-request.json
+    # carries "deprecated": true and "x-deprecated-in": "3.2.0"), and this row is a
+    # COMPATIBILITY SURFACE rather than the model to extend. The pin lets an existing 3.x
+    # agent keep serving it; it is never a prerequisite for sync_creatives and never a
+    # purchasability promise (``docs/creative/task-reference/list_creative_formats.mdx``). ``docs/creative/sales-agent-creative-capabilities.mdx``
+    # states why: "An agent-global format list cannot express product-, placement-,
+    # account-, or inventory-specific deliverability. For that reason, sales-agent
+    # `list_creative_formats` is deprecated in 3.2." ``docs/creative/formats.mdx`` adds
+    # "Named `format_id` objects and `list_creative_formats` are deprecated compatibility
+    # surfaces" and dates the removal: "Fields named exactly `format_ids` are removed in
+    # AdCP 4.0; singular `format_id`, named-format definitions, and the task follow separate
+    # schedules." The pin agrees structurally -- ``core/format-id.json`` carries
+    # "deprecated": true at 3.2 and did not at 3.0/3.1.
+    #
+    # WHAT REPLACES IT for this seller is ``get_products``' ``format_options[]``: per
+    # formats.mdx's three authorities, "What can a sales agent deliver for this product?" is
+    # answered by ``Product.format_options[]``, which is product-scoped where this task is
+    # agent-global.
+    #
+    # THE ROW STAYS, and its comparison semantics stay LEGACY-KEYED on purpose. The pinned
+    # request declares only ``format_ids``-shaped filters, so the legacy
+    # ``(canonical agent_url, id)`` pair is the correct key for this surface's whole
+    # lifetime -- the 3.x compatibility window is open and a buyer calling it is by
+    # definition an older peer. Do not "canonicalize" the comparison here; do not add a
+    # ``format_kinds`` filter to it. New format work belongs on ``get_products``
+    # (``salesagent-ol033.8``, S5).
+    #
+    # WHAT IT SERVES is a projection of the products, never a catalogue of its own
+    # (``_list_creative_formats_impl``), and every transport advertises it with the pinned
+    # request schema's own description (``deprecated_compatibility``), not the SDK sentence
+    # that calls its answer "format_ids needed for sync_creatives".
     "list_creative_formats": ToolSpec(
         dto=ListCreativeFormatsRequest,
         impl=_list_creative_formats_impl,
         rest=RestBinding("POST", "/creative-formats"),
+        deprecated_compatibility=True,
     ),
     "list_accounts": ToolSpec(
         dto=ListAccountsRequest,

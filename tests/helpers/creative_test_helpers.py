@@ -15,15 +15,34 @@ from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 from uuid import uuid4
 
-from adcp.types import AccountReference
+from adcp.types import AccountReferenceById
 
 from src.core.schemas import SyncCreativesRequest
-from tests.factories.creative_asset import AssetSpec, assert_assets, build_assets, image_spec
-from tests.helpers.adcp_factories import create_test_format_id
+from tests.factories.creative_asset import AssetSpec, assert_assets, build_assets, image_spec, named_format_assets
 
 if TYPE_CHECKING:
     from src.core.schemas import Creative
     from src.core.schemas.creative import SyncCreativesRequest
+
+
+#: THE reference every default creative payload names, and the only one that resolves on
+#: all four transports. Both halves are forced:
+#:
+#: * the agent_url must be the one the capture was taken from, because
+#:   ``format_resolver.find_format`` matches on the PAIR ``(canonical agent_url, id)`` and
+#:   every captured format carries ``https://creative.adcontextprotocol.org``. It is also
+#:   the only value ``is_operator_agent`` admits, so ``_validation.py``'s ``get_format``
+#:   reaches the capture instead of the egress seam.
+#: * the id must be one the capture carries. ``display_300x250`` is NOT one of them
+#:   (the captured 300x250 formats are ``_image``, ``_image_2x``, ``_image_1x_2x``,
+#:   ``_html`` and ``_generative``), and the previous default named it at
+#:   ``https://creative.test.example.com`` -- a format no agent serves at an agent no
+#:   capture carries, which is how in-process transports and e2e_rest came to grade two
+#:   different sellers.
+#:
+#: ``make_creative_dict`` below already used this pair; ``creative_payload`` is the half
+#: that had not followed, so the two are named once here.
+DEFAULT_FORMAT_REFERENCE = {"id": "display_300x250_image", "agent_url": "https://creative.adcontextprotocol.org"}
 
 
 def make_creative_dict(creative_id: str = "c1", name: str = "Test Banner") -> dict:
@@ -39,12 +58,10 @@ def make_creative_dict(creative_id: str = "c1", name: str = "Test Banner") -> di
     return {
         "creative_id": creative_id,
         "name": name,
-        "format_id": {"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250_image"},
-        "assets": build_assets(image_spec("banner_image", url="https://example.com/banner.png")),
+        "format_id": dict(DEFAULT_FORMAT_REFERENCE),
+        "assets": named_format_assets(DEFAULT_FORMAT_REFERENCE["id"]),
     }
 
-
-_DEFAULT_AGENT_URL = "https://creative.test.example.com"
 
 #: Stands in for an account a test is not about. ``_sync_creatives_impl`` never reads
 #: ``req.account`` -- the transport wrapper resolves the reference into ``identity`` before
@@ -69,7 +86,7 @@ def sync_creatives_request(**fields: Any) -> SyncCreativesRequest:
     fields.setdefault("creatives", [creative_payload()])
     fields.setdefault("idempotency_key", f"test-sync-idem-{uuid4().hex}")
     if fields.get("account") is None:
-        fields["account"] = AccountReference(root={"account_id": _PLACEHOLDER_ACCOUNT_ID})
+        fields["account"] = AccountReferenceById(account_id=_PLACEHOLDER_ACCOUNT_ID)
 
     # Imported at call time: this module is imported by tests that patch objects inside the
     # creatives package, and a module-level import would bind before their patches.
@@ -88,8 +105,8 @@ def creative_payload(**overrides: object) -> dict:
     payload: dict = dict(overrides)
     payload.setdefault("creative_id", "c1")
     payload.setdefault("name", "Test")
-    payload.setdefault("format_id", {"id": "display_300x250", "agent_url": _DEFAULT_AGENT_URL})
-    payload.setdefault("assets", build_assets(image_spec("banner")))
+    payload.setdefault("format_id", dict(DEFAULT_FORMAT_REFERENCE))
+    payload.setdefault("assets", named_format_assets(DEFAULT_FORMAT_REFERENCE["id"]))
     return payload
 
 
@@ -148,36 +165,6 @@ def make_creative_uow(*, include_assignments: bool = False):
 
     _, mock_uow = make_mock_uow(repos=repos)
     return mock_uow, mock_creative_repo
-
-
-def make_format_spec(
-    format_id: str = "display_300x250_image",
-    *,
-    agent_url: str = "https://creative.adcontextprotocol.org",
-    name: str = "Medium Rectangle",
-    output_format_ids: list[str] | None = None,
-) -> Mock:
-    """A registry listing entry shaped the way production's actually is.
-
-    ONE definition, because three test modules hand-rolled this same stand-in and all
-    three carried the same two defects:
-
-    - ``format_id`` as a bare STRING. ``Format.format_id`` is annotated as the library
-      FormatId, so a string is a shape production never produces. It made the old
-      class-sensitive ``fmt.format_id == creative_format`` match by accident in unit
-      tests while it matched NOTHING in production (#2093) -- the mock was propping up
-      the bug it should have caught.
-    - ``output_format_ids`` left auto-specced. _processing reads that attribute to
-      decide whether a format is generative, and a bare Mock attribute is truthy, so
-      every static format silently became a generative one the moment the lookup
-      started working. Empty by default; pass a list to build a generative spec.
-    """
-    spec = Mock()
-    spec.format_id = create_test_format_id(format_id, agent_url=agent_url)
-    spec.agent_url = agent_url
-    spec.name = name
-    spec.output_format_ids = output_format_ids or []
-    return spec
 
 
 def make_registry_mock(

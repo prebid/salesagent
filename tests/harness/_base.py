@@ -1361,6 +1361,41 @@ class BaseTestEnv:
             self.__dict__["_signing"] = build_signing_capability(self)
         return self.__dict__["_signing"]
 
+    def repoint_signing_agent_url(self, agent_url: str) -> Any:
+        """Move this buyer's PUBLISHED ``agent_url`` to *agent_url*, keeping its key.
+
+        One variable away from :meth:`enable_request_signing`: the same counterparty,
+        the same keypair, the same signature — and a trust root the seller cannot walk
+        to. The capability is minted first if it has not been, so a scenario can say
+        "this buyer signs" and "its agent_url is unwalkable" as two Givens in either
+        order.
+
+        NO TRANSPORT BRANCH, and that is the point. The write goes through
+        :func:`~tests.harness.signing_capability.attach_agent_url`, whose session is
+        bound to the LIVE SERVER's database in e2e mode and to this process's in
+        every other, so all four transports read the re-pointed row by the one
+        mechanism production reads it by: ``token -> Principal.agent_url``. There is
+        no in-process shortcut here to diverge from the e2e leg.
+
+        The two process-global caches for *agent_url* are cleared, so the walk
+        actually RUNS rather than being answered from a neighbour scenario's verdict:
+        ``AGENT_RESOLUTION_CACHE`` would serve a resolution for 3600 s, and
+        ``_RESOLUTION_FAILURES`` would serve a previous failure's code for the refetch
+        cooldown. Both are keyed by ``agent_url``, so clearing this one key leaves
+        every other counterparty in the process untouched. Without this the scenario's
+        outcome would depend on execution order, which under xdist and
+        ``pytest-randomly`` is not an order anyone chose.
+        """
+        from src.core.signing import verifier
+        from src.core.signing.agent_cache import AGENT_RESOLUTION_CACHE
+        from tests.harness.signing_capability import attach_agent_url
+
+        capability = self.enable_request_signing()
+        attach_agent_url(self, agent_url)
+        AGENT_RESOLUTION_CACHE.pop(agent_url, None)
+        verifier._RESOLUTION_FAILURES.pop(agent_url, None)
+        return capability
+
     def declare_request_signing(
         self,
         *,
@@ -1762,7 +1797,7 @@ class BaseTestEnv:
         #
         # Through ``revive`` when the parser is a response model, because a SERVED document
         # carries the context the boundary stamped and the constructor refuses that field --
-        # ``AdcpResponse`` makes ``_boundary._served`` the only thing that can put one on a
+        # ``SalesAgentAdcpResponse`` makes ``_boundary._served`` the only thing that can put one on a
         # response, so ``parser(**wire)`` raised a ValidationError in the TEST process and the
         # scenario reported "no response arrived" for a request the seller answered fine.
         # ``revive`` is the reader-side door: it takes the field off the document, validates
@@ -2679,7 +2714,7 @@ class BaseTestEnv:
         NotImplementedError, and nine envs answered it with one line of their own --
         ``SomeResponse(**data)`` -- which is the substituted-variable duplication the DRY
         rule forbids, and which every one of them got WRONG in the same way: a served
-        document carries the ``context`` the boundary stamped, ``AdcpResponse`` refuses
+        document carries the ``context`` the boundary stamped, ``SalesAgentAdcpResponse`` refuses
         that field on construction so the boundary is the only thing that can put one
         there, and so every REST dispatch of a context-carrying request raised in the TEST
         process. The scenario then reported "no response arrived" for a request the seller
@@ -2691,7 +2726,7 @@ class BaseTestEnv:
         ``RESPONSE_MODEL`` and overrides this; the refusal below is what it used to be.
 
         ``revive`` only when the model HAS one. Some envs name the LIBRARY response type
-        rather than a local subclass of ``AdcpResponse`` — ``CapabilitiesEnv`` does — and a
+        rather than a local subclass of ``SalesAgentAdcpResponse`` — ``CapabilitiesEnv`` does — and a
         library model carries no context refusal to work around, so plain construction is
         correct for it. Refusing instead cost 97 UC-010 failures in one run: measured as
         NEW between two remote runs, every one of them this frame raising
@@ -2760,6 +2795,27 @@ class BaseTestEnv:
             assert self.e2e_config is not None, "fetch_agent_card()'s e2e branch needs env.e2e_config"
             return httpx.get(f"{self.e2e_config.base_url}{path}", headers=headers, timeout=30)
         return self.get_rest_client().get(path, headers=headers)
+
+    def list_mcp_tools(self) -> dict[str, str | None]:
+        """Each MCP tool's advertised description, by name, as a client's ``tools/list`` answers.
+
+        Like the card, ``tools/list`` is not a registry tool and so not reachable through
+        ``call_via``. It runs over FastMCP's in-memory client against the server the MCP
+        transport dispatches to, so the answer is the MCP wire's, not a read of the registry.
+        In-process only: e2e serves no MCP transport to grade.
+        """
+        assert not self.is_e2e, "list_mcp_tools() reads the in-process MCP server; e2e dispatches no MCP"
+        import asyncio
+
+        from fastmcp import Client
+
+        from src.core.main import mcp
+
+        async def _list() -> dict[str, str | None]:
+            async with Client(mcp) as client:
+                return {tool.name: tool.description for tool in await client.list_tools()}
+
+        return asyncio.run(_list())
 
     def _commit_factory_data(self) -> None:
         """Flush pending session state before calling production code.
@@ -2870,7 +2926,25 @@ class BaseTestEnv:
                 )
 
         try:
-            # 0. Subclass setup that must precede the database and the mocks.
+            # 0. Compose the app before anything here patches the settings. ``src.app`` is
+            #    the composition root and calls ``load_settings()`` when it is imported,
+            #    which REPLACES the process's settings object; a patch an env made on the
+            #    old object (``set_egress_hatches``, ``FastOutboundBackoffMixin``, a
+            #    replaced ``_settings``) was silently discarded when the first REST
+            #    dispatch in the process imported it. A server process composes before it
+            #    serves, so this is the order production runs in. Not on e2e: the server
+            #    there is another process, and this one composes nothing it reaches.
+            if not self.is_e2e:
+                import src.app  # noqa: F401
+
+                # 0. The live public creative agent is unreachable from any in-process env,
+                #    and an attempt to reach it fails the env on exit. Not on e2e: the dial
+                #    happens in the server, which reaches the stack's own creative agent.
+                from tests.helpers.peer_creative_agent import refuse_the_public_creative_agent
+
+                refuse_the_public_creative_agent(self._guard)
+
+            # 0a. Subclass setup that must precede the database and the mocks.
             self._enter_pre()
 
             # 1. Database setup (integration mode only). INSIDE the try: the
@@ -3156,6 +3230,30 @@ class IntegrationEnv(BaseTestEnv):
     #: opt-out is scoped to exactly the scenario that calls it.
     REST_RAISE_SERVER_EXCEPTIONS: bool = True
 
+    def ensure_tenant(self, **tenant_kwargs: Any) -> Any:
+        """Get-or-create this env's tenant row alone, with *tenant_kwargs* applied either way.
+
+        The tenant half of :meth:`setup_default_data`, for a setup that configures the
+        SELLER and must not seed a principal: the factory derives a principal's token from
+        its ``principal_id`` alone and ``principals.token_hash`` is globally unique, so a
+        principal seeded as a side effect collides with one a test creates itself.
+        Forwarded to ``TenantFactory`` on the create path; APPLIED to the existing row on
+        the get path, where the e2e ``__enter__`` auto-seed created it with model defaults.
+        """
+        from sqlalchemy import select
+
+        from src.core.database.models import Tenant
+        from tests.factories import TenantFactory
+
+        tenant = self._session.scalars(select(Tenant).filter_by(tenant_id=self._tenant_id)).first()
+        if tenant is None:
+            return TenantFactory(tenant_id=self._tenant_id, **tenant_kwargs)
+        if tenant_kwargs:
+            for column, value in tenant_kwargs.items():
+                setattr(tenant, column, value)
+            self._commit_factory_data()
+        return tenant
+
     def setup_default_data(self, **tenant_kwargs: Any) -> tuple[Any, Any]:
         """Get-or-create default tenant + principal via factories.
 
@@ -3176,22 +3274,35 @@ class IntegrationEnv(BaseTestEnv):
         """
         from sqlalchemy import select
 
-        from src.core.database.models import Principal, Tenant
-        from tests.factories import PrincipalFactory, TenantFactory
+        from src.core.database.models import AdapterConfig as DBAdapterConfig
+        from src.core.database.models import Principal
+        from tests.factories import AdapterConfigFactory, PrincipalFactory
 
-        tenant = self._session.scalars(select(Tenant).filter_by(tenant_id=self._tenant_id)).first()
-        if tenant is None:
-            tenant = TenantFactory(tenant_id=self._tenant_id, **tenant_kwargs)
-        elif tenant_kwargs:
-            for column, value in tenant_kwargs.items():
-                setattr(tenant, column, value)
-            self._commit_factory_data()
+        tenant = self.ensure_tenant(**tenant_kwargs)
 
         principal = self._session.scalars(
             select(Principal).filter_by(tenant_id=self._tenant_id, principal_id=self._principal_id)
         ).first()
         if principal is None:
             principal = PrincipalFactory(tenant=tenant, principal_id=self._principal_id)
+
+        # AN ``adapter_config`` ROW, because EVERY production tenant has one and a fixture
+        # without one is state production cannot be in. Every creation path writes it --
+        # ``admin/blueprints/public.py`` (signup), the tenant management API,
+        # ``scripts/setup/setup_tenant.py`` and ``scripts/setup/init_database.py`` -- and the
+        # only ``delete(AdapterConfig)`` drops the tenant in the same transaction.
+        #
+        # ITS ABSENCE WAS A TRANSPORT DIVERGENCE. ``helpers/adapter_helpers.get_adapter``
+        # reads the row, and with none it took a different branch for a SANDBOX account than
+        # for any other, so two uc002 account-reference rows failed on e2e_rest only while
+        # passing on the three in-process transports -- which patch the adapter and so could
+        # not see it (salesagent-6d07f, salesagent-8mynh). The posture column is left at its
+        # own server default (``false``); this seeds the ROW's existence, which is the fact
+        # production guarantees, and states no policy a scenario did not ask for.
+        adapter_config = self._session.scalars(select(DBAdapterConfig).filter_by(tenant_id=self._tenant_id)).first()
+        if adapter_config is None:
+            AdapterConfigFactory(tenant=tenant, adapter_type="mock")
+            self._commit_factory_data()
 
         # NO account is seeded here, deliberately. Seeding one for every tenant made
         # UC-011's account-LISTING scenarios wrong -- "0 accounts visible" saw one -- which
@@ -3281,9 +3392,9 @@ class IntegrationEnv(BaseTestEnv):
         The account_id form is the one a seeded row can satisfy exactly, so steps get
         that rather than reconstructing a brand/operator pair the DB may not agree with.
         """
-        from adcp.types import AccountReference
+        from adcp.types import AccountReferenceById
 
-        return AccountReference(root={"account_id": self.setup_default_account().account_id})
+        return AccountReferenceById(account_id=self.setup_default_account().account_id)
 
     # Seeding a NAMED account reference lives here rather than on one env: any env whose
     # tool carries an ``account`` needs it, and update_media_buy needed it the moment the

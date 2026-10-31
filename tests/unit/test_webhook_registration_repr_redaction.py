@@ -47,6 +47,11 @@ QUERY_SECRET = "QUERYSECRET"
 
 REGISTRATION_DOCUMENT = {
     "url": f"https://buyer.example.com/hook?token={QUERY_SECRET}",
+    # The gate takes AdCP 3.2.1 L3/webhooks.mdx :141's MAY and refuses a registration
+    # that omits ``operation_id``, so a document without one never reaches the carrier
+    # this module grades. Present here for the same reason the webhook factories default
+    # it: a fixture asserting something about an ACCEPTED registration has to be one.
+    "operation_id": "op_repr_redaction",
     "authentication": {"schemes": ["HMAC-SHA256"], "credentials": CREDENTIAL},
 }
 

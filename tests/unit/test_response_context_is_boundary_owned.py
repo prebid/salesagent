@@ -1,6 +1,6 @@
 """The response envelope refuses a ``context`` from anyone but the boundary.
 
-Two refusals on ``AdcpResponse`` (salesagent-3cs7o.3), each proven by breaking it:
+Two refusals on ``SalesAgentAdcpResponse`` (salesagent-3cs7o.3), each proven by breaking it:
 constructing a response with a non-None ``context`` fails validation, and assigning one
 afterwards fails too. ``_boundary._served`` is the one writer, through ``object.__setattr__``,
 and the third case proves that bypass still lands the echo -- a guard that also blocked the

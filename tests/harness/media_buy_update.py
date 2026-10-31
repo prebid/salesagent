@@ -36,7 +36,9 @@ from typing import Any
 from unittest.mock import MagicMock
 
 from src.core.errors.details import EntityRefDetails
+from tests.factories.creative import stamp_format_identity
 from tests.harness._base import BaseTestEnv
+from tests.helpers.media_buy_row_stubs import stub_package_row
 
 _MODULE = "src.core.tools.media_buy_update"
 _DB_MODULE = "src.core.database.database_session"
@@ -152,6 +154,20 @@ class MediaBuyUpdateEnv(BaseTestEnv):
         _mb_repo.get_by_id_or_raise.side_effect = _get_by_id_or_raise
         _mb_repo.get_package_or_raise.side_effect = _get_package_or_raise
 
+        # Default package: the ROW a package-level update reads back, carrying the fields
+        # the tool projects into ``affected_packages`` as the column and the JSON document
+        # really hold them (``paused`` defaults to false per 3.2.1 core/package.json;
+        # ``budget``, ``bid_price`` and ``pacing`` are nullable columns). A bare MagicMock
+        # answers every unset attribute with another MagicMock, which the response model
+        # rightly refuses — the mock was the defect, not the projection. The columns are
+        # DERIVED from the model by ``stub_package_row`` rather than listed here, so the
+        # next column the projection starts reading does not reopen this.
+        #
+        # ``return_value``, deliberately NOT ``side_effect``: a side_effect WINS over a
+        # later ``get_package.return_value = None``, so the not-found tests
+        # (TestUC003ExtL) would have been unable to configure their own absence.
+        _mb_repo.get_package.return_value = stub_package_row(package_config={"paused": False})
+
         # creatives repo: by default every referenced creative "exists" with an
         # approved status and no format restriction (uow.products.get_by_id
         # returns a product without format_ids). Tests that exercise the
@@ -165,8 +181,20 @@ class MediaBuyUpdateEnv(BaseTestEnv):
                 cr = MagicMock()
                 cr.creative_id = cid
                 cr.status = "approved"
-                cr.agent_url = None
-                cr.format = "display_300x250"
+                # The FOUR stored identity columns, through the production mapping. This
+                # used to set ``cr.agent_url`` and ``cr.format`` -- two names the Creative
+                # model no longer carries, left over from when the format identity was
+                # loose columns. ``CreativeFormatIdentity.from_row`` reads
+                # ``legacy_format_id`` / ``format_kind`` / ``format_option_ref``, and an
+                # unstubbed MagicMock answers each with a fresh Mock, which is not a state
+                # any of those columns can hold -- so the reader raised
+                # ``ValidationError: Input should be a valid dictionary or instance of
+                # FormatId`` instead of the code under test failing or passing. That was
+                # invisible only because the format gate used to return early on this
+                # stub's product; the moment it read one line further, every test sharing
+                # this default broke on the fixture. ``stamp_format_identity`` exists for
+                # exactly this and says so in its own docstring.
+                stamp_format_identity(cr, format_id="display_300x250")
                 creatives.append(cr)
             return creatives
 

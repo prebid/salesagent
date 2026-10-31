@@ -2,10 +2,8 @@ import logging
 from typing import Any
 
 from fastmcp import FastMCP
-from fastmcp.tools.tool import Tool, ToolResult
+from fastmcp.tools.base import Tool, ToolResult
 from rich.console import Console
-
-from src.adapters.mock_creative_engine import MockCreativeEngine
 
 logger = logging.getLogger(__name__)
 
@@ -145,9 +143,22 @@ mcp = FastMCP(
 # credential the tool hands it, so this was pure double resolution -- measured at 2x
 # resolve_identity per MCP request while it stood.
 
-# Initialize creative engine with minimal config (will be tenant-specific later)
-creative_engine_config: dict[str, Any] = {}
-creative_engine = MockCreativeEngine(creative_engine_config)
+# (Deleted) A module-level MockCreativeEngine built from an empty config dict, with a comment
+# promising it would become tenant-specific. Nothing read the name, in any import spelling --
+# enumerated by resolving ``src.core.main.creative_engine`` through the AST of every module
+# under src/, scripts/ and tests/ rather than by grepping the word, which matches
+# src/adapters/creative_engine.py, CreativeEngineAdapter, the ADAPTER_REGISTRY key and
+# config["creative_engine"] dict literals and tells you nothing.
+#
+# It was also unreachable in a second, independent way: the config it was handed was a
+# hardcoded ``{}``, so even a tenant that sets ``auto_approve_format_ids`` could not have
+# reached its auto-approve branch. The live approval decision is ``tenant.approval_mode``
+# (src/core/tools/creatives/_sync.py), which is format-blind.
+#
+# ``MockCreativeEngine`` itself is kept: it is a mock adapter and the class is still graded
+# directly by its own unit tests, which construct their own instance. See salesagent-ol033.9
+# for those tests -- they grade code no production path can reach, which is that bead's
+# subject, and they are deliberately neither deleted nor re-grounded here.
 
 
 # Removed get_task_from_db - replaced by workflow-based system
@@ -227,7 +238,8 @@ if __name__ == "__main__":
 # get agent-facing descriptions and annotations (readOnlyHint, destructiveHint,
 # idempotentHint). Non-matching tools keep their existing docstrings.
 from adcp.server.mcp_tools import ADCP_TOOL_DEFINITIONS
-from adcp.types.generated_poc.core.version_envelope import AdcpVersionEnvelope
+from adcp.types import AdcpVersionEnvelope
+from adcp.types.base import AdcpRequest
 
 # Request DTOs named explicitly for tools that do not reach one through a builder. The
 # advertised shape is "DTO fields INTERSECT the implementation's arguments", so the DTO is
@@ -235,7 +247,7 @@ from adcp.types.generated_poc.core.version_envelope import AdcpVersionEnvelope
 from mcp.types import ToolAnnotations
 
 from src.core.resolved_identity import TransportProtocol
-from src.core.schemas._base import AdcpResponse
+from src.core.schemas._base import SalesAgentAdcpResponse
 from src.core.signing.capture import HttpExchange, captured_exchange
 from src.core.tools._announced_shape import sdk_grounding
 from src.core.tools._boundary import _response_model_for
@@ -284,33 +296,42 @@ def _register_tool(tool_name: str, spec: Any) -> None:
     """
     sdk_def = _sdk_tool_defs.get(tool_name)
     model = spec.dto
-    if model is not None and not issubclass(model, AdcpVersionEnvelope):
+    if model is not None and not (issubclass(model, AdcpRequest) and issubclass(model, AdcpVersionEnvelope)):
         raise RuntimeError(
-            f"{tool_name} cannot be registered: {model.__name__} does not descend from "
-            f"adcp's AdcpVersionEnvelope. Every request DTO reaches adcp_version and "
-            f"adcp_major_version through it, so a model that does not is not a request in "
-            f"this protocol -- and in practice it means the DTO came from a PARALLEL "
-            f"HIERARCHY rather than from the SDK. That has happened: complete_task once had "
+            f"{tool_name} cannot be registered: {model.__name__} is not both an adcp "
+            f"AdcpRequest and an AdcpVersionEnvelope. The two predicates refuse DISJOINT "
+            f"forgeries, so the check is their CONJUNCTION. AdcpRequest is field-less by "
+            f"design, so inheriting it grants nothing and a model can satisfy it while "
+            f"declaring whatever fields it likes; AdcpVersionEnvelope is what SUPPLIES "
+            f"adcp_version and adcp_major_version, but a class can inherit it without being "
+            f"a request at all. Measured against three deliberately built forgeries -- the "
+            f"two version fields with no SDK ancestry, an AdcpRequest subclass with invented "
+            f"fields, and an AdcpVersionEnvelope subclass that is not a task message: a "
+            f"field-presence check accepts two of the three, each predicate alone accepts "
+            f"one, and the conjunction refuses all three.\n\n"
+            f"A model that fails this came from a PARALLEL HIERARCHY rather than from the "
+            f"SDK. That has happened: complete_task once had "
             f"two hand-written models, CompleteTaskRequest and CompleteTaskRequestLocal, "
             f"neither a subclass of the other, both descending from SalesAgentBaseModel, "
             f"differing by three required fields (salesagent-fdkub). Extend the SDK type for "
-            f"this tool, or -- where the SDK ships none -- AdcpVersionEnvelope itself.\n\n"
+            f"this tool, or -- where the SDK ships none -- name BOTH markers as bases, as "
+            f"CompleteTaskRequest does: AdcpVersionEnvelope alone no longer satisfies this.\n\n"
             f"This check is UNGATED on purpose. The SDK-grounding refusal below fires only "
             f"when the SDK defines the tool, which exempts precisely the tools most likely "
             f"to grow a parallel model."
         )
     response_model = _response_model_for(spec.impl)
-    if response_model is not None and not issubclass(response_model, AdcpResponse):
+    if response_model is not None and not issubclass(response_model, SalesAgentAdcpResponse):
         raise RuntimeError(
             f"{tool_name} cannot be registered: {response_model.__name__} does not descend from "
-            f"AdcpResponse, the base carrying the two envelopes every pinned response schema "
+            f"SalesAgentAdcpResponse, the base carrying the two envelopes every pinned response schema "
             f"composes at its root (version-envelope and protocol-envelope). The boundary "
             f"assigns adcp_version and replayed on every response and calls revive() on every "
             f"replay; a model without the base has nowhere to put them.\n\n"
             f"A response model that cannot hold an envelope field fails SILENTLY, which is why "
             f"this is a refusal and not a check: AdCPBaseModel serializes with "
             f"exclude_none=True, so the field is absent from the wire rather than null.\n\n"
-            f"Add AdcpResponse to the response model's bases, AFTER its SDK type -- base order "
+            f"Add SalesAgentAdcpResponse to the response model's bases, AFTER its SDK type -- base order "
             f"decides which class's field definitions win, and the SDK type must keep its own "
             f"(a oneOf branch's const status among them)."
         )
@@ -330,7 +351,7 @@ def _register_tool(tool_name: str, spec: Any) -> None:
         RegistryTool(
             name=tool_name,
             parameters=model.model_json_schema(),
-            description=sdk_def["description"] if sdk_def else None,
+            description=spec.advertised_description(sdk_def["description"] if sdk_def else None),
             annotations=ToolAnnotations(**sdk_def["annotations"]) if sdk_def and sdk_def.get("annotations") else None,
         )
     )

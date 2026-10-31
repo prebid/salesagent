@@ -7,9 +7,9 @@ requires-python = ">=3.12"
 
 dependencies = [
     "a2wsgi>=1.10.0",
-    "adcp==6.6.0",  # exact pin — 6.6.0 (latest stable); bump WIP, see docs/adcp-spec-version.md
-    "fastmcp>=3.4.10,<3.5", # GHSA-7xgj-8392-5q4r (no 3.2.x fix); minor-capped because 3.3.0 broke Context/Middleware imports between minors
-    "mcp>=1.30.0", # CVE-2026-59951 / GHSA-84m7-p3x7-pcfv; earlier CVE-2026-59950 / GHSA-vj7q-gjh5-988w
+    "adcp==9.3.0",  # exact pin, resolved from PyPI — see docs/adcp-spec-version.md
+    "fastmcp>=4.0.0,<5.0.0", # 4.0.0 is the first fastmcp whose mcp floor allows mcp 2.x, which adcp 9 requires; fastmcp.tools.tool moved to fastmcp.tools.base
+    "mcp>=2.2.0", # adcp 9 requires mcp>=2.0,<3.0 (mcp.server.fastmcp was renamed mcp.server.mcpserver); 2.2.0 fixes CVE-2026-59951 / GHSA-84m7-p3x7-pcfv on the 2.x line; earlier CVE-2026-59950 / GHSA-vj7q-gjh5-988w
     "google-cloud-iam>=2.19.1",
     "rich>=13.7.1",
     "google-ads>=24.1.0",
@@ -49,10 +49,10 @@ dependencies = [
     "types-Markdown>=3.4.2.10",
     "freezegun>=1.5.5",
     "babel>=2.17.0",
-    "logfire>=4.16.0",
+    "logfire>=5.4.0",  # 5.x pulls opentelemetry-api>=1.45.1, which fixes the advisories against 1.39.1
     "pydantic-ai-slim[google,openai,anthropic,cohere,mistral,groq]>=1.107.7,<2",  # PYSEC-2026-4283..4291 (fixed across 1.107.2-1.107.7); earlier CVE-2026-46678 / GHSA-cqp8-fcvh-x7r3 (1.99.0); use slim to avoid pydantic-ai meta-package pulling fastmcp>=3.3.0
     # Security patches for transitive dependencies
-    "mcp>=1.30.0",  # CVE-2026-59951 / GHSA-84m7-p3x7-pcfv (via fastmcp); earlier CVE-2026-59950
+    "mcp>=2.2.0",  # CVE-2026-59951 / GHSA-84m7-p3x7-pcfv, fixed in 2.2.0 on the 2.x line (via fastmcp); 2.0 floor required by adcp 9; earlier CVE-2026-59950
     "pyjwt>=2.15.0",  # GHSA-42vr-xj54-vc7v (fixed in 2.15.0) + 11 more fixed in 2.14.0, GHSA-w6j9-cwv2-h6wq et al.; earlier GHSA-752w-5fwx-jx9f
     "filelock>=4.2.1",  # GHSA-v4x8-3wr5-3wq8, GHSA-9vhv-jxww-xfm5, GHSA-567q-5qvw-pf92; earlier GHSA-qmgc-5h2g-mvrw
     "opentelemetry-api>=1.45.1",  # GHSA-xcq7-p3pf-p88h (moves logfire to 5.x and the opentelemetry family with it)
@@ -75,7 +75,6 @@ dependencies = [
     "httpcore2>=2.10.0",  # GHSA-7mj9-2mp8-4m2p
     "httpx2>=2.12.0",  # GHSA-h4x7-gw46-3wm6 + GHSA-pf96-p4fj-6566 + GHSA-8xx6-hgc6-gc2m
 ]
-
 
 # [project.optional-dependencies] removed in PR 2 of issue #1234.
 # [dependency-groups].dev below is the single source of truth for dev deps.
@@ -148,6 +147,16 @@ dev = [
     "virtualenv>=21.14.13",
 ]
 
+# Local iteration against an SDK worktree checked out beside this one overlays an
+# editable install on the synced version:
+#     uv pip install --no-deps -e ../acp-v9
+#
+# That overlay alone is NOT enough, and the failure is silent: `uv run` syncs the
+# environment from this file before every command, so it reinstalls the pinned wheel
+# over the editable install. Measured — after `uv pip install -e`, the next `uv run`
+# reported "Installed 1 package" and the imported module no longer carried the
+# editable tree's code. An editable SDK has to be declared under [tool.uv.sources] to survive.
+
 [tool.ruff]
 line-length = 120
 target-version = "py312"
@@ -206,7 +215,6 @@ ignore = [
     "B904",    # raise-without-from in adapter error handling — add `from e` when touching
     "B027",    # Empty methods in BaseAdapter — intentional optional interface, not abstract
 ]
-
 
 # Pin current ruff defaults so complexity counts in .ruff-complexity-baseline
 # stay version-independent (ADR-009 / #1613). Absent → live count drifts on ruff bumps.

@@ -28,52 +28,64 @@ from tests.bdd.steps.domain.uc006_sync_creatives import (
     _assignments_for_the_wire,
     _format_payload,
     _persisted_creative_fingerprints,
+    seeded_format_columns,
 )
 from tests.bdd.steps.generic._account_resolution import ensure_tenant_principal
 from tests.bdd.steps.generic._dispatch import dispatch_request
 from tests.factories import CreativeFactory, MediaBuyFactory, MediaPackageFactory, ProductFactory
+from tests.factories.creative_asset import build_assets, image_spec, url_spec
 from tests.factories.request import CreativeAssetRequestFactory
 from tests.harness.transport import TransportResult
 
-#: A format id that differs from the transport's default on EVERY transport. It is never
-#: sent to a creative agent: the mismatch case puts it on the PRODUCT (a product may
-#: declare any format), and the format-update case seeds the library ROW on it (a row is
-#: not validated) and moves the creative to the default, which the agent serves. The
-#: first version of this file used display_300x250_image, which is the e2e stack's
-#: default format -- so on e2e_rest both cases quietly became "same format" and failed.
-_OTHER_FORMAT_ID = "display_300x250_other"
+#: A format id that differs from the default format on EVERY transport. It is never sent
+#: in a creative payload: the mismatch case puts it on the PRODUCT, and the format-update
+#: case seeds the library ROW on it and moves the creative to the default. The first
+#: version of this file used display_300x250_image, which is now the default everywhere --
+#: so on e2e_rest both cases quietly became "same format" and failed.
+#:
+#: IT IS A CAPTURED ID, named at the agent that publishes it (``_format_entry``). Seeding a
+#: row projects its reference to a canonical kind (``creative_identity_of``), and the
+#: mapping registry projects a legacy id alone only at the reference agent's origin; any
+#: other agent's id has a kind only through the declaration that agent serves. The invented
+#: ``display_728x90`` that stood here projected through the registry's glob in process,
+#: where the scenario's agent is the reference one, and was refused on e2e_rest, where it is
+#: the tenant's hosted agent and nothing declares that id. ``display_728x90_image`` is in
+#: the capture, so ``env.catalog_agent_url`` has the scenario's agent publish it and the
+#: seeded row carries that agent's declaration on every transport.
+_OTHER_FORMAT_ID = "display_728x90_image"
 
 
-def _creative(ctx: dict, creative_id: str, name: str, *, format_id: str | None = None) -> dict:
+def _format_entry(ctx: dict, format_id: str | None = None) -> dict[str, str]:
+    """``{agent_url, id}`` for *format_id* (the default format unless told otherwise) at the agent publishing it."""
+    fmt = format_id or _format_payload(ctx, ctx["env"])[0]
+    return {"agent_url": ctx["env"].catalog_agent_url(fmt), "id": fmt}
+
+
+def _creative(ctx: dict, creative_id: str, name: str) -> dict:
     fmt, agent_url, assets = _format_payload(ctx, ctx["env"])
     return CreativeAssetRequestFactory.payload(
         creative_id=creative_id,
         name=name,
-        format_id={"id": format_id or fmt, "agent_url": agent_url},
+        format_id={"id": fmt, "agent_url": agent_url},
         assets=assets,
     )
 
 
 def _seed_row(ctx: dict, creative_id: str, name: str, *, format_id: str | None = None) -> None:
     """A creative already in the caller's library, on the request's default format unless told otherwise."""
-    fmt, agent_url, _ = _format_payload(ctx, ctx["env"])
     CreativeFactory(
         tenant=ctx["tenant"],
         principal=ctx["principal"],
         creative_id=creative_id,
         name=name,
-        agent_url=agent_url,
-        format=format_id or fmt,
+        **seeded_format_columns(ctx["env"], _format_entry(ctx, format_id)),
     )
 
 
 def _seed_package(ctx: dict, *, product_format_id: str | None = None, media_buy: dict[str, Any] | None = None) -> str:
     """A package whose product accepts *product_format_id* (the default format unless told otherwise)."""
-    fmt, agent_url, _ = _format_payload(ctx, ctx["env"])
     buy = MediaBuyFactory(tenant=ctx["tenant"], principal=ctx["principal"], **(media_buy or {"status": "active"}))
-    product = ProductFactory(
-        tenant=ctx["tenant"], format_ids=[{"agent_url": agent_url, "id": product_format_id or fmt}]
-    )
+    product = ProductFactory(tenant=ctx["tenant"], format_ids=[_format_entry(ctx, product_format_id)])
     package = MediaPackageFactory(media_buy=buy, package_config={"product_id": product.product_id, "budget": 1000.0})
     ctx["package"] = package
     return package.package_id
@@ -117,6 +129,40 @@ def _case_two_differ(ctx: dict):
         assert "name" in (_entries(live)[1].get("changes") or []), _entries(live)[1]
 
     return {"creatives": payload}, expect
+
+
+def _case_only_an_asset_differs(ctx: dict):
+    """Two entries alike but for one asset slot, so only the asset map can report the change.
+
+    ``changes`` is "Field names that were modified"
+    (creative/sync-creatives-response.json), and ``assets`` is a creative field -- required
+    on every creative at the pin (core/creative-asset.json ``required``), and the buyer's
+    whole submission for a generative format, where the prompt IS an asset. So a sync that
+    rewrites an asset owes ``updated`` and owes ``assets`` in the list.
+
+    The rewritten slot is ``click_url`` on purpose. ``_extract_url_from_assets`` returns the
+    first slot carrying one, which is ``banner_image``, so the derived ``url`` is identical
+    across the two entries; and ``click_url`` is not a declared creative field at the pin, so
+    it is not in the compared set either. Nothing but the asset map can see this edit --
+    which is what makes the case grade the comparison rather than the url extraction.
+    """
+    first = _creative(ctx, "asset_c1", "Same Name")
+    second = copy.deepcopy(first)
+    second["assets"] = build_assets(
+        image_spec("banner_image", url="https://example.com/banner.png"),
+        url_spec("click_url", url="https://example.com/landing-v2"),
+    )
+
+    def expect(live: TransportResult) -> None:
+        assert _actions(live) == ["created", "updated"], _actions(live)
+        entry = _entries(live)[1]
+        changes = entry.get("changes") or []
+        assert "assets" in changes, entry
+        # Non-vacuity: name and format are byte-identical across the two entries, so neither
+        # can be what produced "updated". If they appear, the case is grading something else.
+        assert "name" not in changes and "format" not in changes, entry
+
+    return {"creatives": [first, second]}, expect
 
 
 def _case_third_entry(ctx: dict):
@@ -284,6 +330,7 @@ def _case_format_mismatch_lenient(ctx: dict):
 _CASES: dict[str, Callable[[dict], tuple[dict, Callable[[TransportResult], None]]]] = {
     "two identical entries on one id": _case_two_identical,
     "two entries on one id that differ": _case_two_differ,
+    "two entries on one id differing only in an asset": _case_only_an_asset_differs,
     "third entry resolves against what the second left": _case_third_entry,
     "distinct creative ids are not collapsed": _case_distinct_ids,
     "single entry update of a seeded creative": _case_single_update,

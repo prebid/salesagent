@@ -33,11 +33,12 @@ class TestAdapterFormatsViaA2A:
     """
 
     def test_broadstreet_formats_merged_into_response(self, integration_db):
-        """UC-005-MAIN-REST-02: Broadstreet adapter formats are merged into the A2A response.
+        """UC-005-MAIN-REST-02: declared Broadstreet adapter formats are merged into the A2A response.
 
-        When a tenant has adapter_type='broadstreet' in AdapterConfig,
-        the list_creative_formats response includes all 8 real Broadstreet
-        template formats (with assets) alongside the standard creative agent formats.
+        When a tenant has adapter_type='broadstreet' in AdapterConfig and its product
+        declares the adapter's templates, the list_creative_formats response includes all 8
+        real Broadstreet template formats (with assets, as the adapter defines them)
+        alongside the standard creative agent format the product also declares.
         """
         from src.core.database.database_session import get_db_session
         from src.core.database.models import AdapterConfig
@@ -65,6 +66,7 @@ class TestAdapterFormatsViaA2A:
                 is_standard=True,
             )
             env.set_registry_formats([standard_format])
+            env.declare_formats([standard_format.format_id, *env.adapter_served_format_ids()])
 
             response = env.call_a2a()
 
@@ -111,6 +113,7 @@ class TestAdapterFormatsViaA2A:
                 session.commit()
 
             env.set_registry_formats([])
+            env.declare_formats(env.adapter_served_format_ids())
 
             response = env.call_a2a()
 
@@ -169,6 +172,33 @@ class TestAdapterFormatsViaA2A:
         assert len(response.formats) == 1
         assert response.formats[0].format_id.id == "display_300x250"
 
+    def test_broadstreet_formats_no_product_declares_are_not_listed(self, integration_db):
+        """UC-005-MAIN-REST-02 (negative): the adapter's templates alone put nothing on the list.
+
+        media-buy/specification.mdx § Canonical creative-format discovery: compatibility
+        list_creative_formats responses "MAY be projected from canonical declarations for
+        older 3.x peers, but MUST NOT be independently authored". An adapter's template
+        catalogue is authored apart from the products, so a template no product declares is
+        not listed, while the standard format the product declares is.
+        """
+        from src.core.schemas import Format
+        from tests.factories import AdapterConfigFactory
+
+        with CreativeFormatsEnv() as env:
+            AdapterConfigFactory(tenant=TenantFactory(tenant_id="test_tenant"), adapter_type="broadstreet")
+
+            standard_format = Format(
+                format_id=FormatId(agent_url="https://creative.adcontextprotocol.org", id="display_300x250"),
+                name="Display 300x250",
+            )
+            env.set_registry_formats([standard_format])
+
+            response = env.call_a2a()
+
+        assert [f.format_id.id for f in response.formats] == ["display_300x250"], (
+            "a Broadstreet template no product declares reached the compatibility list"
+        )
+
 
 class TestInvalidFormatCategoryEnum:
     """UC-005-EXT-B-01: invalid format category enum -> VALIDATION_ERROR.
@@ -186,13 +216,22 @@ class TestInvalidFormatCategoryEnum:
 
         The type filter was removed in adcp 3.12. Verify the MCP wrapper
         handles remaining valid filters (e.g., name_search) without error.
+
+        The list projects the seller's product declarations, so the product declares two
+        formats and the unfiltered call must list both: a wrapper that dropped name_search
+        would then return entries instead of none.
         """
         with CreativeFormatsEnv() as env:
             TenantFactory(tenant_id="test_tenant")
+            env.declare_reference_formats("display_300x250_image", "video_vast")
 
+            unfiltered = env.call_mcp()
             # Pass a valid filter — name_search for nonexistent name → empty result
             response = env.call_mcp(name_search="nonexistent_format_xyz")
 
+        assert sorted(f.format_id.id for f in unfiltered.formats) == ["display_300x250_image", "video_vast"], (
+            "the declared formats are not listed, so an empty filtered answer proves nothing"
+        )
         assert isinstance(response, ListCreativeFormatsResponse)
         assert len(response.formats) == 0
 

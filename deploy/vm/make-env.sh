@@ -29,9 +29,12 @@ hex() { openssl rand -hex "$1"; }
 fernet=$(openssl rand 32 | base64 | tr '+/' '-_')
 
 if [[ "$CREATIVE_AGENT" == yes ]]; then
-    creative_url="CREATIVE_AGENT_URL=https://${DOMAIN}/api/creative-agent"
+    # The MCP endpoint the app dials (the agent serves MCP only at /api/creative-agent/mcp),
+    # and the agent's identity, an origin: the format references it publishes carry this host.
+    creative_url="CREATIVE_AGENT_URL=https://${DOMAIN}/api/creative-agent/mcp
+CREATIVE_AGENT_ORIGIN=https://${DOMAIN}"
 else
-    creative_url="# CREATIVE_AGENT_URL=  (unset: the public agent at https://creative.adcontextprotocol.org)"
+    creative_url="# CREATIVE_AGENT_URL= and CREATIVE_AGENT_ORIGIN=  (unset: the public agent at https://creative.adcontextprotocol.org)"
 fi
 
 cat > .env <<EOF

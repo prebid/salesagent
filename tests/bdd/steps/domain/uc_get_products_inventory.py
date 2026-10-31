@@ -46,13 +46,19 @@ def _call_get_products(ctx: dict, **kwargs: Any) -> None:
 
 
 def _get_first_prop(ctx: dict) -> Any:
-    """Get the inner model of the first publisher_properties entry."""
+    """Get the first publisher_properties entry.
+
+    No ``.root``: adcp 9 ships ``PublisherPropertySelector`` as the union of its
+    three arms (``PublisherProperty85`` / ``86`` / ``87``) rather than a RootModel
+    over them, so the entry IS the arm and carries ``selection_type`` /
+    ``property_ids`` / ``property_tags`` directly. Production made the same move at
+    ``src/core/tools/products.py``; this helper is the test side of it.
+    """
     product = ctx["first_product"]
     pp = product.publisher_properties
     assert pp is not None, "publisher_properties is None"
     assert pp, "publisher_properties is empty"
-    inner = pp[0]
-    return inner.root
+    return pp[0]
 
 
 # ── Given steps ─────────────────────────────────────────────────────

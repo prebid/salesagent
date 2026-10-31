@@ -4,7 +4,7 @@ Covers:
 - GeoCountry/GeoRegion (RootModel[str]) construction
 - GeoMetro/GeoPostalArea (structured with system enum) construction
 - Targeting model_dump JSON safety (regression: Bug A — MetroAreaSystem enum serialization)
-- FrequencyCap inheritance from library type + scope field
+- FrequencyCap inheritance from library type, and that no undeclared key (``scope``) survives it
 - Exclusion field construction and serialization
 """
 
@@ -22,6 +22,7 @@ from adcp.types import (
 )
 
 from src.core.schemas import FrequencyCap, Targeting
+from tests.factories import FrequencyCapFactory
 
 
 # ---------------------------------------------------------------------------
@@ -63,7 +64,9 @@ class TestTargetingV3Construction:
             geo_metros_exclude=[{"system": "nielsen_dma", "values": ["803"]}],
             geo_postal_areas_exclude=[{"system": "us_zip", "values": ["90210"]}],
             device_type_any_of=["mobile", "desktop"],
-            frequency_cap={"max_impressions": 5, "suppress_minutes": 60},
+            # Through the factory because this test DOES assert on max_impressions,
+            # which the pin only admits alongside per and window.
+            frequency_cap=FrequencyCapFactory.build(max_impressions=5, suppress_minutes=60),
         )
         assert len(t.geo_countries) == 2
         assert len(t.geo_regions) == 2
@@ -162,7 +165,7 @@ class TestTargetingModelDumpSerialization:
 
     def test_model_dump_mode_override(self):
         """Explicit mode='python' still works when caller needs it."""
-        from adcp.types.generated_poc.enums.metro_system import MetroAreaSystem
+        from adcp.types.domains.enums.metro_system import MetroAreaSystem
 
         t = Targeting(geo_metros=[{"system": "nielsen_dma", "values": ["501"]}])
         d = t.model_dump(exclude_none=True, mode="python")
@@ -175,33 +178,74 @@ class TestTargetingModelDumpSerialization:
 # FrequencyCap Inheritance
 # ---------------------------------------------------------------------------
 class TestFrequencyCapInheritance:
+    # Every test here is about the SUBCLASS — that it inherits the library type, that
+    # ``suppress_minutes`` takes an int or a float, and that no undeclared key survives
+    # it. None of them asserts anything about ``max_impressions``, which these fixtures
+    # used to carry. They cannot carry it alone: ``core/frequency-cap.json`` makes
+    # ``max_impressions`` depend on ``per`` and ``window``, so the old fixtures were
+    # documents the pin forbids (salesagent-8qela.120). ``suppress_minutes`` on its
+    # own satisfies the schema's anyOf, so dropping the field costs no assertion and
+    # leaves each test with only what it grades.
+    #
+    # THREE TESTS ASSERTING ``scope`` ARE REPLACED by their inverse, because they graded a
+    # defect. ``core/frequency-cap.json`` declares five properties and no ``scope``; the pin
+    # decides the level POSITIONALLY ("the package flight for a targeting overlay, or the
+    # MediaBuy flight for a root cap" — the ``max_impressions`` description), and carries the
+    # MediaBuy level as a different field of a different type
+    # (``CreateMediaBuyRequest.frequency_cap`` → ``core/media-buy-frequency-cap.json``).
+    # ``enums/frequency-cap-scope.json`` exists but its SOLE member is "package" and no schema
+    # in the bundle references it, so the old ``test_scope_default_media_buy`` pinned a
+    # default the pin's own vocabulary does not contain.
     def test_isinstance_library_freq_cap(self):
-        fc = FrequencyCap(max_impressions=5, suppress_minutes=60)
+        fc = FrequencyCap(suppress_minutes=60)
         assert isinstance(fc, LibraryFrequencyCap)
 
-    def test_scope_field_preserved(self):
-        fc = FrequencyCap(max_impressions=5, suppress_minutes=60, scope="package")
-        assert fc.scope == "package"
+    def test_scope_is_not_a_field(self):
+        """``scope`` is not declared, so it cannot be read back off a cap."""
+        assert "scope" not in FrequencyCap.model_fields
 
-    def test_scope_default_media_buy(self):
-        fc = FrequencyCap(max_impressions=5, suppress_minutes=60)
-        assert fc.scope == "media_buy"
+    def test_scope_passed_at_construction_never_reaches_the_wire(self):
+        """The generated parent is ``extra="allow"``; the subclass's config is what refuses.
+
+        Without ``extra="ignore"`` here, deleting the declared ``scope`` would have PROMOTED
+        it from a field that could never be serialized (``exclude=True`` was never on it, but
+        a Literal bound it to two values) to an unknown key stored and emitted verbatim.
+        """
+        fc = FrequencyCap(suppress_minutes=60, scope="package")
+        assert fc.model_dump(exclude_none=True) == {"suppress_minutes": 60.0}
 
     def test_suppress_minutes_accepts_float(self):
-        fc = FrequencyCap(max_impressions=5, suppress_minutes=60.5)
+        fc = FrequencyCap(suppress_minutes=60.5)
         assert fc.suppress_minutes == 60.5
 
     def test_suppress_minutes_accepts_int(self):
-        fc = FrequencyCap(max_impressions=5, suppress_minutes=60)
+        fc = FrequencyCap(suppress_minutes=60)
         assert isinstance(fc.suppress_minutes, float)
 
-    def test_model_dump_includes_scope(self):
-        fc = FrequencyCap(max_impressions=5, suppress_minutes=60, scope="package")
-        d = fc.model_dump()
-        assert d["scope"] == "package"
-
     def test_freq_cap_in_targeting(self):
-        t = Targeting(frequency_cap={"max_impressions": 5, "suppress_minutes": 60, "scope": "package"})
-        assert t.frequency_cap.scope == "package"
+        t = Targeting(frequency_cap={"suppress_minutes": 60})
         assert isinstance(t.frequency_cap, FrequencyCap)
         assert isinstance(t.frequency_cap, LibraryFrequencyCap)
+
+    def test_stale_stored_scope_is_dropped_on_readback(self):
+        """A targeting overlay persisted before the deletion carries ``"scope": "media_buy"``.
+
+        The field had that DEFAULT, so every stored overlay has the key. The narrowing on
+        :class:`Targeting` is what applies the subclass's ``extra="ignore"`` to the slot — drop
+        it and the readback puts a non-spec key back on the wire for every stored media buy.
+        """
+        t = Targeting(frequency_cap={"suppress_minutes": 60, "scope": "media_buy"})
+        assert t.frequency_cap.model_dump(exclude_none=True) == {"suppress_minutes": 60.0}
+        assert "scope" not in Targeting(**t.model_dump(exclude_none=True)).model_dump(exclude_none=True).get(
+            "frequency_cap", {}
+        )
+
+    def test_library_instance_fills_the_narrowed_slot(self):
+        """``from_attributes`` is what lets a parent-class cap through the narrowing.
+
+        Adapters and the GAM discovery readers build ``adcp.types.FrequencyCap``; pydantic
+        refuses a parent instance in a subclass slot by identity without this.
+        """
+        t = Targeting(frequency_cap=LibraryFrequencyCap(suppress_minutes=90))
+        assert isinstance(t.frequency_cap, FrequencyCap)
+        assert t.frequency_cap.suppress_minutes == 90.0

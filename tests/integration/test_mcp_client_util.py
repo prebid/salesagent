@@ -5,6 +5,7 @@ and handle various scenarios (auth, retries, errors, etc.).
 """
 
 import asyncio
+import json
 import socket
 
 import pytest
@@ -26,11 +27,13 @@ skip_no_audience_agent = pytest.mark.skipif(
     reason="audience-agent.fly.dev is not reachable",
 )
 
+from src.core.creative_agent_registry import CreativeAgentRegistry
 from src.core.errors.codes import CODE_TABLE
 from src.core.exceptions import AdCPSalesAgentError
 from src.core.security import outbound_http as outbound_http_module
 from src.core.security.outbound_http import OutboundRequestBlocked
 from src.core.signals_agent_registry import SignalsAgent, SignalsAgentRegistry
+from src.core.tools.creatives._processing import _failed_sync_result
 from src.core.utils import mcp_client as mcp_client_module
 from src.core.utils.mcp_client import (
     MCPConnectionError,
@@ -723,3 +726,99 @@ class TestDialTimeRefusalIsNotRetriedOrLaundered:
         assert "stub-signals-agent" not in str(envelope), (
             f"the endpoint's name leaked onto the buyer's wire: {envelope}"
         )
+
+
+#: The reference agent's 429 in the shape its express-rate-limit handlers answer one (adcp
+#: ``server/src/mcp/routes.ts``, ``mcpRateLimiter``): a JSON-RPC error body with
+#: ``id: null``, carrying the message box run innet_291026_0008 recorded from the creative
+#: agent. The MCP transport surfaces that as an ``MCPError`` with the body's message and
+#: neither the status nor the headers, which is the shape the seam has to see through.
+_REFERENCE_AGENT_429_BODY = json.dumps(
+    {"jsonrpc": "2.0", "id": None, "error": {"code": -32000, "message": "Rate limit exceeded. Please try again later."}}
+).encode()
+
+
+@pytest.mark.asyncio
+class TestRateLimitedAgentSurfacesAsRateLimited:
+    """A creative agent's HTTP 429 reaches the buyer as RATE_LIMITED, unretried.
+
+    Grades salesagent-ol033.26 (1) through the production path ``sync_creatives`` takes
+    for a static format: ``CreativeAgentRegistry.preview_creative`` ->
+    ``call_operator_mcp_tool`` -> ``call_mcp_tool``, against a real https origin that
+    answers every request 429. Before the fix the seam retried the 429 three times on the
+    1s/2s/4s schedule, tried the ``/mcp`` fallback, and reported SERVICE_UNAVAILABLE --
+    the status never reached it, because mcp 2.x turns a 429 into an ``MCPError`` with no
+    status on it.
+
+    Not a BDD scenario on the four transports, because no transport can put a 429-answering
+    agent on this path today: in process, ``CreativeSyncEnv`` replaces the creative agent
+    registry (an EXTERNAL_PATCH), so ``call_mcp_tool`` never runs; over e2e_rest the server
+    dials the reference creative-agent container, whose limiter is hard-coded and cannot be
+    told to answer 429 for one scenario (adcontextprotocol/adcp#8574). The hosted test
+    agent of salesagent-ol033.20.30 is what gives a scenario that lever.
+
+    Pinned obligations (AdCP 3.2.7): ``enums/error-code.json`` RATE_LIMITED -- recovery
+    ``transient``, "Sellers SHOULD populate top-level ``error.retry_after``";
+    ``core/error.json`` ``retry_after`` -- an integer from 1 through 3600, a fraction
+    rounded up, non-finite values treated as absent.
+    """
+
+    @pytest.mark.timeout(60)
+    @pytest.mark.parametrize(
+        ("headers", "expected_retry_after"),
+        [
+            pytest.param({"Retry-After": "30"}, 30, id="retry-after"),
+            pytest.param({"RateLimit-Reset": "42"}, 42, id="ratelimit-reset"),
+            pytest.param({"Retry-After": "7", "RateLimit-Reset": "42"}, 7, id="retry-after-wins"),
+            pytest.param({"Retry-After": "4.2"}, 5, id="fraction-rounds-up"),
+            pytest.param({"Retry-After": "inf"}, None, id="non-finite-is-absent"),
+            pytest.param({}, None, id="no-header"),
+        ],
+    )
+    async def test_a_429_is_rate_limited_on_the_wire_and_on_the_creative(
+        self, headers, expected_retry_after, local_origin_tls, monkeypatch, recorded_retry_sleeps
+    ):
+        set_flags(monkeypatch, private=True)
+        local_origin_tls.respond_with(429, body=_REFERENCE_AGENT_429_BODY, headers=headers)
+        # No ``/mcp`` suffix, so the seam WOULD synthesise its ``/mcp`` fallback candidate:
+        # a 429 must end the call before that candidate is tried, and the request paths
+        # below are what say whether it was.
+        agent_url = f"{local_origin_tls.base_url}/creative-agent"
+
+        with pytest.raises(AdCPSalesAgentError) as exc_info:
+            await CreativeAgentRegistry().preview_creative(
+                agent_url=agent_url,
+                format_id="display_300x250_image",
+                creative_manifest={"creative_id": "creative-1", "assets": {}},
+            )
+
+        assert recorded_retry_sleeps == [], (
+            f"a 429 was retried (slept {recorded_retry_sleeps}); it must end the attempt sequence at once"
+        )
+        assert local_origin_tls.hits > 0, "the origin was never dialled, so nothing about a 429 was graded"
+        assert set(local_origin_tls.paths) == {"/creative-agent"}, (
+            f"a 429 fell through to the /mcp fallback candidate: {local_origin_tls.paths}"
+        )
+
+        # Read from the pinned enumMetadata rather than written as a literal, then pinned once
+        # here so the derivation cannot silently return something else.
+        expected_recovery = CODE_TABLE["RATE_LIMITED"].recovery
+        assert expected_recovery == "transient", (
+            f"the pinned enumMetadata classifies RATE_LIMITED as {expected_recovery!r}, not 'transient' — "
+            "the premise this assertion is built on no longer holds"
+        )
+        envelope = envelope_for(exc_info.value)
+        assert_envelope_shape(envelope, "RATE_LIMITED", recovery=expected_recovery, retry_after=expected_retry_after)
+        if expected_retry_after is None:
+            assert "retry_after" not in envelope["adcp_error"], (
+                f"the agent named no usable wait, yet retry_after was emitted: {envelope['adcp_error']}"
+            )
+        assert "127.0.0.1" not in str(envelope), f"the agent's address leaked onto the buyer's wire: {envelope}"
+
+        # The per-creative result sync_creatives builds from the same exception: its typed
+        # branch hands any AdCPSalesAgentError to ``_failed_sync_result``.
+        per_creative = _failed_sync_result("creative-1", exc_info.value)
+        assert per_creative.action == "failed"
+        assert [(e.code, e.retry_after) for e in per_creative.errors or []] == [
+            ("RATE_LIMITED", expected_retry_after)
+        ], f"the creative's own result does not carry the agent's rate limit: {per_creative.errors}"

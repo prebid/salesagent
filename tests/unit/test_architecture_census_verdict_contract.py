@@ -54,14 +54,14 @@ import collections
 import importlib
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, get_args
 
 import pydantic
 import pytest
 
 from scripts.audit.creative_literal_sites import CREATIVE_KEYS, PRE_311_KEYS, SCOPES, scan
 from src.core.schemas.creative import CreativeAssetRequest
-from src.core.schemas.pricing import CpmPricingOption, PricingOption
+from src.core.schemas.pricing import AdCPPricingOption, CpmPricingOption
 from tests.unit._architecture_helpers import assert_guard_subject_resolves, iter_call_expressions, repo_root
 
 CENSUS_MODULE = "scripts.audit.creative_literal_sites"
@@ -586,7 +586,14 @@ def test_config_reports_the_observed_extra_mode(tmp_path: Path) -> None:
     assert set(pricing_modes.values()) == {CpmPricingOption.model_config["extra"]}, (
         f"pricing members report {pricing_modes}; the live union member says {CpmPricingOption.model_config['extra']!r}"
     )
-    assert PricingOption.model_fields["root"].annotation is not None, "PricingOption lost its root union"
+    # The census reports an extra mode for every arm it could decide a pricing verdict
+    # against, so the population it measured must be the WHOLE union, not a subset of it.
+    # This read used to go through a local RootModel wrapper's ``model_fields["root"]``;
+    # the wrapper is deleted and the union is the thing with arms.
+    assert set(pricing_modes) == {member.__name__ for member in get_args(AdCPPricingOption)}, (
+        f"config reports {sorted(pricing_modes)}; the union declares "
+        f"{sorted(m.__name__ for m in get_args(AdCPPricingOption))}"
+    )
 
 
 @pytest.mark.arch_guard

@@ -24,6 +24,23 @@ from tests.unit._architecture_helpers import load_hook_module, repo_root
 #: Key used for single-integer baseline files, which have no per-key structure.
 SINGLE_KEY = "count"
 
+#: One counter run per process, keyed by ``hook_id``.
+#:
+#: Both assertions below need the SAME number, and each used to measure it for
+#: itself. For ``check-code-duplication`` one number costs three
+#: ``pylint --enable=R0801`` processes (``src/``, ``tests/``, ``scripts/``), so a
+#: gate ran SIX — and that made the single-process ``quality`` env the critical
+#: path of the whole run: 50.6m of a 62.4m run, 48.9m of it this counter,
+#: measured twice (1752.3s + 1183.4s in innet_171026_2038/quality.json). It has
+#: been the longest suite in every full run since 2026-09-09, and the run's suite
+#: span EQUALS it in each one.
+#:
+#: Caching is sound because the tree does not change inside a run: both
+#: assertions grade the same working tree, and measuring it twice could only
+#: ever disagree by being wrong. The two node ids stay separate so per-nodeid
+#: gate deltas keep comparing.
+_MEASURED: dict[str, dict[str, int]] = {}
+
 
 @dataclass(frozen=True)
 class RatchetCounter:
@@ -40,8 +57,14 @@ class RatchetCounter:
     measure: Callable[[Any, Path], Mapping[str, int]]
 
     def current(self) -> dict[str, int]:
-        """Count against the working tree, using the hook's own counter."""
-        return dict(self.measure(load_hook_module(self.module), repo_root()))
+        """Count against the working tree, using the hook's own counter.
+
+        Measured once per process (see ``_MEASURED``) and handed out as a copy,
+        so a caller cannot mutate the next caller's answer.
+        """
+        if self.hook_id not in _MEASURED:
+            _MEASURED[self.hook_id] = dict(self.measure(load_hook_module(self.module), repo_root()))
+        return dict(_MEASURED[self.hook_id])
 
     def committed(self) -> dict[str, int]:
         """The baseline as committed, normalized to the same per-key shape."""
@@ -80,11 +103,18 @@ FAST_RATCHETS = (
     ),
 )
 
-#: A full mypy pass and a full pylint R0801 pass. Measured together at 12m18s,
-#: against a unit suite that runs in ~5m30s — putting them there would roughly
-#: triple the most-frequently-run suite, so they are graded by the ``quality``
-#: tox env, which the full gate runs in parallel with the others (no added
-#: wall-clock: the critical path is bdd_inprocess at ~12m40s).
+#: A full mypy pass and a full pylint R0801 pass, graded by the ``quality`` tox
+#: env rather than by ``tests/unit`` because they are minutes, not seconds, and
+#: the unit suite is what every executor runs on every iteration.
+#:
+#: "Runs in parallel with the others, so it costs no wall-clock" was the original
+#: claim and it was never true. ``quality`` has been the LONGEST suite in every
+#: full run since 2026-09-09, so the gate's wall-clock IS this env's wall-clock.
+#: The claim rested on 12m18s for ONE pass of each counter while the env ran each
+#: of them TWICE, which made it arithmetically impossible against the ~12m40s
+#: critical path it was compared to. ``_MEASURED`` above removes the second pass;
+#: one measurement of each is still minutes, so a counter added here is a direct
+#: charge against every full run and has to be budgeted as one.
 SLOW_RATCHETS = (
     RatchetCounter(
         "mypy-untyped-defs-no-regression",

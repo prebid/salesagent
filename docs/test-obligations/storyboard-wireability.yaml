@@ -1,4 +1,4 @@
-# End-to-end wireability of the pinned conformance surface — AdCP 3.1.1
+# End-to-end wireability of the pinned conformance surface — AdCP 3.2.1
 #
 # CURATED INPUT, like storyboard-issue-map.yaml. Joined per (storyboard, step)
 # into the check index; not derivable from the tree, because it is a
@@ -36,7 +36,118 @@
 # admitting nobody has judged it yet. A step silently missing from both fails
 # that guard, naming it — this file is not allowed to just fall behind the pin.
 
-untriaged: []
+# ON-PATH ONLY SINCE THE 3.2.1 PIN, and plainly not yet judged. Every entry below
+# arrived when the SDK pin moved 3.1.1 -> 3.2.1 (adcp 6.6.0 -> 9.0.0): 3.2 adds the
+# buyer-selected-timezone phases to protocols/media-buy/index.yaml and brings
+# available_actions, pending_creatives_to_start and portfolio_routing_scope on-path.
+# Named here rather than given a verdict, because a wireability verdict is a judgement
+# about whether a step can be DRIVEN and OBSERVED from outside a running agent, and
+# inventing one per step without reading the step would be worse than admitting the gap --
+# which is exactly what this escape hatch is for. They leave this list by being assessed.
+untriaged:
+  - "protocols/media-buy/index.yaml::check_buy_status_buyer_selected_timezone"
+  - "protocols/media-buy/index.yaml::create_media_buy_buyer_selected_timezone"
+  - "protocols/media-buy/index.yaml::discover_buyer_selected_timezone"
+  - "protocols/media-buy/index.yaml::get_delivery_buyer_selected_timezone"
+  - "protocols/media-buy/index.yaml::get_products_brief_buyer_selected_timezone"
+  - "protocols/media-buy/index.yaml::sync_accounts_buyer_selected_timezone"
+  - "protocols/media-buy/scenarios/available_actions.yaml::create_media_buy_with_available_actions"
+  - "protocols/media-buy/scenarios/available_actions.yaml::direct_cancel_requires_approval"
+  - "protocols/media-buy/scenarios/available_actions.yaml::direct_decrease_wrong_status"
+  - "protocols/media-buy/scenarios/available_actions.yaml::direct_extend_requires_approval"
+  - "protocols/media-buy/scenarios/available_actions.yaml::direct_pause_not_supported_on_product"
+  - "protocols/media-buy/scenarios/available_actions.yaml::get_created_buy_available_actions"
+  - "protocols/media-buy/scenarios/available_actions.yaml::get_product_allowed_actions"
+  - "protocols/media-buy/scenarios/available_actions.yaml::increase_budget"
+  - "protocols/media-buy/scenarios/available_actions.yaml::sync_available_actions_creative"
+  - "protocols/media-buy/scenarios/pending_creatives_to_start.yaml::assign_creative_to_package"
+  - "protocols/media-buy/scenarios/pending_creatives_to_start.yaml::create_buy_no_creatives"
+  - "protocols/media-buy/scenarios/pending_creatives_to_start.yaml::get_media_buy_after_sync"
+  - "protocols/media-buy/scenarios/pending_creatives_to_start.yaml::get_products_brief"
+  - "protocols/media-buy/scenarios/pending_creatives_to_start.yaml::sync_creative"
+  - "protocols/media-buy/scenarios/portfolio_routing_scope.yaml::capture_declared_channels"
+  - "protocols/media-buy/scenarios/portfolio_routing_scope.yaml::get_capabilities"
+  - "protocols/media-buy/scenarios/portfolio_routing_scope.yaml::query_declared_channel"
+  - "protocols/media-buy/scenarios/product_coverage_filters.yaml::legacy_country_and_metro"
+  - "protocols/media-buy/scenarios/seller_optimized_min_spend_target_exceeds_package_cap.yaml::create_oversubscribed_package_minimum"
+  - "protocols/media-buy/scenarios/seller_optimized_min_spend_target_exceeds_package_cap.yaml::get_products_for_shared_budget"
+  - "protocols/media-buy/scenarios/seller_optimized_min_spend_target_exceeds_package_cap.yaml::sync_accounts"
+  - "protocols/media-buy/scenarios/seller_optimized_proposal_package_pacing.yaml::create_from_seller_optimized_proposal"
+  - "protocols/media-buy/scenarios/seller_optimized_proposal_package_pacing.yaml::finalize_seller_optimized_proposal"
+  - "protocols/media-buy/scenarios/seller_optimized_proposal_package_pacing.yaml::get_products_for_shared_budget"
+  - "protocols/media-buy/scenarios/seller_optimized_proposal_package_pacing.yaml::get_seller_optimized_proposal"
+  - "protocols/media-buy/scenarios/seller_optimized_proposal_package_pacing.yaml::read_seller_optimized_proposal_buy"
+  - "protocols/media-buy/scenarios/seller_optimized_proposal_package_pacing.yaml::sync_accounts"
+  - "protocols/media-buy/scenarios/total_budget_redistribution.yaml::create_fixed_buy"
+  - "protocols/media-buy/scenarios/total_budget_redistribution.yaml::read_redistributed_budget"
+  - "protocols/media-buy/scenarios/total_budget_redistribution.yaml::reject_total_with_packages"
+  - "protocols/media-buy/scenarios/total_budget_redistribution.yaml::sync_account"
+  - "protocols/media-buy/scenarios/total_budget_redistribution.yaml::update_total_budget"
+  - "universal/billing-gate-dispatch.yaml::sync_accounts_unsupported_advertiser_billing"
+  - "universal/billing-gate-dispatch.yaml::sync_accounts_unsupported_agent_billing"
+  - "universal/billing-gate-dispatch.yaml::sync_accounts_unsupported_operator_billing"
+  - "universal/read-tool-idempotency.yaml::get_capabilities_without_idempotency_key"
+  - "universal/reliable-reporting-managed-delivery.yaml::get_reliable_reporting_managed_capabilities"
+  - "universal/reliable-reporting-managed-delivery.yaml::recover_managed_materialization_by_status"
+  - "universal/reliable-reporting-reconciled-billing.yaml::get_reliable_reporting_reconciled_capabilities"
+  - "universal/reliable-reporting-reconciled-billing.yaml::read_accepted_revision_receipt"
+  - "universal/reliable-reporting-reconciled-billing.yaml::read_adjustment_reopened_state"
+  - "universal/reliable-reporting-reconciled-billing.yaml::read_reconciled_billing_baseline"
+  - "universal/reliable-reporting-reconciled-billing.yaml::read_reconciliation_restored"
+  - "universal/reliable-reporting-reconciled-billing.yaml::read_rejected_adjustment_state"
+  - "universal/reliable-reporting-reconciled-billing.yaml::read_revision_receipt_history"
+  - "universal/reliable-reporting-reconciled-billing.yaml::reconcile_post_official_adjustments"
+  - "universal/reliable-reporting-reconciled-billing.yaml::reject_official_revision"
+  - "universal/reliable-reporting-reconciled-billing.yaml::reject_stale_adjustment_supersession"
+  - "universal/reliable-reporting-reconciled-billing.yaml::reject_terminal_official_revision_receipt"
+  - "universal/reliable-reporting-reconciled-billing.yaml::repair_reconciled_billing_from_checkpoint"
+  - "universal/reliable-reporting-reconciled-billing.yaml::supersede_rejected_adjustment_receipt"
+  - "universal/reliable-reporting-reconciled-billing.yaml::supersede_rejected_official_revision_receipt"
+  - "universal/reporting-consumer-status.yaml::consume_mismatch_revision"
+  - "universal/reporting-consumer-status.yaml::consume_recovered_revision"
+  - "universal/reporting-consumer-status.yaml::read_consumer_status_declaration"
+  - "universal/reporting-consumer-status.yaml::read_content_mismatch"
+  - "universal/reporting-consumer-status.yaml::read_content_mismatch_revision_view"
+  - "universal/reporting-consumer-status.yaml::read_counted_silence"
+  - "universal/reporting-consumer-status.yaml::read_escalated_mismatch"
+  - "universal/reporting-consumer-status.yaml::read_escalation_declaration"
+  - "universal/reporting-consumer-status.yaml::read_omission_mismatch"
+  - "universal/reporting-consumer-status.yaml::read_resolved_revision_status"
+  - "universal/reporting-consumer-status.yaml::read_restatement_grace"
+  - "universal/reporting-consumer-status.yaml::read_restatement_mismatch"
+  - "universal/reporting-consumer-status.yaml::read_revision_mismatch"
+  - "universal/reporting-consumer-status.yaml::read_silence_before_deadline"
+  - "universal/reporting-consumer-status.yaml::read_silence_cleared"
+  - "universal/reporting-consumer-status.yaml::reject_content_mismatch_without_code"
+  - "universal/reporting-consumer-status.yaml::reject_received_with_wrong_binding"
+  - "universal/reporting-consumer-status.yaml::reject_stale_status_fork"
+  - "universal/reporting-consumer-status.yaml::sync_content_mismatch_coverage_short"
+  - "universal/reporting-consumer-status.yaml::sync_content_mismatch_currency_mismatch"
+  - "universal/reporting-consumer-status.yaml::sync_content_mismatch_metric_missing"
+  - "universal/reporting-consumer-status.yaml::sync_content_mismatch_period_mismatch"
+  - "universal/reporting-consumer-status.yaml::sync_content_mismatch_schema_nonconformant"
+  - "universal/reporting-consumer-status.yaml::sync_content_mismatch_scope_media_buy_missing"
+  - "universal/reporting-consumer-status.yaml::sync_obligation_missing"
+  - "universal/reporting-consumer-status.yaml::sync_revision_missing"
+  - "universal/reporting-consumer-status.yaml::sync_revision_received"
+  - "universal/reporting-consumer-status.yaml::sync_silence_clearing_status"
+  - "universal/reporting-consumer-status.yaml::verify_stale_fork_was_atomic"
+  - "universal/reporting-core-declaration.yaml::get_capabilities_declares_reporting_core"
+  - "universal/reporting-core.yaml::exact_nonempty_page_one"
+  - "universal/reporting-core.yaml::exact_nonempty_page_two"
+  - "universal/reporting-core.yaml::exact_nonempty_reject_mixed_selector"
+  - "universal/reporting-core.yaml::exact_nonempty_reject_rc0"
+  - "universal/reporting-core.yaml::exact_nonempty_repeat"
+  - "universal/reporting-core.yaml::read_action_required"
+  - "universal/reporting-core.yaml::read_complete_summary_with_future_schedule"
+  - "universal/reporting-core.yaml::read_core_integrity_baseline"
+  - "universal/reporting-core.yaml::read_delayed_summary"
+  - "universal/reporting-core.yaml::read_nonempty_revision_status"
+  - "universal/reporting-core.yaml::read_waiting_obligation"
+  - "universal/reporting-core.yaml::read_zero_row_content_exactly"
+  - "universal/reporting-core.yaml::read_zero_row_revision"
+  - "universal/reporting-core.yaml::repair_core_integrity_from_checkpoint"
+  - "universal/webhook-emission.yaml::get_products_discovery"
 
 steps:
   "universal/webhook-emission.yaml::trigger_webhook_operation":
@@ -104,26 +215,10 @@ steps:
     axes: {given: yes, when: yes, then: yes}
     verdict_before_audit: wireable
     evidence: "`task: get_products` with `stateful: false`; the whole trigger is a payload a client builds \u2014 `buying_mode: \"brief\" / brief: \"Premium video inventory on sports and outdoor lifestyle publishers. Q2 flight, $50K budget...\" / pagination: max_results: 5`. Its precondition is ordinary catalog seeding named in the storyboard's own `fixtures:` block \u2014 `product_id: \"sports_preroll_q2\" / delivery_type: \"non_guaranteed\" / format_ids: - id: \"video_30s\"` with `pricing_options: - pricing_option_id: \"cpm_non_guaranteed\" / floor_price: 22.0` \u2014 a product with a pricing option, i.e. a normal e2e fixture, not i"
-  "protocols/media-buy/index.yaml::list_formats":
-    verdict: wireable
-    axes: {given: yes, when: yes, then: yes}
-    evidence: "`task: list_creative_formats`, `stateful: false`, with `sample_request: format_ids: - \"$context.product_format_id\" / pagination: max_results: 1` \u2014 the one input comes from the earlier `get_products_brief` response capture. The refs_resolve check compares two things both already on the wire: `source: from: context / path: \"product_format_id\"` against `target: from: current_step / path: \"formats[*].format_id\"` with `match_keys: [agent_url, id]`, and third-party formats degrade to observations via `on_out_of_scope: warn` \u2014 no upstream_traffic, log, or DB inspection anywhere in the seven checks."
-  "protocols/media-buy/index.yaml::list_formats_integrity":
-    verdict: wireable
-    axes: {given: yes, when: yes, then: yes}
-    evidence: "`task: list_creative_formats`, `stateful: false`. Its only precondition is `sample_request: format_ids: - \"$context.product_format_id\"`, which the preceding `get_products_brief` step produces via `context_outputs: - name: product_format_id / path: 'products[0].format_ids[0]'` \u2014 that earlier step is itself a client request, so the state is reachable by sending requests in order. The `context_inputs: - key: product_format_id / inject_at: \"format_ids[0]\"` block plus its comment ('the runner's post-builder merge only forwards envelope fields... so `format_ids` above never reaches the wire') is cli"
   "protocols/media-buy/index.yaml::sync_accounts":
     verdict: wireable
     axes: {given: yes, when: yes, then: yes}
     evidence: "`task: sync_accounts` \u2014 the step itself CREATES the precondition it needs: `sample_request: accounts: - brand: domain: \"acmeoutdoor.example\" / operator: \"pinnacle-agency.example\" / billing: \"operator\" / payment_terms: \"net_30\"` plus a client-generated `idempotency_key: \"$generate:uuid_v4#media_buy_seller_account_setup_sync_accounts\"`. No `$context.*` reference, so nothing from an earlier step is needed. All five checks read the response: `field_present path: \"accounts[0].account_id\"`, `field_present path: \"accounts[0].status\"`, plus response_schema and the context echo. The storyboard's own co"
-  "protocols/media-buy/index.yaml::sync_creatives":
-    verdict: wireable
-    axes: {given: yes, when: yes, then: yes}
-    evidence: "task: sync_creatives; the only precondition values are produced by earlier client calls in the same storyboard \u2014 get_products_brief declares `context_outputs: - name: product_format_id / path: 'products[0].format_ids[0]'` and the request uses `format_id: \"$context.product_format_id\"`, while the phase narrative says 'With the media buy confirmed, the buyer syncs creative assets' (create_buy is itself a create_media_buy request). The second creative uses a literal fixture format (`agent_url: \"https://your-platform.example.com\", id: \"display_300x250\"`) matching the storyboard `fixtures.products[]"
-  "protocols/media-buy/index.yaml::sync_governance":
-    verdict: wireable
-    axes: {given: yes, when: yes, then: yes}
-    evidence: "task: sync_governance, `stateful: true`. The account precondition is created by the earlier sync_accounts step in phase account_setup (itself a client request whose sample_request registers brand acmeoutdoor.example / operator pinnacle-agency.example) \u2014 the same account object is echoed here in `accounts[0].account`. The governance agent endpoint is a static storyboard constant, not live state: top-level `context: governance_agent_url: \"https://test-agent.adcontextprotocol.org\"`, injected as `url: \"$context.governance_agent_url\"`; it is a value we put on the wire, and no validation requires th"
   "protocols/media-buy/scenarios/creative_fate_after_cancellation.yaml::create_buy":
     verdict: wireable
     axes: {given: yes, when: yes, then: yes}
@@ -196,12 +291,6 @@ steps:
     verdict: wireable
     axes: {given: yes, when: yes, then: yes}
     evidence: "GIVEN: 'stateful: true' with 'media_buy_id: \"$context.media_buy_id\"'; the phase narrative states 'The media_buy_id is real, but the package_id is fabricated.' The real id comes from the storyboard's own setup phase step create_buy, whose 'context_outputs' capture '- path: \"media_buy_id\"' \u2014 i.e. produced by sending create_media_buy, not by injecting a DB row. WHEN: 'task: update_media_buy' with 'packages: [{package_id: \"does-not-exist-package-invalid-transitions-v1\", budget: 5001}]' \u2014 a client-constructed request. THEN: '- check: error_code / value: \"PACKAGE_NOT_FOUND\" / description: \"Error cod"
-  "protocols/media-buy/scenarios/inventory_list_no_match.yaml::create_buy_no_match":
-    verdict: conditional
-    axes: {given: yes, when: yes, then: yes}
-    requires: [other]
-    blocker: "The buyer-side inventory lists referenced in targeting_overlay must exist as resolvable lists for the seller: 'This scenario exercises the no-match path using the test kit's pre-populated no_match_properties and no_match_collections lists.' and prerequisites 'The seller must resolve PropertyListReference / CollectionListReference against its own inventory and report a truthful outcome when nothing matches.' The e2e stack has no governance agent at 'agent_url: \"https://governance.pinnacle-agency.example\"', so the list ids (acme_outdoor_no_match_v1 / acme_outdoor_no_match_collections_v1) must be provisioned from the test kit before the run."
-    evidence: "GIVEN: 'packages: [{product_id: \"$context.product_id\", ... pricing_option_id: \"$context.pricing_option_id\"}]' \u2014 both come from the storyboard's own get_products_brief step, so they are request-produced; the extra is the test-kit list provisioning quoted in the blocker. WHEN: 'task: create_media_buy' carrying 'targeting_overlay: {property_list: {agent_url: \"https://governance.pinnacle-agency.example\", list_id: \"acme_outdoor_no_match_v1\"}, collection_list: {... list_id: \"acme_outdoor_no_match_collections_v1\"}}' \u2014 one client request. THEN: the two graded checks are wire-only and deliberately outc"
   "protocols/media-buy/scenarios/inventory_list_no_match.yaml::get_products_brief":
     verdict: wireable
     axes: {given: yes, when: yes, then: yes}
@@ -238,10 +327,6 @@ steps:
     verdict: wireable
     axes: {given: yes, when: yes, then: yes}
     evidence: "GIVEN: \"stateful: false\", inputs are $context.product_id / $context.pricing_option_id from the preceding get_products_brief step, plus the prerequisite \"Seller supports measurement_terms on create_media_buy packages\" (a product/tenant capability, ordinary fixture). WHEN is a deliberately aggressive but well-formed client request \u2014 \"expect_error: true, negative_path: payload_well_formed\", body carries \"max_variance_percent: 0\" \u2014 exactly the kind of negative vector a harness constructs and sends. THEN reads the wire error envelope: \"check: error_code, value: TERMS_REJECTED\", \"check: field_presen"
-  "protocols/media-buy/scenarios/measurement_terms_rejected.yaml::create_media_buy_relaxed_terms":
-    verdict: wireable
-    axes: {given: yes, when: yes, then: yes}
-    evidence: "GIVEN is the prior rejected attempt plus discovery context \u2014 both earlier steps of this same storyboard are client requests; the retry is described as \"The buyer mints a fresh idempotency_key and retries create_media_buy with the adjusted payload\" and the request carries \"idempotency_key: $generate:uuid_v4#...accept_terms_create_media_buy_relaxed_terms\". WHEN is \"task: create_media_buy\" with relaxed terms (\"measurement_window: c7\", \"max_variance_percent: 10\"). THEN is response-only: \"check: response_schema\", \"check: field_present, path: media_buy_id \u2014 Seller returns a media_buy_id after accept"
   "protocols/media-buy/scenarios/measurement_terms_rejected.yaml::get_products_brief":
     verdict: wireable
     axes: {given: yes, when: yes, then: yes}
@@ -339,12 +424,6 @@ steps:
     requires: [other]
     blocker: "The step is stateless on the wire (`stateful: false`, no $context inputs), but nine of its fourteen checks are assertions about a specific seeded auction catalog: two non-guaranteed products, each pricing option carrying `price_guidance.p50` and `.p75`, and format ids carrying `agent_url`. The storyboard supplies these as a `fixtures:` block plus `controller_seeding: true`, so the catalog must be provisioned before the run \u2014 richer than the ordinary \"a product with a pricing option\" fixture. Every check reads the response body; no off-wire observation."
     evidence: "stateful: false; fixtures: products: - product_id: \"sports_display_auction\" delivery_type: \"non_guaranteed\" ... pricing_options: - floor_price: 5.0 price_guidance: p50: 6.0 p75: 7.0; validations: - check: field_present path: \"products[0].pricing_options[0].price_guidance.p50\" \"First auction pricing option declares median bid guidance used as the initial bid\" - check: field_present path: \"products[0].format_ids[0].agent_url\" \"Format IDs include agent_url \u2014 must match this agent's URL\""
-  "specialisms/sales-non-guaranteed/index.yaml::sync_governance":
-    verdict: conditional
-    axes: {given: yes, when: yes, then: yes}
-    requires: [second_agent, seeded_account]
-    blocker: "Registration targets an external governance agent \u2014 `url: \"$context.governance_agent_url\"` resolving to the storyboard's `context: governance_agent_url: \"https://test-agent.adcontextprotocol.org\"` \u2014 with Bearer credentials, so a second agent (or a stand-in the seller will accept) must be provisioned and reachable. It also registers governance ON an existing account for acmeoutdoor.example/pinnacle-agency.example, which this storyboard seeds via `controller_seeding: true` rather than creating in a preceding step. The call itself is an ordinary sync_governance request and all four checks read the response."
-    evidence: "task: sync_governance; stateful: true; sample_request: accounts: - account: brand: domain: \"acmeoutdoor.example\" operator: \"pinnacle-agency.example\" governance_agents: - url: \"$context.governance_agent_url\" authentication: schemes: [\"Bearer\"] credentials: \"gov-token-...\"; validations: - check: response_schema - check: field_value path: \"accounts[0].status\" value: \"synced\" \"Governance agent is registered on the account\" - check: field_value path: \"context.correlation_id\""
   "specialisms/sales-non-guaranteed/index.yaml::update_media_buy":
     verdict: conditional
     axes: {given: yes, when: yes, then: no}
@@ -367,12 +446,6 @@ steps:
     requires: [seeded_account, prior_state]
     blocker: "GIVEN needs the same passthrough-only onboarding seed plus the preceding reject step's captured `suggested_billing`; the latter is fine (an earlier wireable request), the former is out-of-band provisioning."
     evidence: "`skip_if: \"test_kit.commercial_relationship != 'passthrough_only'\"` and `stateful: true`; the request is `billing: \"$context.suggested_billing\"`, a value captured by the previous step's `context_outputs: - path: \"accounts[0].errors[0].details.suggested_billing\"` \u2014 i.e. produced by a request we ourselves sent, which the narrative confirms: \"The runner submits a new request with the `billing` value the seller suggested ... under a fresh idempotency_key ... The recover phase is NOT a replay\". WHEN is a second sync_accounts call with `idempotency_key: \"$generate:uuid_v4#billing_gate_dispatch_passt"
-  "universal/billing-gate-dispatch.yaml::sync_accounts_unsupported_billing":
-    verdict: conditional
-    axes: {given: yes, when: yes, then: yes}
-    requires: [seeded_account]
-    blocker: "GIVEN requires an agent whose advertised `supported_billing` excludes the probe value; the phase self-skips otherwise, so the tenant/agent capability config has to be provisioned to leave a value out."
-    evidence: "`optional: true` / `skip_if: \"!test_kit.account.unsupported_billing_probe\"`, described as \"account.unsupported_billing_probe \u2014 (optional) value the runner submits on the capability-gate phase. MUST be absent from the seller's `supported_billing`. When unset, capability_gate grades `not_applicable`.\" WHEN is a normal client call carrying a deliberately bad value: `billing: \"$test_kit.account.unsupported_billing_probe\"` with `idempotency_key: \"$generate:uuid_v4#billing_gate_dispatch_capability_probe\"` \u2014 building a negative-vector request is test work, not a blocker. All 8 validations read the re"
   "universal/capability-discovery.yaml::get_capabilities":
     verdict: wireable
     axes: {given: yes, when: yes, then: yes}
@@ -636,22 +709,10 @@ steps:
     requires: [prior_state, seeded_account]
     blocker: "Needs the same exact three-creative library seed plus $context.next_cursor captured from first_page (itself a list_creatives request we send). Seeding is doable via sync_creatives/sync_accounts rather than the controller, but the terminal assertions (has_more=false, returned=1) only hold if the seeded matching set is exactly three."
     evidence: "sample_request: pagination: {cursor: \"$context.next_cursor\", max_results: 2}; validations: '- check: field_value, path: \"pagination.has_more\", value: false', '- check: field_value_or_absent, path: \"pagination.cursor\", allowed_values: [null], description: \"Terminal page MUST omit cursor\"', '- check: field_value, path: \"query_summary.returned\", value: 1' \u2014 all observable on the response."
-  "universal/read-tool-idempotency.yaml::assert_omitted_key_grace_handled":
-    verdict: wireable
-    axes: {given: yes, when: yes, then: yes}
-    evidence: "validations: '- check: any_of, allowed_values: [\"omitted_key_grace_handled\"], description: \"Agent must either accept the omitted-key read during the 3.1 grace window or reject it with INVALID_REQUEST.\"' The step has no sample_request (task: assert_contribution, stateful: false) \u2014 it aggregates two branch steps that are both ordinary client requests: get_capabilities_without_idempotency_key_3_1_accept/reject, each 'task: get_adcp_capabilities' with 'omit_idempotency_key: true' and 'contributes: true'. Omitting a field is test-side request construction, and both outcomes are graded on the wire ("
   "universal/read-tool-idempotency.yaml::get_capabilities_with_idempotency_key":
     verdict: wireable
     axes: {given: yes, when: yes, then: yes}
     evidence: "prerequisites: 'No special seed state is required.'; step is 'stateful: false' with 'task: get_adcp_capabilities' and a sample_request carrying 'idempotency_key: \"$generate:uuid_v4#read_tools_3_1_capabilities\"', 'context.correlation_id', and 'ext.adcp'. All four validations read the response: 'check: response_schema', 'check: field_present / path: supported_protocols', 'check: field_present / path: context', 'check: field_value / path: context.correlation_id / value: read_tool_idempotency--get_capabilities_with_key'. GIVEN needs nothing beyond an authenticated client; WHEN is a plain protocol "
-  "universal/read-tool-idempotency.yaml::get_capabilities_without_idempotency_key_3_1_accept":
-    verdict: wireable
-    axes: {given: yes, when: yes, then: yes}
-    evidence: "'omit_idempotency_key: true' with narrative 'The request intentionally omits idempotency_key ... so future runners that auto-inject keys for all tasks preserve the missing-key vector' \u2014 suppressing a field the client itself builds is harness construction, not internal state. 'stateful: false', no seed. Validations are all wire-side: 'check: response_schema', 'check: field_present / path: context', 'check: field_value / path: context.correlation_id / value: read_tool_idempotency--capabilities_omitted_key_grace'. Note the phase is 'optional: true' under 'branch_set: id: omitted_key_grace_handled"
-  "universal/read-tool-idempotency.yaml::get_capabilities_without_idempotency_key_3_1_reject":
-    verdict: wireable
-    axes: {given: yes, when: yes, then: yes}
-    evidence: "'omit_idempotency_key: true', 'expect_error: true', 'negative_path: payload_well_formed', 'stateful: false'. The trigger is a deliberately incomplete but well-formed client request \u2014 exactly the negative-vector case that counts as invokable. Assertions are on the wire error envelope: 'check: error_code / value: \"INVALID_REQUEST\" / description: Missing idempotency_key rejected with INVALID_REQUEST', plus 'field_present path: context' and 'field_value path: context.correlation_id'. Nothing off-wire is inspected."
   "universal/read-tool-idempotency.yaml::get_products_with_idempotency_key":
     verdict: wireable
     axes: {given: yes, when: yes, then: yes}
@@ -698,10 +759,6 @@ steps:
     verdict: wireable
     axes: {given: yes, when: yes, then: yes}
     evidence: "'task: get_products', 'stateful: false', sample_request 'brief: \"Return a small representative sample of available advertising products\"' with 'pagination: max_results: 5' \u2014 a single client request against an ordinary seeded catalog. Assertions are entirely on the response: 'check: response_schema / Response matches get-products-response.json schema', 'field_present / products', 'field_present / products[0].product_id', 'field_present / products[0].delivery_type', and 'field_value / context.correlation_id = schema_validation--get_products_schema'."
-  "universal/schema-validation.yaml::list_formats_match":
-    verdict: wireable
-    axes: {given: yes, when: yes, then: yes}
-    evidence: "The only precondition is the value produced by the preceding step in the same phase: 'sample_request: format_ids: - \"$context.product_format_id\"', where product_format_id is 'context_outputs' of get_products_for_formats ('path: products[0].format_ids[0]') \u2014 that earlier step is itself a request the harness sends, so the chaining is client-side, not internal state. WHEN is 'task: list_creative_formats' over the wire. THEN is response-only: 'response_schema', 'field_present / formats[0].format_id.agent_url', 'formats[0].format_id.id', and 'field_value / path: formats[0].format_id / value: $conte"
   "universal/schema-validation.yaml::pricing_options_present":
     verdict: wireable
     axes: {given: yes, when: yes, then: yes}

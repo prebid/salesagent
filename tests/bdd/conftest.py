@@ -27,11 +27,12 @@ from collections.abc import Callable, Generator, Sequence
 from contextlib import AbstractContextManager, contextmanager, nullcontext
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, NamedTuple
+from typing import TYPE_CHECKING, Any, NamedTuple, NoReturn
 
 import pytest
 
 from scripts.audit import storyboard_spec
+from tests.helpers.bdd_transport import NODEID_TRANSPORTS, transport_of
 from tests.helpers.ledger import load_ledger_nodeids
 from tests.helpers.marker_names import derive_marker_names
 
@@ -69,6 +70,10 @@ pytest_plugins = [
     "tests.bdd.steps.domain.uc004_delivery",
     "tests.bdd.steps.domain.uc002_create_media_buy",
     "tests.bdd.steps.domain.uc002_nfr",
+    "tests.bdd.steps.domain.uc002_task_query",
+    "tests.bdd.steps.domain.uc002_v31_request",
+    "tests.bdd.steps.domain.uc002_v31_proposal_targeting",
+    "tests.bdd.steps.domain.uc002_invariants",
     "tests.bdd.steps.domain.uc003_update_media_buy",
     "tests.bdd.steps.domain.uc003_ext_error_scenarios",
     "tests.bdd.steps.domain.uc003_storyboard_generic_client",
@@ -81,20 +86,26 @@ pytest_plugins = [
     "tests.bdd.steps.domain.uc006_sync_creatives",
     "tests.bdd.steps.domain.uc006_storyboard_creative_sync",
     "tests.bdd.steps.domain.uc006_dry_run_parity",
+    "tests.bdd.steps.domain.uc005_creative_formats",
     "tests.bdd.steps.domain.uc005_format_id_shape",
-    "tests.bdd.steps.domain.uc005_format_id_roundtrip",
     "tests.bdd.steps.domain.uc005_format_id_third_party",
+    "tests.bdd.steps.domain.uc005_peer_catalog",
     "tests.bdd.steps.domain.signing_enforcement",
     "tests.bdd.steps.domain.uc010_capabilities",
     "tests.bdd.steps.domain.uc011_accounts",
     "tests.bdd.steps.domain.admin_accounts",
     "tests.bdd.steps.domain.uc_get_products_inventory",
     "tests.bdd.steps.domain.uc_get_products_pricing",
+    "tests.bdd.steps.domain.uc_get_products_format_options",
+    "tests.bdd.steps.domain.uc_get_products_format_id_filter",
+    "tests.bdd.steps.domain.uc_get_products_canonical_format_filters",
+    "tests.bdd.steps.domain.uc_format_satisfaction",
     "tests.bdd.steps.domain.egress_ssrf",
     "tests.bdd.steps.domain.local_constraint_relaxations",
     "tests.bdd.steps.domain.local_context_echo",
     "tests.bdd.steps.domain.tenant_identification",
     "tests.bdd.steps.domain.agent_card_discovery",
+    "tests.bdd.steps.domain.publisher_format_catalog",
     "tests.bdd.steps.domain.publisher_authorization",
     "tests.bdd.steps.domain.pre_dispatch_refusals",
     "tests.bdd.steps.domain.codes_open_vocabulary",
@@ -391,6 +402,16 @@ def pytest_configure(config: pytest.Config) -> None:
 # These tags correspond to features not yet implemented in production code.
 # Each xfail has a FIXME pointing to the work needed.
 
+#: The tenant arm of BR-RULE-017 on update_media_buy, for every route that holds a
+#: tenant-only approval scenario or row: the scenario in _XFAIL_TAGS, the boundary row in
+#: _SELECTIVE_XFAIL, and the partition and boundary outline rows in _UC002_UC003_LEDGER.
+_UPDATE_TENANT_REVIEW_DIVERGENCE = (
+    "update_media_buy consults only the adapter's manual_approval_required, never "
+    "tenant.human_review_required, which create_media_buy treats as authoritative, so a "
+    "tenant-only review answers completed where submitted is owed; create and update "
+    "disagree — prebid/salesagent#2483"
+)
+
 _XFAIL_TAGS: dict[str, str] = {
     # ── Wired by this sweep; they FAIL, and that failure is the finding. ──
     # These three scenarios were dormant on main (routed to the uc003/uc006
@@ -452,7 +473,6 @@ _XFAIL_TAGS: dict[str, str] = {
     # FIXME: UC-003 main/alt-timing — production doesn't populate these fields
     # Steps have hard assertions now; xfail at scenario level until production catches up.
     "T-UC-003-main": "implementation_date, budget, sandbox not populated in update response — spec-production gap",
-    "T-UC-003-alt-timing": "implementation_date not populated in update response — spec-production gap",
     # FIXME: UC-003 pause — sandbox flag not populated in update response
     "T-UC-003-alt-pause": "sandbox not populated in pause response — spec-production gap",
     # FIXME: UC-003 optimization_goals — affected_packages empty in response
@@ -460,15 +480,43 @@ _XFAIL_TAGS: dict[str, str] = {
     # FIXME: UC-003 ext-t — invoice_recipient authorization (BR-RULE-214) not implemented;
     # production accepts the override without an authorization check, so no VALIDATION_ERROR is raised.
     "T-UC-003-ext-t": "invoice_recipient authorization not implemented (BR-RULE-214) — production gap",
-    # FIXME: UC-003 ext-u — new_packages midflight-additions capability check
-    # (BR-RULE-217 -> UNSUPPORTED_FEATURE) not implemented; production accepts new_packages unhandled.
-    "T-UC-003-ext-u": "new_packages midflight capability check not implemented (BR-RULE-217) — production gap",
+    # ── create_media_buy and update_media_buy disagree (#2483) ──
+    # Each scenario states, on update_media_buy, work create_media_buy already does. Neither
+    # tool is patched alone: #2483 moves both onto shared services, and each entry
+    # graduates (XPASS strict on all four transports) when it lands.
+    "T-UC-003-local-inline-creatives-ad-server-push": (
+        "update_media_buy syncs and assigns a package's inline creatives but never calls the "
+        "ad server's add_creative_assets, which create_media_buy does; create and update "
+        "disagree — prebid/salesagent#2483"
+    ),
+    # The tenant arm of BR-RULE-017. Its Given now sets the tenant flag alone (see
+    # given_tenant_human_review_flag), so the scenario grades the tenant column; before, the
+    # Given also raised the adapter's flag and the pass rode the adapter arm.
+    "T-UC-003-approval-tenant": _UPDATE_TENANT_REVIEW_DIVERGENCE,
+    # Graduated: T-UC-003-ext-u (new_packages refused UNSUPPORTED_FEATURE). XPASS(strict) on
+    # a2a, mcp, rest and e2e_rest in box run innet_291026_0131. Inspected per
+    # .claude/rules/workflows/xpass-graduation.md: the scenario states the full obligation
+    # (BR-RULE-217 INV-1, code, suggestion), and the code is the one
+    # media-buy/update-media-buy-request.json /properties/new_packages permits at the pin
+    # ("MUST reject with ACTION_NOT_ALLOWED (preferred) or UNSUPPORTED_FEATURE (legacy)").
+    # The Givens build a complete package-request through the shared builder and read the
+    # seller's advertisement from _adcp_status_and_actions (non-empty, no add_packages); the
+    # Thens grade the wire envelope (_wire_code, no reconstructed fallback). Production:
+    # media_buy_update._refuse_unsupported_actions raises AdCPCapabilityNotSupportedError
+    # above the UoW from UNSUPPORTED_ACTIONS, the declaration that also keeps add_packages out
+    # of valid_actions[]. Not in e2e_rest_known_failures.txt.
     # FIXME: UC-002 ASAP — response doesn't expose resolved start_time
     "T-UC-002-alt-asap": "response lacks resolved start_time field — spec-production gap",
-    # FIXME: UC-002 error code mismatch — Pydantic VALIDATION_ERROR vs spec INVALID_REQUEST
-    "T-UC-002-inv-087-5": "duplicate optimization_goals priority: VALIDATION_ERROR instead of INVALID_REQUEST — spec-production gap",
-    "T-UC-002-inv-087-6": "empty optimization_goals array: VALIDATION_ERROR instead of INVALID_REQUEST — spec-production gap",
-    "T-UC-002-inv-087-7": "per_ad_spend without value_field: VALIDATION_ERROR instead of INVALID_REQUEST — spec-production gap",
+    # Graduated: T-UC-002-inv-087-5 and T-UC-002-inv-087-6. Both entries XPASSed strictly on
+    # a2a, mcp, rest and e2e_rest in measure_innet_291026_1202, the first run in which the
+    # uc002-not-wired catch-all did not xfail them at setup. -5 grades acceptance of tied
+    # priorities against the success branch and a created buy (core/optimization-goal.json
+    # resolves ties by array order); -6 grades INVALID_REQUEST, correctable and a suggestion
+    # on the wire for an empty optimization_goals array (minItems 1).
+    # Graduated: T-UC-002-inv-087-7 (strict XPASS on a2a, mcp, rest and e2e_rest in
+    # innet_291026_2041). The scenario names VALIDATION_ERROR for per_ad_spend without
+    # value_field, the code production answers: optimization-goal.json value_field says
+    # sellers must reject the target kind, a rule the schema does not encode.
     # Graduated: T-UC-005-inv-049-8-holds, together with the -violated and -nofield rows
     # that used to sit in _UC005_PARTIAL_TAGS below. The disclosure_positions filter IS
     # implemented now -- src/core/tools/creative_formats.py applies AND semantics
@@ -492,11 +540,17 @@ _XFAIL_TAGS: dict[str, str] = {
     # omitting the `type` filter, and missing uniqueItems on
     # disclosure_positions/persistence). Presence was never the defect here; application
     # was. #1660 stays open on its own subject.
-    # adcp 3.12: FormatCategory/type filter removed from ListCreativeFormatsRequest.
-    # Scenarios that rely on type filter or type-based sorting can no longer pass.
-    "T-UC-005-main-filtered": "adcp 3.12: type filter removed from ListCreativeFormatsRequest",
-    "T-UC-005-inv-031-1-holds": "adcp 3.12: type filter removed — combined type+asset_types AND filter not possible",
-    "T-UC-005-inv-031-1-violated": "adcp 3.12: type filter removed — combined type+asset_types AND filter not possible",
+    # REGROUNDED, not graduated-by-hope: T-UC-005-main-filtered,
+    # T-UC-005-inv-031-1-holds and T-UC-005-inv-031-1-violated were xfailed as
+    # "adcp 3.12: type filter removed". Two things were wrong with that. The version
+    # does not exist -- `type` left the media-buy list-creative-formats request at the
+    # 3.0 major (2.5 declares it) and still stands on the "(Creative Agent)" variant,
+    # which this seller does not serve. And the scenarios were stated over a parameter
+    # the request never carries, so they graded nothing either way. Each now filters on
+    # fields the request declares and production applies -- asset_types
+    # (creative_formats.py:365) and name_search (:360) -- with their Givens and Thens
+    # unchanged, so the obligations they always claimed (POST-S3, and BR-RULE-031's AND
+    # semantics) are reached for the first time. No entry here is needed.
     # T-UC-005-inv-031-2-holds GRADUATED. It was xfailed as "adcp 3.12: type field removed —
     # sort by type then name not possible", which described an OBSOLETE SCENARIO, not a
     # production gap: the rule it graded no longer exists. The scenario now grades the rule
@@ -504,12 +558,33 @@ _XFAIL_TAGS: dict[str, str] = {
     # (src/core/tools/creative_formats.py:386). It stays xfailed on e2e_rest alone, via
     # _UC005_E2E_FIXTURE_INJECTION_TAGS, because that stack cannot be told to serve
     # specific format fixtures.
-    "T-UC-005-inv-049-1-holds": "adcp 3.12: type filter removed from ListCreativeFormatsRequest",
-    "T-UC-005-inv-049-1-violated": "adcp 3.12: type filter removed from ListCreativeFormatsRequest",
-    # Un-graduated: T-UC-005-sandbox-happy — sandbox=True not set on response (all transports)
-    "T-UC-005-sandbox-happy": "sandbox mode not implemented in list_creative_formats response — spec-production gap",
-    # Un-graduated: T-UC-005-sandbox-validation — sandbox validation not triggered (all transports)
-    "T-UC-005-sandbox-validation": "sandbox validation not triggered for invalid filters — spec-production gap",
+    # DELETED: T-UC-005-inv-049-1-holds and -violated. Not a graduation — the two tags
+    # ROUTE NOTHING. `git grep T-UC-005-inv-049-1-holds -- tests/bdd/features/` returns
+    # nothing, and the invariant tags BR-UC-005 actually carries run inv-049-2 through
+    # inv-049-11 (plus -8-capabilities); there is no inv-049-1 scenario to xfail. Both
+    # entries are matched by exact set membership (`tag in marker_names`), so the
+    # similarly-named -10-* and -11-* tags were never covered by them either. They also
+    # stood in _UC005_E2E_FIXTURE_INJECTION_TAGS, equally inert, and go from there in the
+    # same change.
+    #
+    # Their shared citation was "adcp 3.12", which is not a version that exists in the
+    # schema tree. `type` was really removed, at the 3.0 MAJOR — present in 2.5, absent in
+    # 3.0/3.1/3.2 — and it still stands on the "(Creative Agent)" variant of the request.
+    # Two lanes found this pair independently, which is why the entries are gone once here
+    # rather than twice.
+    # Graduated: T-UC-005-sandbox-happy. Two halves, both real. The When named no account,
+    # so the request was a production request whatever account the Given seeded --
+    # sandbox.mdx makes sandbox account-level ("Once a request references a sandbox
+    # account, the entire request is treated as sandbox"). And production answered
+    # sandbox=None unconditionally. The When now names the seeded account, and
+    # _list_creative_formats_impl reads the flag off the account the resolver loaded for it
+    # (a request naming an account carries a credential even on this public task), which
+    # is the SHOULD sandbox.mdx states: "include `sandbox: true` in success responses".
+    # Graduated: T-UC-005-sandbox-validation. "Sandbox validation not triggered" was the
+    # When, not the seller: it sent min_width=-1, and the pinned request declares min_width
+    # {"type": "integer"} with no minimum, so the seller rightly served it. The When now
+    # sends a non-integer, and the Thens assert the INVALID_REQUEST a schema violation
+    # earns rather than VALIDATION_ERROR (see the scenario).
     # Graduated 2026-09-15: T-UC-005-main-referrals. Its reason had two halves and neither
     # was production. The first -- "in-process registry mock returns no agents" -- was the
     # MOCK: CreativeFormatsEnv left ``_get_tenant_agents`` as a MagicMock attribute, and
@@ -530,18 +605,33 @@ _XFAIL_TAGS: dict[str, str] = {
     # server answers with the WHOLE catalog, pixel_tracker assets included, and the
     # compliance Then fails on adcp#7338 exactly as its siblings do -- that one node is on
     # tests/bdd/e2e_rest_known_failures.txt under the #7338 block, not parked by tag.
-    # Partially graduated: dispatch fix landed; error code mismatch remains
-    # FIXME: production raises AUTH_REQUIRED, spec expects TENANT_REQUIRED
-    "T-UC-005-ext-a": "error code AUTH_REQUIRED instead of TENANT_REQUIRED — spec-production gap",
+    # Graduated: T-UC-005-ext-a ("No tenant context"). Its Givens never removed the tenant
+    # -- the token-less credential still addressed the env's seller, and this public task
+    # served it -- so no envelope was captured at all, and the AUTH_REQUIRED/TENANT_REQUIRED
+    # reason described neither the pin nor the run. The scenario now sends no headers and
+    # asserts TENANT_UNDEFINED/terminal, as the UC-010, UC-013 and UC-018 scenarios on the
+    # same Given do.
     # Graduated: creative agent partition/boundary tests
     # Steps now dispatch through harness — all 34 tests pass across 4 transports.
     # FIXME(#1660): suggestion field not in production error model
-    # NOTE(ah98 red-step inspection, 2026-07-06): NOT graduatable as-is — the
-    # When step no-ops (type filter removed in adcp 3.12), so the scenario
-    # fails on "operation should fail", not on the missing suggestion.
-    # Suggestion parity for list_creative_formats is pinned instead by
+    # Graduated: T-UC-005-ext-b, xfailed as "suggestion field not implemented in error
+    # responses". NOTE(ah98 red-step inspection, 2026-07-06) had already found it "NOT
+    # graduatable as-is -- the When step no-ops (type filter removed), so the scenario
+    # fails on 'operation should fail', not on the missing suggestion". That inspection
+    # was right about the cause and could not act on it: the scenario named a `type`
+    # filter this seller's request does not declare, so no rejection was reachable and
+    # the cited gap was never what stopped it. The When now sends an out-of-enum
+    # `asset_types` member, which production does reject, and the scenario passes END TO
+    # END on mcp, a2a and rest -- the error code, the `field` pointer naming asset_types,
+    # AND the suggestion. Measured: [XPASS(strict)] on all three transports.
+    #
+    # Not a vacuous pass: `the error code should be` and `the error field should contain`
+    # read the wire envelope with no reconstructed fallback (then_error.py:539, :1554),
+    # and `suggestion` is wire-first on all three of these transports. `suggestion` is a
+    # read-only property over CODE_TABLE, which is why the 2026-07 reason had gone stale.
+    # No e2e_rest ledger row for this tag, so there is no sibling to reconcile.
+    # Suggestion parity for list_creative_formats stays additionally pinned by
     # tests/integration/test_request_validation_suggestion_parity.py.
-    "T-UC-005-ext-b": "suggestion field not implemented in error responses",
     # Graduated (cassini run 4e57e3338ca3407ab0d78d70f3a20a09):
     # T-UC-005-ext-b-disclosure-invalid, -disclosure-empty, -output-empty,
     # -output-invalid, -output-noid, -input-empty, -input-invalid, -input-noid.
@@ -561,28 +651,39 @@ _XFAIL_TAGS: dict[str, str] = {
     # scenario), and none appears in tests/bdd/e2e_rest_known_failures.txt, so there is
     # no sibling-transport or e2e ledger entry to graduate alongside them.
     #
-    # NOT graduated — T-UC-005-ext-b-disclosure-dupes still xfails, and it is a
-    # SPEC question rather than a production gap: the pinned
-    # list-creative-formats-request declares minItems=1 on disclosure_positions but NO
-    # uniqueItems, so ["prominent","prominent"] violates no schema constraint and
-    # production is right to accept it. The scenario is over-specified; reconciling it
-    # upstream is the fix, not patching production to match.
-    "T-UC-005-ext-b-disclosure-dupes": "scenario demands rejection of duplicate disclosure_positions, "
-    "but the pinned schema declares no uniqueItems — over-specified scenario, pending upstream reconciliation",
+    # GRADUATED — T-UC-005-ext-b-disclosure-dupes. Its reason asserted a fact about the pin
+    # and the fact was FALSE: "the pinned schema declares no uniqueItems, so
+    # ["prominent","prominent"] violates no schema constraint and production is right to
+    # accept it". MEASURED against the pin this tree installs (adcp
+    # 9.0.0b2+prs1435.1415.1447.1456, get_adcp_spec_version() == 3.2.1):
+    # _schemas/3.2/media-buy/list-creative-formats-request.json AND
+    # _schemas/3.2/creative/list-creative-formats-request.json both declare
+    # "uniqueItems": true on disclosure_positions — and on disclosure_persistence. So the
+    # scenario was never over-specified; the seller was under-implemented, and the entry
+    # closed the question in the wrong direction for the whole life of the marker.
+    #
+    # What hid it: adcp 9's types._ergonomic._patch_unique_enum_list attaches a WrapValidator
+    # whose coerce_to_unique_enum_list DEDUPES (list(dict.fromkeys(...))), so the generated
+    # model silently rewrote the buyer's duplicate array instead of refusing it, and reading
+    # the SDK rather than the schema produced the reason above. The constraint is now asserted
+    # on the DTO (ListCreativeFormatsRequest._refuse_duplicate_disclosure_members) and the
+    # scenario gets the INVALID_REQUEST / error.field=disclosure_positions / suggestion it
+    # always asked for. Verified a2a-only, as the note above records, and absent from
+    # e2e_rest_known_failures.txt, so there is no sibling entry to graduate with it.
     # Graduated: T-UC-002-ext-f. The gap was never in production -- it was in the harness.
     # The step built CreateMediaBuyRequest IN THE TEST PROCESS, so an unknown targeting
     # field raised pydantic's ValidationError there and never crossed a transport; the
     # scenario graded the harness's own exception. Dispatching the raw parameter bag lets
     # the payload reach the server, which answers INVALID_REQUEST with a suggestion, which
     # is what the scenario asked for all along (prkv.33).
-    # FIXME: the error CODE is fixed (currency-not-supported now
-    # raises AdCPCapabilityNotSupportedError -> UNSUPPORTED_FEATURE, verified by
-    # tests/integration/test_currency_not_supported_error_code.py). But this scenario
-    # selects a non-default-currency pricing_option_id, and create_media_buy derives
-    # request_currency from the product's FIRST pricing option — it never validates the
-    # SELECTED option's currency — so the create SUCCEEDS instead of failing. Graduates
-    # once selected-option currency validation lands (#1417).
-    "T-UC-002-ext-d": "selected pricing-option currency not validated against CurrencyLimit; create succeeds instead of UNSUPPORTED_FEATURE — spec-production gap",
+    # Graduated (#1417): T-UC-002-ext-d. create_media_buy now reads the currency from the
+    # pricing option the package SELECTS, not the product's first (3b1339f63), so an
+    # option in a currency outside the tenant's CurrencyLimit rows is refused
+    # UNSUPPORTED_FEATURE / correctable, the closest code the pinned enum defines ("a
+    # requested feature or field is not supported by this seller"). The Given seeds the
+    # option through PricingOptionFactory; the code and recovery Thens read the wire only.
+    # Strict XPASS on a2a, mcp, rest and e2e_rest in box run innet_281026_1713; not in
+    # e2e_rest_known_failures.txt.
     # Graduated (#1417/gh8p.10): duplicate product_id now raises AdCPValidationError
     # with a buyer-facing suggestion ("Each package must reference a distinct
     # product_id ..."), surfaced on the wire. T-UC-002-ext-e passes.
@@ -614,14 +715,22 @@ _XFAIL_TAGS: dict[str, str] = {
     # FIXME: creative/format_id validation errors lack suggestion field
     # ext-g: _validate_creatives_before_adapter_call raises INVALID_CREATIVES without suggestion
     # ext-h: plain string format_id caught by Pydantic, not structured AdCPSalesAgentError
-    # ext-h-agent: _validate_and_convert_format_ids is dead code — unregistered agent not detected
     # Graduated 2026-09-01: the reason named the defect exactly -- "produces Pydantic error,
     # not AdCPSalesAgentError with suggestion". d2d6609da maps a pydantic ValidationError to
     # AdCPInvalidRequestError, so the boundary now emits the typed error WITH a suggestion and
     # the scenario's three wire assertions (fails, code INVALID_REQUEST, suggestion present)
     # all hold. Inspected per .claude/rules/workflows/xpass-graduation.md: the assertions are
     # wire-level, not truthiness, so the pass is not vacuous.
-    "T-UC-002-ext-h-agent": "unregistered agent_url validation not wired — _validate_and_convert_format_ids is dead code",
+    # Graduated: T-UC-002-ext-h-agent. media-buy/package-request.json @ 3.2.7, "Format
+    # selector contract (normative)", codes a legacy format_id that does not normalize, or
+    # resolves and satisfies nothing the product declares, UNSUPPORTED_FEATURE. 88edb921b
+    # corrected the scenario from REFERENCE_NOT_FOUND to that code. c0e130f1b makes the
+    # package selector gate refuse the deprecated lane too: the seeded product declares only
+    # display_300x250_image at the reference agent, so a format_id at an unregistered agent is
+    # LEGACY_NOT_ACCEPTED and canonical_refusal raises AdCPCapabilityNotSupportedError, whose
+    # suggestion comes from CODE_TABLE. The Thens are wire-level (code, suggestion present),
+    # and the scenario is not in e2e_rest_known_failures.txt, so all four transports are
+    # graded. The serial box run of the UC-002 module that confirms plain PASS is the lead's.
     # Graduated: T-UC-002-ext-i, for the same reason as ext-f above -- the auth error was
     # never reached. With the raw dispatch the request crosses the transport, the auth
     # boundary answers, and its envelope does carry a suggestion (prkv.33).
@@ -629,8 +738,11 @@ _XFAIL_TAGS: dict[str, str] = {
     # Production wraps adapter exceptions as AdCPAdapterError and re-raises instead of
     # returning CreateMediaBuyResult(status="failed"). Also no suggestion field on error.
     "T-UC-002-ext-j": "adapter failure raises exception, no failed result envelope or suggestion — spec-production gap",
-    "T-UC-002-inv-026-2": "INVALID_CREATIVES error lacks suggestion field",
-    "T-UC-002-inv-026-4": "INVALID_CREATIVES error lacks suggestion field",
+    # Graduated: T-UC-002-inv-026-2 and T-UC-002-inv-026-4 ("INVALID_CREATIVES error lacks
+    # suggestion field"). XPASS(strict) on a2a, mcp, rest and e2e_rest in
+    # measure_innet_291026_1202, the first run that dispatched them. Each Then pins its code
+    # on the wire (INVALID_STATE for a rejected creative, VALIDATION_ERROR for a format
+    # outside the product's set) and requires the wire suggestion.
     # Graduated (#1417/gh8p.10): the request-construction boundary now derives a
     # field-aware suggestion (suggest_validation_fix) and attaches it to the
     # AdCPValidationError, so a missing idempotency_key rejects with a non-empty
@@ -647,34 +759,44 @@ _XFAIL_TAGS: dict[str, str] = {
     # Removed stale xfails: T-UC-002-partition-optimization-goals, T-UC-002-boundary-optimization-goals
     # Valid rows now pass; invalid rows xfail via _assert_error_outcome _SPEC_PRODUCTION_CODE_MAP.
     # Removed: T-UC-003-partition-optimization-goals, T-UC-003-boundary-optimization-goals, T-UC-003-alt-optimization-goals
-    # NOTE: principal-ownership error code gap — spec expects ACCOUNT_NOT_FOUND,
-    # production raises AdCPAuthorizationError (PERMISSION_DENIED, )
-    # — see T-UC-003-ext-c below
     # RESOLVED: UpdateMediaBuySuccess status="submitted" now handled
     # by then_response_status (empty affected_packages = approval pending).
     # Removed T-UC-003-alt-manual xfail — tests pass with the fix.
     # FIXME: catalog validation not implemented in production
     # PackageRequest accepts catalogs (inherited from adcp library) but production
     # code never validates duplicate types or catalog_id existence.
-    "T-UC-002-ext-v": "catalog validation not implemented in production — spec-production gap",
+    # Graduated in wave 5 (integrate/wave1 a3687d971): T-UC-002-ext-v (w5b10). create_media_buy
+    # now refuses two catalogs of one type with VALIDATION_ERROR (refuse_duplicate_catalog_types).
     "T-UC-002-ext-v-notfound": "catalog validation not implemented in production — spec-production gap",
     # FIXME: proposal-based creation not implemented in production
     # proposal_id exists on adcp library CreateMediaBuyRequest but production code
     # never reads it — no proposal store, no allocation derivation, no budget distribution.
-    "T-UC-002-alt-proposal": "proposal-based creation not implemented in production — spec-production gap",
+    # The reason used to name the missing proposal store, but the measured failure in
+    # measure_innet_291026_1202 is earlier: the Given that seeds the proposal has no step
+    # definition, so the conftest's dormancy tripwire rejected the old wording.
+    "T-UC-002-alt-proposal": (
+        'dormant (test-wiring): no step definition binds \'proposal "prop-2026-001" exists and has '
+        "not expired'; create_media_buy also never reads proposal_id, which is the next thing a "
+        "wired step will meet"
+    ),
     # FIXME: pricing XOR invariant not enforced during create_media_buy
     # Schema-level validate_pricing_option() enforces XOR but _validate_pricing_model_selection()
     # works at ORM level (is_fixed + rate + price_guidance) and doesn't check for both/neither.
     "T-UC-002-inv-006-3": "pricing XOR invariant (both set) not validated in create flow — spec-production gap",
     "T-UC-002-inv-006-4": "pricing XOR invariant (neither set) error lacks suggestion field — spec-production gap",
     # RESOLVED: budget positivity validation now works — removed stale xfail T-UC-002-inv-008-2
-    # FIXME: ASAP case sensitivity error code mismatch
-    # Production: Pydantic rejects "ASAP" → ValidationError, spec expects INVALID_REQUEST.
-    "T-UC-002-inv-013-5": "INVALID_REQUEST error code not implemented for wrong-case ASAP — spec-production gap",
+    # Graduated: T-UC-002-inv-013-5 (wrong-case "ASAP"). core/start-timing.json admits the
+    # const "asap" or a date-time, so "ASAP" violates the schema, and the boundary's DTO
+    # parse answers INVALID_REQUEST with field start_time (adcp_error_for's ValidationError
+    # branch). The Given sets start_time through _ensure_request_defaults on every transport;
+    # the Thens read the wire code and the wire suggestion. Measured XPASS(strict) on a2a,
+    # mcp, rest and e2e_rest in run measure_innet_281026_1501; no e2e_rest ledger line.
     # FIXME: sandbox mode not implemented in create_media_buy
     # CreateMediaBuyResult has no sandbox field; no sandbox suppression logic exists.
     # sandbox-production passes vacuously (sandbox absent from response by default).
-    "T-UC-002-sandbox-happy": "sandbox mode not implemented in create_media_buy — spec-production gap",
+    # Graduated: T-UC-002-sandbox-happy. XPASS(strict) on a2a, mcp, rest and e2e_rest in
+    # measure_innet_291026_1202, the first run that dispatched it: the Thens grade the success
+    # branch, status "completed", sandbox true on the wire, and no billing records.
     "T-UC-002-sandbox-validation": "sandbox mode not implemented in create_media_buy — spec-production gap",
     # FIXME(production-gap bead): natural-key sandbox resolution
     # without prior provisioning is unimplemented. _resolve_by_natural_key
@@ -685,12 +807,10 @@ _XFAIL_TAGS: dict[str, str] = {
     # auto-provisioning + the sandbox echo land. BR-RULE-209 INV-8.
     "T-UC-002-sandbox-natural-key": "natural-key sandbox auto-provisioning + sandbox echo not implemented "
     "in create_media_buy (ACCOUNT_NOT_FOUND without prior provisioning) — spec-production gap",
-    # FIXME: inline creative upload not persisted in create_media_buy
-    # process_and_upload_package_creatives → _sync_creatives_impl should persist
-    # creatives to DB, but the Then step "upload creatives to creative library" fails
-    # because no Creative rows exist after creation. Gap was previously masked by
-    # inline pytest.xfail() in the step body — moved to scenario-level here.
-    "T-UC-002-alt-creatives": "inline creative upload not persisted in create_media_buy — spec-production gap",
+    # Graduated: T-UC-002-alt-creatives. The inline creatives and their assignment rows were
+    # persisted all along; the failing Then was packages[0].creative_assignments on the
+    # create response. c0085b9df reports each created package's assignments from the rows
+    # written (core/package.json creative_assignments), on all four transports.
     # RESOLVED: T-UC-004-webhook-hmac — no longer xfailed on any transport as of
     # salesagent-n78j0.13. The sentence that stood here ("Then steps are pending (no-op),
     # test passes trivially") was TRUE WHEN WRITTEN and has been false since #1291 C1 /
@@ -761,7 +881,13 @@ _XFAIL_TAGS: dict[str, str] = {
     # constructs a real typed GetAdcpCapabilitiesRequest (Pydantic enforces the
     # protocols enum + minItems:1), and _get_adcp_capabilities_impl echoes
     # req.context verbatim onto the response on every transport.
-    "T-UC-010-ext-d-all-protocols": "signals/governance/sponsored_intelligence/creative sections never emitted — #1724",
+    # Graduated: T-UC-010-ext-d-all-protocols. The reason demanded the signals, governance,
+    # sponsored_intelligence and creative sections, which v3.2.7
+    # get-adcp-capabilities-response.json makes "Only present if <protocol> is in
+    # supported_protocols". The scenario's Thens were corrected to that rule: a filter naming
+    # every request-enum value is accepted, media_buy is present, and the four unsupported
+    # sections are absent. For a media_buy-only tenant that absence is the spec-true answer,
+    # and production already emits it. No e2e_rest_known_failures.txt row existed.
     # Graduated: T-UC-010-v31-supported-versions removed —
     # see T-UC-010-ext-a graduation note above (same _build_adcp_block fix).
     # Graduated: version negotiation now implemented
@@ -772,11 +898,10 @@ _XFAIL_TAGS: dict[str, str] = {
     # Wired non-dormant + strengthened: steps execute and grade the
     # spec-pinned shape, then fail on the unemitted/hard-coded block (strict xfail on all transports).
     "T-UC-010-v31-compliance-testing": "compliance_testing block not emitted by the capabilities builder; no comply_test_controller surface — #1724",
-    # Re-cited #1592 -> #1724 (a recorded gap batch B3). The OLD reason ("hard-coded,
-    # not derived from tenant config") is now FALSE: specialisms ARE declaration-driven
-    # and registry-validated. The scenario stays xfailed for a different, permanent
-    # reason — it claims postures this deployment does not back.
-    "T-UC-010-v31-specialisms": "scenario claims unbacked postures the STRICT policy forbids declaring: `creative-generative` (no generative creative implemented) and the `creative` protocol (bundle required_tools unimplemented) — #1724",
+    # Graduated: T-UC-010-v31-specialisms. The scenario was corrected to the claims this
+    # seller backs (sales-non-guaranteed under media_buy, signal-owned under signals): the
+    # pinned specialisms description says "Only list specialisms your agent actually
+    # implements", so the creative-generative claim it used to make was not owed.
     # Ledger SHRINK (a recorded gap batch B5): T-UC-010-v31-advisory-errors removed —
     # the capabilities builder now emits top-level advisory errors[] for genuinely
     # faulted discovery lookups (except-path only), so the gap the row recorded is closed.
@@ -789,7 +914,9 @@ _XFAIL_TAGS: dict[str, str] = {
     # Wired non-dormant + strengthened: steps execute and grade the
     # spec-pinned shape, then fail on the missing block (strict xfail on all transports).
     "T-UC-010-conversion-caps": "media_buy.conversion_tracking not emitted by the capabilities builder — #1855",
-    "T-UC-010-creative-caps": "creative section not emitted — production advertises only the media_buy protocol — #1724",
+    # Graduated: T-UC-010-creative-caps. Rewritten as a seller that does not claim the
+    # creative protocol: it grades "creative" absent from supported_protocols and the
+    # creative section absent from the wire, which is the pin's answer for this seller.
     # Graduated (a recorded gap R2): CHANNEL_MAPPING now includes sponsored_intelligence,
     # the 20th canonical channel. T-UC-010-channel-all-canonical removed.
     # Wired non-dormant + strengthened: each scenario executes and grades the
@@ -861,22 +988,15 @@ _XFAIL_TAGS: dict[str, str] = {
     # Graduated: _check_billing_policy now emits recovery="correctable"
     # + details={scope, supported_billing} (conditionally, honest-absence on an empty
     # policy) on the per-account BILLING_NOT_SUPPORTED error. T-UC-011-ext-c-rejected removed.
-    # ── UC-011 per-buyer-agent commercial gate wiring (FIXME(#1772)) ──
-    # Steps now execute non-dormant on a2a/mcp/rest and grade the spec-pinned
-    # v3.1.1 shape (error-details/billing-not-permitted-for-agent.json); each
-    # fails because production (src/core/tools/accounts.py) has NO per-buyer-agent
-    # commercial gate. The passthrough-only Given declares agent as
-    # capability-supported (supported_billing), so _check_billing_policy accepts
-    # the value and production PROVISIONS the account (action "created") instead
-    # of rejecting it with BILLING_NOT_PERMITTED_FOR_AGENT — the code is never
-    # emitted anywhere in production.
-    "T-UC-011-billing-agent-gate-reject": "no per-buyer-agent commercial gate exists in production — agent billing is "
-    "capability-supported so _check_billing_policy accepts it and the account is provisioned (action 'created') "
-    "instead of rejected with BILLING_NOT_PERMITTED_FOR_AGENT + clamped rejected_billing/suggested_billing details — "
-    "#1772",
-    "T-UC-011-billing-agent-gate-recover": "no per-buyer-agent commercial gate exists in production — the first leg "
-    "never emits BILLING_NOT_PERMITTED_FOR_AGENT (capability-supported agent billing is provisioned), so the "
-    "autonomous suggested_billing recovery flow is unreachable — #1772",
+    # ── UC-011 per-buyer-agent commercial gate — GRADUATED (#1772) ──
+    # Graduated: T-UC-011-billing-agent-gate-reject and -recover removed.
+    # _check_agent_billing_permission (src/core/tools/accounts.py) runs after the
+    # capability gate and reads principals.billing_passthrough_only off the resolved
+    # identity; a passthrough-only agent asking for capability-supported "agent"
+    # billing gets BILLING_NOT_PERMITTED_FOR_AGENT with the clamped
+    # {rejected_billing, suggested_billing} details, and the recover leg retries with
+    # the suggested value read off that response. The passthrough-only Given now
+    # writes the principal row, so the state is the same on all four transports.
     # ── UC-011 account-level notification_configs + sandbox capability gate — ALL GRADUATED ──
     # Graduated (T2 increment F4a): T-UC-011-notif-register-paused,
     # -notif-replace-clear and -notif-omit-preserves removed. accounts.notification_configs now
@@ -887,11 +1007,36 @@ _XFAIL_TAGS: dict[str, str] = {
     # Graduated: _check_sandbox_capability gate added -- rejects
     # sandbox provisioning with UNSUPPORTED_FEATURE (accounts[i].sandbox) when the
     # tenant's account_sandbox capability is not declared. T-UC-011-sandbox-capability-not-declared removed.
-    # ── UC-011 notification_configs per-account rejections — ALL GRADUATED ──
-    # Graduated (T2 increment F4b): T-UC-011-notif-event-scope-reject and
-    # -notif-duplicate-subscriber removed. _check_notification_configs runs pre-persist in BOTH
-    # entry handlers and emits a per-account failure inside a transport-level success, with the
-    # exact error.field pointers the storyboards grade.
+    # ── UC-011 notification_configs per-account rejections ──
+    # Graduated (T2 increment F4b): T-UC-011-notif-duplicate-subscriber removed.
+    # _check_notification_configs runs pre-persist in BOTH entry handlers and emits a
+    # per-account failure inside a transport-level success, with the exact error.field
+    # pointers the storyboards grade.
+    #
+    # Graduated (#2353): T-UC-011-notif-event-scope-reject removed. The event-scope half of
+    # the F4b graduation above was ledgered because the gate's branch was unreachable — the
+    # DTO typed ``event_types`` with the account-surface enum, so pydantic refused every
+    # value the gate refuses, and all three transports answered INVALID_REQUEST at
+    # ``accounts.0.…notification_configs.0.event_types.0`` instead of reporting the entry.
+    # ``src/core/schemas/notification.py`` now declares the field over the wide
+    # ``enums/notification-type.json``, which is what the pinned field asks for in the same
+    # sentence that states its enum: the eight off-surface types "are schema-invalid on this
+    # surface AND sellers MUST reject those entries as PER-ACCOUNT validation failures …
+    # RATHER THAN SILENTLY DROPPING THEM" (core/notification-config.json
+    # #/properties/event_types, AdCP 3.2.1; account/sync-accounts-request.json repeats it at
+    # #/properties/accounts/items/properties/notification_configs). The enum is still
+    # enforced, by ``_check_notification_configs``, which refuses exactly
+    # ``NotificationType - EventType`` and names ``notification_configs[i].event_types[j]``
+    # — so admitted minus refused IS the account-surface enum, member for member, and a
+    # value outside the vocabulary entirely still earns a request-level INVALID_REQUEST.
+    # The weakened axis is named in the model's own docstring.
+    #
+    # tests/storyboard/known_failures.txt:124,137 still carry
+    # ``notification_config_event_scope::sync_accounts_rejects_scheduled_account_notification``
+    # for a2a and mcp. Those rows are xfail(strict=False) and are NOT graduated here: this
+    # ledger's own header says it has not been re-measured against 3.2.1, and only
+    # ``tox -e storyboard`` on the stack can say whether that check now passes.
+    #
     # Graduated (T2 increment F4c): T-UC-011-notif-activation-proof-fail
     # removed. NotificationProofService performs a bounded proof-of-control challenge BEFORE the
     # write transaction opens; a failed proof
@@ -908,12 +1053,36 @@ _XFAIL_TAGS: dict[str, str] = {
     # media-buy-delivery-webhook-result.json declares, rather than from the top level where
     # several of them had been looking and finding nothing.
     #
-    # adcp#7338, whole-scenario form. These three are plain Scenarios, not Outlines: every
-    # transport builds a success response and validates assets, so there is no passing row
-    # to protect and the tag is the right granularity. The four Scenario OUTLINES affected
-    # by the same bug are row-level in _SELECTIVE_XFAIL, which carries the evidence.
-    "T-UC-005-storyboard-baseline-format-id-object-shape": "upstream adcp#7338: the response asset oneOf omits pixel_tracker, which the reference formats declare -- see the _SELECTIVE_XFAIL block for the full evidence",
-    "T-UC-005-sandbox-production": "upstream adcp#7338: the response asset oneOf omits pixel_tracker, which the reference formats declare -- see the _SELECTIVE_XFAIL block for the full evidence",
+    # Graduated: the two adcp#7338 whole-scenario tags
+    # (@T-UC-005-storyboard-baseline-format-id-object-shape, @T-UC-005-sandbox-production),
+    # 6 nodes. THE BLOCK STATED ITS OWN CONDITION -- "graduates when the SPEC pin moves to
+    # v3.1.22 or later" -- and the pin is now 3.2: core/format.json admits pixel_tracker,
+    # vast_tracker, daast_tracker, card and published_post, the five adcp#7421 added. The
+    # condition was met by the SDK bump; what made it visible was the schema-category fix,
+    # because until then these scenarios failed on a PinnedSchemaError
+    # ('list-creative-formats-response.json' is ambiguous) rather than on the asset union
+    # they are ledgered for -- an xfail satisfied by the wrong defect.
+    #
+    # NOT A VACUOUS XPASS, which is the other thing an xpass can mean and the only reason
+    # to refuse graduation. Three measurements:
+    #   - the obligation is real: 45 of the 71 formats in
+    #     tests/fixtures/creative_formats/reference_formats.json declare a pixel_tracker
+    #     asset, so the compliance Then validates documents that genuinely carry one;
+    #   - the check DISCRIMINATES: a served pixel_tracker format validates against
+    #     core/format.json, and the same format with its asset_type changed to a bogus
+    #     value is rejected. It is grading asset types, not accepting anything;
+    #   - each scenario carries a specific assertion beyond the compliance line --
+    #     "should not include a sandbox field" (BR-RULE-209 INV-5) and "every entry's
+    #     format_id should be an object carrying both agent_url and id / no entry's
+    #     format_id should be a bare string" (core/format-id.json required [agent_url, id]).
+    #     Neither is a presence check.
+    #
+    # Verified on lane/bdd-category at 549c3bc5d, own agent-db, artifacts redirected:
+    # 69 XPASS(strict) over uc005, every one citing adcp#7338 and nothing else, grouping
+    # exactly onto these two tags (3 + 3) and the four outlines below (24/18/12/9).
+    #
+    # tests/bdd/e2e_rest_known_failures.txt keeps its one #7338 row: that ledger names the
+    # same spec-pin condition, but only a bdd-in-network run grades it and none was run here.
 }
 
 # Selective xfail for parametrized scenarios where only
@@ -948,86 +1117,52 @@ _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
     # "partial" row names the code; main-lenient-warnings built its two valid packages
     # from one factory-default id, so they collapsed into one assignment; and the
     # assignment-weight / provenance rows are described where the Given changed.
-    # ── UPSTREAM SPEC BUG: adcontextprotocol/adcp#7338 ──
-    # Row-level, not tag-level, and that distinction was MEASURED. Only the "-valid" rows
-    # build a success response and therefore validate assets against the pinned schema; the
-    # "-INVALID_REQUEST" rows are rejected before any response is serialized. Ledgering the
-    # whole tag turned all 16 error rows into XPASS(strict) failures -- an xfail that hides
-    # working behavior is worse than the bug it parks. Split measured from run
-    # innet_070926_0757: 68 failing rows, every one ending "-valid"; 16 others, every one
-    # ending "-INVALID_REQUEST".
+    # ── GRADUATED: adcontextprotocol/adcp#7338 ──
+    # The four UC-005 Scenario Outlines parked row-level here
+    # (@T-UC-005-partition-agent-type, -partition-agent-asset, -boundary-agent-type,
+    # -boundary-agent-asset, "-valid" rows only) are graduated: 63 nodes, plus the 6 from
+    # the two whole-scenario tags in _XFAIL_TAGS, which is the 69 that were XPASS(strict).
+    # Two of those four are since DELETED rather than graduated -- the two TYPE
+    # outlines graded nothing, see the record below and salesagent-8qela.149 -- so
+    # the 63 is a count of what this block released, not of what still exists.
     #
-    # NOT our formats. tests/fixtures/creative_formats/reference_formats.json is captured
-    # from the REFERENCE creative agent (provenance pin 76b031a85eb8, the v3.1.25 tag; it was
-    # 467fd93d7711, v3.1.1, when this was ledgered, with the same 45 pixel_tracker formats),
-    # and 4 of the 16 files under the spec's own formats/canonical/ declare pixel_tracker
-    # assets. At v3.1.1 the spec's reference catalogue emits what the spec's response schema
-    # rejects.
+    # THE CONDITION THIS BLOCK NAMED IS MET. It said "graduates when the SPEC pin moves to
+    # v3.1.22 or later, not when the agent pin moves". adcp#7421 (merged 2026-09-11, first
+    # released v3.1.22) added the five missing branches, and at the 3.2 pin core/format.json
+    # admits pixel_tracker, vast_tracker, daast_tracker, card and published_post. The SDK
+    # bump earned this; the schema-category fix only made it visible, because until then
+    # these rows failed on a PinnedSchemaError ('list-creative-formats-response.json' is
+    # ambiguous across creative/ and media-buy/) rather than on the asset union they were
+    # parked for. An xfail was being satisfied by a different defect than the one it cited.
     #
-    # Checked against the newest upstream before ledgering, not assumed: v3.1.20 (latest
-    # stable then) still admitted the same 15. adcp#7338 was then fixed by adcp PR #7421
-    # (merged 2026-09-11, first released in v3.1.22): core/format.json, which
-    # list-creative-formats-response.json $refs, now admits pixel_tracker, vast_tracker,
-    # daast_tracker, card and published_post. Bumping the AGENT pin does not fix it here.
+    # INSPECTED FOR VACUITY BEFORE REMOVAL, because the other thing an xpass can mean is a
+    # scenario too weak to fail. Everything below is measured on lane/bdd-category at
+    # 549c3bc5d, own agent-db, artifacts redirected:
+    #   - the obligation is real: 45 of the 71 formats in reference_formats.json declare a
+    #     pixel_tracker asset, so the compliance Then grades documents that carry one;
+    #   - the compliance check DISCRIMINATES: a served pixel_tracker format validates
+    #     against core/format.json, and the same format with asset_type set to a bogus
+    #     value is REJECTED;
+    #   - the asset outlines' second Then is live, not skipped. _assert_filter_content
+    #     guards its asset_types content check with `if was_narrowed`, so it would pass on
+    #     nothing if production ignored the filter. It does not: measured over the
+    #     reference catalog, asset_types=[image] keeps 34/71, [video] 13, [audio] 3,
+    #     [text] 19, [html] 7, [javascript] 1, [url] 35 -- every filtered row narrows, so
+    #     the branch fires. The `not_provided` rows are correctly exempt.
+    #   - the type outlines' second Then asserts the result EQUALS the full registry (the
+    #     post-3.12 obligation: ListCreativeFormatsRequest has no `type` field, so every
+    #     value dispatches unfiltered) and that every format carries a type attribute.
+    #     Falsifiable: a production path that narrowed would fail it.
     #
-    # Graduates when the SPEC pin (tests/fixtures/adcp_schemas_pinned, v3.1.1) moves to
-    # v3.1.22 or later. A local schema overlay was considered and rejected:
-    # tests/helpers/adcp_pinned_schema.py deliberately RAISES on a name present in both the
-    # pinned tree and schemas/, because two live definitions of one contract is the exact
-    # condition that tree exists to avoid, and a copied format.json would freeze the whole
-    # file behind the pin the way the old vendored fixture tree already did once.
+    # The row-level granularity this block argued for was kept to the end and is why the
+    # 16 "-INVALID_REQUEST" rows never needed graduating -- they were never parked.
     #
-    # The fix shape is measured, so whoever picks this up upstream need not re-derive it:
-    #   - the reference asset matches 0 of the 16 existing oneOf branches, so adding one
-    #     introduces no ambiguity;
-    #   - a branch of allOf[baseIndividualAsset] + item_type/asset_type consts and NO
-    #     requirements $ref already validates it, because baseIndividualAsset does not set
-    #     additionalProperties:false, so event/method/requirements pass through
-    #     (IndividualZipAsset and IndividualBriefAsset are the existing ref-less precedent);
-    #   - five types need branches: pixel_tracker, vast_tracker, daast_tracker, card,
-    #     published_post.
-    # The underlying defect is that core/format.json HAND-COPIES the asset union instead of
-    # deriving from core/assets/asset-union.json. Five branches fix this instance; deriving
-    # is what stops the next drift.
-    #
-    # The storyboard does NOT provide a second opinion here. compliance/universal/
-    # schema-validation.yaml step list_formats_match carries `check: response_schema` against
-    # creative/list-creative-formats-response.json, which $refs the same core/format.json --
-    # but that storyboard is not selected for this agent (22 of the 198 shipped storyboards
-    # are; the step appears in neither storyboard_collected.json nor known_failures.txt).
-    # This BDD check is the only thing grading it.
-    (
-        "T-UC-005-partition-agent-type",
-        {"-valid"},
-        "upstream adcp#7338: list-creative-formats-response inlines an assets.items.oneOf that has "
-        "drifted from core/assets/asset-union.json -- the union declares 20 asset types, the "
-        "response admits 15, and pixel_tracker/vast_tracker/daast_tracker/card/published_post "
-        "are in the union only. The reference formats we serve declare pixel_tracker.",
-    ),
-    (
-        "T-UC-005-partition-agent-asset",
-        {"-valid"},
-        "upstream adcp#7338: list-creative-formats-response inlines an assets.items.oneOf that has "
-        "drifted from core/assets/asset-union.json -- the union declares 20 asset types, the "
-        "response admits 15, and pixel_tracker/vast_tracker/daast_tracker/card/published_post "
-        "are in the union only. The reference formats we serve declare pixel_tracker.",
-    ),
-    (
-        "T-UC-005-boundary-agent-type",
-        {"-valid"},
-        "upstream adcp#7338: list-creative-formats-response inlines an assets.items.oneOf that has "
-        "drifted from core/assets/asset-union.json -- the union declares 20 asset types, the "
-        "response admits 15, and pixel_tracker/vast_tracker/daast_tracker/card/published_post "
-        "are in the union only. The reference formats we serve declare pixel_tracker.",
-    ),
-    (
-        "T-UC-005-boundary-agent-asset",
-        {"-valid"},
-        "upstream adcp#7338: list-creative-formats-response inlines an assets.items.oneOf that has "
-        "drifted from core/assets/asset-union.json -- the union declares 20 asset types, the "
-        "response admits 15, and pixel_tracker/vast_tracker/daast_tracker/card/published_post "
-        "are in the union only. The reference formats we serve declare pixel_tracker.",
-    ),
+    # tests/bdd/e2e_rest_known_failures.txt keeps its one #7338 row
+    # (test_discover_full_format_catalog[e2e_rest]). That ledger names this same spec-pin
+    # condition, so it is very likely graduatable too, but only a bdd-in-network run grades
+    # it and none was run here -- graduating it on an in-process measurement would be citing
+    # the wrong run, which is what the UC-005 baseline-format-id row in that file refuses on
+    # the same grounds.
     # #1721 M4: @T-UC-010-v31-account-sandbox newly wired. The true/false rows
     # pass for real; the "absent" row expects the wire to OMIT account.sandbox
     # (buyer applies the schema default) but _build_account_block
@@ -1067,11 +1202,34 @@ _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
             "proximity_geometry",
             "proximity_radius",
             "proximity_travel_time",
-            "frequency_cap_missing_fields",
-            "keyword_duplicate",
+            # Graduated: frequency_cap_missing_fields, on all three transports this
+            # outline parametrizes (rest, a2a, mcp — enumerated from the collected
+            # ids, not assumed; this module has no impl or e2e_rest row, and
+            # e2e_rest_known_failures.txt carries no entry for it, so no sibling is
+            # left behind). The gap was "frequency_cap field-combo validation": the
+            # seller accepted {"max_impressions": 3} with no per/window.
+            # core/frequency-cap.json has always declared
+            # dependencies.max_impressions -> [per, window]. The SDK's generated class
+            # does not compile `dependencies`, so the local FrequencyCap carries the map
+            # (SchemaDependencies, src/core/schemas/_dependencies.py), the DTO refuses
+            # the document in validated_request (_boundary.py) and the buyer gets
+            # INVALID_REQUEST with a suggestion — which is what the scenario demands.
+            # Not a vacuous pass: the Then reaches
+            # TransportResult.assert_wire_error(code, require_suggestion=True) via
+            # _assert_error_outcome, i.e. the captured envelope, not a reconstructed
+            # exception. Run: bdd_inprocess at 9c88c3b2e, 6 strict XPASSes, the only
+            # failures in 8648 items. The other labels in this set still xfail, so
+            # this is one scenario graduated, not the entry emptied.
+            #
+            # Graduated: keyword_duplicate. The gap was "keyword-dup": the seller accepted
+            # a keyword_targets list repeating a (keyword, match_type) pair, which
+            # core/targeting.json says sellers SHOULD reject. collect_targeting_violations
+            # now reports it (keyword_duplicates), and update_media_buy raises that as
+            # INVALID_REQUEST on every transport, the code and suggestion the row grades
+            # on the wire envelope (_assert_error_outcome -> assert_wire_error).
         },
         "Pre-existing UC-003 targeting-overlay validation gaps (not da07): pydantic "
-        "extra='forbid' / GeoProximity coordinate modes / frequency_cap / keyword-dup / device_type overlap",
+        "extra='forbid' / GeoProximity coordinate modes / keyword-dup / device_type overlap",
     ),
     (
         "T-UC-003-boundary-targeting-overlay",
@@ -1082,11 +1240,14 @@ _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
             "with travel_time only",
             "with radius only",
             "with geometry only",
-            "frequency_cap max_impressions without per",
-            "keyword_targets with duplicate",
+            # Graduated: "frequency_cap max_impressions without per", the boundary
+            # half of the same gap the partition entry above graduates. Same three
+            # transports, same measurement, same wire-envelope assertion.
+            # Graduated: "keyword_targets with duplicate", the boundary half of the
+            # partition entry's keyword_duplicate, for the same reason.
         },
         "Pre-existing UC-003 targeting-overlay validation gaps (not da07): pydantic "
-        "extra='forbid' / GeoProximity coordinate modes / frequency_cap / keyword-dup / device_type overlap",
+        "extra='forbid' / GeoProximity coordinate modes / keyword-dup / device_type overlap",
     ),
     # ── #1721 lane D: three UC-018 outlines newly wired ──
     # The lane converts _handle_list_creatives_skill to the shared build_*_request
@@ -1114,36 +1275,53 @@ _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
     # the assignments block the pin defaults to including — which is what makes the ordering
     # observable on the wire at all. The 60-creative library now seeds rotating counts, so
     # the row cannot pass over a constant column.
-    (
-        "T-UC-005-partition-disclosure",
-        {"duplicate_positions"},
-        "disclosure_positions filter/validation not implemented",
-    ),
+    # GRADUATED: the duplicate_positions row of T-UC-005-partition-disclosure and the
+    # "duplicate positions" row of T-UC-005-boundary-disclosure. Their shared reason,
+    # "disclosure_positions filter/validation not implemented", was half true and half stale:
+    # the FILTER has been implemented since creative_formats.py:405, and what was missing was
+    # the uniqueItems VALIDATION — which is now on the DTO
+    # (ListCreativeFormatsRequest._refuse_duplicate_disclosure_members), so both rows get the
+    # INVALID_REQUEST with error.field=disclosure_positions they ask for. Measured XPASS
+    # (strict) with these two entries still in place, on a2a/mcp/rest.
     # Graduated: all_positions, no_matching_formats on impl (disclosure filter now partially works)
     # Non-impl transports still fail — handled in transport-aware section below.
     # MCP-specific disclosure xfails are in _MCP_SELECTIVE_XFAIL
-    (
-        "T-UC-005-boundary-disclosure",
-        {"duplicate positions"},
-        "disclosure_positions filter/validation not implemented",
-    ),
     # Graduated: "all 8 positions", "format has no" on impl (disclosure filter now partially works)
     # Non-impl transports still fail — handled in transport-aware section below.
     # MCP-specific boundary disclosure xfails are in _MCP_SELECTIVE_XFAIL
-    # adcp 3.12: type filter removed — only "invalid" examples fail (valid rows dispatch unfiltered and pass)
-    (
-        "T-UC-005-partition-type-filter",
-        {"invalid_type"},
-        "adcp 3.12: type filter removed from ListCreativeFormatsRequest — invalid type no longer rejected",
-    ),
-    (
-        "T-UC-005-boundary-type-filter",
-        {"invalid type (rejected)"},
-        "adcp 3.12: type filter removed from ListCreativeFormatsRequest — invalid type no longer rejected",
-    ),
+    # DELETED with their outlines: T-UC-005-partition-type-filter and
+    # T-UC-005-boundary-type-filter. Each row here parked the ONE example that expected
+    # a rejection, which left the outline's five valid rows passing for asserting that
+    # type filtering had not happened. Both outlines are gone from the feature.
     # Graduated: T-UC-005-boundary-asset-types (all 4 transports pass — brief/catalog now in enum)
-    # Graduated: T-UC-005-partition-agent-type, T-UC-005-boundary-agent-type,
-    # T-UC-005-boundary-agent-asset — all pass now that When steps dispatch through harness.
+    # Graduated: T-UC-005-boundary-agent-asset — passes now that the When step
+    # dispatches through the harness, and it GRADES: the media-buy variant declares
+    # asset_types, _partition_agent_asset_types sends it via _call_raw (invalid rows
+    # included), and the Examples table keeps real INVALID_REQUEST rows.
+    #
+    # DELETED with their outlines: T-UC-005-partition-agent-type and
+    # T-UC-005-boundary-agent-type. The graduation that listed them beside the asset
+    # one was premature — they passed while grading NOTHING, because
+    # _partition_agent_type dispatched a bare _call(ctx) and the request carried no
+    # `type` for any partition, so every row would pass whatever the table named
+    # (salesagent-8qela.129, .149).
+    #
+    # THE SELLER HAS NO `type` FILTER TO GRADE, and the chain is read not inferred:
+    # schemas/cache/3.2 declares `type` on creative/list-creative-formats-request.json
+    # and NOT on media-buy/; adcp/types/legacy.py:112 aliases
+    # LegacyListCreativeFormatsRequest to the MEDIA-BUY class (the creative one is
+    # separately named ListCreativeFormatsRequestCreativeAgent); and
+    # src/core/schemas/creative.py inherits that alias. So `type` is not a field on
+    # the accepted shape, and under critical pattern #7 an undeclared field is
+    # refused in dev and dropped in production.
+    #
+    # NOT a role this seller claims: creative_formats.py's
+    # ADVERTISED_CREATIVE_AGENT_CAPABILITIES is attached to REFERRALS to
+    # tenant-registered remote agents in the media-buy response, not to its own tool
+    # surface.
+    #
+    # Same action and same ground as T-UC-005-partition-type-filter /
+    # -boundary-type-filter above: rows that assert type filtering did not happen.
     # FIXME: BR-RULE-029 defines 4 notification types but production
     # WebhookDeliveryService only emits {scheduled, final, adjusted}. No is_delayed flag.
     (
@@ -1236,24 +1414,20 @@ _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
         "T-UC-010-degradation-partitions",
         {"no_principal", "account_degraded"},
         "INV-4 keeps adapter channels principal-free so no_principal does not degrade to "
-        "[display]; account_degraded expects a supported_billing-only account block but "
+        "the adapter-unavailable shape; account_degraded expects a supported_billing-only account block but "
         "_build_account_block always emits require_operator_auth/sandbox as real values "
         "— #1856 account-config surface",
     ),
-    # Wired (a recorded gap R7): approval_unspecified (creative_approval_mode omitted
-    # by default -- TenantFactory.human_review_required=False and no
-    # gam/kevel/mock_manual_approval_required column set) passes today with zero
-    # production change -- honest-absence regression armor. Graduated: approval_human
-    # now passes -- resolve_manual_approval_signal() derives require_human from
-    # tenant.human_review_required (adapter_helpers.py), wired into the MediaBuy build.
-    # approval_auto stays xfailed -- no config surface exists to affirmatively claim
-    # auto_approve (Q2, deferred; declaring it without certainty would be a false
-    # conformance claim).
-    (
-        "T-UC-010-v31-creative-approval-mode",
-        {"approval_auto"},
-        "media_buy.creative_approval_mode=auto_approve has no backing config surface (Q2 deferred) — #1724",
-    ),
+    # Graduated: T-UC-010-v31-creative-approval-mode approval_auto. Its reason ("no backing
+    # config surface (Q2 deferred) — #1724") stopped being true when the signal moved onto
+    # the creative-review setting: the Given writes tenant.approval_mode="auto-approve",
+    # describe_seller (seller_capabilities.py) advertises auto_approve from
+    # TenantContext.auto_approves_creatives, and _apply_approval_mode (creatives/
+    # _processing.py) asks the same predicate and sets status=approved at sync -- the
+    # auto-approval behaviour #1724 requires before the claim. approval_human and approval_ai
+    # take the require_human branch of the same expression. No transport carries its own
+    # leg: the Given writes the DB row every wire resolver reads, and the scenario has no
+    # line in e2e_rest_known_failures.txt.
     # Moved from _XFAIL_TAGS: request_signing/webhook_signing={supported:false}
     # now emitted, so "valid" rows (asserting schema-valid relations/bounds against an
     # unsupported posture) pass; "invalid" rows (requiring the builder to REJECT a
@@ -1380,6 +1554,18 @@ _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
     # bdd_e2e run sa-0a76f566 (test-results/innet_120826_1349) has all 7 rows of both outlines
     # PASSING on e2e_rest, 0 failed. tests/bdd/e2e_rest_known_failures.txt carries no UC-010
     # entry for either outline, so nothing to graduate there.
+    # ── create_media_buy and update_media_buy disagree (#2483), one row ──
+    # The tenant row of the submitted-envelope boundary outline. Its Given
+    # (given_approval_configuration) delegates to given_tenant_human_review_flag, which sets
+    # the tenant flag alone since @T-UC-003-approval-tenant was routed above; before, it also
+    # raised the adapter's flag and the row passed on the adapter arm. The adapter row of the
+    # same outline still passes, so the entry names the one row. Strict on all four
+    # transports; it graduates (XPASS strict) when #2483 lands.
+    (
+        "T-UC-003-bva-approval-workflow",
+        {"tenant flag true (submitted task envelope)"},
+        _UPDATE_TENANT_REVIEW_DIVERGENCE,
+    ),
 ]
 
 
@@ -1466,6 +1652,15 @@ _UC010_PARKED_ROWS: list[tuple[str, set[str], str]] = [
         "the surface that makes its trigger declarable",
     ),
 ]
+# XPASS INSPECTED AND REFUSED 2026-10-09: both rows of the entry above reported XPASS
+# over e2e_rest in innet_091026_1343, with a real call phase against the live server
+# (POST /api/v1/capabilities -> 200). They were not supposed to RUN at all. The cause
+# was not this table: the e2e_rest marker collapse (:4489) rebuilt the marker from
+# reason+strict and dropped ``run=False``, so the park degraded into a running
+# non-strict xfail on that transport alone — and the XPASS it produced is precisely the
+# vacuous green the park's own reason predicts. The collapse now carries ``run``; the
+# entry stays exactly as it is, because the surface its reason names (#1855, #1867)
+# still does not exist.
 
 
 # The wired-tag gate lives in ``_uc010_wired_tags()`` (one definition, below): the
@@ -1498,10 +1693,11 @@ _MCP_SELECTIVE_XFAIL: list[tuple[str, set[str], str, bool]] = [
 # NOTE: the former _REST_XFAIL_TAGS set was retired once the stale
 # CreativeFormatsEnv.build_rest_body override (which returned {}) was removed.
 # In-process REST now serializes the request body and filters for real, so these
-# UC-005 filter scenarios pass on [rest] like every other transport. The only
-# UC-005 filter tags that still cannot hold are not REST-specific: inv-031-1-holds
-# / inv-031-1-violated stay xfailed via _XFAIL_TAGS because adcp 3.12 removed the
-# `type` filter for ALL transports (not a REST body issue).
+# UC-005 filter scenarios pass on [rest] like every other transport. inv-031-1-holds
+# / inv-031-1-violated used to be named here as the exception, xfailed for ALL
+# transports because the `type` filter they stated does not exist on this seller's
+# request. They no longer state it: both filter on asset_types + name_search, so
+# there is no remaining UC-005 filter tag that cannot hold.
 
 
 # Every transport a BDD nodeid can be parametrized over. `impl` is vestigial
@@ -1516,19 +1712,14 @@ _MCP_SELECTIVE_XFAIL: list[tuple[str, set[str], str, bool]] = [
 # `rest` (all three mutations verified to leave the guard green). What the
 # bracket discipline DOES buy is refusing a row id that merely contains a
 # transport name.
-_NODEID_TRANSPORTS = ("e2e_rest", "a2a", "mcp", "rest")
-_TRANSPORT_IN_NODEID = re.compile(r"\[(" + "|".join(_NODEID_TRANSPORTS) + r")[-\]]")
-
-
-def _transport_of(nodeid: str) -> str | None:
-    """The transport a parametrized BDD nodeid dispatches through, else None.
-
-    One derivation for the whole file. Previously this was spelled out as
-    `"[X]" in nodeid or "[X-" in nodeid` pairs in several places, which is how the
-    `e2e_rest`/`rest` overlap becomes a silent mis-route.
-    """
-    match = _TRANSPORT_IN_NODEID.search(nodeid)
-    return match.group(1) if match else None
+# IMPORTED, not declared here. It was "one derivation for the whole file" and needed to be
+# one for the whole SUITE: tests/bdd/scenario_liveness.py needs the same answer and cannot
+# import this conftest (2098 modules at plugin-load time), so it grew its own copy and the
+# copy split on the LAST bracket -- 433 corrupted transports in one run
+# (salesagent-8qela.159). The derivation now lives in a stdlib-only helper both can reach.
+# The aliases keep this file's fourteen call sites spelled as they were.
+_NODEID_TRANSPORTS = NODEID_TRANSPORTS
+_transport_of = transport_of
 
 
 #: Causes a typed xfail reason may declare. A reason whose ``cause=`` is not here is a
@@ -1624,6 +1815,402 @@ def parse_xfail_reason(reason: str) -> XfailReason | None:
     return XfailReason(cause=found["cause"], scope=found["scope"], ref=found["ref"])
 
 
+# ── The UC-002 / UC-003 explicit ledger ─────────────────────────────────────
+# The two catch-all routes, `uc002-not-wired` and `uc003-not-wired`, used to xfail every
+# UC-002 / UC-003 scenario no earlier ENV_ROUTES row claimed, at FIXTURE SETUP. 2397 items
+# graded nothing behind two sentences. Those routes now build their env and seed like any
+# other row, and what fails is named here instead, scenario by scenario and row by row.
+#
+# THE EVIDENCE. measure_innet_291026_1202 (tree 22bb2b72b = 1b5c6880b with the two
+# xfail_reasons lifted), both BDD suites: of the scenario functions the catch-alls held,
+# 99 passed outright, 57 failed outright, 46 were mixed and 32 stayed xfailed by markers of
+# their own. Every FAILED nodeid of that run is matched by exactly one entry of
+# _UC002_UC003_LEDGER, with the cause its first failure line shows, except where the fix
+# was made in this change instead: an existing marker that XPASSed came out, a reason the
+# dormancy tripwire rejected was corrected, and six UC-003 Examples rows that contradicted
+# the pin were corrected in place to the code production answers (each carries a LOCAL
+# CORRECTION note and an @source). 890 nodeids are ledgered.
+#
+# Graduated: 1263 of the run's 2082 passing nodeids carry no marker now and are graded as
+# they stand (measure_innet_291026_1202). Four of them are the UC-002 zero-budget boundary
+# row, whose outcome now pins the field, so its nodeid changed. The other 819 passes are in
+# _UC002_UC003_VACUOUS_PARKS, drawn from a per-scenario inspection of these passes made the
+# way .claude/rules/workflows/xpass-graduation.md describes. Also graduated: the
+# 20 nodeids whose own strict markers XPASSed (see _XFAIL_TAGS), and the 32 nodeids of rows
+# corrected in place to the code production already answers (ext-f, ext-g, and the UC-003
+# daily-cap, idempotency, negative-budget and naive-start rows).
+#
+# THE TWO LISTS. _UC002_UC003_LEDGER holds what FAILS: strict xfails, so a row that starts
+# passing reports XPASS(strict) and has to be looked at. _UC002_UC003_VACUOUS_PARKS holds what
+# PASSES but grades nothing (or grades a claim the pin contradicts): xfail(run=False), the
+# UC-010 park's shape, because a vacuous pass counted as coverage is the defect and a running
+# xfail would report it as an XPASS. No nodeid is matched by both lists, and a park on a
+# Scenario Outline names the measured rows it parks, so a ledgered row that starts passing,
+# or a row added to the outline later, runs instead of falling into a park nobody reads.
+#
+# Both lists may only SHRINK. A scenario that newly fails is not added here; it is fixed, or
+# its cause is measured and given its own entry with that cause. The entry counts, the
+# nodeids each list matches, the no-overlap rule and the outline-rows rule are pinned by
+# tests/unit/test_architecture_route_xfail_census.py.
+#
+# Reasons avoid the words the dormancy tripwire (_classify_strict_xfail_dormancy) reads as a
+# claim about production, because several entries ARE test-wiring and say so.
+
+_CATCHALL_RUN = "measure_innet_291026_1202"
+
+
+def _dormant(step: str) -> str:
+    """The reason for a scenario whose step has no definition at all."""
+    return f"dormant (test-wiring): no step definition binds {step!r}, so the scenario executes nothing"
+
+
+def _no_given_branch(given: str, value: str) -> str:
+    """The reason for an Examples value a Given step has no branch for."""
+    return f"Given gap: {given} has no branch for {value!r} (ValueError), so nothing is dispatched"
+
+
+def _no_datatable_field(field: str) -> str:
+    """The reason for a package-update datatable field the shared step does not accept."""
+    return f"step gap: the package-update datatable step does not accept {field!r}, so nothing is dispatched"
+
+
+_LEDGER_SEED_MEDIA_BUY = (
+    "harness: the Given calls env.seed_media_buy, which MediaBuyCreateEnv does not have "
+    "(AttributeError), so nothing is dispatched"
+)
+_LEDGER_CATALOG_NOT_FOUND = (
+    "production accepts a catalog the seller never synced; the Given also sends it as an inline ids "
+    "filter rather than a catalog_id reference, and the pinned code for a missing reference is "
+    "REFERENCE_NOT_FOUND, so the row needs regrounding as well"
+)
+_LEDGER_OPT_CAPABILITY = (
+    "production does not check optimization_goals against the product's declared optimization "
+    "capability, so the goal is accepted where the row expects UNSUPPORTED_FEATURE"
+)
+_LEDGER_OPT_UNVALIDATED = (
+    "production validates optimization_goals only against the request schema, so this cross-field or "
+    "per-account rule is not enforced and the create succeeds"
+)
+_LEDGER_PRODUCT_CONFIG = (
+    "Given gap: given_product_configuration has no branch for 'proposal_id, no packages' (ValueError), "
+    "so nothing is dispatched"
+)
+_LEDGER_DEVICE_OVERLAP = (
+    "production accepts a device_type that is both included and excluded, where the row expects INVALID_REQUEST"
+)
+_LEDGER_DEVICE_OVERLAP_E2E = (
+    "on e2e_rest production answers UNSUPPORTED_FEATURE for the overlapping device_type overlay, where "
+    "the row expects INVALID_REQUEST"
+)
+_LEDGER_NO_ADD_PACKAGES = (
+    "the seeded buy does not advertise add_packages in valid_actions (this seller refuses "
+    "new_packages), so the scenario stops at its own precondition"
+)
+_LEDGER_INVOICE_RECIPIENT = (
+    "production accepts an invoice_recipient the account does not authorize (BR-RULE-214 is not "
+    "implemented), where the row expects VALIDATION_ERROR"
+)
+
+
+def _example_row(nodeid: str) -> str:
+    """The Examples-row part of a parametrized nodeid: everything after its transport.
+
+    ``…::test_x[mcp-zero_amount-0-error …]`` gives ``zero_amount-0-error …``; a nodeid with no
+    Examples row gives "". Keyed off ``_transport_of`` so the transport is derived once.
+    """
+    transport = _transport_of(nodeid)
+    head = f"[{transport}-"
+    start = nodeid.find(head) if transport else -1
+    return nodeid[start + len(head) : -1] if start >= 0 else ""
+
+
+@dataclass(frozen=True)
+class _CatchallXfail:
+    """One entry of the UC-002 / UC-003 explicit ledger or of its vacuous parks.
+
+    ``rows`` are leading Examples columns of the row (``_example_row``), matched whole: each
+    one is a row's first column, so an entry reads as the Examples line it names, and
+    ``view_duration_seconds = 0`` does not also claim ``view_duration_seconds = 0.001``. A
+    non-ASCII character is written the way the nodeid escapes it (``\\u2014``). Empty means
+    every row. ``transports`` empty means every transport.
+    """
+
+    tag: str
+    reason: str
+    rows: tuple[str, ...] = ()
+    transports: tuple[str, ...] = ()
+
+    def matches(self, marker_names: set[str], nodeid: str) -> bool:
+        if self.tag not in marker_names:
+            return False
+        if self.transports and _transport_of(nodeid) not in self.transports:
+            return False
+        row = _example_row(nodeid)
+        return not self.rows or any(row == r or row.startswith(f"{r}-") for r in self.rows)
+
+
+_X = _CatchallXfail
+
+#: What FAILED in measure_innet_291026_1202 once the catch-alls were lifted. Strict xfails.
+# Graduated in wave 5 (integrate/wave1 a3687d971): w5b01, w5b02, w5b03, w5b04, w5b06, w5b07,
+# w5b08, w5b09, w5b10, w5b11, w5b13, w5b14, w5b15, w5b16, w5b17, w5b18, w5b19, w5b20, w5b21.
+# Graduated: T-UC-002-partition-pricing-option-xor cpa_model. Strict XPASS on a2a/mcp/rest in
+# innet_291026_2322 because MediaBuyCreateEnv stubbed the adapter's pre-creation check to "no
+# problems"; e2e_rest answered VALIDATION_ERROR (UNSUPPORTED_FEATURE on
+# packages[0].pricing_option_id). The harness now runs MockAdServer's real check and the row
+# expects that refusal.
+_UC002_UC003_LEDGER: tuple[_CatchallXfail, ...] = (
+    _X("T-UC-002-alt-manual-reject-override", _LEDGER_SEED_MEDIA_BUY),
+    _X(
+        "T-UC-002-boundary-catalog-distinct-type",
+        _LEDGER_CATALOG_NOT_FOUND,
+        rows=("catalog_id references a non-existent catalog",),
+    ),
+    _X(
+        "T-UC-002-boundary-io-acceptance",
+        _dormant('given a proposal-based create_media_buy request matching "<>"'),
+        rows=(
+            "requires_signature false, io_acceptance absent (no gate)",
+            "requires_signature false, io_acceptance present (no-op)",
+            "requires_signature true, io_acceptance absent (gate blocks)",
+            "requires_signature true, io_acceptance present with all required members",
+            "requires_signature true, io_acceptance present with signature_id also supplied",
+        ),
+    ),
+    _X(
+        "T-UC-002-boundary-optimization-goals",
+        _LEDGER_OPT_CAPABILITY,
+        rows=(
+            "product lacks conversion_tracking + event goal submitted",
+            "product lacks metric_optimization + metric goal submitted",
+        ),
+    ),
+    _X(
+        "T-UC-002-boundary-pricing-option-xor",
+        _no_given_branch("given_pricing_option_configuration", "max_bid=true"),
+        rows=("max_bid=true on bid-based auction model",),
+    ),
+    _X(
+        "T-UC-002-boundary-pricing-option-xor",
+        _no_given_branch("given_pricing_option_configuration", "neither (v3.1 schema)"),
+        rows=("neither present, v3.1 schema (auction, no floor)",),
+    ),
+    _X(
+        "T-UC-002-boundary-product-uniqueness",
+        _LEDGER_PRODUCT_CONFIG,
+        rows=("proposal_id supplied, packages omitted (no buyer packages array)",),
+    ),
+    _X(
+        "T-UC-002-boundary-targeting-overlay",
+        _LEDGER_DEVICE_OVERLAP,
+        rows=("device_type include/exclude overlap",),
+        transports=("a2a", "mcp", "rest"),
+    ),
+    _X(
+        "T-UC-002-boundary-targeting-overlay",
+        _LEDGER_DEVICE_OVERLAP_E2E,
+        rows=("device_type include/exclude overlap",),
+        transports=("e2e_rest",),
+    ),
+    _X(
+        "T-UC-002-inv-006-5",
+        _dormant("given a package uses a bid-based auction pricing model with max_bid set to true"),
+    ),
+    _X(
+        "T-UC-002-inv-214-8",
+        _dormant(
+            "given a create_media_buy request that carries an invoice_recipient overriding the account default billing entity"
+        ),
+    ),
+    _X("T-UC-002-partition-catalog-distinct-type", _LEDGER_CATALOG_NOT_FOUND, rows=("catalog_not_found",)),
+    _X(
+        "T-UC-002-partition-optimization-goals",
+        _LEDGER_OPT_CAPABILITY,
+        rows=(
+            "event_not_supported_by_product",
+            "unsupported_attribution_window",
+            "unsupported_metric",
+            "unsupported_reach_unit",
+        ),
+    ),
+    _X("T-UC-002-partition-optimization-goals", _LEDGER_OPT_UNVALIDATED, rows=("unregistered_event_source",)),
+    _X(
+        "T-UC-002-partition-targeting-overlay",
+        _LEDGER_DEVICE_OVERLAP,
+        rows=("device_type_overlap",),
+        transports=("a2a", "mcp", "rest"),
+    ),
+    _X(
+        "T-UC-002-partition-targeting-overlay",
+        _LEDGER_DEVICE_OVERLAP_E2E,
+        rows=("device_type_overlap",),
+        transports=("e2e_rest",),
+    ),
+    _X(
+        "T-UC-002-storyboard-async-submitted-envelope-task-id-roundtrip",
+        _dormant(
+            'given a comply_test_controller directive registered force_create_media_buy_arm with branch "<>" and task_id "<>"'
+        ),
+    ),
+    _X(
+        "T-UC-002-storyboard-governance-approved",
+        _dormant('given the buyer\'s governance agent has returned decision "<>" for the proposed buy'),
+    ),
+    _X(
+        "T-UC-002-storyboard-governance-denied",
+        _dormant('given the buyer\'s governance agent has returned decision "<>" with a denial reason'),
+    ),
+    _X(
+        "T-UC-002-storyboard-governance-denied-recovery",
+        _dormant('given a previous create_media_buy attempt failed with error code "<>"'),
+    ),
+    _X(
+        "T-UC-002-storyboard-governance-with-conditions",
+        _dormant('given the buyer\'s governance agent has returned decision "<>" with a non-empty conditions array'),
+    ),
+    _X(
+        "T-UC-002-storyboard-inventory-list-no-match",
+        _dormant("given the buyer references a property_list whose entries do not match any seller inventory"),
+    ),
+    _X(
+        "T-UC-002-storyboard-inventory-list-targeting-parity",
+        _dormant("given the buyer holds a property_list (agent_url, list_id) that matches seller inventory"),
+    ),
+    _X(
+        "T-UC-002-v31-artifact-webhook-config",
+        _dormant("then the seller should accept the artifact_webhook configuration for governance content delivery"),
+    ),
+    _X(
+        "T-UC-002-v31-committed-metrics-standard-accepted",
+        _dormant('given the request package includes committed_metrics with one entry of scope "<>"'),
+    ),
+    _X(
+        "T-UC-002-v31-error-policy-violation-details",
+        _dormant("given a create_media_buy request that violates the seller's editorial policy"),
+    ),
+    _X(
+        "T-UC-002-v31-invoice-recipient-echoed",
+        _dormant("given a valid create_media_buy request with an invoice_recipient override"),
+    ),
+    _X(
+        "T-UC-002-v31-io-acceptance-not-required",
+        _dormant('given a valid create_media_buy request with proposal_id "<>" and the io_acceptance field omitted'),
+    ),
+    _X(
+        "T-UC-002-v31-io-acceptance-provided",
+        _dormant("given the proposal's insertion_order requires_signature is true"),
+    ),
+    _X(
+        "T-UC-002-v31-io-acceptance-required",
+        _dormant("given the proposal's insertion_order requires_signature is true"),
+    ),
+    _X(
+        "T-UC-002-v31-io-acceptance-signature-id",
+        _dormant("given the proposal's insertion_order requires_signature is true"),
+    ),
+    _X(
+        "T-UC-002-v31-plan-id-required-when-governance",
+        _dormant("given a create_media_buy request with the plan_id field omitted"),
+    ),
+    _X("T-UC-002-v31-plan-id-resolves", _dormant('given a valid create_media_buy request with plan_id "<>"')),
+    _X(
+        "T-UC-002-v31-planned-delivery-with-governance",
+        _dormant('given a valid create_media_buy request with plan_id "<>"'),
+    ),
+    _X("T-UC-003-boundary-approval-workflow", _UPDATE_TENANT_REVIEW_DIVERGENCE, rows=("tenant flag true (pending)",)),
+    _X(
+        "T-UC-003-bva-billing-eligibility",
+        _LEDGER_INVOICE_RECIPIENT,
+        rows=("invoice_recipient supplied = business entity not authorized for this account",),
+    ),
+    _X("T-UC-003-cancel-package", _no_datatable_field("canceled")),
+    _X("T-UC-003-new-packages-add", _LEDGER_NO_ADD_PACKAGES),
+    _X("T-UC-003-new-packages-duplicate", _LEDGER_NO_ADD_PACKAGES),
+    _X("T-UC-003-partition-approval-workflow", _UPDATE_TENANT_REVIEW_DIVERGENCE, rows=("pending_human_review",)),
+    _X("T-UC-003-storyboard-creative-fate-after-cancellation", _dormant("given a media buy has been canceled")),
+)
+
+_VACUOUS_OPT_CREATE = (
+    "vacuous pass: production does not read optimization_goals after schema validation, and "
+    "'optimization validation passes' checks only for a media_buy_id"
+)
+_VACUOUS_OVERLAY_UPDATE = (
+    "vacuous pass: 'success' never reads back the stored targeting_overlay, so a seller that drops the overlay passes"
+)
+
+#: What PASSES but grades nothing, or grades a claim the pin contradicts. xfail(run=False).
+# Graduated in wave 5 (integrate/wave1 a3687d971): w5b01, w5b07, w5b08, w5b10, w5b11, w5b12,
+# w5b13, w5b14, w5b15, w5b16, w5b17, w5b18, w5b19, w5b21, w5b22, w5b23, w5b24.
+_UC002_UC003_VACUOUS_PARKS: tuple[_CatchallXfail, ...] = (
+    # ── UC-002 ──
+    _X(
+        "T-UC-002-boundary-optimization-goals",
+        _VACUOUS_OPT_CREATE,
+        rows=(
+            "product has conversion_tracking + event goal submitted",
+            "product has metric_optimization + metric goal submitted",
+        ),
+    ),
+    # ── UC-003 ──
+    _X(
+        "T-UC-003-boundary-targeting-overlay",
+        _VACUOUS_OVERLAY_UPDATE,
+        rows=("keyword_targets with unique tuples",),
+    ),
+    _X(
+        "T-UC-003-partition-targeting-overlay",
+        _VACUOUS_OVERLAY_UPDATE,
+        rows=("keyword_targeting",),
+    ),
+)
+
+_NO_UPDATE_WITHOUT_ID_ON_REST = (
+    "the REST binding carries media_buy_id as the resource path (PUT /media-buys/{media_buy_id}, "
+    "src/core/tools/registry.py), so an update_media_buy that names no media_buy_id has no REST "
+    "request to send; the row grades on a2a and mcp, which carry the id in the body"
+)
+
+#: Examples rows a transport cannot express: its binding has no request for the state the row
+#: names, so there is nothing to send and nothing to grade on that transport. This is neither a
+#: failure (the ledger) nor a pass that grades nothing (the parks); nothing is wrong on either
+#: side. Each entry names its rows and its transports, the row is xfail(run=False) on exactly
+#: those transports with the reason below, and it runs and grades on every other transport.
+#: Pinned by tests/unit/test_architecture_route_xfail_census.py with the two lists above.
+_TRANSPORT_INEXPRESSIBLE_ROWS: tuple[_CatchallXfail, ...] = (
+    _X(
+        "T-UC-003-partition-media-buy-identification",
+        _NO_UPDATE_WITHOUT_ID_ON_REST,
+        rows=("neither_provided",),
+        transports=("rest", "e2e_rest"),
+    ),
+    _X(
+        "T-UC-003-boundary-media-buy-identification",
+        _NO_UPDATE_WITHOUT_ID_ON_REST,
+        rows=("neither identifier (missing)",),
+        transports=("rest", "e2e_rest"),
+    ),
+)
+
+
+def _catchall_ledger_marker(marker_names: set[str], nodeid: str) -> pytest.MarkDecorator | None:
+    """The marker the explicit row lists assign, or None.
+
+    A row a transport cannot express is not run there, whatever else names it; then a ledger
+    entry wins over a park.
+    """
+    for entry in _TRANSPORT_INEXPRESSIBLE_ROWS:
+        if entry.matches(marker_names, nodeid):
+            reason = f"not applicable on {_transport_of(nodeid)}: {entry.reason}"
+            return pytest.mark.xfail(reason=reason, run=False, strict=True)
+    for entry in _UC002_UC003_LEDGER:
+        if entry.matches(marker_names, nodeid):
+            return pytest.mark.xfail(reason=f"{entry.reason} ({_CATCHALL_RUN})", strict=True)
+    for entry in _UC002_UC003_VACUOUS_PARKS:
+        if entry.matches(marker_names, nodeid):
+            return pytest.mark.xfail(reason=f"{entry.reason} ({_CATCHALL_RUN})", run=False, strict=True)
+    return None
+
+
 def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
     """Apply xfail markers to scenarios with unimplemented production features."""
     for item in items:
@@ -1647,29 +2234,35 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # three transports answer AUTH_MISSING. The ordering divergence needs its own
         # scenario -- no credential AND a malformed body -- which #2243 describes.
 
-        # uc005 type-filter / disclosure-validation scenarios cannot hold as strict
-        # xfails over e2e_rest — but NOT because the body is dropped (build_rest_body
-        # now serializes the request and the live server observes the filters). The
-        # remaining gaps are transport-independent production gaps that the in-process
-        # transports xfail strict=True: the `type` filter was removed from the SDK 5.7
-        # request model (adcp 3.12 — the pin 3.1.0-beta.3 still lists it, but the
-        # generated request cannot carry it), and disclosure_positions lacks the pin's
-        # uniqueItems validation. Against the live Docker server these scenarios pass
-        # vacuously (valid rows dispatch unfiltered) rather than failing deterministically,
-        # so strict=True would XPASS — weaken to strict=False to tolerate either outcome.
-        uc005_filter_e2e_untestable = {
-            # type filter — removed from the SDK 5.7 request model (pin still lists it)
-            "T-UC-005-inv-031-1-violated",
-            "T-UC-005-partition-type-filter",
-            "T-UC-005-boundary-type-filter",
-            # disclosure_positions duplicate — prod lacks the pin's uniqueItems validation
-            "T-UC-005-partition-disclosure",
-            "T-UC-005-boundary-disclosure",
-        }
+        # THIS ESCAPE HATCH IS NOW EMPTY, and both halves were emptied by different lanes
+        # for independent reasons. A UNION MERGE: each lane deleted the entries it had
+        # earned the right to delete, and neither deletion subsumes the other.
+        #
+        # The three TYPE-FILTER entries are gone because their scenarios are gone.
+        # inv-031-1-violated now filters on asset_types + name_search, and the two type
+        # outlines are deleted, so nothing here "passes vacuously over the live server"
+        # any more — nothing here dispatches unfiltered. The reason they used to carry
+        # was also wrong: "removed from the SDK 5.7 request model (adcp 3.12)" read as
+        # codegen drift, and 3.12 is not a version that exists in the schema tree. The pin
+        # ships TWO list-creative-formats requests; `type` belongs to the "(Creative
+        # Agent)" one, and the media-buy request this seller serves has not declared it
+        # since the 3.0 MAJOR. There was never a filter to carry.
+        #
+        # The two DISCLOSURE entries are gone because PRODUCTION WAS FIXED: the pin's
+        # uniqueItems refusal on disclosure_positions now exists, so the transport-
+        # independent gap the hatch existed for is closed. The consequence is deliberate
+        # and belongs in a bdd-in-network run's reading: with no escape hatch, the
+        # disclosure outlines are now GRADED over e2e_rest, where the duplicate rows
+        # should pass for the same DTO-level reason they pass in-process.
+        #
+        # With the set empty, the two `tag in uc005_filter_e2e_untestable` branches below
+        # can never match. They are inert rather than wrong, and deleting them changes
+        # control flow, so that is a follow-up and not a merge resolution.
+        uc005_filter_e2e_untestable: set[str] = set()
         uc005_filter_e2e_reason = (
-            "e2e_rest: type filter removed from SDK 5.7 request model / disclosure_positions "
-            "uniqueItems not validated in production — transport-independent gaps that pass "
-            "vacuously over the live server, so the strict in-process xfail cannot hold here"
+            "e2e_rest: unreachable — uc005_filter_e2e_untestable is empty, so no tag selects "
+            "this reason. Kept only so the branches that read it still type-check; see the "
+            "comment above for why both halves were removed"
         )
 
         # Graduated: UC-005 creative agent type/asset_type filter tests now pass —
@@ -1714,14 +2307,15 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # so [rest] serializes the request body and filters for real — the former
         # _REST_XFAIL_TAGS block is gone (see note above the function).
 
-        # E2E_REST: Docker always has the creative agent — can't test empty catalog
-        if is_e2e_rest and "T-UC-005-empty-catalog" in marker_names:
-            item.add_marker(
-                pytest.mark.xfail(
-                    reason="E2E Docker always has creative agents — cannot test empty catalog",
-                    strict=True,
-                )
-            )
+        # Graduated: the e2e_rest route for T-UC-005-empty-catalog ("E2E Docker always has
+        # creative agents — cannot test empty catalog"). XPASS(strict) on e2e_rest in box run
+        # innet_291026_0131, and passed on a2a, mcp and rest in the same run. Its premise is
+        # gone: the Given seeds the catalog through set_registry_formats ->
+        # seed_own_creative_agent, which serves the empty catalog from the tenant's own peer
+        # creative agent and turns off use_default_creative_agent, so the live server's
+        # registry (_get_tenant_agents) lists that peer alone. The scenario now also grades
+        # that no errors[] rides the response, so a peer that failed (AGENT_UNREACHABLE,
+        # zero formats) cannot satisfy it.
 
         # E2E_REST: the 3 UC-003 manual-approval scenarios (T-UC-003-alt-manual,
         # T-UC-003-approval-tenant, T-UC-003-approval-adapter) GRADUATED — the old
@@ -1737,41 +2331,34 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         #   _submitted_wire_dict (loud failure if wire_response missing on non-IMPL).
         # - T-UC-003-approval-tenant → GRADUATE — BR-RULE-017 INV-2: same real-wire path;
         #   status "submitted" asserted on the typed payload parsed from the live wire.
+        #   That pass rode the adapter flag its Given also raised; with the Given setting the
+        #   tenant flag alone it is xfailed in _XFAIL_TAGS against #2483 on every transport.
         # - T-UC-003-approval-adapter → GRADUATE — BR-RULE-017 INV-3: same real-wire path;
         #   the last_a2a_task guard is Transport.A2A-gated and inert on e2e_rest.
         # No UC-003 entries remain in e2e_rest_known_failures.txt — no sibling conflict.
 
-        # FIXME: E2E_REST —
-        # set_registry_formats has no sidecar mock path. Docker's real creative
-        # agent serves its own catalog, so scenarios that inject specific format
-        # fixtures via Given steps and assert on those names can't run against
-        # E2E. Remove when E2E gains catalog-injection.
-        _UC005_E2E_FIXTURE_INJECTION_TAGS: set[str] = {
-            "T-UC-005-inv-031-1-holds",
-            # Graduated e2e_rest: inv-031-1-violated, inv-049-3-violated,
-            # inv-049-4-violated, inv-049-4-nodim (pass with strong assertions)
-            "T-UC-005-inv-031-2-holds",
-            "T-UC-005-inv-049-1-holds",
-            "T-UC-005-inv-049-1-violated",
-            "T-UC-005-inv-049-2-holds",
-            "T-UC-005-inv-049-2-violated",
-            "T-UC-005-inv-049-3-holds",
-            "T-UC-005-inv-049-3-group",
-            "T-UC-005-inv-049-4-holds",
-            "T-UC-005-inv-049-5-holds",
-            "T-UC-005-inv-049-6-holds",
-            "T-UC-005-inv-049-7-holds",
-            "T-UC-005-inv-049-7-violated",
-            # Graduated: inv-049-9 and inv-049-10 (u04y: no e2e_rest variants exist)
-            "T-UC-005-dim-boundary",
-        }
-        if is_e2e_rest and (marker_names & _UC005_E2E_FIXTURE_INJECTION_TAGS):
-            item.add_marker(
-                pytest.mark.xfail(
-                    reason="E2E: set_registry_formats has no sidecar mock — real creative agent catalog used",
-                    strict=False,
-                )
-            )
+        # Graduated: eleven of the twelve scenarios of the _UC005_E2E_FIXTURE_INJECTION_TAGS
+        # set that stood here, a strict=False xfail on e2e_rest: inv-031-1-holds,
+        # inv-031-2-holds, inv-049-2-violated, inv-049-3-holds, inv-049-3-group,
+        # inv-049-4-holds, inv-049-5-holds, inv-049-6-holds, inv-049-7-holds,
+        # inv-049-7-violated and dim-boundary. All eleven XPASSED on e2e_rest in box run
+        # innet_291026_0257 and passed on a2a, mcp and rest in the same run. The twelfth,
+        # inv-049-2-holds, graduated later (see below). The set's reason ("set_registry_formats has
+        # no sidecar mock") stopped being true when the format Givens began seeding through
+        # CreativeFormatsEnv.set_registry_formats -> seed_own_creative_agent: the tenant's
+        # own peer creative agent (the compose stack's capture service on e2e) serves
+        # exactly the Given's formats and use_default_creative_agent is off, so the live
+        # server lists those formats and no others. Each filter is graded against
+        # media-buy/list-creative-formats-request.json @ 3.2.7 (ANY-render inclusive
+        # widths, case-insensitive partial name_search, is_responsive, format_ids).
+        # The exclusion Thens ("no formats" / "X should not be returned") and
+        # inv-049-2-violated's "no error should be raised" now require a successful
+        # response on the wire, so a refusal can no longer satisfy them.
+        #
+        # Graduated: T-UC-005-inv-049-2-holds on e2e_rest. The scenario seeds
+        # "foreign-leaderboard" under the same id from another agent, which grades the
+        # (agent_url, id) pair identity of core/format-id.json @ 3.2.7; it passed on a2a, mcp
+        # and rest and XPASSED on e2e_rest in innet_291026_2041, the route's exit condition.
 
         # FIXME(#1291, #2098): E2E_REST — these Thens observe env.mock['post'],
         # the in-process local origin, or CircuitBreaker state, none of which is
@@ -1912,6 +2499,18 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # The same premise change is owed a re-grade for the four tags the merge DID
             # drop from this set — -retry-success, -sequence, -retry-5xx, -no-retry-4xx —
             # and only a bdd-in-network run can settle it.
+            #
+            # XPASS INSPECTED AND REFUSED 2026-10-09 (innet_091026_1343). One of this
+            # outline's four e2e_rest rows — [scheduled-should] — reported XPASS while
+            # [adjusted], [final] and [delayed] reported xfail, so the tag-level route is
+            # the only thing that can hold it: remove the tag and three rows go RED. And
+            # the one row that passes is the one that CANNOT fail here, for the reason the
+            # note above states: delivery_webhook_scheduler.py:332 assigns
+            # NotificationType.scheduled unconditionally, so a request for a scheduled
+            # report gets `scheduled` whether or not production selects anything. The
+            # XPASS is the hardcode, not the behavior. A row-level narrowing would turn
+            # that into a plain PASS and read as coverage, which is strictly worse.
+            # Graduates with the same production change the note already names.
             "T-UC-004-webhook-notification-type",
             # STAYS (salesagent-n78j0.13) — FAILED INSPECTION STEP 5 (Then assertions), and
             # it fails it in a shape neither graduated neighbour had, which is why "hmac and
@@ -2043,127 +2642,89 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # (GA L3 error-handling). The two Scenario-Outline rows that asserted
         # VALIDATION_ERROR were corrected to INVALID_REQUEST in the same change.
 
-        # FIXME: UC-003 keyword_targets_add — production applies the
-        # keyword additions but returns empty affected_packages. All transports pass the When
-        # step (no error) but the Then step "affected_packages including pkg_001" fails.
-        if "T-UC-003-alt-keyword-ops" in marker_names:
-            item.add_marker(
-                pytest.mark.xfail(
-                    reason="keyword_targets_add: affected_packages empty after keyword add (spec-production gap)",
-                    strict=True,
-                )
-            )
-
-        # FIXME: UC-003 inline creatives — _sync_creatives_impl
-        # FK violation: creative_assignments references creative before commit.
-        # _sync_creatives_impl uses its own UoW scope; assignment FK check fails
-        # because the creative hasn't been committed in the outer transaction yet.
-        if "T-UC-003-alt-creatives-inline" in marker_names:
-            item.add_marker(
-                pytest.mark.xfail(
-                    reason="inline creatives: FK violation in _sync_creatives_impl assignment path (spec-production gap)",
-                    strict=True,
-                )
-            )
-
-        # T-UC-003-boundary-revision is wired (see _UC003_REVISION_TAGS and the
-        # uc003-manual-approval row in the routing registry below), so its steps
-        # RUN and each row fails or passes on its own assertion. Routing is per ROW,
-        # selected on the Examples `outcome` column rather than a node-id substring, so
-        # a row that changes its expected outcome stops matching instead of silently
-        # keeping someone else's exemption.
+        # Graduated: T-UC-003-alt-keyword-ops. Its xfail reason was factually wrong --
+        # "production applies the keyword additions but returns empty affected_packages".
+        # MEASURED: `git grep keyword_targets -- src/` returns ZERO hits, so production
+        # never applied anything; it accepted a declared field and dropped it, answering
+        # success. The scenario was over-specified too, asserting the obligation of a seller
+        # that SUPPORTS keyword targeting.
         #
-        # Two rows expect CONFLICT and are the coverage half of #1607. Verified failure:
-        # `_assert_error_outcome` raises `AssertionError: Expected an error for outcome:
-        # error "CONFLICT" with suggestion` — an assertion about a response that came
-        # back 200 OK, NOT a StepDefinitionNotFoundError. Production accepts the stale
-        # and ahead tokens on a2a, mcp and rest and returns success; enforcement is what
-        # #1607 owns. strict=True so implementing it XPASSes and the graduation workflow
-        # catches the row rather than letting it sit green-by-omission.
+        # Both are fixed together: the scenario now asserts UNSUPPORTED_FEATURE (the
+        # obligation this seller actually holds, per core/targeting.json's "applied exactly
+        # or rejected") and _update_media_buy_impl refuses the op above the UoW.
         #
-        # One row expects INVALID_REQUEST for revision 0 and fails for a DIFFERENT
-        # reason, which is why it is not filed under #1607: production DOES reject it,
-        # but `UpdateMediaBuyRequest.revision` carries `ge=1`, so pydantic raises during
-        # request construction inside the step — before any transport dispatch. The row
-        # cannot grade the seller's response because the request never reaches the
-        # seller. That is a harness limitation, not a production gap, and calling it one
-        # is the exact mislabelling this task exists to stop.
-        if marker_names & {"T-UC-003-boundary-revision", "T-UC-003-partition-revision"}:
-            # pytest-bdd nests a Scenario Outline's Examples row under the single
-            # `_pytest_bdd_example` param rather than exposing each column, so reading
-            # `params["outcome"]` returns None and every row falls through unrouted.
-            _row = (getattr(item, "callspec", None) and item.callspec.params.get("_pytest_bdd_example")) or {}
-            _row_outcome = str(_row.get("outcome") or "")
-            if "CONFLICT" in _row_outcome and is_a2a:
-                # a2a fails EARLIER than the others and for a different reason, so it
-                # does not carry #1607's label. Measured: a probe in _update_media_buy_impl
-                # reads `req.revision=None` on a2a and `6` on mcp/rest, because
-                # _handle_update_media_buy_skill rebuilds the request from five hand-listed
-                # fields and forwards another hand-listed subset — `revision` is in neither.
-                # Implementing CONFLICT would NOT xpass this row; the token never arrives.
-                item.add_marker(
-                    pytest.mark.xfail(
-                        reason=(
-                            "cause=transport-drops-parameter scope=per-transport ref=#1885 — the "
-                            "a2a skill handler discards `revision` before it reaches the tool, so "
-                            "this row cannot grade CONFLICT enforcement on a2a at all. NOT #1607: "
-                            "enforcing the check would leave this row red. #1885 is the remedy — "
-                            "route the handler through media_buy_update.UpdateMediaBuyRequest, which "
-                            "already forwards every field — so closing it makes this row gradeable. "
-                            "#1259 owns the separate question of why no guard sees the drop."
-                        ),
-                        strict=True,
-                    )
-                )
-            elif "CONFLICT" in _row_outcome:
-                item.add_marker(
-                    pytest.mark.xfail(
-                        reason=(
-                            "cause=production-gap scope=per-transport ref=#1607 — update_media_buy "
-                            "accepts a stale or ahead revision and returns success; the spec MUST "
-                            "reject it with CONFLICT. Steps execute, the token arrives (probed: "
-                            "req.revision=6 on mcp and rest), and the failure is the missing "
-                            "rejection. scope=per-transport because each transport enforces (or "
-                            "fails to enforce) independently, so each must xpass on its own when "
-                            "#1607 lands."
-                        ),
-                        strict=True,
-                    )
-                )
-            elif '"7"' in item.nodeid:
-                # The wrong_type row only. The blanket entry below had been MASKING this,
-                # and it is a different defect: not a harness limitation, a production gap.
-                item.add_marker(
-                    pytest.mark.xfail(
-                        reason=(
-                            "cause=production-gap scope=transport-independent ref=#1721 — pydantic "
-                            'runs in lax mode, so the string "7" is coerced to 7 and a revision '
-                            "whose JSON type is wrong is ACCEPTED on a2a, mcp and rest alike. "
-                            "update-media-buy-request.json declares revision as an integer, so a "
-                            "type violation is INVALID_REQUEST; the scenario says why it matters -- "
-                            '7 and "7" must not behave alike. REMEDY: strict typing on the field. '
-                            "Not done inline because revision is INHERITED from the SDK model, so "
-                            "enforcing it means redeclaring the field (or making the whole request "
-                            "strict), which is a cross-cutting decision about every numeric field "
-                            "rather than a property of this row."
-                        ),
-                        strict=True,
-                    )
-                )
-            # GRADUATED (the remaining INVALID_REQUEST rows). The entry described a harness
-            # limitation -- "revision 0 is rejected by UpdateMediaBuyRequest's ge=1 during
-            # request construction in the step, so the request never reaches the seller" --
-            # and prescribed its own remedy: dispatch the raw payload instead of the typed
-            # model. That remedy is in place. The a2a handler log for these rows now reads
-            #   Found explicit skill invocation: update_media_buy with params:
-            #   ['revision', 'idempotency_key', 'media_buy_id', 'paused', 'account']
-            # so `revision` DOES reach the seller and the rows grade the seller's rejection
-            # as written. Strict XPASS on all three transports.
-            #
-            # The wrong_type row ("7" as a string) came out of this graduation red, because
-            # the blanket entry had been masking a REAL gap: pydantic lax mode coerced the
-            # string to an int and the request succeeded. That is fixed at the field
-            # instead of re-parked here -- see UpdateMediaBuyRequest.revision.
+        # CORRECTION to the reason this marker was first removed. The removal was justified
+        # as "with strict=True the now-passing scenario would fail as an unexpected pass".
+        # That was WRONG: this scenario is not graded at all. MEASURED on a UC-003 keyword
+        # slice -- test_add_keyword_targets_incrementally, _remove_, and the negative-keyword
+        # sibling are XFAIL on every transport, because the `uc003-not-wired` EnvRoute below
+        # xfails every UC-003 scenario that is not `T-UC-003-ext-*` with "harness not yet
+        # wired for non-extension scenarios". So the marker was redundant with that route,
+        # not standing between a pass and a failure.
+        #
+        # It stays removed because its TEXT was false twice over -- production applied
+        # nothing, and the scenario no longer claims a production gap -- and because the
+        # not-wired route already carries the honest reason. The thing to fix here is the
+        # WIRING, not the marker: until UC-003's non-extension scenarios are wired, this
+        # scenario and the two keyword siblings grade nothing whatever they assert.
+        # They are wired now: the catch-all's reason is gone, and measure_innet_291026_1202
+        # measured all three passing on a2a, mcp, rest and e2e_rest.
+
+        # The strict xfail that stood here for T-UC-003-alt-creatives-inline ("FK violation in
+        # _sync_creatives_impl assignment path") XPASSed on a2a, mcp, rest and e2e_rest in
+        # measure_innet_291026_1202, the first run that dispatched it. The FK failure is gone,
+        # but the pass is not graduated: its Thens read only the success branch, status
+        # "completed" and affected_packages, so nothing observes the upload or the
+        # assignment. It is parked as a vacuous pass in _UC002_UC003_VACUOUS_PARKS instead.
+
+        # T-UC-003-boundary-revision / -partition-revision are wired (see _UC003_REVISION_TAGS
+        # and the uc003-manual-approval row in the routing registry below), so their steps
+        # RUN and each row fails or passes on its own assertion.
+        #
+        # Graduated: the CONFLICT rows (stale_revision, ahead_revision, and the boundary's
+        # revision-below/above-current rows). They were strict xfails on two reasons: #1607,
+        # update_media_buy accepting a stale or ahead revision; and on a2a, #1885, the skill
+        # handler dropping `revision`. a2a now dispatches through `serve` like every other
+        # transport (the handler log quoted below shows `revision` arriving), and
+        # `_refuse_stale_revision` answers a mismatch with CONFLICT under the row lock
+        # `MediaBuyRepository.lock_revision` takes -- media-buy/update-media-buy-request.json
+        # /properties/revision, "sellers MUST reject the update with CONFLICT". The box run
+        # that lands this change is the evidence each row passes on all four transports.
+        # GRADUATED at the adcp 9.0.0 / AdCP 3.2.1 pin: the wrong_type row ('"7"').
+        # Its reason was "pydantic runs in lax mode, so the string "7" is coerced to
+        # 7 and a revision whose JSON type is wrong is ACCEPTED", and its named REMEDY
+        # was strict typing on the field — deferred because `revision` is INHERITED
+        # from the SDK model, so the decision was cross-cutting. The SDK made that
+        # decision: at v9 the inherited field is
+        #   Optional[Annotated[int, Strict(strict=True),
+        #                      BeforeValidator(as_json_schema_integer)]]   (+ Ge(1))
+        # and the measured behaviour now separates the two values the scenario says
+        # must not behave alike — model_validate(revision="7") REFUSES with
+        # [type=int_type] while revision=7 parses. The obligation itself did not move:
+        # media-buy/update-media-buy-request.json declares revision
+        # {"type": "integer", "minimum": 1} at the 3.2 pin, as it did at 3.1.
+        # Not vacuous: the row's Then is `error "INVALID_REQUEST" with suggestion`,
+        # which routes to TransportResult.assert_wire_error and raises outright when
+        # no wire envelope was captured — a request that died building in the step
+        # cannot pass it. The Given passes the string through UNCONVERTED into the
+        # shared harness env's dispatch kwargs, so all three transports send the same
+        # wrong-typed document. No second routing carries this tag: the only other
+        # mention of T-UC-003-partition-revision is the uc003-manual-approval EnvRoute
+        # (setup, not an exemption).
+        # GRADUATED (the remaining INVALID_REQUEST rows). The entry described a harness
+        # limitation -- "revision 0 is rejected by UpdateMediaBuyRequest's ge=1 during
+        # request construction in the step, so the request never reaches the seller" --
+        # and prescribed its own remedy: dispatch the raw payload instead of the typed
+        # model. That remedy is in place. The a2a handler log for these rows now reads
+        #   Found explicit skill invocation: update_media_buy with params:
+        #   ['revision', 'idempotency_key', 'media_buy_id', 'paused', 'account']
+        # so `revision` DOES reach the seller and the rows grade the seller's rejection
+        # as written. Strict XPASS on all three transports.
+        #
+        # The wrong_type row ("7" as a string) came out of this graduation red, because
+        # the blanket entry had been masking a REAL gap: pydantic lax mode coerced the
+        # string to an int and the request succeeded. That is fixed at the field
+        # instead of re-parked here -- see UpdateMediaBuyRequest.revision.
 
         # FIXME: UC-003 extension/error scenarios — production uses
         # different error codes than spec, or doesn't validate at all. These are
@@ -2177,24 +2738,22 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # no longer drops it), and the unknown-principal ownership check
             # (AdCPAuthorizationError) carries a "verify your x-adcp-auth token" suggestion.
             # T-UC-003-ext-a / -ext-a-unknown pass on a2a/mcp/rest.
-            "T-UC-003-ext-c": "production returns PERMISSION_DENIED (AdCPAuthorizationError), spec expects ACCOUNT_NOT_FOUND",
+            # Graduated: T-UC-003-ext-c (xpassed on a2a, mcp, rest and e2e_rest in
+            # innet_291026_2041). The scenario expects MEDIA_BUY_NOT_FOUND for a buy another
+            # principal owns, per L1/security.mdx @ 3.2.7 (the body MUST NOT distinguish
+            # unauthorized from not found), which production answers.
             # Graduated: T-UC-003-ext-d, T-UC-003-ext-d-negative (production now returns BUDGET_TOO_LOW)
             # Production doesn't validate these cases at all
-            "T-UC-003-ext-e": "production doesn't validate end_time < start_time on update",
-            "T-UC-003-ext-e-equal": "production doesn't validate end_time == start_time on update",
-            # FIXME: stale .feature expectation, NOT a production gap.
-            # Production validates currency on update and correctly emits
-            # UNSUPPORTED_FEATURE (AdCPCapabilityNotSupportedError, media_buy_update.py:441;
-            # verified at wire on mcp/rest/a2a). The generated .feature asserts INVALID_REQUEST.
-            # UNSUPPORTED_FEATURE is the authoritative code (adcp-req BR-UC-002 impl-coverage;
-            # matches UC-002 ext-d). Graduates after upstream regen.
-            "T-UC-003-ext-f": "generated .feature asserts INVALID_REQUEST; production correctly emits UNSUPPORTED_FEATURE for unsupported currency on update — stale spec, pending upstream regen",
-            # FIXME: stale .feature expectation, NOT a production gap.
-            # Production validates the daily spend cap on update and correctly emits
-            # BUDGET_EXCEEDED (AdCPBudgetExceededError, media_buy_update.py:484;
-            # verified at wire on mcp/rest/a2a). The generated .feature asserts the
-            # pre-v3.1 BUDGET_TOO_LOW (see UC-002 ext-k). Graduates after upstream regen.
-            "T-UC-003-ext-g": "generated .feature asserts pre-v3.1 BUDGET_TOO_LOW; production validates and correctly emits BUDGET_EXCEEDED — stale spec, pending upstream regen",
+            # Graduated in wave 5 (integrate/wave1 a3687d971): T-UC-003-ext-e and
+            # T-UC-003-ext-e-equal (w5b21). update_media_buy refuses an inverted or equal
+            # flight with INVALID_REQUEST on end_time (refuse_inverted_flight).
+            # Graduated: T-UC-003-ext-f and T-UC-003-ext-g. Both entries named a stale .feature
+            # expectation, and measure_innet_291026_1202 measured exactly that on all four
+            # transports ("Expected INVALID_REQUEST, got UNSUPPORTED_FEATURE" and "Expected
+            # BUDGET_TOO_LOW, got BUDGET_EXCEEDED"). The scenarios are corrected in place, with
+            # @source citations to the pinned enums/error-code.json: a currency this seller does
+            # not support is UNSUPPORTED_FEATURE, and a budget above the daily cap is
+            # BUDGET_EXCEEDED, never BUDGET_TOO_LOW ("below the seller's minimum").
             # Graduated (#1417/gh8p.10): a failed creative sync no longer crashes with an
             # FK violation. _process_assignments skips assignment for un-synced creatives,
             # and update_media_buy raises a clean retryable AdCPAdapterError carrying a
@@ -2299,6 +2858,11 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # wrapper, so MCP now accepts the
         # keyword exactly like a2a/rest and the valid examples pass on MCP too.
 
+        # The UC-002 / UC-003 explicit ledger that replaced the two not-wired catch-alls.
+        catchall_marker = _catchall_ledger_marker(marker_names, nodeid)
+        if catchall_marker is not None:
+            item.add_marker(catchall_marker)
+
         # Selective xfail for parametrized scenarios
         for tag, substrings, reason in _SELECTIVE_XFAIL:
             if tag in marker_names:
@@ -2394,6 +2958,95 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # INVALID_REQUEST); the oneOf-both shape is rejected by Pydantic at the
         # boundary as VALIDATION_ERROR. The feature outcomes were reconciled to
         # match production and the scenarios now pass on a2a/mcp/rest.
+        # One reason, two rows' worth of entries: the two outlines exhibit the SAME fixture
+        # GRADUATED: the nine inline-upload rows of the two creative-asset outlines, and the
+        # shared _UC002_INLINE_FORMAT_FIXTURE reason with them. They graduated on exactly the
+        # condition that reason named -- "These rows graduate when tpr3 reconciles the id" --
+        # which this change is: the seeded product arm now carries display_300x250_image, the
+        # id the pinned capture serves, and the per-id format-spec stub that made the old
+        # synthetic id resolvable in process is deleted.
+        #
+        # GRADUATION RECORD, per .claude/rules/workflows/xpass-graduation.md, for all nine
+        # together because they share ONE cause and ONE routing entry pair -- the protocol's
+        # "one at a time" is about not sweeping unrelated xpasses into a bulk delete, and
+        # these nine are one finding with nine nodeids:
+        #
+        #   ROUTING   two entries in _UC002_VALIDATION_XFAIL below, keyed
+        #             ("T-UC-002-partition-creative-asset", {"uploads_only","both_paths"})
+        #             and ("T-UC-002-boundary-creative-asset", {"upload with format"}),
+        #             both strict=True.
+        #   WHY NOT A WEAK PASS  strict=True is what proves it. A non-strict marker hides a
+        #             weak scenario because failing and passing both read as xfail/xpass; a
+        #             STRICT one turns the pass into a hard FAILED, which is how these nine
+        #             announced themselves (9 XPASS, 9 FAILED, zero silent). The scenarios
+        #             assert creative validation PASSES and then that the buy is created, so
+        #             a vacuous pass would need the dispatch to succeed while seeding nothing
+        #             -- and the rows that do NOT graduate here (the library-reference rows of
+        #             the same outlines) stayed green throughout, which is the control.
+        #   OBLIGATION RE-VERIFIED  the scenarios demand that a resolvable creative whose
+        #             identity matches the product's arm passes the pre-adapter gate. Nothing
+        #             in the pin changed; what changed is that the fixture can now satisfy
+        #             both halves at once. Previously it could not: a referenced creative must
+        #             be RESOLVABLE (id in the capture) and ACCEPTED (identity equal to the
+        #             arm, compared whole), and with the arm on the synthetic id the only id
+        #             satisfying the second failed the first.
+        #   PRODUCTION TRACED  no production change. The seller was right in both directions
+        #             all along -- it answered VALIDATION_ERROR "unknown format ... must be
+        #             registered with the creative agent" for the unserved id, and
+        #             "not one this product accepts" when only the creative moved. The reason
+        #             string said so too ("not a seller gap").
+        #   SIBLING TRANSPORTS  all three in-process transports graduate together (a2a, mcp,
+        #             rest), which is expected: the marker was transport-independent. The
+        #             e2e_rest rows of these outlines are the six this change exists to turn
+        #             green and are measured in-network, not here.
+        #
+        # THE NINE NODEIDS, enumerated so membership is re-checkable without re-running
+        # anything. All under tests/bdd/test_uc002_create_media_buy.py, each verified
+        # individually as XPASS by nodeid (9 XPASS in the run, 9 rows leaving the xfail set,
+        # same nine):
+        #
+        #   test_creative_asset_boundary_validation__boundary_point
+        #     [a2a-valid inline upload-upload with format-creative validation passes]
+        #     [mcp-valid inline upload-upload with format-creative validation passes]
+        #     [rest-valid inline upload-upload with format-creative validation passes]
+        #   test_creative_asset_partition_validation__partition
+        #     [a2a-both_paths-creative validation passes]
+        #     [a2a-uploads_only-creative validation passes]
+        #     [mcp-both_paths-creative validation passes]
+        #     [mcp-uploads_only-creative validation passes]
+        #     [rest-both_paths-creative validation passes]
+        #     [rest-uploads_only-creative validation passes]
+        #
+        # WHICH ENVIRONMENT THE XPASS WAS OBSERVED IN, stated because it is a condition on
+        # the claim and not a footnote. Measured locally, same tree, three repeats each:
+        #
+        #   CREATIVE_AGENT_URL unset  -> 3 failed / 252 passed; the nine XPASS. Format
+        #       resolution is served from the committed capture under ADCP_TESTING and
+        #       nothing is dialled. One row (mcp-both_paths) failed in 1 of 4 runs, and ONLY
+        #       in the run that reached the live public host (4 connection-attempt failures,
+        #       30 host mentions; the clean runs had 0 of each) -- so that was the harness
+        #       going networked on a missing env var, not the scenario.
+        #   CREATIVE_AGENT_URL=agent.localhost:9443 -> 12 failed / 243 passed, IDENTICAL
+        #       across three runs, and the nine fail `inline-cr-001: Configuration error`.
+        #       That is salesagent-ol033.18's signature exactly: AdCPConfigurationError is
+        #       the mapped form of an outbound refusal, the egress gateway refuses that
+        #       destination, and SSL_CERT_FILE alone does not fix it.
+        #
+        # So BOTH local configurations are known-broken in documented ways and neither is
+        # the authoritative environment. The nine XPASS in the hermetic one; their verdict in
+        # the environment the in-network runner builds is NOT established here and is the
+        # thing to confirm before this graduation is relied on.
+        #
+        # NOTE WHAT SELECTED THEM, because it is the quiet half: the deleted entries keyed on
+        # Examples ROW-ID SUBSTRINGS ("uploads_only", "both_paths", "upload with format"),
+        # not on the format id any step reads. So this routing is de-routed by renaming an
+        # Examples row and NOT by changing a fixture's format id -- these nine graduated
+        # because they started PASSING, which is the only reason that counts, and no row
+        # label was touched. A fixture change that renames a row would drop a marker with no
+        # error at all; that hazard is filed separately.
+        #
+        # The two entries are deleted below rather than left with a corrected reason: a
+        # marker whose condition is met is not a marker.
         _UC002_VALIDATION_XFAIL: list[tuple[str, set[str], str]] = [
             # GRADUATED: the two daily-spend-cap entries are gone. Their reason -- "production
             # raises plain ValueError -> code=validation_error, no suggestion. Spec expects
@@ -2408,29 +3061,98 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # zero executed. Both markers came off together: the routing moved to the
             # uc002-ext row and this pair was deleted, because removing either one alone
             # leaves the scenarios exactly as dormant as before.
-            # FIXME: creative error code mismatch
-            # Production uses CREATIVES_NOT_FOUND / VALIDATION_ERROR / INVALID_CREATIVES,
-            # spec expects CREATIVE_REJECTED. No max_creatives limit in production either.
-            (
-                "T-UC-002-partition-creative-asset",
-                {"creative_not_found", "format_mismatch", "missing_required_assets"},
-                "creative error code mismatch: production uses NOT_FOUND/VALIDATION_ERROR/INVALID_CREATIVES, spec expects CREATIVE_REJECTED — spec-production gap",
-            ),
-            (
-                "T-UC-002-partition-creative-asset",
-                {"exceeds_max_creatives"},
-                "max_creatives limit not enforced in production — spec-production gap",
-            ),
-            (
-                "T-UC-002-boundary-creative-asset",
-                {"cr-bad", "wrong format"},
-                "creative error code mismatch: production uses NOT_FOUND/VALIDATION_ERROR, spec expects CREATIVE_REJECTED — spec-production gap",
-            ),
-            (
-                "T-UC-002-boundary-creative-asset",
-                {"101 uploads"},
-                "max_creatives limit not enforced in production — spec-production gap",
-            ),
+            # GRADUATED, and the four entries that stood here are replaced by the two below
+            # — a narrowing from seven marked rows to three, every one of them measured.
+            #
+            # The four deleted entries carried two reasons and BOTH WERE FALSE. "Production
+            # uses NOT_FOUND/VALIDATION_ERROR/INVALID_CREATIVES, spec expects
+            # CREATIVE_REJECTED" described a disagreement the feature itself had already
+            # settled in production's favour: the three invalid partition rows were
+            # regrounded to CREATIVE_NOT_FOUND / VALIDATION_ERROR (the citation sits above
+            # those Examples), so there was nothing left to mismatch. "max_creatives limit
+            # not enforced in production" was wrong about its own row, which asks for
+            # INVALID_REQUEST — exactly what production raises for 101 creatives.
+            #
+            # Neither could be tested while it stood. Both outlines also sat on the
+            # uc002-not-wired ENV_ROUTES catch-all, which xfails at FIXTURE SETUP, so nothing
+            # dispatched and these strict=True markers had nothing to grade. MEASURED
+            # baseline (box run 3b83d400e1234a7bb0ec79df6a32fadd): 54 items, 54 xfailed,
+            # ZERO executed. Both markers come off together, exactly as the daily-spend-cap
+            # pair above did: removing either alone leaves the rows as ungraded as before.
+            #
+            # With the outlines claimed on the uc002-ext row, 45 of the 54 items PASS across
+            # a2a/mcp/rest — 24 of 30 on the partition outline (box run
+            # d376b293041b48629441884f67699a44) and 21 of 24 on the boundary outline (box run
+            # d9e341c094e845b3b1ff3a2608e67295), the latter reported as XPASS(strict) because
+            # these markers were still on them.
+            #
+            # WHAT THE THREE SURVIVING ROWS ARE, and why the reason is a fixture and not a
+            # seller. They are the three rows that UPLOAD AN INLINE CREATIVE, and they cannot
+            # pass on either spelling of this suite's canonical test format id:
+            #   display_300x250       — no agent serves it. An inline creative goes through
+            #     sync_creatives, whose creatives/_validation.py resolves format_id through
+            #     the creative-agent registry, and in a test process
+            #     get_creative_agent_registry() returns ReferenceFormatsRegistry — the
+            #     formats in tests/fixtures/creative_formats/reference_formats.json, which is
+            #     also what the e2e server serves. That catalog carries
+            #     display_300x250_image / _html / _generative / _2x and NO bare
+            #     display_300x250, so the seller correctly answered REFERENCE_NOT_FOUND and
+            #     the create surfaced it as CREATIVE_REJECTED.
+            #   display_300x250_image — the agent serves it, but the product
+            #     _seed_media_buy_chain creates advertises the bare id
+            #     (tests/harness/media_buy_create.py:180), so the create correctly answers
+            #     VALIDATION_ERROR "not accepted by product prod_1".
+            # Production is right in both directions; the FIXTURE is wrong.
+            #
+            # AND THE FIX IS NOT LOCAL TO THE HARNESS — MEASURED, not estimated. Moving the
+            # product's seeded format_ids to the catalog id (tests/harness/
+            # media_buy_create.py:180) and renaming the fabricated spec at :340 was tried on
+            # this branch and REVERTED: box run e2370f95c3804e7ea214da9c64fffa8a turned these
+            # two outlines from 45 passed / 9 xfailed into 24 passed / 23 failed, and every
+            # new failure is a LIBRARY-REFERENCE row — assignments_only,
+            # assignment_with_weight_zero, assignment_with_placement_targeting, "assignment
+            # cr-001", weight=0, weight=100. The cause is symmetrical to the one above: those
+            # rows seed their creative through given_media_buy._create_approved_creative,
+            # whose default fmt is the BARE id, so moving only the product inverts the
+            # product-vs-creative compatibility check for every one of them.
+            #
+            # THOSE SIX ROW LABELS ARE EXACTLY THE SIX THAT FAIL ON e2e_rest, which nobody
+            # had connected to this comment. Read off box run innet_161026_2101 (commit
+            # 72e80051d): the six bdd_e2e failures in this module are `valid library
+            # reference / assignment cr-001`, `weight = 0 (paused)`, `weight = 100 (max)`,
+            # `assignments_only`, `assignment_with_weight_zero` and
+            # `assignment_with_placement_targeting` -- this list, label for label. They fail
+            # with VALIDATION_ERROR "Creative ... has unknown format 'display_300x250' ...
+            # must be registered with the creative agent" (`::1` and `upload` appear ZERO
+            # times in that artifact; the SSRF rows carrying `::1` all PASS).
+            #
+            # So the in-process and e2e_rest symptom sets are DISJOINT and the stub is what
+            # splits them: these six resolve `display_300x250` through the per-id stub in
+            # process and so PASS there, failing only where resolution is real; the nine
+            # INLINE-UPLOAD rows graduated above are the other half of the same root. One
+            # cause, two symptom sets, and this comment had already enumerated one of them
+            # from the in-process side months before the box run named the other.
+            # So the bare id is a shared fixture CONSTANT, not three sites: ~10 more in
+            # tests/bdd/steps/generic/given_media_buy.py (including an @T-UC-002-ext-g step
+            # that ASSERTS the literal, and an ext-q Given that adds the catalog id to the
+            # product precisely because the default lacks it), ~9 in
+            # uc003_update_media_buy.py and ~7 in uc006_sync_creatives.py — and
+            # MediaBuyDualEnv SUBCLASSES MediaBuyCreateEnv, so the UC-003 and UC-026 products
+            # move with it. That is the scope tpr3 actually has.
+            #
+            # GRADUATED — the two entries that stood here are gone; the record is at the top
+            # of this block. The analysis above is kept because it is the measurement that
+            # made the graduation possible, and because its central claim turned out to be
+            # exactly right: "the bare id is a shared fixture CONSTANT, not three sites". The
+            # reconciliation moved the harness arm, deleted the per-id spec stub, and moved
+            # the creative-side defaults in given_media_buy (fmt AND asset_key together,
+            # since the capture declares banner_image rather than the stub's `primary`).
+            #
+            # One correction to it, since it is load-bearing for anyone reading this next:
+            # the earlier attempt it describes as REVERTED ("24 passed / 23 failed") moved
+            # only the PRODUCT arm and the spec name. The creative-side defaults have to move
+            # in the same change — that is what inverted the product-vs-creative check for
+            # every library-reference row, and it is why the full move lands instead.
         ]
         if any(t.startswith("T-UC-002") for t in marker_names):
             for tag, substrings, reason in _UC002_VALIDATION_XFAIL:
@@ -2868,12 +3590,21 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # daily-breakdown: include_package_daily_breakdown
             # is a real bool field; production lax-coerces non-boolean strings
             # ("yes"/"true" → True) instead of raising INVALID_REQUEST.
-            (
-                "T-UC-004-partition-daily-breakdown",
-                {"non_boolean"},
-                "production lax-coerces non-boolean strings to bool (no strict-bool "
-                "validation, no AdCPSalesAgentError(INVALID_REQUEST)). See docs/test-debt-bdd-strict-markers.md item C4.",
-            ),
+            #
+            # GRADUATED at the adcp 9.0.0 / AdCP 3.2.1 pin (whole entry removed, not
+            # emptied). The lax coercion the reason names is gone: the SDK now types
+            # the field Optional[Annotated[bool, Strict(strict=True)]], so
+            # GetMediaBuyDeliveryRequest.model_validate(
+            #     {"include_package_daily_breakdown": "yes"})
+            # REFUSES with [type=bool_type], and the boundary frames that refusal as
+            # the INVALID_REQUEST-with-suggestion envelope the row asserts.
+            # Not vacuous: this row's Then resolves to error "INVALID_REQUEST" with
+            # suggestion, which goes through TransportResult.assert_wire_error — the
+            # sanctioned wire assertion, which refuses a missing envelope outright and
+            # checks code, pin-sourced recovery and the suggestion in BOTH mirrored
+            # layers. There is no reconstructed-exception path for it to pass on.
+            # The strict=False twin in _UC004_PARTITION_SELECTIVE is deleted in the
+            # same change; left alone it would turn this graduation into a silent XPASS.
             # VERIFIED 2026-08-24 (xpass-graduation walk of e2e_rest ledger line
             # :55). This entry is CORRECT and stays. Three independent checks:
             #  1. The mechanism in the reason above is real, not inferred. Direct
@@ -2906,12 +3637,40 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # ValidationError — would not move these rows. C4's "one change clears
             # ~32 rows" estimate over-counts by however many of them are coercion,
             # not translation. Fixing this needs strict-bool validation, not C4.
-            (
-                "T-UC-004-boundary-daily-breakdown",
-                {"string 'true' (non-boolean type)"},
-                "production lax-coerces non-boolean strings to bool (no strict-bool "
-                "validation). See docs/test-debt-bdd-strict-markers.md item C4.",
-            ),
+            #
+            # GRADUATED at the adcp 9.0.0 / AdCP 3.2.1 pin (whole entry removed, not
+            # emptied — an empty substring set xfails EVERY row carrying the tag).
+            # The strict-bool validation the reason said production lacks is now what
+            # the SDK ships, so the remedy the CAVEAT above names is in place:
+            #   GetMediaBuyDeliveryRequest.model_fields[
+            #       "include_package_daily_breakdown"].annotation
+            #   -> Optional[Annotated[bool, Strict(strict=True)]]
+            # and model_validate({"include_package_daily_breakdown": "true"}) now
+            # REFUSES with [type=bool_type] (same for "TRUE"/"yes"/"1"), while a real
+            # bool and an absent field still parse. The boundary turns that refusal
+            # into an INVALID_REQUEST envelope (_boundary.py validated_request ->
+            # HTTP 400), so the row grades production, not a reconstruction.
+            # Not vacuous, and that was measured rather than argued — but it took TWO
+            # findings, and the first was not enough:
+            #  1. The row reached a real wire envelope. Its outcome cell was a bare
+            #     `invalid`, which resolves to _assert_wire_rejection (uc004_delivery.py);
+            #     that helper accepts ONE outcome besides an envelope, a request that died
+            #     building in the step. Poisoning the no-envelope branch with a raise left
+            #     all three transports passing, so none takes it; moving the same raise to
+            #     the top of the helper reddened all three, proving the probe live.
+            #  2. But reaching an envelope is not grading the obligation. The bare
+            #     `invalid` branch only asserts the code is NOT one of nine server-fault /
+            #     auth codes and that recovery is correctable|terminal. It never asserts
+            #     WHICH code, so production answering BUDGET_TOO_LOW would have passed.
+            #     The cell is therefore STRENGTHENED to `error "INVALID_REQUEST" with
+            #     suggestion` (BR-UC-004 Examples), which routes to _assert_error_outcome
+            #     -> assert_wire_error(code, require_suggestion=True). Grounded in the pin:
+            #     get-media-buy-delivery-request.json types the field {"type":"boolean"}
+            #     and enums/error-code.json gives INVALID_REQUEST recovery "correctable"
+            #     with a suggestion. Measured after strengthening: the three rows pass, and
+            #     substituting BUDGET_TOO_LOW into the cell reddens all three (the failure
+            #     names the real INVALID_REQUEST) — so the row now grades which code.
+            # Per-row evidence for the sibling partition entry below.
             # account: only the omitted/(field absent) rows
             # pass on every transport. The other rows fail transport-asym-
             # metrically — a2a/mcp/rest never parse/resolve AccountReference
@@ -3231,13 +3990,16 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # hatches.py) cannot catch it: it records conditions only, never `strict`,
             # so a strict=False shadow behind a strict=True route is invisible to it.
             # 62 tags in this file are routed more than once; only this one has been
-            # checked. Deliberately NOT deleted here — it is behaviour-neutral today
-            # and removing a pinned route is its own change, not part of walking :55.
-            (
-                "T-UC-004-boundary-daily-breakdown",
-                {"non-boolean", "non_boolean", "string 'true'"},
-                "include_package_daily_breakdown boundary: non-boolean validation not implemented",
-            ),
+            # checked.
+            #
+            # GRADUATED at the adcp 9.0.0 / AdCP 3.2.1 pin, together with the
+            # strict=True entry whose removal this comment made a precondition. The
+            # predicted sequence is exactly what happened: the SDK grew strict-bool
+            # validation, the strict=True entry fired as an XPASS failure, and
+            # removing it alone handed the row to this shadow, which reported a
+            # silent XPASS (measured: 3 failed -> 3 xpassed on a2a/mcp/rest). Both
+            # entries are therefore deleted in one change, and the row now grades
+            # live. Evidence for the behaviour is on the strict=True entry above.
             # Graduated: "buyer_refs only" and "zero resolution" (all 4 transports pass)
             # Graduated: "empty array" passes on impl/mcp/rest (only a2a fails)
             # Graduated: "partial resolution" -- the transport-agnostic _impl
@@ -3302,54 +4064,17 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # innet_150926_0049 — the last of that run's 11 e2e failures that was a routing
         # artifact rather than a defect.
 
-        # STAYS — inspected, and the previous reason here was WRONG
-        # in every particular. It claimed the spend-fallback needs injected by_placement
-        # data that is "in-process mock state invisible to the live server", with
-        # salesagent-04im as the follow-up. In fact:
-        #   • _inject_placement_data is DEAD CODE — zero callers anywhere in tests/
-        #     (its only other mention was that comment). It never runs on ANY transport,
-        #     so it cannot be the reason e2e_rest differs.
-        #   • the follow-up id that comment cited does not resolve to any issue.
-        #   • by_placement is NOT injected at all — production SYNTHESIZES it server-side
-        #     (media_buy_delivery.py:1040-1058) whenever the adapter reports no
-        #     per-placement data, so e2e_rest receives the same rows as in-process.
-        #
-        # The real defect is that the scenario cannot grade its own obligation, on any
-        # transport. _build_placement_breakdown derives every metric from ONE weight
-        # vector (0.5, 0.3, 0.2): impressions=imp*w, spend=spd*w, clicks=imp*w*0.01.
-        # All metrics are therefore rank-identical by construction AND already emitted
-        # in descending order, so `values == sorted(values, reverse=True)` holds for
-        # every sort key regardless of what production does. Probe (in-process, all 3
-        # transports): n_placements=3, spend=[125.0, 75.0, 50.0], clicks=[25.0, 15.0,
-        # 10.0] — plc_a > plc_b > plc_c on every metric.
-        #
-        # Mutation-proved (local slice, 6 tests = 3 transports x
-        # {fallback, counter-example}):
-        #   M1 delete the spend-fallback branch entirely  -> 6 passed (GREEN)
-        #   M2 fall back to "clicks" instead of "spend"   -> 6 passed (GREEN)
-        # Deleting the exact behaviour the scenario exists to grade does not turn it
-        # red. The obligation is real and correctly stated — AdCP 3.1.1
-        # media-buy/task-reference/get_media_buy_delivery.mdx:869 "falls back to `spend`
-        # if the seller does not report the requested metric" — it is simply ungraded.
-        #
-        # NOTE the discriminating fixture already exists and is the dead one:
-        # _DEFAULT_PLACEMENT_DATA (spend 150/200/50, clicks 30/10/50) is NOT
-        # rank-correlated and WOULD separate the orderings. Fixing this row means
-        # wiring that data in (and asserting the ORDER of placement_ids, not just
-        # descending-ness), then re-checking whether it still passes. Threading it needs
-        # a by_placement parameter on set_adapter_response AND on its
-        # _persist_simulation_config realization, so the live server sees the same data.
-        # GH #2059.
-        # Do not graduate this route until a replacement assertion is mutation-proved.
-        if "T-UC-004-dim-sortby-fallback" in marker_names and is_e2e_rest:
-            item.add_marker(
-                pytest.mark.xfail(
-                    reason="sort_by spend-fallback is ungraded on EVERY transport: the synthesized "
-                    "placement split descends identically for spend, impressions and clicks, so a "
-                    "broken fallback sorts the same as a working one",
-                    strict=False,
-                )
-            )
+        # Graduated: the e2e_rest route for T-UC-004-dim-sortby-fallback, a strict=False
+        # xfail kept only because no in-network run had carried by_placement through the
+        # delivery_simulation_configs row, nor written that row three times in one
+        # scenario as the accumulating placement Given does. Box run innet_291026_0257 is
+        # that measurement: XPASS on e2e_rest, passed on a2a, mcp and rest. The scenario
+        # names three placements whose spend, impressions and clicks rank differently and
+        # pins the resulting order ("pl-B", "pl-A", "pl-C"), so only a fallback to spend
+        # satisfies it; the order Then fails loudly when no package carries by_placement.
+        # Obligation: media-buy/get-media-buy-delivery-request.json @ 3.2.7,
+        # reporting_dimensions.placement.sort_by -- "Falls back to 'spend' when the seller
+        # does not report the requested metric at this breakdown's row grain". GH #2059.
 
         # UC-004 partition scenarios: adcp 3.10 changed schema validation behavior.
         # Partition tests exercise valid/invalid value ranges per field.
@@ -3395,12 +4120,12 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # a real-wire-asserted field (_WIRE_ASSERTED_FIELDS), and all 4 rows
             # pass with the correct VALIDATION_ERROR+suggestion on all 3
             # transports.
-            # daily breakdown: production doesn't validate non-boolean values
-            (
-                "T-UC-004-partition-daily-breakdown",
-                {"non_boolean"},
-                "include_package_daily_breakdown validation not implemented — production accepts non-boolean",
-            ),
+            # daily breakdown: GRADUATED with its strict=True twin in
+            # _UC004_GENUINE_XFAIL_ROWS (see the evidence there). The reason —
+            # "production accepts non-boolean" — is disproved by the pinned SDK's
+            # strict-bool field; leaving this entry would have absorbed the
+            # graduation as a silent XPASS, exactly as the boundary twin's SHADOW
+            # note predicted. Entry deleted, not emptied.
             # Graduated: T-UC-004-partition-account. ENTRY DELETED, not thinned — its set
             # named invalid_oneOf_both and empty_object, and with impl sunsetted (#1417)
             # a2a/mcp/rest are the only in-process transports, so all SIX matching rows
@@ -3534,10 +4259,25 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # seller that stopped echoing them entirely would never have turned it red
             # . As a tag this XPASSes the day production populates them.
             "T-UC-019-main",
-            # Creative approval mapping — not implemented
-            "T-UC-019-partition-approval",
-            "T-UC-019-partition-approval-invalid",
-            "T-UC-019-boundary-approval",
+            # GRADUATED: T-UC-019-partition-approval and T-UC-019-boundary-approval. The
+            # entry read "Creative approval mapping — not implemented", which was false on
+            # both halves: production maps internal status to the AdCP enum (its four
+            # invariant siblings inv-152-1/2/3/5 are graduated and green on that very
+            # mapping), and these two tags were never the thing reporting the failure. Both
+            # outlines were held by ONE imperative pytest.xfail() in
+            # given_package_creative_assignment, whose stated reason ("No
+            # CreativeAssignmentFactory") was false too -- the factory is imported at the top
+            # of uc019_query_media_buys.py and used by the two Givens directly above it.
+            # pytest.xfail() ABORTS the scenario, so this tag never fired and the four
+            # further inline xfails below that Given were dead code. MEASURED before the fix:
+            # 39 items, 39 xfailed, ZERO executed, every one of them citing that one Given.
+            # The Givens now seed and move real rows, and the boundary outline's four outcome
+            # sentences have step definitions for the first time.
+            #
+            # T-UC-019-partition-approval-invalid is retired from BR-UC-019, not routed: the
+            # pin states no rule for an assignment whose creative is missing, and the
+            # composite FK makes that state unreachable here. The note where the scenario
+            # stood records both.
             # Graduated (#1545 review), now wired + passing on the A2A/MCP wire:
             #   inv-150-1 (pre-flight active -> pending_start)
             #   inv-150-3 (post-flight active -> completed)
@@ -3889,14 +4629,26 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # keyword targeting ops not implemented, error codes/suggestions missing.
         # FIXME: UC-026 production gaps in update response and validation.
         _UC026_XFAIL_TAGS: set[str] = {
-            # Graduated: T-UC-026-main-explicit-formats (qq6f: format_ids now echoed)
+            # (The qq6f "Graduated: T-UC-026-main-explicit-formats" note that stood here
+            # was stale: the tag was re-added in the 2026-09-15 block below, which now
+            # carries the graduation record.)
             # Full-config: optimization_goals missing `kind`, targeting_overlay.audiences extra_forbidden
             "T-UC-026-main-full-config",
-            # Update alt-flows: AffectedPackage lacks budget/targeting_overlay/format_ids;
-            # keyword_targets_add/remove and negative_keywords_add/remove not implemented
-            "T-UC-026-alt-update",
-            "T-UC-026-alt-pause",
-            "T-UC-026-alt-resume",
+            # Graduated: T-UC-026-alt-update, T-UC-026-alt-pause, T-UC-026-alt-resume
+            # (innet_291026_0008, all four transports xpass). update_media_buy now answers
+            # one affected_packages snapshot per modified package (_affected_package,
+            # media_buy_update.py), which 3.2.7 media-buy/update-media-buy-response.json
+            # requires ("full Package objects showing complete post-update state for each
+            # modified package"). The snapshot's budget and paused are the values the
+            # budget and paused branches applied, and a field no branch touched is read off
+            # the stored package -- so a seller that skipped either branch would report the
+            # stored 5000 budget, or the stored pause state the Given realized (created
+            # active for pause, created paused for resume), and fail these Thens. Scope of
+            # the grade: in-process, MediaBuyDualEnv's update adapter is a MagicMock, so the
+            # package_config write an update pause makes on the ad server side is graded on
+            # no transport; the Thens grade the tool's branch, not the adapter's record.
+            # Keyword alt-flows: the seller refuses keyword ops with UNSUPPORTED_FEATURE and
+            # these scenarios still assert the effect of applying them.
             "T-UC-026-alt-keyword-add",
             "T-UC-026-alt-keyword-upsert",
             "T-UC-026-alt-keyword-remove",
@@ -3907,35 +4659,112 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # Graduated: T-UC-026-alt-dedup-crossbuy (all 4 transports pass)
             # Extension error scenarios — error codes/suggestions not implemented
             # Graduated: T-UC-026-ext-a (all 4 transports pass)
-            "T-UC-026-ext-b",
+            # Graduated to _UC026_PARTITION_SELECTIVE: T-UC-026-ext-b. Two of its three
+            # rows (product_id, pricing_option_id) pass on all four transports; the
+            # budget row is a 3.2.1 regrounding failure, not a production gap, and is
+            # row-keyed below.
             "T-UC-026-ext-c",
             "T-UC-026-ext-d",
-            "T-UC-026-ext-e",
-            "T-UC-026-ext-f",
-            "T-UC-026-ext-g-product",
-            "T-UC-026-ext-g-format",
-            "T-UC-026-ext-g-pricing",
+            # Graduated in wave 5 (integrate/wave1 a3687d971): T-UC-026-ext-f (w5b10), the
+            # duplicate-catalog refusal create_media_buy now makes with VALIDATION_ERROR.
+            # Graduated: T-UC-026-ext-g-product, T-UC-026-ext-g-format,
+            # T-UC-026-ext-g-pricing (innet_091026_1343, all four transports xpass).
+            # Production refuses each immutable field on update from
+            # UpdateMediaBuyRequest._refuse_forbidden_package_shapes, which raises one
+            # pydantic `not` error per offending field; adcp_error_for maps a pydantic
+            # ValidationError to AdCPInvalidRequestError, so the buyer gets
+            # INVALID_REQUEST + recovery=correctable + the CODE_TABLE suggestion with
+            # field='packages[0].<name>'. Measured on this tree at the DTO boundary:
+            # product_id, format_ids and pricing_option_id each resolve to
+            # INVALID_REQUEST with that field; the wire-level evidence is the xpass on
+            # all four transports. 3.2.1 media-buy/package-update.json grounds it -- it
+            # declares none of the three and its root description names them
+            # "Fully-immutable fields ... cannot appear in update payloads".
+            # Each scenario's POST-F2 said "Error identifies immutable <name> field" and
+            # no Then graded it, so the graduation added `the error field should contain
+            # "<name>"` to all three; they still xpass under it.
             "T-UC-026-ext-h-keyword",
             "T-UC-026-ext-h-negative",
             "T-UC-026-ext-h-cross-ok",
             "T-UC-026-ext-h-cross-reverse",
+            # NOT graduated, and the reason is a HARNESS gap this xpass was hiding.
+            #
+            # T-UC-026-ext-i xpassed on all four transports, and the xpass was grading the
+            # WRONG TOOL. Its Givens are "a valid update_media_buy request with package
+            # update: | budget | 7000 |" and "the package update contains no package_id"
+            # -- and nothing before them creates a media buy. So ``_ensure_update_kwargs``
+            # has no ``existing_media_buy_id`` to copy, ``update_kwargs`` carries no
+            # ``media_buy_id``, and ``_is_update_request`` (tests/harness/media_buy_dual.py:37)
+            # discriminates on exactly that key: with no ``req`` and no ``media_buy_id`` it
+            # returns False and the flat body is dispatched to CREATE_media_buy. Production
+            # then refuses a create package of ``{budget: 7000}`` -- no product_id -- and the
+            # scenario's INVALID_REQUEST / suggestion / correctable assertions all held,
+            # because create and update share one error-envelope schema.
+            #
+            # Measured: the graduation added `the error field should contain "package_id"`
+            # (the scenario's own ungraded POST-F2, "Error explains that a package
+            # identifier is required"), and all three in-process transports went from
+            # xpass to FAIL with "Expected error field to contain 'package_id', got
+            # 'packages[0].product_id'". The field pointer is the one part of the envelope
+            # that says which request was validated, which is why adding it is what made
+            # the misdispatch visible.
+            #
+            # The assertion STAYS -- it is the correct obligation (3.2.1
+            # media-buy/package-update.json has required: ["package_id"]) and deleting it
+            # would restore the vacuum. Graduating this needs the Given to establish a
+            # media buy so the dispatch reaches update_media_buy at all; same family as
+            # T-UC-026-ext-j below, a harness gap stated as such rather than blamed on the
+            # seller.
             "T-UC-026-ext-i",
             # Invariant scenarios — production validation gaps
             # Graduated: T-UC-026-inv-194-1 (all 4 transports pass)
             "T-UC-026-inv-194-2",
-            "T-UC-026-inv-195-1",
+            # Graduated: T-UC-026-inv-195-1 (innet_091026_1343, all four transports
+            # xpass). 3.2.1 core/package.json declares pricing_option_id on the returned
+            # package, and the Then compares it for equality against the id the scenario
+            # named (resolved through the seeded pricing option), so an unechoed or
+            # substituted value fails.
             "T-UC-026-inv-195-2",
             # Graduated: T-UC-026-inv-195-3 (rczc: bid_price ceiling semantics pass all 4 transports)
             # Graduated: T-UC-026-inv-195-4 (rczc: bid_price exact semantics pass all 4 transports)
             # Graduated: T-UC-026-inv-196-3 (all 4 transports pass)
-            "T-UC-026-inv-197-3",
-            "T-UC-026-inv-197-4",
-            "T-UC-026-inv-198-4",
+            # Graduated: T-UC-026-inv-197-4 (innet_091026_1343, all four transports
+            # xpass). 3.2.1 media-buy/package-request.json keeps minItems: 1 on
+            # format_ids, so an empty array is a schema-constraint violation, which
+            # 3.2.1 enums/error-code.json puts under INVALID_REQUEST ("violates schema
+            # constraints", recovery correctable). Measured on this tree: the refusal
+            # comes back INVALID_REQUEST with field='packages[0].format_ids' and one
+            # issue carrying keyword 'minItems' -- measured at the DTO boundary, with the
+            # xpass as the wire-level evidence. The scenario was strengthened with the
+            # graduation to assert that field pointer and recovery=correctable.
+            # Graduated: T-UC-026-inv-198-4 (innet_291026_0008, all four transports xpass).
+            # The Then reads budget 9000 and pacing "even" off the affected_packages
+            # snapshot; pacing is re-read from the MediaPackage.pacing column the update
+            # writes, and the Given's package was created with no pacing, so an update that
+            # dropped pacing reports None and fails.
             "T-UC-026-inv-199-3",
             "T-UC-026-inv-199-4",
             # Graduated: T-UC-026-inv-200-1 (all 4 transports pass)
-            "T-UC-026-inv-200-2",
-            "T-UC-026-inv-201-1",
+            # Graduated: T-UC-026-inv-200-2 (PASSED on a2a, mcp and rest -- the three
+            # transports this module parametrizes; not in e2e_rest_known_failures.txt,
+            # so there is no ledger line to mirror).
+            # 3.2.1 media-buy/package-request.json types the request's ``paused``
+            # "Whether this package should be created in a paused state. Paused packages
+            # do not deliver impressions. Defaults to false." The seller used to write a
+            # hardcoded False into package_config and read the pause state back off it,
+            # so a package asked for paused delivered AND reported paused=false. The ask
+            # now rides MediaPackage to the ad server, which is where the response's
+            # value comes from (``Package.SELLER_DECIDED`` names paused), and GAM/Kevel/
+            # Triton create the line item held. The scenario's Then was strengthened with
+            # the graduation to read the persisted package_config as well as the response
+            # -- the record get_media_buys serves the field from -- so an echo cannot
+            # satisfy it. Fire-probed: restoring the hardcoded literal turns it red.
+            # Graduated: T-UC-026-inv-201-1 (xpassed on a2a, mcp, rest and e2e_rest in
+            # innet_291026_2041). Create records the request's catalogs in package_config on
+            # both arms of media_buy_create.py, and 7685a2908 made the scenario read the
+            # created package's stored catalogs back before the update and compare the
+            # replaced list by exact (type, catalog_id) pair, so a seller that echoes
+            # catalogs without storing them, or merges instead of replacing, fails it.
             "T-UC-026-inv-201-2",
             "T-UC-026-inv-201-3",
             "T-UC-026-inv-201-4",
@@ -3962,13 +4791,26 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # on a2a, mcp and rest alike. The outlines that fail only some rows are in
             # _UC026_PARTITION_SELECTIVE below, keyed by the row.
             #
-            # format_ids: not defaulted to the product's formats when the package omits
-            # them, and absent from the response when the package supplies them. The
-            # pinned 3.1 core/package.json declares the field on the returned package.
+            # format_ids is echoed only when the request carried it. core/package.json @
+            # 3.2.7: "Omitted means the request did not carry legacy format_ids", so a
+            # package that omits them gets none back, and 10c593143 corrected the scenario
+            # to assert exactly that, which production already does. The expected remaining
+            # failure is the format_ids_to_provide line: on a product with no canonical
+            # snapshot, _legacy_formats_to_provide returns the request's format_ids, which
+            # are absent here, so the Then reads None. Not yet measured on a box run.
             "T-UC-026-main-required-fields",
-            "T-UC-026-main-explicit-formats",
-            # catalogs accepted but not echoed on the created package.
-            "T-UC-026-inv-089-2",
+            # Graduated: T-UC-026-main-explicit-formats (innet_091026_1343, all four
+            # transports xpass) -- the other half of that note is fixed: a package that
+            # SUPPLIES format_ids now gets them echoed, and the Then compares the echoed
+            # set for equality, so a dropped or widened set fails. format_ids_to_provide
+            # is graded in both directions (assigned formats excluded, unassigned ones
+            # present) by then_package_formats_to_provide_based_on_creatives.
+            # Graduated: T-UC-026-inv-089-2 (innet_091026_1343, all four transports
+            # xpass) -- catalogs are echoed on the created package now. 3.2.1
+            # core/package.json: "Echoed from the create_media_buy request". The Then was
+            # strengthened with the graduation from a count-plus-distinct-types tally to
+            # set equality of (type, catalog_id) against the request, which is what an
+            # echo obligation actually says; it still xpasses under the stronger rule.
             # price_breakdown absent from the create response, so the default
             # list_price == option rate claim has nothing to read.
             "T-UC-026-inv-196-3",
@@ -3978,14 +4820,33 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # are production's measured answers:
             #
             #   alt-cancel: the update response carries NO packages at all, so the
-            #   canceled=true echo has nothing to be read from. Same family as the
-            #   AffectedPackage-lacks-state note above.
+            #   canceled=true echo has nothing to be read from.
             "T-UC-026-alt-cancel",
             #   alt-cancel-irreversible: the seller DOES refuse canceled=false, but the
             #   envelope names field 'media_buy_id' rather than 'canceled', so the buyer
             #   is not told which field violated the const. The refusal is right and the
             #   field pointer is wrong.
             "T-UC-026-alt-cancel-irreversible",
+            # Graduated: T-UC-026-ext-e (innet_291026_0008, all four transports xpass).
+            #   Production answers UNSUPPORTED_FEATURE since c0e130f1b, the code
+            #   media-buy/package-request.json @ 3.2.7 ("Format selector contract
+            #   (normative)") gives "a single resolved route that does not satisfy the
+            #   product"; _resolve_package_selectors raises canonical_refusal with
+            #   field=packages[0].format_ids. The scenario's POST-F2 ("Error identifies
+            #   unsupported format_ids") was ungraded, so the graduation added `the error
+            #   field should contain "format_ids"`.
+            # NOT graduated although it xpassed on all four transports (innet_291026_0008):
+            # the xpass was vacuous. Its only Then checked that format_ids is not echoed,
+            # which a seller applying no default also passes, so INV-3 ("format_ids omitted
+            # defaults to all product formats") was graded by nothing. The scenario now reads
+            # the default off format_ids_to_provide, and is expected to fail there: a request
+            # naming no selector records no snapshot (_package_format_snapshots), so
+            # _legacy_formats_to_provide falls back to the request's absent format_ids and
+            # the field is None. That is the failure T-UC-026-main-required-fields measured
+            # on all four transports in innet_291026_0008 ("Package format_ids_to_provide
+            # is None") through the same code path; this scenario's own failure is traced,
+            # not yet measured on a box run.
+            "T-UC-026-inv-197-3",
             # HARNESS gap, not a production one, and the distinction is the point. The
             # scenario opens "the Buyer owns a media buy with a package that has already
             # SETTLED", and nothing reaches that state: settlement is billing-side, no
@@ -3997,11 +4858,15 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # package, after which the scenario grades the refusal for real.
             "T-UC-026-ext-j",
         }
+        # THE SHARED REASON BELOW IS A GROUP LABEL, not each member's cause; the cause of
+        # each is the comment beside its tag. strict=False means an xpass here is SILENT,
+        # so a member that starts passing is graduated by nobody unless a box run's xpass
+        # list is read.
         if marker_names & _UC026_XFAIL_TAGS:
             item.add_marker(
                 pytest.mark.xfail(
-                    reason="UC-026 spec-production gap — AffectedPackage lacks full state / "
-                    "keyword ops not implemented / error codes missing",
+                    reason="UC-026 spec-production gap — see the comment beside the tag in "
+                    "_UC026_XFAIL_TAGS for this scenario's measured cause",
                     strict=False,
                 )
             )
@@ -4009,94 +4874,144 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # --- UC-026 partition/boundary: selective xfail for graduated tags ---
         # FIXME: Remaining failures are production-level gaps.
         # x2l0: narrowed from set() (all-fail) after a3xo MediaBuyDualEnv wiring
-        # graduated most partition/boundary examples. Two failure patterns remain:
-        #   1. REST update dispatch: REST success-path update tests fail (error-path
-        #      tests and create-path tests pass because validation catches them first)
-        #   2. Cross-transport production gaps: conflict_with_overlay validation,
-        #      creative_assignments/optimization_goals replacement, empty keyword
-        #      validation not implemented
+        # graduated most partition/boundary examples.
+        #
+        # ── § REST update rows ─────────────────────────────────────────────────
+        # Graduated (innet_291026_0008): every REST row this block used to park as "REST
+        # update dispatch" or "vacuous because update_media_buy returns
+        # affected_packages=[]". Both causes are gone, and each row now passes on a2a, mcp,
+        # rest and e2e_rest alike:
+        #   * The keyword-op rows (keyword_targets_add/_remove, negative_keywords_add/
+        #     _remove, partition and boundary, shared and unshared) were regrounded by
+        #     051877652 to expect UNSUPPORTED_FEATURE -- core/targeting.json "MUST be
+        #     applied exactly or rejected", and this seller declares no overlay_support --
+        #     and _refuse_unapplied_package_fields (media_buy_update.py) raises it before
+        #     the UoW opens. then_outcome grades the code and the suggestion on the wire
+        #     envelope through assert_wire_error, and the refusal exists on the update
+        #     path only, so it also proves the REST row reached update_media_buy.
+        #   * The immutable and paused success rows grade their effect through
+        #     _assert_requested_package_effects against the one affected_packages snapshot
+        #     per modified package that _affected_package now builds. 3.2.7
+        #     media-buy/update-media-buy-response.json: "full Package objects showing
+        #     complete post-update state for each modified package". The paused resume and
+        #     already-paused rows now start from a package created paused, so a seller that
+        #     ignored the resume reports the stored pause and fails.
+        # The two "existing values preserved" REST rows stay routed below, with their own
+        # reason: their xpass is vacuous on the claim the row names. They XPASSED again in
+        # innet_291026_0257 on the same vacuous Then, so they are not graduated from it. The
+        # vacuity is now removed: the Given creates the package with catalogs, create records
+        # them in package_config, and _assert_unnamed_catalogs_preserved compares the
+        # snapshot's catalogs with the created ones (3.2.7 media-buy/package-update.json,
+        # "Omit to leave catalogs unchanged"). They graduate, with their a2a, mcp and
+        # e2e_rest siblings now graded by the same check, on the first box run of that change.
+        _UC026_SHAPE_ROW_ANSWERED_UNSUPPORTED = (
+            "answered UNSUPPORTED_FEATURE where the row expects INVALID_REQUEST, on a2a, mcp, "
+            "rest and e2e_rest (innet_291026_0008)"
+        )
+        _UC026_PRESERVATION_UNGRADED = (
+            "the row's xpass in innet_291026_0257 graded nothing about preservation (the package "
+            "was created with no catalogs); the Given now seeds catalogs, create persists them and "
+            "the effect check compares them, so this row graduates on the first box run that "
+            "measures that change"
+        )
         _UC026_PARTITION_SELECTIVE: list[tuple[str, set[str], str]] = [
+            # Moved here from _UC026_XFAIL_TAGS, narrowed from the whole tag to one row.
+            # T-UC-026-ext-b has three rows and two of them -- product_id and
+            # pricing_option_id -- xpass on all four transports (innet_091026_1343):
+            # measured on this tree, each comes back INVALID_REQUEST with
+            # field='packages[0].<name>' and one issue whose keyword is 'required', which
+            # is exactly what the scenario grades.
+            #
+            # The budget row is a REGROUNDING failure, not a production gap, and it is the
+            # reason the tag could not simply be deleted. 3.2.1
+            # media-buy/package-request.json has required: ["product_id",
+            # "pricing_option_id"] -- budget is NOT required ("Required in fixed
+            # allocation mode. Optional in seller-optimized mode"). The scenario was
+            # written against 3.1.1 and lists budget as a third required field. This
+            # seller does refuse a budget-less package, but through the request-level
+            # accepted-shape oneOf ("matches no accepted shape. One of: packages, each
+            # with budget and without min_spend_target ..."), whose pydantic error has
+            # loc () -- so `field` comes out EMPTY and `issues` empty, and the scenario's
+            # `the error field should contain "budget"` has nothing to read. Two separate
+            # things to fix upstream, neither of them here: reconcile the row against the
+            # 3.2.1 required list, and give the accepted-shape refusal a field pointer
+            # (the spec's own answer for the seller-optimized case is UNSUPPORTED_FEATURE,
+            # not an unattributed INVALID_REQUEST).
+            (
+                "T-UC-026-ext-b",
+                {"-budget]"},
+                "3.2.1 package-request.json does not require budget, and the accepted-shape "
+                "refusal that does reject it carries loc () so the envelope names no field — "
+                "scenario needs upstream reconciliation, not graduation",
+            ),
             # ── Added 2026-09-15 with the UC-026 wiring. Row-keyed, not tag-keyed,
             # because each of these outlines fails a MINORITY of its rows and the rest
             # genuinely pass; xfailing the whole tag would have turned those passes into
             # xpasses and deleted the coverage the wiring just produced.
-            (
-                "T-UC-026-boundary-format-ids",
-                {"format_id from different product", "one unsupported format_id among valid ones"},
-                "a format_id the product does not carry is accepted instead of refused with "
-                "INVALID_REQUEST — the valid-format rows of this outline pass",
+            # Graduated: T-UC-026-boundary-format-ids ("format_id from different product",
+            # "one unsupported format_id among valid ones") and T-UC-026-partition-format-ids
+            # (unsupported_format) -- innet_291026_0008, all four transports xpass.
+            # media-buy/package-request.json @ 3.2.7, "Format selector contract
+            # (normative)": "A single resolved route that does not satisfy the product is
+            # rejected with UNSUPPORTED_FEATURE"; _resolve_package_selectors raises it
+            # through canonical_refusal since c0e130f1b, and then_outcome grades the code
+            # and suggestion on the wire envelope.
+            #
+            # Keyword / negative-keyword shape rows that still fail on every transport: an
+            # empty keyword, or a keyword op sent beside the same dimension in
+            # targeting_overlay. ONE row each, any transport, so these entries are the whole
+            # routing for those rows.
+            *(
+                (tag, {row}, f"{what} {_UC026_SHAPE_ROW_ANSWERED_UNSUPPORTED}")
+                for tag, row, what in (
+                    ("T-UC-026-boundary-keyword-add", "empty keyword string", "an empty keyword is"),
+                    ("T-UC-026-boundary-keyword-remove", "empty keyword string", "an empty keyword is"),
+                    (
+                        "T-UC-026-boundary-kw-add-shared",
+                        "keyword_targets_add WITH targeting_overlay.keyword_targets",
+                        "a keyword op beside the same overlay dimension is",
+                    ),
+                    (
+                        "T-UC-026-boundary-kw-remove-shared",
+                        "keyword_targets_remove WITH targeting_overlay.keyword_targets",
+                        "a keyword op beside the same overlay dimension is",
+                    ),
+                    (
+                        "T-UC-026-boundary-neg-kw-add",
+                        "negative_keywords_add WITH targeting_overlay.negative_keywords",
+                        "a keyword op beside the same overlay dimension is",
+                    ),
+                    (
+                        "T-UC-026-boundary-neg-kw-remove",
+                        "negative_keywords_remove WITH targeting_overlay.negative_keywords",
+                        "a keyword op beside the same overlay dimension is",
+                    ),
+                    (
+                        "T-UC-026-partition-kw-add-shared",
+                        "conflict_with_overlay",
+                        "a keyword op beside the same overlay dimension is",
+                    ),
+                    (
+                        "T-UC-026-partition-kw-remove-shared",
+                        "conflict_with_overlay",
+                        "a keyword op beside the same overlay dimension is",
+                    ),
+                    (
+                        "T-UC-026-partition-neg-kw-add",
+                        "conflict_with_overlay",
+                        "a keyword op beside the same overlay dimension is",
+                    ),
+                    (
+                        "T-UC-026-partition-neg-kw-remove",
+                        "conflict_with_overlay",
+                        "a keyword op beside the same overlay dimension is",
+                    ),
+                )
             ),
-            (
-                "T-UC-026-partition-format-ids",
-                {"unsupported_format"},
-                "a format_id the product does not carry is accepted instead of refused with "
-                "INVALID_REQUEST — the valid-format rows of this outline pass",
-            ),
-            # Keyword / negative-keyword conflict and empty-value validation. Every
-            # failing row is REST-only, which matches the REST update-dispatch note
-            # recorded further down; a2a and mcp pass the same rows.
-            (
-                "T-UC-026-boundary-keyword-add",
-                {"empty keyword string"},
-                "empty keyword value not rejected on the REST update path",
-            ),
-            (
-                "T-UC-026-boundary-keyword-remove",
-                {"empty keyword string"},
-                "empty keyword value not rejected on the REST update path",
-            ),
-            (
-                "T-UC-026-boundary-kw-add-shared",
-                {"keyword_targets_add WITH targeting_overlay.keyword_targets"},
-                "conflict between a keyword op and targeting_overlay not rejected on the REST update path",
-            ),
-            (
-                "T-UC-026-boundary-kw-remove-shared",
-                {"keyword_targets_remove WITH targeting_overlay.keyword_targets"},
-                "conflict between a keyword op and targeting_overlay not rejected on the REST update path",
-            ),
-            (
-                "T-UC-026-boundary-neg-kw-add",
-                {"negative_keywords_add WITH targeting_overlay.negative_keywords"},
-                "conflict between a keyword op and targeting_overlay not rejected on the REST update path",
-            ),
-            (
-                "T-UC-026-boundary-neg-kw-remove",
-                {"negative_keywords_remove WITH targeting_overlay.negative_keywords"},
-                "conflict between a keyword op and targeting_overlay not rejected on the REST update path",
-            ),
-            (
-                "T-UC-026-partition-kw-add-shared",
-                {"conflict_with_overlay"},
-                "conflict between a keyword op and targeting_overlay not rejected on the REST update path",
-            ),
-            (
-                "T-UC-026-partition-kw-remove-shared",
-                {"conflict_with_overlay"},
-                "conflict between a keyword op and targeting_overlay not rejected on the REST update path",
-            ),
-            (
-                "T-UC-026-partition-neg-kw-add",
-                {"conflict_with_overlay"},
-                "conflict between a keyword op and targeting_overlay not rejected on the REST update path",
-            ),
-            (
-                "T-UC-026-partition-neg-kw-remove",
-                {"conflict_with_overlay"},
-                "conflict between a keyword op and targeting_overlay not rejected on the REST update path",
-            ),
-            # Replacement semantics: only the targeting_overlay rows fail. The catalogs
-            # and scalar-patch rows of the same outlines pass.
-            (
-                "T-UC-026-boundary-replacement",
-                {"targeting_overlay replacement (full swap)"},
-                "targeting_overlay is not replaced wholesale on update",
-            ),
-            (
-                "T-UC-026-partition-replacement",
-                {"replace_targeting_overlay"},
-                "targeting_overlay is not replaced wholesale on update",
-            ),
+            # Retired: the targeting_overlay replacement rows. 2bab7f2d3 removed them from
+            # both outlines because they contradicted the pin (an undeclared `audiences`
+            # dimension, and a "full swap" where the pin makes the overlay a per-dimension
+            # patch); @T-UC-003-alt-targeting grades the replacement on a declared dimension.
             # budget=0 rejected with BUDGET_TOO_LOW — spec says 0 is valid
             (
                 "T-UC-026-partition-required-fields",
@@ -4123,213 +5038,30 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 "Production returns 'validation_error' instead of AdCP-spec 'INVALID_REQUEST' — "
                 "AdCPValidationError caught and re-raised as plain ValueError, stripping error code",
             ),
-            # Immutable: only REST success-path update tests fail (error tests pass)
-            (
-                "T-UC-026-partition-immutable",
-                {"[rest-update_mutable_only", "[rest-no_immutable_fields_present"},
-                "REST update dispatch not wired for partition immutable success tests",
-            ),
-            (
-                "T-UC-026-boundary-immutable",
-                {"[rest-update with only mutable"},
-                "REST update dispatch not wired for boundary immutable success tests",
-            ),
-            # Keyword add partition: only REST success-path tests fail
-            (
-                "T-UC-026-partition-keyword-add",
-                {
-                    "[rest-new_keyword",
-                    "[rest-existing_keyword_update_bid",
-                    "[rest-mixed_new_and_update",
-                    "[rest-same_keyword_different_match",
-                },
-                "REST update dispatch not wired for partition keyword-add success tests",
-            ),
-            # Keyword remove partition: only REST success-path tests fail
-            (
-                "T-UC-026-partition-keyword-remove",
-                {
-                    "[rest-remove_existing_pair",
-                    "[rest-remove_nonexistent_pair",
-                    "[rest-remove_all_keywords",
-                    "[rest-mixed_existing_and_nonexistent",
-                },
-                "REST update dispatch not wired for partition keyword-remove success tests",
-            ),
-            # Keyword boundary add: empty keyword string on impl/a2a/mcp +
-            # REST success-path tests fail
-            (
-                "T-UC-026-boundary-keyword-add",
-                {
-                    "impl-empty keyword string",
-                    "a2a-empty keyword string",
-                    "mcp-empty keyword string",
-                    "[rest-single new keyword target",
-                    "[rest-existing (keyword, match_type) pair",
-                    "[rest-same keyword with broad and exact",
-                    "[rest-bid_price = 0",
-                },
-                "empty keyword validation not implemented / REST update not wired",
-            ),
-            # Keyword boundary remove: empty keyword string on impl/a2a/mcp +
-            # REST success-path tests fail
-            (
-                "T-UC-026-boundary-keyword-remove",
-                {
-                    "impl-empty keyword string",
-                    "a2a-empty keyword string",
-                    "mcp-empty keyword string",
-                    "[rest-remove single existing",
-                    "[rest-remove non-existent pair",
-                    "[rest-remove all keyword targets",
-                    "[rest-mix of existing and non-existent",
-                },
-                "empty keyword validation not implemented / REST update not wired",
-            ),
-            # Keyword shared partition: conflict_with_overlay on impl/a2a/mcp +
-            # REST success-path tests fail
-            (
-                "T-UC-026-partition-kw-add-shared",
-                {
-                    "impl-conflict_with_overlay",
-                    "a2a-conflict_with_overlay",
-                    "mcp-conflict_with_overlay",
-                    "[rest-typical_add",
-                    "[rest-add_with_bid_price",
-                    "[rest-add_without_bid_price",
-                    "[rest-all_match_types",
-                    "[rest-boundary_min_array",
-                    "[rest-boundary_min_keyword",
-                    "[rest-cross_dimension_valid",
-                    "[rest-upsert_existing",
-                    "[rest-zero_bid_price",
-                },
-                "conflict_with_overlay not implemented / REST update not wired",
-            ),
-            (
-                "T-UC-026-partition-kw-remove-shared",
-                {
-                    "impl-conflict_with_overlay",
-                    "a2a-conflict_with_overlay",
-                    "mcp-conflict_with_overlay",
-                    "[rest-typical_remove",
-                    "[rest-all_match_types",
-                    "[rest-boundary_min_array",
-                    "[rest-boundary_min_keyword",
-                    "[rest-cross_dimension_valid",
-                    "[rest-remove_nonexistent",
-                },
-                "conflict_with_overlay not implemented / REST update not wired",
-            ),
-            # Keyword shared boundary: overlay conflict on impl/a2a/mcp +
-            # REST success-path tests fail
-            (
-                "T-UC-026-boundary-kw-add-shared",
-                {
-                    "impl-keyword_targets_add WITH targeting_overlay.keyword_targets-error",
-                    "a2a-keyword_targets_add WITH targeting_overlay.keyword_targets-error",
-                    "mcp-keyword_targets_add WITH targeting_overlay.keyword_targets-error",
-                    "[rest-array length 1",
-                    "[rest-keyword length 1",
-                    "[rest-keyword_targets_add WITH targeting_overlay.negative_keywords",
-                    "[rest-keyword_targets_add WITHOUT",
-                    "[rest-match_type = 'broad'",
-                    "[rest-match_type = 'exact'",
-                    "[rest-match_type = 'phrase'",
-                },
-                "overlay conflict validation not implemented / REST update not wired",
-            ),
-            (
-                "T-UC-026-boundary-kw-remove-shared",
-                {
-                    "impl-keyword_targets_remove WITH targeting_overlay.keyword_targets-error",
-                    "a2a-keyword_targets_remove WITH targeting_overlay.keyword_targets-error",
-                    "mcp-keyword_targets_remove WITH targeting_overlay.keyword_targets-error",
-                    "[rest-array length 1",
-                    "[rest-keyword length 1",
-                    "[rest-keyword_targets_remove WITHOUT",
-                    "[rest-match_type = 'broad'",
-                    "[rest-match_type = 'exact'",
-                    "[rest-match_type = 'phrase'",
-                    "[rest-remove pair that does NOT exist",
-                    "[rest-remove pair that exists",
-                },
-                "overlay conflict validation not implemented / REST update not wired",
-            ),
-            # Negative keyword partition: conflict_with_overlay on impl/a2a/mcp +
-            # REST success-path tests fail
-            (
-                "T-UC-026-partition-neg-kw-add",
-                {
-                    "impl-conflict_with_overlay",
-                    "a2a-conflict_with_overlay",
-                    "mcp-conflict_with_overlay",
-                    "[rest-typical_add",
-                    "[rest-add_duplicate",
-                    "[rest-all_match_types",
-                    "[rest-boundary_min_array",
-                    "[rest-boundary_min_keyword",
-                    "[rest-cross_dimension_valid",
-                },
-                "conflict_with_overlay not implemented / REST update not wired",
-            ),
-            (
-                "T-UC-026-partition-neg-kw-remove",
-                {
-                    "impl-conflict_with_overlay",
-                    "a2a-conflict_with_overlay",
-                    "mcp-conflict_with_overlay",
-                    "[rest-typical_remove",
-                    "[rest-all_match_types",
-                    "[rest-boundary_min_array",
-                    "[rest-boundary_min_keyword",
-                    "[rest-cross_dimension_valid",
-                    "[rest-remove_nonexistent",
-                },
-                "conflict_with_overlay not implemented / REST update not wired",
-            ),
-            # Negative keyword boundary: overlay conflict on impl/a2a/mcp +
-            # REST success-path tests fail
-            (
-                "T-UC-026-boundary-neg-kw-add",
-                {
-                    "impl-negative_keywords_add WITH targeting_overlay.negative_keywords-error",
-                    "a2a-negative_keywords_add WITH targeting_overlay.negative_keywords-error",
-                    "mcp-negative_keywords_add WITH targeting_overlay.negative_keywords-error",
-                    "[rest-negative_keywords_add WITHOUT",
-                    "[rest-negative_keywords_add WITH targeting_overlay.keyword_targets",
-                    "[rest-add pair that already exists",
-                    "[rest-array length 1",
-                    "[rest-keyword length 1",
-                    "[rest-match_type = 'broad'",
-                    "[rest-match_type = 'exact'",
-                    "[rest-match_type = 'phrase'",
-                },
-                "overlay conflict validation not implemented / REST update not wired",
-            ),
-            (
-                "T-UC-026-boundary-neg-kw-remove",
-                {
-                    "impl-negative_keywords_remove WITH targeting_overlay.negative_keywords-error",
-                    "a2a-negative_keywords_remove WITH targeting_overlay.negative_keywords-error",
-                    "mcp-negative_keywords_remove WITH targeting_overlay.negative_keywords-error",
-                    "[rest-negative_keywords_remove WITHOUT",
-                    "[rest-array length 1",
-                    "[rest-keyword length 1",
-                    "[rest-match_type = 'broad'",
-                    "[rest-match_type = 'exact'",
-                    "[rest-match_type = 'phrase'",
-                    "[rest-remove pair that does NOT exist",
-                    "[rest-remove pair that exists",
-                },
-                "overlay conflict validation not implemented / REST update not wired",
-            ),
-            # Paused: only REST update-path tests fail (create-path passes)
-            (
-                "T-UC-026-partition-paused",
-                {"[rest-pause_on_update", "[rest-resume_on_update"},
-                "REST update dispatch not wired for partition paused update tests",
-            ),
+            # Immutable: graduated, the last REST row with it.
+            #
+            # Graduated: [rest-no_immutable_fields_present (salesagent-mx7a8). That row
+            # sends packages[0] = {package_id, budget: 8000, pacing: "even"} and the
+            # outcome step reads BOTH back off the response package. pacing is now applied
+            # — update_media_buy writes the MediaPackage.pacing column that create already
+            # dual-writes — and the one affected_packages snapshot per modified package
+            # carries the column, so a2a and mcp moved failed->passed and this REST row
+            # moved xfail->xpass in the same run. The pass is NOT vacuous: the Then is
+            # _assert_requested_package_effects, which derives its assertion from the
+            # request and fails BY NAME on any requested field it cannot read back.
+            # Fire-probed by reverting the pacing write: the row fails on
+            # "Requested pacing='even', package carries None".
+            # Graduated: [rest-update_mutable_only (partition) and [rest-update with only
+            # mutable fields (boundary) -- innet_291026_0008, passing on a2a, mcp and
+            # e2e_rest and xpassing on rest. Both send {package_id, budget: 9000}; the
+            # snapshot reports the budget the budget branch applied, and a branch that
+            # skipped it reports the stored 5000.
+            #
+            # Graduated (innet_291026_0008, see § REST update rows above): every REST row of
+            # T-UC-026-partition-keyword-add / -keyword-remove, the boundary keyword and
+            # negative-keyword outlines (shared and unshared), and the partition shared
+            # outlines -- now UNSUPPORTED_FEATURE rows -- and the REST pause/resume rows of
+            # T-UC-026-partition-paused and T-UC-026-boundary-paused.
             # d09y: boundary scenarios exposing real production gaps after step-parser fix.
             (
                 "T-UC-026-boundary-pricing-option",
@@ -4337,41 +5069,30 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 "pricing_option validation returns 'validation_error' instead of AdCP 'INVALID_REQUEST' / "
                 "max_bid pricing requires bid_price / last-entry pricing_option rejects valid id — spec-production gap",
             ),
-            # Paused boundary: only REST update-path tests fail (create-path passes)
-            (
-                "T-UC-026-boundary-paused",
-                {
-                    "[rest-paused=false on update",
-                    "[rest-paused=true on update",
-                    "[rest-paused=true on already-paused",
-                },
-                "REST update dispatch not wired for boundary paused update tests",
-            ),
-            # Replacement: REST all tests fail (update dispatch) +
-            # creative_assignments/optimization_goals on impl/a2a/mcp
-            (
-                "T-UC-026-partition-replacement",
-                {
-                    "creative_assignments",
-                    "optimization_goals",
-                    "[rest-omit_array_fields",
-                    "[rest-replace_catalogs",
-                    "[rest-replace_targeting_overlay",
-                },
-                "creative_assignments/optimization_goals replacement not implemented / REST update not wired",
-            ),
-            (
-                "T-UC-026-boundary-replacement",
-                {
-                    "creative_assignments",
-                    "optimization_goals",
-                    "[rest-all array fields omitted",
-                    "[rest-catalogs provided",
-                    "[rest-only scalar fields updated",
-                    "[rest-targeting_overlay replacement",
-                },
-                "creative_assignments/optimization_goals replacement not implemented / REST update not wired",
-            ),
+            # Replacement: the REST "existing values preserved" rows, which are routed for their own
+            # reason (_UC026_PRESERVATION_UNGRADED). Their a2a, mcp and e2e_rest siblings run
+            # unrouted; the Given now seeds catalogs and create persists them, so all four
+            # rows grade preservation (see the note above _UC026_SHAPE_ROW_ANSWERED_UNSUPPORTED).
+            #
+            # Graduated: replace_catalogs on every transport, and the REST siblings
+            # [rest-replace_catalogs / [rest-catalogs provided / [rest-only scalar fields
+            # updated (salesagent-mx7a8). catalogs is now applied: 3.2
+            # media-buy/package-update.json defines it as "Replace the catalogs this
+            # package promotes. Uses replacement semantics — the provided array replaces
+            # the current list", and update_media_buy writes that whole document through
+            # MediaBuyRepository.update_package_config, which the one affected_packages
+            # snapshot then reads back. Measured in one serial run over this module's
+            # 63 immutable/replacement rows: 29 passed / 8 failed / 22 xfailed / 4 xpassed
+            # -> 37 passed / 0 failed / 18 xfailed / 8 xpassed, the four new xpasses being
+            # exactly the REST siblings of the four rows that went green.
+            #
+            # Retired: the creative_assignments and optimization_goals rows. 2bab7f2d3
+            # removed them from both outlines because each contradicted the pin (a goal with
+            # no `kind`; an assignment to a creative never put in the library); the
+            # @T-UC-003-*-optimization-goals and @T-UC-003-*-creative-replacement outlines
+            # grade both replacements.
+            ("T-UC-026-partition-replacement", {"[rest-omit_array_fields"}, _UC026_PRESERVATION_UNGRADED),
+            ("T-UC-026-boundary-replacement", {"[rest-all array fields omitted"}, _UC026_PRESERVATION_UNGRADED),
         ]
         for tag, substrings, reason in _UC026_PARTITION_SELECTIVE:
             if tag in marker_names:
@@ -4432,6 +5153,16 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # production fix surfaces as a strict xpass instead of being silently
             # swallowed. Ledger-only items carry only non-strict markers, so they
             # stay non-strict — an environment-dependent xpass must not fail CI.
+            #
+            # ``run`` is carried over for the same reason ``strict`` is, and it was NOT
+            # until 2026-10-09. The collapse rebuilt the marker from reason+strict only,
+            # so a ``run=False`` park (the one in _UC010_PARKED_ROWS, which exists
+            # precisely because those rows would PASS while grading nothing) silently
+            # became a RUNNING non-strict xfail on this transport alone — and the two
+            # webhook-signing-bounds rows duly executed against the live server and
+            # reported XPASS in innet_091026_1343, which is the exact vacuous green the
+            # park was written to refuse. Dropping a kwarg in a collapse is not a
+            # weaker version of the same routing; it is a different routing.
             xfails = [m for m in item.own_markers if m.name == "xfail"]
             if xfails:
                 strict = next((m for m in xfails if m.kwargs.get("strict", False)), None)
@@ -4441,6 +5172,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     pytest.mark.xfail(
                         reason=chosen.kwargs.get("reason", "e2e_rest xfail"),
                         strict=strict is not None,
+                        run=all(m.kwargs.get("run", True) for m in xfails),
                     )
                 )
 
@@ -4674,8 +5406,6 @@ _UC010_DORMANT_TRACKING: dict[str, str] = {
     # media_buy presence-object sections. #1855's body enumerates these by name, including
     # media_buy.content_standards -- which the old blanket citation got right by accident
     # and a naive #1855 -> #1291 swap would have got wrong.
-    "T-UC-010-v31-creative-multiplicity": "#1855",
-    "T-UC-010-v31-creative-agentic-flags": "#1855",
     "T-UC-010-v31-governance-aware": "#1855",
     "T-UC-010-v31-vendor-metric-optimization": "#1855",
     "T-UC-010-v31-content-standards-block": "#1855",
@@ -4683,7 +5413,6 @@ _UC010_DORMANT_TRACKING: dict[str, str] = {
     # adapter creative_specs and generative creative; conftest already cites it in-file for
     # the specialism tags.
     "T-UC-010-v31-creative-specs": "#1724",
-    "T-UC-010-v31-creative-extended": "#1724",
 }
 
 
@@ -4746,6 +5475,11 @@ def _uc010_wired_tags() -> frozenset[str]:
             # Batch 3 — degradation-sections + channel-all-canonical
             "T-UC-010-degradation-sections",
             "T-UC-010-channel-all-canonical",
+            # Wired when their Thens were corrected to the pin: the channel outline seeds the
+            # catalog production reads, and the protocols scenario reads its enum from the
+            # pin; both need only setup the env already has.
+            "T-UC-010-channel-mapping",
+            "T-UC-010-v31-supported-protocols-extended",
             # Batch 4 — features / targeting / idempotency-required
             "T-UC-010-features",
             "T-UC-010-targeting",
@@ -4772,7 +5506,7 @@ def _uc010_wired_tags() -> frozenset[str]:
             # Batch 9 — version negotiation + idempotency posture
             "T-UC-010-v31-idempotency-supported",
             "T-UC-010-v31-idempotency-in-flight-bound",
-            # Batch 10 — creative_approval_mode (a recorded gap R7)
+            # Batch 10 — creative_approval_mode (tenant.approval_mode)
             "T-UC-010-v31-creative-approval-mode",
             # Batch 11 — trusted_match surfaces
             "T-UC-010-v31-trusted-match-surfaces",
@@ -4780,12 +5514,14 @@ def _uc010_wired_tags() -> frozenset[str]:
             "T-UC-010-v31-measurement-accreditations",
             # Batch 13 — locally-added declaration-backing graders.
             # These grade validate_backing()'s rejection rules, which the generated
-            # specialisms scenario cannot: it declares creative-generative + the
-            # creative protocol, both unbacked, so it stays xfailed against #1724.
+            # specialisms scenario cannot: it declares only the claims this seller backs.
+            # local-inline-creative-management grades the inline_creative_management
+            # declaration against the create and update paths that honor it.
             "T-UC-010-local-backed-specialism",
             "T-UC-010-local-unbacked-specialism",
             "T-UC-010-local-orphaned-specialism",
             "T-UC-010-local-unbacked-protocol",
+            "T-UC-010-local-inline-creative-management",
             # Batch 14 — account.sandbox boundary outline (#1721 M4). Was dormant
             # (no bound Given for "the tenant account is configured for
             # {boundary_point}"), citing #1855 (generic wiring) instead of the
@@ -4807,6 +5543,13 @@ def _uc010_wired_tags() -> frozenset[str]:
             # They are correspondingly absent from _UC010_DORMANT_TRACKING, which is
             # where they used to be cited.
             "T-UC-010-v31-request-signing-posture",
+            # Split out of T-UC-010-v31-request-signing-posture: under 3.2 a
+            # covers_content_digest of `either` or `forbidden` is not an emission this
+            # seller may make, so the two rows that used to assert it moved to a scenario
+            # that grades the refusal. Wired by the SAME steps as the posture outline it
+            # left, so it must join this set or it would xfail as "not yet wired" rather
+            # than run.
+            "T-UC-010-v31-request-signing-legacy-digest",
             "T-UC-010-v31-request-signing-subset",
             "T-UC-010-v31-webhook-signing",
         }
@@ -5080,6 +5823,15 @@ _E2E_RESTART_IDENTITY_SQL = (
 )
 
 
+#: The tables the live server's concurrent writers take KEY SHARE row locks on, in the order
+#: they take them, which the reset deletes from FIRST and in this same order. The delivery
+#: scheduler's ``webhook_delivery_log`` INSERT checks its foreign keys in the order its
+#: migration declared them (``1759f70fc76a``): tenants, then principals, then media_buys.
+#: Two transactions that take the same rows in the same order cannot wait on each other in
+#: a cycle, whichever one starts first.
+_E2E_RESET_FIRST = ("tenants", "principals", "media_buys")
+
+
 def _reset_e2e_db(e2e_config) -> None:
     """Flush the live server DB to a clean baseline before an e2e scenario.
 
@@ -5105,25 +5857,29 @@ def _reset_e2e_db(e2e_config) -> None:
     in scenario SETUP and never on an assertion (#2048).
 
     DELETE takes a RowExclusiveLock, which does not conflict with AccessShareLock
-    at all, so that relation-lock cycle has nowhere to form. A ROW-lock cycle
-    remains, with a concurrent writer rather than a reader. The delivery
-    scheduler's ``webhook_delivery_log`` INSERT takes KEY SHARE locks on the rows
-    its foreign keys name -- tenants, then principals, then media_buys -- while
-    the reset deletes rows in ``pg_tables`` order (measured: principals, then
-    media_buys, then tenants). With those orders the server starts waiting first
-    and Postgres picks it as the victim; ``ProtocolWebhookService._conclude``
-    swallows the error and one delivery-log row is lost. When the reset commits
-    first, the INSERT fails its foreign-key check and is swallowed the same way.
-    Neither touches the scenario, and since #2328 neither trips the server's
-    process-wide fail-fast in ``get_db_session``. Nothing enforces the order,
-    though: a ``DeadlockDetected`` back in scenario SETUP means it changed, and
-    #2048 tracks the remaining cycle. Do NOT "fix" a recurrence by retrying or by
-    serialising the suite -- both leave the cycle in place.
+    at all, so that relation-lock cycle has nowhere to form. A ROW-lock cycle is
+    left, with a concurrent writer rather than a reader. The delivery scheduler's
+    ``webhook_delivery_log`` INSERT takes KEY SHARE locks on the rows its foreign
+    keys name -- tenants, then principals, then media_buys. A reset that deleted in
+    ``pg_tables`` order took principals long before tenants, so each side could hold
+    the row the other waited on, and Postgres killed whichever side's deadlock check
+    ran first -- the server's delivery-log write, or the reset in scenario SETUP
+    (innet_291026_0008). That order is the catalog's physical order, which moves
+    whenever a migration rewrites a table's ``pg_class`` row, so nothing held it
+    still. The reset therefore deletes ``_E2E_RESET_FIRST`` before anything else, in
+    the INSERT's order. If the INSERT holds tenants, the reset waits holding nothing
+    the INSERT needs and deletes the committed log row with the rest; if the reset
+    holds tenants first, the INSERT waits, then fails its foreign-key check, and
+    ``ProtocolWebhookService._conclude`` swallows that without touching the scenario
+    (since #2328 it does not trip the server's process-wide fail-fast in
+    ``get_db_session`` either). Do NOT "fix" a recurrence by retrying or by
+    serialising the suite -- both leave a cycle in place; a new writer that takes
+    these rows in another order belongs in the ordering.
 
-    Emptying every table makes the delete order irrelevant, so FK triggers are
-    suppressed for the transaction (``session_replication_role = replica``, SET
-    LOCAL so it reverts at COMMIT) instead of topologically sorting 40+ tables --
-    that is the property ``CASCADE`` was supplying. It needs a superuser, which
+    Emptying every table makes the delete order irrelevant to the end state, so FK
+    triggers are suppressed for the transaction (``session_replication_role =
+    replica``, SET LOCAL so it reverts at COMMIT) instead of topologically sorting
+    40+ tables -- that is the property ``CASCADE`` was supplying. It needs a superuser, which
     the e2e Postgres role already is (run_all_tests.sh calls pg_terminate_backend
     on other backends with it); if that ever stops being true this raises loudly
     rather than silently leaving rows behind.
@@ -5142,8 +5898,10 @@ def _reset_e2e_db(e2e_config) -> None:
                 )
             ]
             if tables:
+                ordered = [t for t in _E2E_RESET_FIRST if t in tables]
+                ordered += sorted(t for t in tables if t not in _E2E_RESET_FIRST)
                 statements = ["SET LOCAL session_replication_role = replica"]
-                statements += [f'DELETE FROM "{t}"' for t in tables]
+                statements += [f'DELETE FROM "{t}"' for t in ordered]
                 conn.exec_driver_sql("; ".join(statements))
                 conn.exec_driver_sql(_E2E_RESTART_IDENTITY_SQL)
     finally:
@@ -5734,6 +6492,14 @@ _UC003_TARGETING_OVERLAY_TAGS = frozenset(
 _UC003_MANUAL_APPROVAL_TAGS = frozenset(
     {"T-UC-003-alt-manual", "T-UC-003-approval-tenant", "T-UC-003-approval-adapter"}
 )
+# The package-update root `not` scenarios (media-buy/package-update.json). Their Givens need
+# exactly the uc003-ext seed -- an existing buy with pkg_001 -- and the refusal they grade is
+# raised before any of it is read: by the request model, or for bidding beside bid_price by
+# update_media_buy above the UoW (AMBIGUOUS_BIDDING_POLICY). They sat on the uc003-not-wired
+# catch-all, which xfails at setup, so the outline added with the refusal had never run.
+_UC003_PACKAGE_UPDATE_NOT_TAGS = frozenset(
+    {"T-UC-003-package-update-immutable-keyword", "T-UC-003-package-update-bidding-with-bid-price"}
+)
 # The BR-RULE-215 revision scenarios. They were dormant for a reason that was not
 # "the harness cannot reach them": they had NO step definitions at all, so the
 # not-wired row was standing in for missing work rather than for a production gap.
@@ -5751,6 +6517,14 @@ _UC003_REVISION_TAGS = frozenset(
 )
 _UC003_STORYBOARD_CLIENT_TAGS = frozenset(
     {"T-UC-003-storyboard-media-buy-not-found", "T-UC-003-storyboard-not-cancellable-on-recancel"}
+)
+_UC003_INLINE_CREATIVES_READBACK_TAGS = frozenset(
+    {
+        "T-UC-003-local-inline-creatives-replace",
+        "T-UC-003-local-inline-creatives-keep-library",
+        "T-UC-003-alt-creatives-inline",
+        "T-UC-003-storyboard-creative-fate-after-cancellation",
+    }
 )
 
 #: UC-006 scenarios CreativeSyncEnv provably serves, keyed by SCENARIO IDENTITY.
@@ -5875,6 +6649,12 @@ _UC006_WIRED_SCENARIOS = frozenset(
         "T-UC-006-main-delete-missing-conflict",
         "T-UC-006-rule-039-inv5-lenient",
         "T-UC-006-main-unchanged",
+        # Same env and the same Given as main-unchanged, with the agent_url respelled
+        # between the two syncs. core/format-id.json makes canonicalizing agent_url a
+        # MUST before two format references are treated as the same, and CreativeSyncEnv
+        # already serves everything this needs -- so it executes rather than sitting on
+        # the unclassified path. salesagent-jnp2s.
+        "T-UC-006-unchanged-respelled",
         "T-UC-006-rule-033-inv1",
         "T-UC-006-rule-033-inv3",
         "T-UC-006-rule-033-inv4",
@@ -5923,6 +6703,28 @@ _UC006_WIRED_SCENARIOS = frozenset(
         # CREATIVE_REJECTED with reasons, driven through the no-preview / no-media_url
         # rejection production already makes.
         "T-UC-006-error-details-creative-rejected",
+        # A canonical creative's format_kind and format_option_ref read back through
+        # list_creatives after a sync and after a resync onto a different option. The env
+        # serves both tools already; the readback uses the same client the format_id
+        # roundtrip does.
+        "T-UC-006-canonical-identity-roundtrip-on-sync",
+        "T-UC-006-canonical-identity-resync-replaces-option",
+        # The preview half of the same checklist item, and review on resync of a creative
+        # identified by format_kind. CreativeSyncEnv serves all three: the preview answer
+        # is the env's preview_creative seam in process and the pinned agent on e2e, and
+        # the approval mode is the env's tenant writer.
+        "T-UC-006-canonical-identity-through-preview",
+        "T-UC-006-canonical-unchanged-resync-keeps-review",
+        "T-UC-006-canonical-changed-resync-enters-review",
+        # A rename on resync is metadata: "updated", review state kept.
+        "T-UC-006-canonical-renamed-resync-keeps-review",
+        # representation_selection on sync: the lineage verified against its item, stored,
+        # listed back, and the execution-vs-revision review split. The same sync and
+        # readback the canonical-identity rows above use, and the same tenant writer.
+        "T-UC-006-representation-selection-readback",
+        "T-UC-006-representation-selection-refused",
+        "T-UC-006-representation-reselection-enters-review",
+        "T-UC-006-representation-new-revision-keeps-review",
     }
 )
 
@@ -5995,6 +6797,19 @@ ENV_ROUTES: list[EnvRoute] = [
         when=lambda m: "agentcard" in m,
         env_builder=_build_capabilities_env,
         seed=_seed_tenant_and_principal,
+    ),
+    # ── @pubformats (local publisher-format-catalog feature, RFC S3) ────────
+    # An UNSCOPED `when` row for the same reason as the rows around it: T-PUBFORMATS-* tags
+    # carry no T-UC-<n>, so detect_uc returns None and no coarse bucket claims them.
+    #
+    # The product env, because one scenario dispatches get_products and reads the product
+    # off the wire; the adagents.json fetches use `fetch_agent_card`, which every env has.
+    # No seed: the Background's "a tenant is configured for product discovery" seeds the
+    # tenant and principal, as for the canonical-format-filter rows.
+    EnvRoute(
+        tag="pubformats",
+        when=lambda m: "pubformats" in m,
+        env_builder=_build_product_env,
     ),
     # ── @pubauth (local publisher-authorization feature) ────────────────────
     # A `when` row because its scenarios carry T-ADMIN-PUBAUTH-* tags, which detect_uc
@@ -6081,6 +6896,27 @@ ENV_ROUTES: list[EnvRoute] = [
         seed=_seed_egress_create,
     ),
     EnvRoute(
+        tag="reporting-cadence-create",
+        # local-reporting-cadence-refusal: a reporting_frequency the buy's products do
+        # not advertise is refused at create ingest, so this dispatches a real
+        # create_media_buy and takes the same env and dependency chain as its
+        # @egress_create sibling above. It does NOT take that row's seed: the
+        # non-signing-seller declaration there is an egress concern, and a cadence
+        # refusal is decided before any signing posture matters.
+        #
+        # Its own identity tag means detect_uc returns None for these scenarios, so
+        # WITHOUT this row all three auto-xfail at fixture setup with "No harness wired
+        # for None" and grade nothing while reading green. The row is therefore added in
+        # the same change as the feature AND pinned in
+        # tests/unit/test_architecture_measurement_floors.py's EXPECTED_WIRED_ROUTES in
+        # that same change -- salesagent-8qela.152 is that pin being forgotten for a
+        # sibling row, which left the only scenarios grading canonical format filtering
+        # deletable without anything reddening.
+        when=lambda m: "reporting_cadence" in m,
+        env_builder=_env("tests.harness.media_buy_create.MediaBuyCreateEnv"),
+        seed=_seed_media_buy_chain,
+    ),
+    EnvRoute(
         tag="egress-get-products",
         # The remaining @egress scenarios dispatch get_products (and the A2A
         # message/send envelope pair). They share the UC-GET-PRODUCTS branch and
@@ -6101,6 +6937,129 @@ ENV_ROUTES: list[EnvRoute] = [
         # returns None for it and no coarse bucket claims it.
         when=lambda m: "pricing_option_announcement" in m,
         env_builder=_build_product_env,
+    ),
+    EnvRoute(
+        tag="get-products-format-options",
+        # BR-UC-GET-PRODUCTS format-option announcement: stores real products.format_options
+        # documents and reads them back off get_products, so it takes the UC-GET-PRODUCTS
+        # branch, exactly like its pricing sibling above. It carries its own identity tag, so
+        # detect_uc returns None for it and no coarse bucket claims it -- which is why the row
+        # is needed at all: without it the scenarios auto-xfail at fixture setup with
+        # "No harness wired for None" and grade nothing while reading green.
+        when=lambda m: "format_option_announcement" in m,
+        env_builder=_build_product_env,
+    ),
+    EnvRoute(
+        tag="get-products-format-id-filter",
+        # BR-UC-GET-PRODUCTS format_id filtering: stores real products.format_ids documents
+        # under two declaring agents and reads which products get_products announces, so it
+        # takes the UC-GET-PRODUCTS branch like its two siblings above. Its own identity tag
+        # means detect_uc returns None, so without this row the scenario would auto-xfail at
+        # fixture setup with "No harness wired for None" and grade nothing while reading green.
+        when=lambda m: "format_id_filter" in m,
+        env_builder=_build_product_env,
+    ),
+    EnvRoute(
+        tag="get-products-canonical-format-filters",
+        # BR-UC-GET-PRODUCTS canonical format filtering: stores real canonical-only
+        # products.format_options documents and reads which products get_products
+        # announces, so it takes the UC-GET-PRODUCTS branch like its three siblings above.
+        # Its own identity tag means detect_uc returns None, so WITHOUT this row the
+        # scenarios auto-xfail at fixture setup with "No harness wired for None" and grade
+        # nothing while reading green -- which is the hole salesagent-edkpt describes one
+        # layer up, and the reason this row is added in the same change as the feature.
+        when=lambda m: "canonical_format_filter" in m,
+        env_builder=_build_product_env,
+    ),
+    EnvRoute(
+        tag="format-satisfaction",
+        # BR-UC-FORMAT-SATISFACTION dispatches create_media_buy AND update_media_buy against
+        # a product carrying a real canonical declaration, so it takes MediaBuyDualEnv --
+        # which subclasses MediaBuyCreateEnv and routes an update (discriminated by
+        # media_buy_id) to the update wrappers. The create scenarios are unaffected by the
+        # subclass; what it adds is the second of the three paths the bead grades.
+        #
+        # Its own identity tag means detect_uc returns None, so WITHOUT this row every
+        # scenario auto-xfails at fixture setup with "No harness wired for None" and grades
+        # nothing while reading green. Added in the same change as the feature, and pinned in
+        # tests/unit/test_architecture_measurement_floors.py in that same change --
+        # salesagent-8qela.152 is this pin being forgotten for a sibling row.
+        when=lambda m: "format_satisfaction" in m,
+        env_builder=_env("tests.harness.media_buy_dual.MediaBuyDualEnv"),
+        seed=_seed_media_buy_chain,
+    ),
+    EnvRoute(
+        tag="format-satisfaction-sync",
+        # The THIRD path the bead grades: the sync_creatives assignment gate. A different
+        # tool and so a different env, which is why these scenarios carry their own tag
+        # rather than sharing @format_satisfaction -- one row cannot build two envs. Seeded
+        # by the scenarios' own Givens, because CreativeSyncEnv's default seed does not know
+        # which format arms this feature's product needs to declare.
+        #
+        # Pinned alongside its sibling for the same reason: its tag is its own, so no coarse
+        # uc bucket claims it and deleting this row makes all four scenarios auto-xfail.
+        #
+        # ``_seed_default_tenant_and_principal`` and not ``_seed_media_buy_chain``: a buyer
+        # dispatching sync_creatives has to EXIST (``identity_for`` nulls principal_id on a
+        # failed lookup, so an unseeded principal arrives unauthenticated and is refused
+        # AUTH_MISSING before reaching the gate), but the product these scenarios need
+        # declares format arms the shared chain knows nothing about -- so the product, the
+        # buy and the package are the scenarios' own Givens.
+        when=lambda m: "format_satisfaction_sync" in m,
+        env_builder=_env("tests.harness.creative_sync.CreativeSyncEnv"),
+        seed=_seed_default_tenant_and_principal,
+    ),
+    EnvRoute(
+        tag="creative-library-upsert",
+        # The LIBRARY UPSERT path, and the ONE route in this feature that leaves the
+        # creative-agent registry unpatched. ``RealRegistryCreativeSyncEnv`` says why that
+        # is worth having -- "a refusal produced by a mock proves nothing about
+        # production".
+        #
+        # THE CATALOGUE IS NO LONGER THE REASON THIS ROW EXISTS, and the two measurements
+        # that used to be written here ("``CreativeSyncEnv`` sets
+        # ``list_all_formats.return_value = []``, so ``all_formats`` arrives EMPTY",
+        # "the parent still blanks the fetch, measured at len=0") WERE TRUE AND ARE NOW
+        # FALSE: 1883dedc4 installs production's own ``ReferenceFormatsRegistry`` on the
+        # parent and deleted the ``run_async`` patch, so BOTH envs serve the committed
+        # capture with nothing arranged. They are recorded as retired rather
+        # than deleted because they are what made the Given for these two scenarios reach
+        # for ``mock["registry"]`` -- a key this env DELETES -- and died there with
+        # ``KeyError`` on all four transports from the day the scenarios were written
+        # (``KeyError: 'run_async'`` in box run innet_171026_2038,
+        # ``KeyError: 'registry'`` in innet_171026_2156). Nothing here needs the
+        # catalogue arranged; see ``_sync_legacy_claim``.
+        #
+        # THE CATALOGUE IS HERMETIC HERE; THE PREVIEW IS NOT, and the paragraph this
+        # replaces claimed the env "never dials" on the strength of the catalogue alone.
+        # Resolution is hermetic: under ADCP_TESTING the unpatched registry is
+        # ``ReferenceFormatsRegistry``, which answers every format from the checked-in
+        # capture, ``display_300x250_image`` projecting to ``image``. The PREVIEW is a
+        # real request: with the Given fixed and the gate reached, production's own
+        # ``preview_creative`` runs for a static agent-backed format, and the projectable
+        # scenario was measured dialling ``https://creative.adcontextprotocol.org`` for
+        # real -- three failed MCP handshakes, then a live session answering
+        # ``variants=1`` -- on every in-process transport. The GRADE is unaffected (the
+        # canonical kind comes from the capture, not from the agent), but the row's green
+        # mark now depends on a third party being up. That is **salesagent-1bc7l**, which
+        # owns the missing ``preview_creative``/``build_creative`` capture; routing these
+        # rows to the parent would trade the dial for an ``AsyncMock`` in the BDD layer,
+        # which is not a fix.
+        #
+        # ITS OWN TAG, and the tag deliberately does NOT contain "format_satisfaction":
+        # these rows are PREDICATE-routed by substring, so a tag sharing a prefix with a
+        # sibling would be claimed by whichever row is reached first. Derived against the
+        # live table rather than assumed -- ``creative_library_upsert`` is claimed by no
+        # other row, checked with the two existing tags as controls so a table that claimed
+        # nothing could not read as agreement.
+        #
+        # Pinned in ``test_architecture_measurement_floors.py`` in this same change: an
+        # own-identity tag makes ``detect_uc`` return None, so deleting this row would send
+        # both scenarios to "No harness wired for None" -- an auto-xfail at fixture setup
+        # that grades nothing while reading green.
+        when=lambda m: "creative_library_upsert" in m,
+        env_builder=_env("tests.harness.creative_sync.LibraryUpsertCreativeSyncEnv"),
+        seed=_seed_default_tenant_and_principal,
     ),
     EnvRoute(
         tag="security-wire-error-safety",
@@ -6190,6 +7149,18 @@ ENV_ROUTES: list[EnvRoute] = [
                 # plain ValueError") had expired. Neither reason was the reason.
                 or "T-UC-002-partition-daily-spend-cap" in m
                 or "T-UC-002-boundary-daily-spend-cap" in m
+                # The two creative-asset outlines join on the same reading. Their Givens need
+                # this row's seed and nothing else: the creative Givens
+                # (given_media_buy.py:2112, :2187) build fixtures off ``ctx["tenant"]`` and
+                # ``ctx["principal"]`` through CreativeFactory, read ``ctx["default_product"]``
+                # for the format a mismatch has to mismatch, and hang creative_ids / inline
+                # creatives on the request defaults — then dispatch_mode="create" makes the
+                # shared When dispatch exactly what they built. All 54 of their items PASS on
+                # this row now. Nine of them used to carry a row-keyed strict xfail for the
+                # seeded-format fixture gap; that gap is reconciled and the nine graduated —
+                # the record is with the _UC002_VALIDATION_XFAIL block.
+                or "T-UC-002-partition-creative-asset" in m
+                or "T-UC-002-boundary-creative-asset" in m
             ),
         ),
         env_builder=_env("tests.harness.media_buy_create.MediaBuyCreateEnv"),
@@ -6214,24 +7185,98 @@ ENV_ROUTES: list[EnvRoute] = [
         env_builder=_env("tests.harness.media_buy_create.MediaBuyCreateEnv"),
         seed=_seed_media_buy_chain,
     ),
+    # Wired, not parked: the scenario needs what the uc002-ext rows need -- the create chain
+    # plus dispatch_mode="create", so the shared When dispatches the request its Given broke
+    # -- and its refusal is the transport boundary's, which every transport reaches.
     EnvRoute(
         tag="uc002-inv-015-6",
         when=_uc("UC-002", lambda m: "T-UC-002-inv-015-6" in m),
         env_builder=_env("tests.harness.media_buy_create.MediaBuyCreateEnv"),
-        xfail_reason="T-UC-002-inv-015-6 create_media_buy harness wiring is tracked in #1652",
+        seed=_seed_media_buy_chain_create_dispatch,
     ),
+    # The sandbox-isolation pair (@T-UC-002-sandbox-no-live-ad-server and its
+    # instrument check @T-UC-002-live-ad-server-reached). A row of its own, ABOVE the
+    # catch-all, because the catch-all xfails at fixture setup — a scenario that lands
+    # there dispatches nothing and grades nothing, which is exactly how BR-RULE-209
+    # INV-2 came to be unenforced while a scenario claimed to cover it
+    # (salesagent-kf5mn).
+    #
+    # The same seed as the uc002-ext row: these scenarios need the full create chain
+    # plus dispatch_mode="create", so the When dispatches the request the Givens built
+    # rather than rebuilding it. Not a row-share with uc002-ext because the predicate
+    # there enumerates tags and this one keys on a capability the Given needs
+    # (@live-ad-server), which is the thing a future scenario would reuse.
+    EnvRoute(
+        tag="uc002-live-ad-server",
+        when=_uc("UC-002", lambda m: "live-ad-server" in m),
+        env_builder=_env("tests.harness.media_buy_create.MediaBuyCreateEnv"),
+        seed=_seed_media_buy_chain_create_dispatch,
+    ),
+    # The inline-creatives create reads the created package back with get_media_buys, so it
+    # needs the env that dispatches both: MediaBuyCreateListEnv routes a GetMediaBuysRequest
+    # to the list tool and everything else to the create. The seed is the catch-all's, which
+    # it used before the readback was added.
+    EnvRoute(
+        tag="uc002-inline-creatives-readback",
+        when=_uc("UC-002", lambda m: "T-UC-002-alt-creatives" in m),
+        env_builder=_env("tests.harness.media_buy_create_list.MediaBuyCreateListEnv"),
+        seed=_seed_media_buy_chain_create_dispatch,
+    ),
+    # The pending_creatives_to_start lifecycle creates a buy and then updates it, so it needs
+    # the env that dispatches both: MediaBuyDualEnv subclasses MediaBuyCreateEnv and routes a
+    # request carrying media_buy_id to update_media_buy. The seed is the uc002-ext one, so the
+    # first When dispatches the create its Givens built.
+    EnvRoute(
+        tag="uc002-create-then-update",
+        when=_uc("UC-002", lambda m: "T-UC-002-storyboard-pending-creatives-state-transition" in m),
+        env_builder=_env("tests.harness.media_buy_dual.MediaBuyDualEnv"),
+        seed=_seed_media_buy_chain_create_dispatch,
+    ),
+    # The remainder of UC-002. It seeds what the uc002-ext row seeds, for the same reason:
+    # its Background claims "a tenant exists with completed setup checklist", and
+    # validate_setup_complete reads the rows setup_media_buy_data writes on every
+    # transport. Unseeded, a box run with the xfail lifted refused 452 of these nodeids
+    # CONFIGURATION_ERROR before reaching what they grade.
+    #
+    # No xfail_reason any more: every scenario this row claims runs. What fails is named in
+    # _UC002_UC003_LEDGER, one entry per measured cause (measure_innet_291026_1202), and what
+    # passes without grading anything is parked in _UC002_UC003_VACUOUS_PARKS. The tag keeps
+    # its old name because the census and the docs know the row by it.
     EnvRoute(
         tag="uc002-not-wired",
         when=_uc("UC-002", lambda m: True),
         env_builder=_env("tests.harness.media_buy_create.MediaBuyCreateEnv"),
-        xfail_reason="UC-002 harness not yet wired for non-extension scenarios",
+        seed=_seed_media_buy_chain_create_dispatch,
     ),
     # ── UC-003 ──────────────────────────────────────────────────────────────
+    # The scenarios that read a package's creatives back the way a buyer does (the
+    # inline-creatives uploads and the release on cancel): the uc003-ext seed, on the env
+    # that also routes get_media_buys.
+    EnvRoute(
+        tag="uc003-inline-creatives-readback",
+        when=_uc("UC-003", lambda m: bool(m & _UC003_INLINE_CREATIVES_READBACK_TAGS)),
+        env_builder=_env("tests.harness.media_buy_create_update_list.MediaBuyCreateUpdateListEnv"),
+        seed=_seed_update_with_existing_buy,
+    ),
     EnvRoute(
         tag="uc003-ext",
+        # The two creative-state outlines share this row rather than getting one of their
+        # own: their Givens need exactly this seed — the update chain plus an existing media
+        # buy and its package, which is what ``_seed_update_with_existing_buy`` builds — and
+        # nothing else. ONE marker held them: the uc003-not-wired catch-all, which xfails at
+        # fixture setup, so neither outline had ever dispatched. Verified to be the only one
+        # — neither tag appears in _XFAIL_TAGS, in e2e_rest_known_failures.txt, or in
+        # dormant_scenarios.txt — so unlike the UC-002 creative-asset pair there is no second
+        # marker to remove alongside this.
         when=_uc(
             "UC-003",
-            lambda m: any(t.startswith("T-UC-003-ext-") for t in m) or bool(m & _UC003_TARGETING_OVERLAY_TAGS),
+            lambda m: (
+                any(t.startswith("T-UC-003-ext-") for t in m)
+                or bool(m & _UC003_TARGETING_OVERLAY_TAGS)
+                or bool(m & _UC003_PACKAGE_UPDATE_NOT_TAGS)
+                or "T-UC-003-partition-creative-state" in m
+                or "T-UC-003-boundary-creative-state" in m
+            ),
         ),
         env_builder=_env("tests.harness.media_buy_dual.MediaBuyDualEnv"),
         seed=_seed_update_with_existing_buy,
@@ -6248,13 +7293,21 @@ ENV_ROUTES: list[EnvRoute] = [
         env_builder=_build_uc003_storyboard_generic_client_env,
         seed=_seed_uc003_storyboard_generic_client,
     ),
+    # The catch-all seeds what the feature's Background states for every UC-003 scenario
+    # -- an existing media buy the buyer owns, with a package, and the account the update
+    # names -- which is the uc003-ext seed. Without it, a measurement with the xfail off
+    # (measure_innet_281026_1501) failed every one of the 1524 nodes this row claims on the
+    # Background's ownership Given ("No existing_media_buy in ctx"), so the row's xfail hid
+    # a missing seed rather than the per-scenario gaps it names.
+    #
+    # The reason is dropped, so each scenario is graded on its own steps. What fails is named
+    # in _UC002_UC003_LEDGER and what passes vacuously in _UC002_UC003_VACUOUS_PARKS, both
+    # measured on measure_innet_291026_1202.
     EnvRoute(
         tag="uc003-not-wired",
         when=_uc("UC-003", lambda m: True),
         env_builder=_env("tests.harness.media_buy_dual.MediaBuyDualEnv"),
-        xfail_reason=(
-            "UC-003 harness not yet wired for non-extension scenarios (full graduation pending, PR #1567 follow-up)"
-        ),
+        seed=_seed_update_with_existing_buy,
     ),
     # ── UC-006 ──────────────────────────────────────────────────────────────
     # @request-signing scenarios (salesagent-n78j0.1.3) grade the INBOUND RFC 9421
@@ -6470,6 +7523,53 @@ ENV_ROUTES: list[EnvRoute] = [
 ENV_ROUTES += _uc010_dormancy_rows()
 
 
+def _refuse_unrouted(uc: str | None, marker_names: frozenset[str]) -> NoReturn:
+    """Refuse a scenario no ``ENV_ROUTES`` row claims, instead of xfailing it.
+
+    THIS USED TO BE ``pytest.xfail("No harness wired for ...")``, raised from
+    ``_harness_env`` at FIXTURE SETUP -- before a single step ran. That made it the one
+    routing mechanism with no baseline and no ledger, twenty lines from the dormancy
+    converter that refuses a scenario absent from ``dormant_scenarios.txt``. The cost
+    was not theoretical: it made a ``scenarios()`` call look like binding a feature.
+    Add the call, delete the row from ``UNBOUND_ALLOWLIST`` in
+    ``tests/unit/test_architecture_feature_file_bound.py``, and every scenario in the
+    file xfails here at setup -- so that guard goes GREEN while the feature grades
+    exactly nothing, recorded in no ledger, no xfail census and no dormancy baseline.
+    "Unbound and counted" became "bound and counted by nobody", which reads as progress
+    on every artifact we have.
+
+    A ledger was considered and is the wrong shape HERE, because the population is
+    EMPTY. Measured on run innet_091026_2116 (both BDD suites, both reconciled
+    collected == total, both exit 0): ZERO of 11569 scenario items reached this branch
+    -- 8657 in bdd_inprocess, 2912 in bdd_e2e. Every bound-but-unwired scenario today
+    is claimed by a row that names itself (``uc002-not-wired`` 1236 items,
+    ``uc003-not-wired`` 1161, the UC-010 dormancy rows 105). A shrink-only baseline
+    seeded with the empty set IS this refusal, and a zero-entry file would only add
+    something to grow.
+
+    So refusing costs nothing today and keeps costing nothing for as long as every
+    scenario is routed. If you are here because you added a ``scenarios()`` call: that
+    is the point. Binding a feature means giving it an ``ENV_ROUTES`` row AND step
+    definitions, and this is where you find out you did neither. Do not add a
+    ``<uc>-not-wired`` row to get past it -- that is an xfail wearing a route, and it
+    puts the scenario back in the population this refusal exists to keep at zero.
+
+    Graded by ``tests/unit/test_architecture_bdd_unrouted_is_refused.py``, which drives
+    this fixture for real and carries a routed control, because a mechanism whose
+    population is empty is otherwise indistinguishable from one that stopped working.
+    """
+    pytest.fail(
+        f"UNROUTED SCENARIO: no ENV_ROUTES row claims {uc} "
+        f"(markers: {sorted(marker_names)}).\n"
+        "  It reached _harness_env, so it IS collected -- it just has no environment, "
+        "and would otherwise have xfailed at setup before running a single step.\n"
+        "  Give the UC an ENV_ROUTES row that builds a real env, or revert the "
+        "scenarios() call that bound its feature. A <uc>-not-wired row is not a fix.\n"
+        "  If detect_uc returned None, the tag is unrecognised: widen detect_uc.",
+        pytrace=False,
+    )
+
+
 def _uc_bucket_rows() -> list[EnvRoute]:
     """The coarse uc-bucket rows, each re-keyed to the bucket it routes.
 
@@ -6501,12 +7601,11 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
     - UC-004 @polling → DeliveryPollEnv
     - UC-004 @webhook → WebhookEnv (unit variant, no DB needed)
     - UC-004 @webhook-reliability → CircuitBreakerEnv (unit variant)
-    - A UC recognized by ``storyboard_spec.detect_uc`` but not (yet) claimed by a row
-      xfails with a UC-specific reason via the catch-all at the bottom.
-    - A tag ``storyboard_spec.detect_uc`` does not recognize at all falls through
-      to the same catch-all as ``uc=None`` -- an opaque "No harness wired for None".
-      That is a bug, not intended behavior: widen ``detect_uc`` instead of
-      relying on this fixture to paper over it.
+    - A UC recognized by ``storyboard_spec.detect_uc`` but not claimed by any row is
+      REFUSED by ``_refuse_unrouted`` below -- it is not xfailed. See that function.
+    - A tag ``storyboard_spec.detect_uc`` does not recognize at all reaches the same
+      refusal with ``uc=None``. That is a bug, not intended behavior: widen
+      ``detect_uc`` instead of relying on this fixture to paper over it.
     """
     # ONE derivation, ONE routing call. The marker set comes from the
     # shared accessor so the conftest and the liveness plugin cannot narrow it
@@ -6524,8 +7623,5 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
 
     route = storyboard_spec.resolve_env_route(marker_names, ENV_ROUTES)
     if route is None:
-        # NOT WIRED is a real answer, not an absence. Each branch UC keeps its own
-        # catch-all row (below) carrying the reason it used to xfail with inline;
-        # reaching here means no row claimed the scenario at all.
-        pytest.xfail(f"No harness wired for {uc} (markers: {sorted(marker_names)})")
+        _refuse_unrouted(uc, marker_names)
     yield from _run_env_route(request, ctx, route, e2e_config)

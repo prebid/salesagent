@@ -2,12 +2,71 @@
   "schema_version": 2,
   "captured": {
     "image": "adcp-creative-agent",
-    "pin": "76b031a85eb8",
-    "captured_at": "2026-10-01T17:35:27.090170+00:00",
-    "source_url": "https://agent.localhost:9444/api/creative-agent"
+    "pin": "8d1d3244b2ef",
+    "captured_at": "2026-10-30T21:52:29.345252+00:00",
+    "source_url": "https://creative-agent.adcp.test:8443/api/creative-agent/mcp"
   },
   "agent_url": "https://creative.adcontextprotocol.org",
   "formats": [
+    {
+      "format_id": {
+        "agent_url": "https://creative.adcontextprotocol.org",
+        "id": "audio_30s"
+      },
+      "name": "Hosted Audio - 30 seconds",
+      "description": "Legacy 30-second hosted audio format",
+      "assets": [
+        {
+          "item_type": "individual",
+          "asset_id": "audio_file",
+          "required": true,
+          "asset_type": "audio",
+          "requirements": {
+            "min_duration_ms": 30000,
+            "max_duration_ms": 30000,
+            "containers": [
+              "mp3",
+              "aac",
+              "m4a"
+            ]
+          }
+        },
+        {
+          "item_type": "individual",
+          "asset_id": "impression_tracker",
+          "required": false,
+          "asset_type": "pixel_tracker"
+        },
+        {
+          "item_type": "individual",
+          "asset_id": "viewability_tracker",
+          "required": false,
+          "asset_type": "pixel_tracker"
+        },
+        {
+          "item_type": "individual",
+          "asset_id": "click_tracker",
+          "required": false,
+          "asset_type": "pixel_tracker"
+        }
+      ],
+      "supported_macros": [
+        "MEDIA_BUY_ID",
+        "CREATIVE_ID",
+        "CACHEBUSTER",
+        "CLICK_URL",
+        "DEVICE_TYPE",
+        "GDPR",
+        "GDPR_CONSENT",
+        "US_PRIVACY",
+        "GPP_STRING",
+        "CONTENT_GENRE"
+      ],
+      "canonical": {
+        "kind": "audio_hosted"
+      },
+      "is_standard": true
+    },
     {
       "format_id": {
         "agent_url": "https://creative.adcontextprotocol.org",
@@ -35,34 +94,19 @@
           "item_type": "individual",
           "asset_id": "impression_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "requirements": {
-            "description": "3rd party impression tracking pixel URL"
-          },
-          "event": "impression",
-          "method": "img"
+          "asset_type": "pixel_tracker"
         },
         {
           "item_type": "individual",
           "asset_id": "viewability_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "event": "viewable_mrc_50",
-          "method": "img",
-          "requirements": {
-            "description": "MRC 50% viewable tracker pixel (1-second viewability for display, 2-seconds with audio for video). Optional \u2014 measurement vendor URLs the seller's renderer fires when the viewable threshold is met."
-          }
+          "asset_type": "pixel_tracker"
         },
         {
           "item_type": "individual",
           "asset_id": "click_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "event": "click",
-          "method": "img",
-          "requirements": {
-            "description": "Click measurement tracker pixel (distinct from landing_page_url, the destination). Optional \u2014 measurement vendor URL fired when the user clicks the creative, in addition to navigating to landing_page_url."
-          }
+          "asset_type": "pixel_tracker"
         }
       ],
       "supported_macros": [
@@ -80,24 +124,6 @@
       "canonical": {
         "kind": "audio_hosted"
       },
-      "type": "audio",
-      "assets_required": [
-        {
-          "asset_id": "audio_file",
-          "item_type": "individual",
-          "required": true,
-          "asset_type": "audio",
-          "requirements": {
-            "min_duration_ms": 15000,
-            "max_duration_ms": 15000,
-            "containers": [
-              "mp3",
-              "aac",
-              "m4a"
-            ]
-          }
-        }
-      ],
       "is_standard": true
     },
     {
@@ -127,34 +153,19 @@
           "item_type": "individual",
           "asset_id": "impression_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "requirements": {
-            "description": "3rd party impression tracking pixel URL"
-          },
-          "event": "impression",
-          "method": "img"
+          "asset_type": "pixel_tracker"
         },
         {
           "item_type": "individual",
           "asset_id": "viewability_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "event": "viewable_mrc_50",
-          "method": "img",
-          "requirements": {
-            "description": "MRC 50% viewable tracker pixel (1-second viewability for display, 2-seconds with audio for video). Optional \u2014 measurement vendor URLs the seller's renderer fires when the viewable threshold is met."
-          }
+          "asset_type": "pixel_tracker"
         },
         {
           "item_type": "individual",
           "asset_id": "click_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "event": "click",
-          "method": "img",
-          "requirements": {
-            "description": "Click measurement tracker pixel (distinct from landing_page_url, the destination). Optional \u2014 measurement vendor URL fired when the user clicks the creative, in addition to navigating to landing_page_url."
-          }
+          "asset_type": "pixel_tracker"
         }
       ],
       "supported_macros": [
@@ -172,24 +183,6 @@
       "canonical": {
         "kind": "audio_hosted"
       },
-      "type": "audio",
-      "assets_required": [
-        {
-          "asset_id": "audio_file",
-          "item_type": "individual",
-          "required": true,
-          "asset_type": "audio",
-          "requirements": {
-            "min_duration_ms": 30000,
-            "max_duration_ms": 30000,
-            "containers": [
-              "mp3",
-              "aac",
-              "m4a"
-            ]
-          }
-        }
-      ],
       "is_standard": true
     },
     {
@@ -219,34 +212,19 @@
           "item_type": "individual",
           "asset_id": "impression_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "requirements": {
-            "description": "3rd party impression tracking pixel URL"
-          },
-          "event": "impression",
-          "method": "img"
+          "asset_type": "pixel_tracker"
         },
         {
           "item_type": "individual",
           "asset_id": "viewability_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "event": "viewable_mrc_50",
-          "method": "img",
-          "requirements": {
-            "description": "MRC 50% viewable tracker pixel (1-second viewability for display, 2-seconds with audio for video). Optional \u2014 measurement vendor URLs the seller's renderer fires when the viewable threshold is met."
-          }
+          "asset_type": "pixel_tracker"
         },
         {
           "item_type": "individual",
           "asset_id": "click_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "event": "click",
-          "method": "img",
-          "requirements": {
-            "description": "Click measurement tracker pixel (distinct from landing_page_url, the destination). Optional \u2014 measurement vendor URL fired when the user clicks the creative, in addition to navigating to landing_page_url."
-          }
+          "asset_type": "pixel_tracker"
         }
       ],
       "supported_macros": [
@@ -264,24 +242,6 @@
       "canonical": {
         "kind": "audio_hosted"
       },
-      "type": "audio",
-      "assets_required": [
-        {
-          "asset_id": "audio_file",
-          "item_type": "individual",
-          "required": true,
-          "asset_type": "audio",
-          "requirements": {
-            "min_duration_ms": 60000,
-            "max_duration_ms": 60000,
-            "containers": [
-              "mp3",
-              "aac",
-              "m4a"
-            ]
-          }
-        }
-      ],
       "is_standard": true
     },
     {
@@ -351,27 +311,6 @@
       "canonical": {
         "kind": "video_hosted"
       },
-      "type": "video",
-      "assets_required": [
-        {
-          "asset_id": "video_file",
-          "item_type": "individual",
-          "required": true,
-          "asset_type": "video",
-          "requirements": {
-            "min_duration_ms": 15000,
-            "max_duration_ms": 15000,
-            "containers": [
-              "mp4",
-              "mov"
-            ],
-            "codecs": [
-              "h264"
-            ],
-            "description": "15-second broadcast spot file (1920x1080 HD)"
-          }
-        }
-      ],
       "is_standard": true
     },
     {
@@ -441,27 +380,6 @@
       "canonical": {
         "kind": "video_hosted"
       },
-      "type": "video",
-      "assets_required": [
-        {
-          "asset_id": "video_file",
-          "item_type": "individual",
-          "required": true,
-          "asset_type": "video",
-          "requirements": {
-            "min_duration_ms": 30000,
-            "max_duration_ms": 30000,
-            "containers": [
-              "mp4",
-              "mov"
-            ],
-            "codecs": [
-              "h264"
-            ],
-            "description": "30-second broadcast spot file (1920x1080 HD)"
-          }
-        }
-      ],
       "is_standard": true
     },
     {
@@ -531,27 +449,6 @@
       "canonical": {
         "kind": "video_hosted"
       },
-      "type": "video",
-      "assets_required": [
-        {
-          "asset_id": "video_file",
-          "item_type": "individual",
-          "required": true,
-          "asset_type": "video",
-          "requirements": {
-            "min_duration_ms": 60000,
-            "max_duration_ms": 60000,
-            "containers": [
-              "mp4",
-              "mov"
-            ],
-            "codecs": [
-              "h264"
-            ],
-            "description": "60-second broadcast spot file (1920x1080 HD)"
-          }
-        }
-      ],
       "is_standard": true
     },
     {
@@ -588,34 +485,19 @@
           "item_type": "individual",
           "asset_id": "impression_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "requirements": {
-            "description": "3rd party impression tracking pixel URL"
-          },
-          "event": "impression",
-          "method": "img"
+          "asset_type": "pixel_tracker"
         },
         {
           "item_type": "individual",
           "asset_id": "viewability_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "event": "viewable_mrc_50",
-          "method": "img",
-          "requirements": {
-            "description": "MRC 50% viewable tracker pixel (1-second viewability for display, 2-seconds with audio for video). Optional \u2014 measurement vendor URLs the seller's renderer fires when the viewable threshold is met."
-          }
+          "asset_type": "pixel_tracker"
         },
         {
           "item_type": "individual",
           "asset_id": "click_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "event": "click",
-          "method": "img",
-          "requirements": {
-            "description": "Click measurement tracker pixel (distinct from landing_page_url, the destination). Optional \u2014 measurement vendor URL fired when the user clicks the creative, in addition to navigating to landing_page_url."
-          }
+          "asset_type": "pixel_tracker"
         }
       ],
       "supported_macros": [
@@ -647,27 +529,6 @@
           }
         ]
       },
-      "type": "display",
-      "catalog_requirements": [
-        {
-          "catalog_type": "offering",
-          "required": true,
-          "required_fields": [
-            "name"
-          ]
-        }
-      ],
-      "assets_required": [
-        {
-          "asset_id": "generation_prompt",
-          "item_type": "individual",
-          "required": true,
-          "asset_type": "text",
-          "requirements": {
-            "description": "Text prompt describing the desired creative"
-          }
-        }
-      ],
       "is_standard": true
     },
     {
@@ -707,34 +568,19 @@
           "item_type": "individual",
           "asset_id": "impression_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "requirements": {
-            "description": "3rd party impression tracking pixel URL"
-          },
-          "event": "impression",
-          "method": "img"
+          "asset_type": "pixel_tracker"
         },
         {
           "item_type": "individual",
           "asset_id": "viewability_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "event": "viewable_mrc_50",
-          "method": "img",
-          "requirements": {
-            "description": "MRC 50% viewable tracker pixel (1-second viewability for display, 2-seconds with audio for video). Optional \u2014 measurement vendor URLs the seller's renderer fires when the viewable threshold is met."
-          }
+          "asset_type": "pixel_tracker"
         },
         {
           "item_type": "individual",
           "asset_id": "click_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "event": "click",
-          "method": "img",
-          "requirements": {
-            "description": "Click measurement tracker pixel (distinct from landing_page_url, the destination). Optional \u2014 measurement vendor URL fired when the user clicks the creative, in addition to navigating to landing_page_url."
-          }
+          "asset_type": "pixel_tracker"
         }
       ],
       "supported_macros": [
@@ -751,21 +597,6 @@
       "canonical": {
         "kind": "html5"
       },
-      "type": "display",
-      "assets_required": [
-        {
-          "asset_id": "html_creative",
-          "item_type": "individual",
-          "required": true,
-          "asset_type": "html",
-          "requirements": {
-            "sandbox": "none",
-            "width": 160,
-            "height": 600,
-            "max_file_size_mb": 0.5
-          }
-        }
-      ],
       "is_standard": true
     },
     {
@@ -820,34 +651,19 @@
           "item_type": "individual",
           "asset_id": "impression_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "requirements": {
-            "description": "3rd party impression tracking pixel URL"
-          },
-          "event": "impression",
-          "method": "img"
+          "asset_type": "pixel_tracker"
         },
         {
           "item_type": "individual",
           "asset_id": "viewability_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "event": "viewable_mrc_50",
-          "method": "img",
-          "requirements": {
-            "description": "MRC 50% viewable tracker pixel (1-second viewability for display, 2-seconds with audio for video). Optional \u2014 measurement vendor URLs the seller's renderer fires when the viewable threshold is met."
-          }
+          "asset_type": "pixel_tracker"
         },
         {
           "item_type": "individual",
           "asset_id": "click_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "event": "click",
-          "method": "img",
-          "requirements": {
-            "description": "Click measurement tracker pixel (distinct from landing_page_url, the destination). Optional \u2014 measurement vendor URL fired when the user clicks the creative, in addition to navigating to landing_page_url."
-          }
+          "asset_type": "pixel_tracker"
         }
       ],
       "supported_macros": [
@@ -864,36 +680,6 @@
       "canonical": {
         "kind": "image"
       },
-      "type": "display",
-      "assets_required": [
-        {
-          "asset_id": "banner_image",
-          "item_type": "individual",
-          "required": true,
-          "asset_type": "image",
-          "requirements": {
-            "width": 160,
-            "height": 600,
-            "max_file_size_mb": 0.15,
-            "containers": [
-              "jpg",
-              "png",
-              "gif",
-              "webp"
-            ]
-          }
-        },
-        {
-          "asset_id": "click_url",
-          "item_type": "individual",
-          "required": true,
-          "asset_type": "url",
-          "requirements": {
-            "url_type": "clickthrough",
-            "description": "Clickthrough destination URL"
-          }
-        }
-      ],
       "is_standard": true
     },
     {
@@ -971,12 +757,10 @@
         "experimental": false,
         "format_kind": "image",
         "params": {
-          "width": 160,
-          "height": 600,
-          "pixel_ratios": [
-            1,
-            2
-          ],
+          "experimental": false,
+          "deprecated": false,
+          "v1_translatable": true,
+          "synthesis_nondeterministic": false,
           "slots": [
             {
               "asset_group_id": "image_main",
@@ -993,10 +777,17 @@
                 2
               ]
             }
-          ]
+          ],
+          "width": 160,
+          "height": 600,
+          "pixel_ratios": [
+            1.0,
+            2.0
+          ],
+          "asset_source": "buyer_uploaded",
+          "buyer_asset_acceptance": "accepted"
         }
       },
-      "type": "display",
       "is_standard": true
     },
     {
@@ -1057,14 +848,51 @@
         "experimental": false,
         "format_kind": "image",
         "params": {
+          "experimental": false,
+          "deprecated": false,
+          "v1_translatable": true,
+          "synthesis_nondeterministic": false,
+          "slots": [
+            {
+              "asset_group_id": "image_main",
+              "asset_type": "image",
+              "required": true
+            },
+            {
+              "asset_group_id": "headline",
+              "asset_type": "text",
+              "required": false
+            },
+            {
+              "asset_group_id": "body_text",
+              "asset_type": "text",
+              "required": false
+            },
+            {
+              "asset_group_id": "primary_text",
+              "asset_type": "text",
+              "required": false
+            },
+            {
+              "asset_group_id": "cta",
+              "asset_type": "text",
+              "required": false
+            },
+            {
+              "asset_group_id": "landing_page_url",
+              "asset_type": "url",
+              "required": false
+            }
+          ],
           "width": 160,
           "height": 600,
           "pixel_ratios": [
-            2
-          ]
+            2.0
+          ],
+          "asset_source": "buyer_uploaded",
+          "buyer_asset_acceptance": "accepted"
         }
       },
-      "type": "display",
       "is_standard": true
     },
     {
@@ -1101,34 +929,19 @@
           "item_type": "individual",
           "asset_id": "impression_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "requirements": {
-            "description": "3rd party impression tracking pixel URL"
-          },
-          "event": "impression",
-          "method": "img"
+          "asset_type": "pixel_tracker"
         },
         {
           "item_type": "individual",
           "asset_id": "viewability_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "event": "viewable_mrc_50",
-          "method": "img",
-          "requirements": {
-            "description": "MRC 50% viewable tracker pixel (1-second viewability for display, 2-seconds with audio for video). Optional \u2014 measurement vendor URLs the seller's renderer fires when the viewable threshold is met."
-          }
+          "asset_type": "pixel_tracker"
         },
         {
           "item_type": "individual",
           "asset_id": "click_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "event": "click",
-          "method": "img",
-          "requirements": {
-            "description": "Click measurement tracker pixel (distinct from landing_page_url, the destination). Optional \u2014 measurement vendor URL fired when the user clicks the creative, in addition to navigating to landing_page_url."
-          }
+          "asset_type": "pixel_tracker"
         }
       ],
       "supported_macros": [
@@ -1160,27 +973,6 @@
           }
         ]
       },
-      "type": "display",
-      "catalog_requirements": [
-        {
-          "catalog_type": "offering",
-          "required": true,
-          "required_fields": [
-            "name"
-          ]
-        }
-      ],
-      "assets_required": [
-        {
-          "asset_id": "generation_prompt",
-          "item_type": "individual",
-          "required": true,
-          "asset_type": "text",
-          "requirements": {
-            "description": "Text prompt describing the desired creative"
-          }
-        }
-      ],
       "is_standard": true
     },
     {
@@ -1221,34 +1013,19 @@
           "item_type": "individual",
           "asset_id": "impression_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "requirements": {
-            "description": "3rd party impression tracking pixel URL"
-          },
-          "event": "impression",
-          "method": "img"
+          "asset_type": "pixel_tracker"
         },
         {
           "item_type": "individual",
           "asset_id": "viewability_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "event": "viewable_mrc_50",
-          "method": "img",
-          "requirements": {
-            "description": "MRC 50% viewable tracker pixel (1-second viewability for display, 2-seconds with audio for video). Optional \u2014 measurement vendor URLs the seller's renderer fires when the viewable threshold is met."
-          }
+          "asset_type": "pixel_tracker"
         },
         {
           "item_type": "individual",
           "asset_id": "click_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "event": "click",
-          "method": "img",
-          "requirements": {
-            "description": "Click measurement tracker pixel (distinct from landing_page_url, the destination). Optional \u2014 measurement vendor URL fired when the user clicks the creative, in addition to navigating to landing_page_url."
-          }
+          "asset_type": "pixel_tracker"
         }
       ],
       "supported_macros": [
@@ -1265,22 +1042,6 @@
       "canonical": {
         "kind": "html5"
       },
-      "type": "display",
-      "assets_required": [
-        {
-          "asset_id": "html_creative",
-          "item_type": "individual",
-          "required": true,
-          "asset_type": "html",
-          "requirements": {
-            "sandbox": "none",
-            "width": 300,
-            "height": 250,
-            "max_file_size_mb": 0.5,
-            "description": "HTML5 creative code"
-          }
-        }
-      ],
       "is_standard": true
     },
     {
@@ -1335,34 +1096,19 @@
           "item_type": "individual",
           "asset_id": "impression_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "requirements": {
-            "description": "3rd party impression tracking pixel URL"
-          },
-          "event": "impression",
-          "method": "img"
+          "asset_type": "pixel_tracker"
         },
         {
           "item_type": "individual",
           "asset_id": "viewability_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "event": "viewable_mrc_50",
-          "method": "img",
-          "requirements": {
-            "description": "MRC 50% viewable tracker pixel (1-second viewability for display, 2-seconds with audio for video). Optional \u2014 measurement vendor URLs the seller's renderer fires when the viewable threshold is met."
-          }
+          "asset_type": "pixel_tracker"
         },
         {
           "item_type": "individual",
           "asset_id": "click_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "event": "click",
-          "method": "img",
-          "requirements": {
-            "description": "Click measurement tracker pixel (distinct from landing_page_url, the destination). Optional \u2014 measurement vendor URL fired when the user clicks the creative, in addition to navigating to landing_page_url."
-          }
+          "asset_type": "pixel_tracker"
         }
       ],
       "supported_macros": [
@@ -1379,36 +1125,6 @@
       "canonical": {
         "kind": "image"
       },
-      "type": "display",
-      "assets_required": [
-        {
-          "asset_id": "banner_image",
-          "item_type": "individual",
-          "required": true,
-          "asset_type": "image",
-          "requirements": {
-            "width": 300,
-            "height": 250,
-            "max_file_size_mb": 0.2,
-            "containers": [
-              "jpg",
-              "png",
-              "gif",
-              "webp"
-            ]
-          }
-        },
-        {
-          "asset_id": "click_url",
-          "item_type": "individual",
-          "required": true,
-          "asset_type": "url",
-          "requirements": {
-            "url_type": "clickthrough",
-            "description": "Clickthrough destination URL"
-          }
-        }
-      ],
       "is_standard": true
     },
     {
@@ -1486,12 +1202,10 @@
         "experimental": false,
         "format_kind": "image",
         "params": {
-          "width": 300,
-          "height": 250,
-          "pixel_ratios": [
-            1,
-            2
-          ],
+          "experimental": false,
+          "deprecated": false,
+          "v1_translatable": true,
+          "synthesis_nondeterministic": false,
           "slots": [
             {
               "asset_group_id": "image_main",
@@ -1508,10 +1222,17 @@
                 2
               ]
             }
-          ]
+          ],
+          "width": 300,
+          "height": 250,
+          "pixel_ratios": [
+            1.0,
+            2.0
+          ],
+          "asset_source": "buyer_uploaded",
+          "buyer_asset_acceptance": "accepted"
         }
       },
-      "type": "display",
       "is_standard": true
     },
     {
@@ -1572,14 +1293,120 @@
         "experimental": false,
         "format_kind": "image",
         "params": {
+          "experimental": false,
+          "deprecated": false,
+          "v1_translatable": true,
+          "synthesis_nondeterministic": false,
+          "slots": [
+            {
+              "asset_group_id": "image_main",
+              "asset_type": "image",
+              "required": true
+            },
+            {
+              "asset_group_id": "headline",
+              "asset_type": "text",
+              "required": false
+            },
+            {
+              "asset_group_id": "body_text",
+              "asset_type": "text",
+              "required": false
+            },
+            {
+              "asset_group_id": "primary_text",
+              "asset_type": "text",
+              "required": false
+            },
+            {
+              "asset_group_id": "cta",
+              "asset_type": "text",
+              "required": false
+            },
+            {
+              "asset_group_id": "landing_page_url",
+              "asset_type": "url",
+              "required": false
+            }
+          ],
           "width": 300,
           "height": 250,
           "pixel_ratios": [
-            2
-          ]
+            2.0
+          ],
+          "asset_source": "buyer_uploaded",
+          "buyer_asset_acceptance": "accepted"
         }
       },
-      "type": "display",
+      "is_standard": true
+    },
+    {
+      "format_id": {
+        "agent_url": "https://creative.adcontextprotocol.org",
+        "id": "display_300x50_html"
+      },
+      "name": "Mobile Banner - HTML5",
+      "description": "300x50 HTML5 creative",
+      "renders": [
+        {
+          "role": "primary",
+          "dimensions": {
+            "width": 300.0,
+            "height": 50.0,
+            "responsive": {
+              "width": false,
+              "height": false
+            }
+          }
+        }
+      ],
+      "assets": [
+        {
+          "item_type": "individual",
+          "asset_id": "html_creative",
+          "required": true,
+          "asset_type": "html",
+          "requirements": {
+            "sandbox": "none",
+            "width": 300,
+            "height": 50,
+            "max_file_size_mb": 0.5,
+            "description": "HTML5 creative code"
+          }
+        },
+        {
+          "item_type": "individual",
+          "asset_id": "impression_tracker",
+          "required": false,
+          "asset_type": "pixel_tracker"
+        },
+        {
+          "item_type": "individual",
+          "asset_id": "viewability_tracker",
+          "required": false,
+          "asset_type": "pixel_tracker"
+        },
+        {
+          "item_type": "individual",
+          "asset_id": "click_tracker",
+          "required": false,
+          "asset_type": "pixel_tracker"
+        }
+      ],
+      "supported_macros": [
+        "MEDIA_BUY_ID",
+        "CREATIVE_ID",
+        "CACHEBUSTER",
+        "CLICK_URL",
+        "DEVICE_TYPE",
+        "GDPR",
+        "GDPR_CONSENT",
+        "US_PRIVACY",
+        "GPP_STRING"
+      ],
+      "canonical": {
+        "kind": "html5"
+      },
       "is_standard": true
     },
     {
@@ -1616,34 +1443,19 @@
           "item_type": "individual",
           "asset_id": "impression_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "requirements": {
-            "description": "3rd party impression tracking pixel URL"
-          },
-          "event": "impression",
-          "method": "img"
+          "asset_type": "pixel_tracker"
         },
         {
           "item_type": "individual",
           "asset_id": "viewability_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "event": "viewable_mrc_50",
-          "method": "img",
-          "requirements": {
-            "description": "MRC 50% viewable tracker pixel (1-second viewability for display, 2-seconds with audio for video). Optional \u2014 measurement vendor URLs the seller's renderer fires when the viewable threshold is met."
-          }
+          "asset_type": "pixel_tracker"
         },
         {
           "item_type": "individual",
           "asset_id": "click_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "event": "click",
-          "method": "img",
-          "requirements": {
-            "description": "Click measurement tracker pixel (distinct from landing_page_url, the destination). Optional \u2014 measurement vendor URL fired when the user clicks the creative, in addition to navigating to landing_page_url."
-          }
+          "asset_type": "pixel_tracker"
         }
       ],
       "supported_macros": [
@@ -1675,27 +1487,6 @@
           }
         ]
       },
-      "type": "display",
-      "catalog_requirements": [
-        {
-          "catalog_type": "offering",
-          "required": true,
-          "required_fields": [
-            "name"
-          ]
-        }
-      ],
-      "assets_required": [
-        {
-          "asset_id": "generation_prompt",
-          "item_type": "individual",
-          "required": true,
-          "asset_type": "text",
-          "requirements": {
-            "description": "Text prompt describing the desired creative"
-          }
-        }
-      ],
       "is_standard": true
     },
     {
@@ -1735,34 +1526,19 @@
           "item_type": "individual",
           "asset_id": "impression_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "requirements": {
-            "description": "3rd party impression tracking pixel URL"
-          },
-          "event": "impression",
-          "method": "img"
+          "asset_type": "pixel_tracker"
         },
         {
           "item_type": "individual",
           "asset_id": "viewability_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "event": "viewable_mrc_50",
-          "method": "img",
-          "requirements": {
-            "description": "MRC 50% viewable tracker pixel (1-second viewability for display, 2-seconds with audio for video). Optional \u2014 measurement vendor URLs the seller's renderer fires when the viewable threshold is met."
-          }
+          "asset_type": "pixel_tracker"
         },
         {
           "item_type": "individual",
           "asset_id": "click_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "event": "click",
-          "method": "img",
-          "requirements": {
-            "description": "Click measurement tracker pixel (distinct from landing_page_url, the destination). Optional \u2014 measurement vendor URL fired when the user clicks the creative, in addition to navigating to landing_page_url."
-          }
+          "asset_type": "pixel_tracker"
         }
       ],
       "supported_macros": [
@@ -1779,21 +1555,6 @@
       "canonical": {
         "kind": "html5"
       },
-      "type": "display",
-      "assets_required": [
-        {
-          "asset_id": "html_creative",
-          "item_type": "individual",
-          "required": true,
-          "asset_type": "html",
-          "requirements": {
-            "sandbox": "none",
-            "width": 300,
-            "height": 600,
-            "max_file_size_mb": 0.5
-          }
-        }
-      ],
       "is_standard": true
     },
     {
@@ -1848,34 +1609,19 @@
           "item_type": "individual",
           "asset_id": "impression_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "requirements": {
-            "description": "3rd party impression tracking pixel URL"
-          },
-          "event": "impression",
-          "method": "img"
+          "asset_type": "pixel_tracker"
         },
         {
           "item_type": "individual",
           "asset_id": "viewability_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "event": "viewable_mrc_50",
-          "method": "img",
-          "requirements": {
-            "description": "MRC 50% viewable tracker pixel (1-second viewability for display, 2-seconds with audio for video). Optional \u2014 measurement vendor URLs the seller's renderer fires when the viewable threshold is met."
-          }
+          "asset_type": "pixel_tracker"
         },
         {
           "item_type": "individual",
           "asset_id": "click_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "event": "click",
-          "method": "img",
-          "requirements": {
-            "description": "Click measurement tracker pixel (distinct from landing_page_url, the destination). Optional \u2014 measurement vendor URL fired when the user clicks the creative, in addition to navigating to landing_page_url."
-          }
+          "asset_type": "pixel_tracker"
         }
       ],
       "supported_macros": [
@@ -1892,36 +1638,6 @@
       "canonical": {
         "kind": "image"
       },
-      "type": "display",
-      "assets_required": [
-        {
-          "asset_id": "banner_image",
-          "item_type": "individual",
-          "required": true,
-          "asset_type": "image",
-          "requirements": {
-            "width": 300,
-            "height": 600,
-            "max_file_size_mb": 0.3,
-            "containers": [
-              "jpg",
-              "png",
-              "gif",
-              "webp"
-            ]
-          }
-        },
-        {
-          "asset_id": "click_url",
-          "item_type": "individual",
-          "required": true,
-          "asset_type": "url",
-          "requirements": {
-            "url_type": "clickthrough",
-            "description": "Clickthrough destination URL"
-          }
-        }
-      ],
       "is_standard": true
     },
     {
@@ -1999,12 +1715,10 @@
         "experimental": false,
         "format_kind": "image",
         "params": {
-          "width": 300,
-          "height": 600,
-          "pixel_ratios": [
-            1,
-            2
-          ],
+          "experimental": false,
+          "deprecated": false,
+          "v1_translatable": true,
+          "synthesis_nondeterministic": false,
           "slots": [
             {
               "asset_group_id": "image_main",
@@ -2021,10 +1735,17 @@
                 2
               ]
             }
-          ]
+          ],
+          "width": 300,
+          "height": 600,
+          "pixel_ratios": [
+            1.0,
+            2.0
+          ],
+          "asset_source": "buyer_uploaded",
+          "buyer_asset_acceptance": "accepted"
         }
       },
-      "type": "display",
       "is_standard": true
     },
     {
@@ -2085,14 +1806,51 @@
         "experimental": false,
         "format_kind": "image",
         "params": {
+          "experimental": false,
+          "deprecated": false,
+          "v1_translatable": true,
+          "synthesis_nondeterministic": false,
+          "slots": [
+            {
+              "asset_group_id": "image_main",
+              "asset_type": "image",
+              "required": true
+            },
+            {
+              "asset_group_id": "headline",
+              "asset_type": "text",
+              "required": false
+            },
+            {
+              "asset_group_id": "body_text",
+              "asset_type": "text",
+              "required": false
+            },
+            {
+              "asset_group_id": "primary_text",
+              "asset_type": "text",
+              "required": false
+            },
+            {
+              "asset_group_id": "cta",
+              "asset_type": "text",
+              "required": false
+            },
+            {
+              "asset_group_id": "landing_page_url",
+              "asset_type": "url",
+              "required": false
+            }
+          ],
           "width": 300,
           "height": 600,
           "pixel_ratios": [
-            2
-          ]
+            2.0
+          ],
+          "asset_source": "buyer_uploaded",
+          "buyer_asset_acceptance": "accepted"
         }
       },
-      "type": "display",
       "is_standard": true
     },
     {
@@ -2129,34 +1887,19 @@
           "item_type": "individual",
           "asset_id": "impression_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "requirements": {
-            "description": "3rd party impression tracking pixel URL"
-          },
-          "event": "impression",
-          "method": "img"
+          "asset_type": "pixel_tracker"
         },
         {
           "item_type": "individual",
           "asset_id": "viewability_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "event": "viewable_mrc_50",
-          "method": "img",
-          "requirements": {
-            "description": "MRC 50% viewable tracker pixel (1-second viewability for display, 2-seconds with audio for video). Optional \u2014 measurement vendor URLs the seller's renderer fires when the viewable threshold is met."
-          }
+          "asset_type": "pixel_tracker"
         },
         {
           "item_type": "individual",
           "asset_id": "click_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "event": "click",
-          "method": "img",
-          "requirements": {
-            "description": "Click measurement tracker pixel (distinct from landing_page_url, the destination). Optional \u2014 measurement vendor URL fired when the user clicks the creative, in addition to navigating to landing_page_url."
-          }
+          "asset_type": "pixel_tracker"
         }
       ],
       "supported_macros": [
@@ -2188,27 +1931,75 @@
           }
         ]
       },
-      "type": "display",
-      "catalog_requirements": [
+      "is_standard": true
+    },
+    {
+      "format_id": {
+        "agent_url": "https://creative.adcontextprotocol.org",
+        "id": "display_320x50_html"
+      },
+      "name": "Mobile Leaderboard - HTML5",
+      "description": "320x50 HTML5 creative",
+      "renders": [
         {
-          "catalog_type": "offering",
-          "required": true,
-          "required_fields": [
-            "name"
-          ]
-        }
-      ],
-      "assets_required": [
-        {
-          "asset_id": "generation_prompt",
-          "item_type": "individual",
-          "required": true,
-          "asset_type": "text",
-          "requirements": {
-            "description": "Text prompt describing the desired creative"
+          "role": "primary",
+          "dimensions": {
+            "width": 320.0,
+            "height": 50.0,
+            "responsive": {
+              "width": false,
+              "height": false
+            }
           }
         }
       ],
+      "assets": [
+        {
+          "item_type": "individual",
+          "asset_id": "html_creative",
+          "required": true,
+          "asset_type": "html",
+          "requirements": {
+            "sandbox": "none",
+            "width": 320,
+            "height": 50,
+            "max_file_size_mb": 0.5,
+            "description": "HTML5 creative code"
+          }
+        },
+        {
+          "item_type": "individual",
+          "asset_id": "impression_tracker",
+          "required": false,
+          "asset_type": "pixel_tracker"
+        },
+        {
+          "item_type": "individual",
+          "asset_id": "viewability_tracker",
+          "required": false,
+          "asset_type": "pixel_tracker"
+        },
+        {
+          "item_type": "individual",
+          "asset_id": "click_tracker",
+          "required": false,
+          "asset_type": "pixel_tracker"
+        }
+      ],
+      "supported_macros": [
+        "MEDIA_BUY_ID",
+        "CREATIVE_ID",
+        "CACHEBUSTER",
+        "CLICK_URL",
+        "DEVICE_TYPE",
+        "GDPR",
+        "GDPR_CONSENT",
+        "US_PRIVACY",
+        "GPP_STRING"
+      ],
+      "canonical": {
+        "kind": "html5"
+      },
       "is_standard": true
     },
     {
@@ -2263,34 +2054,19 @@
           "item_type": "individual",
           "asset_id": "impression_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "requirements": {
-            "description": "3rd party impression tracking pixel URL"
-          },
-          "event": "impression",
-          "method": "img"
+          "asset_type": "pixel_tracker"
         },
         {
           "item_type": "individual",
           "asset_id": "viewability_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "event": "viewable_mrc_50",
-          "method": "img",
-          "requirements": {
-            "description": "MRC 50% viewable tracker pixel (1-second viewability for display, 2-seconds with audio for video). Optional \u2014 measurement vendor URLs the seller's renderer fires when the viewable threshold is met."
-          }
+          "asset_type": "pixel_tracker"
         },
         {
           "item_type": "individual",
           "asset_id": "click_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "event": "click",
-          "method": "img",
-          "requirements": {
-            "description": "Click measurement tracker pixel (distinct from landing_page_url, the destination). Optional \u2014 measurement vendor URL fired when the user clicks the creative, in addition to navigating to landing_page_url."
-          }
+          "asset_type": "pixel_tracker"
         }
       ],
       "supported_macros": [
@@ -2307,36 +2083,6 @@
       "canonical": {
         "kind": "image"
       },
-      "type": "display",
-      "assets_required": [
-        {
-          "asset_id": "banner_image",
-          "item_type": "individual",
-          "required": true,
-          "asset_type": "image",
-          "requirements": {
-            "width": 320,
-            "height": 50,
-            "max_file_size_mb": 0.05,
-            "containers": [
-              "jpg",
-              "png",
-              "gif",
-              "webp"
-            ]
-          }
-        },
-        {
-          "asset_id": "click_url",
-          "item_type": "individual",
-          "required": true,
-          "asset_type": "url",
-          "requirements": {
-            "url_type": "clickthrough",
-            "description": "Clickthrough destination URL"
-          }
-        }
-      ],
       "is_standard": true
     },
     {
@@ -2414,12 +2160,10 @@
         "experimental": false,
         "format_kind": "image",
         "params": {
-          "width": 320,
-          "height": 50,
-          "pixel_ratios": [
-            1,
-            2
-          ],
+          "experimental": false,
+          "deprecated": false,
+          "v1_translatable": true,
+          "synthesis_nondeterministic": false,
           "slots": [
             {
               "asset_group_id": "image_main",
@@ -2436,10 +2180,17 @@
                 2
               ]
             }
-          ]
+          ],
+          "width": 320,
+          "height": 50,
+          "pixel_ratios": [
+            1.0,
+            2.0
+          ],
+          "asset_source": "buyer_uploaded",
+          "buyer_asset_acceptance": "accepted"
         }
       },
-      "type": "display",
       "is_standard": true
     },
     {
@@ -2500,14 +2251,51 @@
         "experimental": false,
         "format_kind": "image",
         "params": {
+          "experimental": false,
+          "deprecated": false,
+          "v1_translatable": true,
+          "synthesis_nondeterministic": false,
+          "slots": [
+            {
+              "asset_group_id": "image_main",
+              "asset_type": "image",
+              "required": true
+            },
+            {
+              "asset_group_id": "headline",
+              "asset_type": "text",
+              "required": false
+            },
+            {
+              "asset_group_id": "body_text",
+              "asset_type": "text",
+              "required": false
+            },
+            {
+              "asset_group_id": "primary_text",
+              "asset_type": "text",
+              "required": false
+            },
+            {
+              "asset_group_id": "cta",
+              "asset_type": "text",
+              "required": false
+            },
+            {
+              "asset_group_id": "landing_page_url",
+              "asset_type": "url",
+              "required": false
+            }
+          ],
           "width": 320,
           "height": 50,
           "pixel_ratios": [
-            2
-          ]
+            2.0
+          ],
+          "asset_source": "buyer_uploaded",
+          "buyer_asset_acceptance": "accepted"
         }
       },
-      "type": "display",
       "is_standard": true
     },
     {
@@ -2544,34 +2332,19 @@
           "item_type": "individual",
           "asset_id": "impression_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "requirements": {
-            "description": "3rd party impression tracking pixel URL"
-          },
-          "event": "impression",
-          "method": "img"
+          "asset_type": "pixel_tracker"
         },
         {
           "item_type": "individual",
           "asset_id": "viewability_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "event": "viewable_mrc_50",
-          "method": "img",
-          "requirements": {
-            "description": "MRC 50% viewable tracker pixel (1-second viewability for display, 2-seconds with audio for video). Optional \u2014 measurement vendor URLs the seller's renderer fires when the viewable threshold is met."
-          }
+          "asset_type": "pixel_tracker"
         },
         {
           "item_type": "individual",
           "asset_id": "click_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "event": "click",
-          "method": "img",
-          "requirements": {
-            "description": "Click measurement tracker pixel (distinct from landing_page_url, the destination). Optional \u2014 measurement vendor URL fired when the user clicks the creative, in addition to navigating to landing_page_url."
-          }
+          "asset_type": "pixel_tracker"
         }
       ],
       "supported_macros": [
@@ -2603,27 +2376,6 @@
           }
         ]
       },
-      "type": "display",
-      "catalog_requirements": [
-        {
-          "catalog_type": "offering",
-          "required": true,
-          "required_fields": [
-            "name"
-          ]
-        }
-      ],
-      "assets_required": [
-        {
-          "asset_id": "generation_prompt",
-          "item_type": "individual",
-          "required": true,
-          "asset_type": "text",
-          "requirements": {
-            "description": "Text prompt describing the desired creative"
-          }
-        }
-      ],
       "is_standard": true
     },
     {
@@ -2663,34 +2415,19 @@
           "item_type": "individual",
           "asset_id": "impression_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "requirements": {
-            "description": "3rd party impression tracking pixel URL"
-          },
-          "event": "impression",
-          "method": "img"
+          "asset_type": "pixel_tracker"
         },
         {
           "item_type": "individual",
           "asset_id": "viewability_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "event": "viewable_mrc_50",
-          "method": "img",
-          "requirements": {
-            "description": "MRC 50% viewable tracker pixel (1-second viewability for display, 2-seconds with audio for video). Optional \u2014 measurement vendor URLs the seller's renderer fires when the viewable threshold is met."
-          }
+          "asset_type": "pixel_tracker"
         },
         {
           "item_type": "individual",
           "asset_id": "click_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "event": "click",
-          "method": "img",
-          "requirements": {
-            "description": "Click measurement tracker pixel (distinct from landing_page_url, the destination). Optional \u2014 measurement vendor URL fired when the user clicks the creative, in addition to navigating to landing_page_url."
-          }
+          "asset_type": "pixel_tracker"
         }
       ],
       "supported_macros": [
@@ -2707,21 +2444,6 @@
       "canonical": {
         "kind": "html5"
       },
-      "type": "display",
-      "assets_required": [
-        {
-          "asset_id": "html_creative",
-          "item_type": "individual",
-          "required": true,
-          "asset_type": "html",
-          "requirements": {
-            "sandbox": "none",
-            "width": 336,
-            "height": 280,
-            "max_file_size_mb": 0.5
-          }
-        }
-      ],
       "is_standard": true
     },
     {
@@ -2776,34 +2498,19 @@
           "item_type": "individual",
           "asset_id": "impression_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "requirements": {
-            "description": "3rd party impression tracking pixel URL"
-          },
-          "event": "impression",
-          "method": "img"
+          "asset_type": "pixel_tracker"
         },
         {
           "item_type": "individual",
           "asset_id": "viewability_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "event": "viewable_mrc_50",
-          "method": "img",
-          "requirements": {
-            "description": "MRC 50% viewable tracker pixel (1-second viewability for display, 2-seconds with audio for video). Optional \u2014 measurement vendor URLs the seller's renderer fires when the viewable threshold is met."
-          }
+          "asset_type": "pixel_tracker"
         },
         {
           "item_type": "individual",
           "asset_id": "click_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "event": "click",
-          "method": "img",
-          "requirements": {
-            "description": "Click measurement tracker pixel (distinct from landing_page_url, the destination). Optional \u2014 measurement vendor URL fired when the user clicks the creative, in addition to navigating to landing_page_url."
-          }
+          "asset_type": "pixel_tracker"
         }
       ],
       "supported_macros": [
@@ -2820,36 +2527,6 @@
       "canonical": {
         "kind": "image"
       },
-      "type": "display",
-      "assets_required": [
-        {
-          "asset_id": "banner_image",
-          "item_type": "individual",
-          "required": true,
-          "asset_type": "image",
-          "requirements": {
-            "width": 336,
-            "height": 280,
-            "max_file_size_mb": 0.25,
-            "containers": [
-              "jpg",
-              "png",
-              "gif",
-              "webp"
-            ]
-          }
-        },
-        {
-          "asset_id": "click_url",
-          "item_type": "individual",
-          "required": true,
-          "asset_type": "url",
-          "requirements": {
-            "url_type": "clickthrough",
-            "description": "Clickthrough destination URL"
-          }
-        }
-      ],
       "is_standard": true
     },
     {
@@ -2927,12 +2604,10 @@
         "experimental": false,
         "format_kind": "image",
         "params": {
-          "width": 336,
-          "height": 280,
-          "pixel_ratios": [
-            1,
-            2
-          ],
+          "experimental": false,
+          "deprecated": false,
+          "v1_translatable": true,
+          "synthesis_nondeterministic": false,
           "slots": [
             {
               "asset_group_id": "image_main",
@@ -2949,10 +2624,17 @@
                 2
               ]
             }
-          ]
+          ],
+          "width": 336,
+          "height": 280,
+          "pixel_ratios": [
+            1.0,
+            2.0
+          ],
+          "asset_source": "buyer_uploaded",
+          "buyer_asset_acceptance": "accepted"
         }
       },
-      "type": "display",
       "is_standard": true
     },
     {
@@ -3013,14 +2695,51 @@
         "experimental": false,
         "format_kind": "image",
         "params": {
+          "experimental": false,
+          "deprecated": false,
+          "v1_translatable": true,
+          "synthesis_nondeterministic": false,
+          "slots": [
+            {
+              "asset_group_id": "image_main",
+              "asset_type": "image",
+              "required": true
+            },
+            {
+              "asset_group_id": "headline",
+              "asset_type": "text",
+              "required": false
+            },
+            {
+              "asset_group_id": "body_text",
+              "asset_type": "text",
+              "required": false
+            },
+            {
+              "asset_group_id": "primary_text",
+              "asset_type": "text",
+              "required": false
+            },
+            {
+              "asset_group_id": "cta",
+              "asset_type": "text",
+              "required": false
+            },
+            {
+              "asset_group_id": "landing_page_url",
+              "asset_type": "url",
+              "required": false
+            }
+          ],
           "width": 336,
           "height": 280,
           "pixel_ratios": [
-            2
-          ]
+            2.0
+          ],
+          "asset_source": "buyer_uploaded",
+          "buyer_asset_acceptance": "accepted"
         }
       },
-      "type": "display",
       "is_standard": true
     },
     {
@@ -3057,34 +2776,19 @@
           "item_type": "individual",
           "asset_id": "impression_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "requirements": {
-            "description": "3rd party impression tracking pixel URL"
-          },
-          "event": "impression",
-          "method": "img"
+          "asset_type": "pixel_tracker"
         },
         {
           "item_type": "individual",
           "asset_id": "viewability_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "event": "viewable_mrc_50",
-          "method": "img",
-          "requirements": {
-            "description": "MRC 50% viewable tracker pixel (1-second viewability for display, 2-seconds with audio for video). Optional \u2014 measurement vendor URLs the seller's renderer fires when the viewable threshold is met."
-          }
+          "asset_type": "pixel_tracker"
         },
         {
           "item_type": "individual",
           "asset_id": "click_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "event": "click",
-          "method": "img",
-          "requirements": {
-            "description": "Click measurement tracker pixel (distinct from landing_page_url, the destination). Optional \u2014 measurement vendor URL fired when the user clicks the creative, in addition to navigating to landing_page_url."
-          }
+          "asset_type": "pixel_tracker"
         }
       ],
       "supported_macros": [
@@ -3116,27 +2820,6 @@
           }
         ]
       },
-      "type": "display",
-      "catalog_requirements": [
-        {
-          "catalog_type": "offering",
-          "required": true,
-          "required_fields": [
-            "name"
-          ]
-        }
-      ],
-      "assets_required": [
-        {
-          "asset_id": "generation_prompt",
-          "item_type": "individual",
-          "required": true,
-          "asset_type": "text",
-          "requirements": {
-            "description": "Text prompt describing the desired creative"
-          }
-        }
-      ],
       "is_standard": true
     },
     {
@@ -3176,34 +2859,19 @@
           "item_type": "individual",
           "asset_id": "impression_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "requirements": {
-            "description": "3rd party impression tracking pixel URL"
-          },
-          "event": "impression",
-          "method": "img"
+          "asset_type": "pixel_tracker"
         },
         {
           "item_type": "individual",
           "asset_id": "viewability_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "event": "viewable_mrc_50",
-          "method": "img",
-          "requirements": {
-            "description": "MRC 50% viewable tracker pixel (1-second viewability for display, 2-seconds with audio for video). Optional \u2014 measurement vendor URLs the seller's renderer fires when the viewable threshold is met."
-          }
+          "asset_type": "pixel_tracker"
         },
         {
           "item_type": "individual",
           "asset_id": "click_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "event": "click",
-          "method": "img",
-          "requirements": {
-            "description": "Click measurement tracker pixel (distinct from landing_page_url, the destination). Optional \u2014 measurement vendor URL fired when the user clicks the creative, in addition to navigating to landing_page_url."
-          }
+          "asset_type": "pixel_tracker"
         }
       ],
       "supported_macros": [
@@ -3220,21 +2888,6 @@
       "canonical": {
         "kind": "html5"
       },
-      "type": "display",
-      "assets_required": [
-        {
-          "asset_id": "html_creative",
-          "item_type": "individual",
-          "required": true,
-          "asset_type": "html",
-          "requirements": {
-            "sandbox": "none",
-            "width": 728,
-            "height": 90,
-            "max_file_size_mb": 0.5
-          }
-        }
-      ],
       "is_standard": true
     },
     {
@@ -3289,34 +2942,19 @@
           "item_type": "individual",
           "asset_id": "impression_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "requirements": {
-            "description": "3rd party impression tracking pixel URL"
-          },
-          "event": "impression",
-          "method": "img"
+          "asset_type": "pixel_tracker"
         },
         {
           "item_type": "individual",
           "asset_id": "viewability_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "event": "viewable_mrc_50",
-          "method": "img",
-          "requirements": {
-            "description": "MRC 50% viewable tracker pixel (1-second viewability for display, 2-seconds with audio for video). Optional \u2014 measurement vendor URLs the seller's renderer fires when the viewable threshold is met."
-          }
+          "asset_type": "pixel_tracker"
         },
         {
           "item_type": "individual",
           "asset_id": "click_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "event": "click",
-          "method": "img",
-          "requirements": {
-            "description": "Click measurement tracker pixel (distinct from landing_page_url, the destination). Optional \u2014 measurement vendor URL fired when the user clicks the creative, in addition to navigating to landing_page_url."
-          }
+          "asset_type": "pixel_tracker"
         }
       ],
       "supported_macros": [
@@ -3333,36 +2971,6 @@
       "canonical": {
         "kind": "image"
       },
-      "type": "display",
-      "assets_required": [
-        {
-          "asset_id": "banner_image",
-          "item_type": "individual",
-          "required": true,
-          "asset_type": "image",
-          "requirements": {
-            "width": 728,
-            "height": 90,
-            "max_file_size_mb": 0.15,
-            "containers": [
-              "jpg",
-              "png",
-              "gif",
-              "webp"
-            ]
-          }
-        },
-        {
-          "asset_id": "click_url",
-          "item_type": "individual",
-          "required": true,
-          "asset_type": "url",
-          "requirements": {
-            "url_type": "clickthrough",
-            "description": "Clickthrough destination URL"
-          }
-        }
-      ],
       "is_standard": true
     },
     {
@@ -3440,12 +3048,10 @@
         "experimental": false,
         "format_kind": "image",
         "params": {
-          "width": 728,
-          "height": 90,
-          "pixel_ratios": [
-            1,
-            2
-          ],
+          "experimental": false,
+          "deprecated": false,
+          "v1_translatable": true,
+          "synthesis_nondeterministic": false,
           "slots": [
             {
               "asset_group_id": "image_main",
@@ -3462,10 +3068,17 @@
                 2
               ]
             }
-          ]
+          ],
+          "width": 728,
+          "height": 90,
+          "pixel_ratios": [
+            1.0,
+            2.0
+          ],
+          "asset_source": "buyer_uploaded",
+          "buyer_asset_acceptance": "accepted"
         }
       },
-      "type": "display",
       "is_standard": true
     },
     {
@@ -3526,14 +3139,51 @@
         "experimental": false,
         "format_kind": "image",
         "params": {
+          "experimental": false,
+          "deprecated": false,
+          "v1_translatable": true,
+          "synthesis_nondeterministic": false,
+          "slots": [
+            {
+              "asset_group_id": "image_main",
+              "asset_type": "image",
+              "required": true
+            },
+            {
+              "asset_group_id": "headline",
+              "asset_type": "text",
+              "required": false
+            },
+            {
+              "asset_group_id": "body_text",
+              "asset_type": "text",
+              "required": false
+            },
+            {
+              "asset_group_id": "primary_text",
+              "asset_type": "text",
+              "required": false
+            },
+            {
+              "asset_group_id": "cta",
+              "asset_type": "text",
+              "required": false
+            },
+            {
+              "asset_group_id": "landing_page_url",
+              "asset_type": "url",
+              "required": false
+            }
+          ],
           "width": 728,
           "height": 90,
           "pixel_ratios": [
-            2
-          ]
+            2.0
+          ],
+          "asset_source": "buyer_uploaded",
+          "buyer_asset_acceptance": "accepted"
         }
       },
-      "type": "display",
       "is_standard": true
     },
     {
@@ -3570,34 +3220,19 @@
           "item_type": "individual",
           "asset_id": "impression_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "requirements": {
-            "description": "3rd party impression tracking pixel URL"
-          },
-          "event": "impression",
-          "method": "img"
+          "asset_type": "pixel_tracker"
         },
         {
           "item_type": "individual",
           "asset_id": "viewability_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "event": "viewable_mrc_50",
-          "method": "img",
-          "requirements": {
-            "description": "MRC 50% viewable tracker pixel (1-second viewability for display, 2-seconds with audio for video). Optional \u2014 measurement vendor URLs the seller's renderer fires when the viewable threshold is met."
-          }
+          "asset_type": "pixel_tracker"
         },
         {
           "item_type": "individual",
           "asset_id": "click_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "event": "click",
-          "method": "img",
-          "requirements": {
-            "description": "Click measurement tracker pixel (distinct from landing_page_url, the destination). Optional \u2014 measurement vendor URL fired when the user clicks the creative, in addition to navigating to landing_page_url."
-          }
+          "asset_type": "pixel_tracker"
         }
       ],
       "supported_macros": [
@@ -3629,27 +3264,6 @@
           }
         ]
       },
-      "type": "display",
-      "catalog_requirements": [
-        {
-          "catalog_type": "offering",
-          "required": true,
-          "required_fields": [
-            "name"
-          ]
-        }
-      ],
-      "assets_required": [
-        {
-          "asset_id": "generation_prompt",
-          "item_type": "individual",
-          "required": true,
-          "asset_type": "text",
-          "requirements": {
-            "description": "Text prompt describing the desired creative"
-          }
-        }
-      ],
       "is_standard": true
     },
     {
@@ -3689,34 +3303,19 @@
           "item_type": "individual",
           "asset_id": "impression_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "requirements": {
-            "description": "3rd party impression tracking pixel URL"
-          },
-          "event": "impression",
-          "method": "img"
+          "asset_type": "pixel_tracker"
         },
         {
           "item_type": "individual",
           "asset_id": "viewability_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "event": "viewable_mrc_50",
-          "method": "img",
-          "requirements": {
-            "description": "MRC 50% viewable tracker pixel (1-second viewability for display, 2-seconds with audio for video). Optional \u2014 measurement vendor URLs the seller's renderer fires when the viewable threshold is met."
-          }
+          "asset_type": "pixel_tracker"
         },
         {
           "item_type": "individual",
           "asset_id": "click_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "event": "click",
-          "method": "img",
-          "requirements": {
-            "description": "Click measurement tracker pixel (distinct from landing_page_url, the destination). Optional \u2014 measurement vendor URL fired when the user clicks the creative, in addition to navigating to landing_page_url."
-          }
+          "asset_type": "pixel_tracker"
         }
       ],
       "supported_macros": [
@@ -3733,21 +3332,6 @@
       "canonical": {
         "kind": "html5"
       },
-      "type": "display",
-      "assets_required": [
-        {
-          "asset_id": "html_creative",
-          "item_type": "individual",
-          "required": true,
-          "asset_type": "html",
-          "requirements": {
-            "sandbox": "none",
-            "width": 970,
-            "height": 250,
-            "max_file_size_mb": 0.5
-          }
-        }
-      ],
       "is_standard": true
     },
     {
@@ -3802,34 +3386,19 @@
           "item_type": "individual",
           "asset_id": "impression_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "requirements": {
-            "description": "3rd party impression tracking pixel URL"
-          },
-          "event": "impression",
-          "method": "img"
+          "asset_type": "pixel_tracker"
         },
         {
           "item_type": "individual",
           "asset_id": "viewability_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "event": "viewable_mrc_50",
-          "method": "img",
-          "requirements": {
-            "description": "MRC 50% viewable tracker pixel (1-second viewability for display, 2-seconds with audio for video). Optional \u2014 measurement vendor URLs the seller's renderer fires when the viewable threshold is met."
-          }
+          "asset_type": "pixel_tracker"
         },
         {
           "item_type": "individual",
           "asset_id": "click_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "event": "click",
-          "method": "img",
-          "requirements": {
-            "description": "Click measurement tracker pixel (distinct from landing_page_url, the destination). Optional \u2014 measurement vendor URL fired when the user clicks the creative, in addition to navigating to landing_page_url."
-          }
+          "asset_type": "pixel_tracker"
         }
       ],
       "supported_macros": [
@@ -3846,36 +3415,6 @@
       "canonical": {
         "kind": "image"
       },
-      "type": "display",
-      "assets_required": [
-        {
-          "asset_id": "banner_image",
-          "item_type": "individual",
-          "required": true,
-          "asset_type": "image",
-          "requirements": {
-            "width": 970,
-            "height": 250,
-            "max_file_size_mb": 0.4,
-            "containers": [
-              "jpg",
-              "png",
-              "gif",
-              "webp"
-            ]
-          }
-        },
-        {
-          "asset_id": "click_url",
-          "item_type": "individual",
-          "required": true,
-          "asset_type": "url",
-          "requirements": {
-            "url_type": "clickthrough",
-            "description": "Clickthrough destination URL"
-          }
-        }
-      ],
       "is_standard": true
     },
     {
@@ -3953,12 +3492,10 @@
         "experimental": false,
         "format_kind": "image",
         "params": {
-          "width": 970,
-          "height": 250,
-          "pixel_ratios": [
-            1,
-            2
-          ],
+          "experimental": false,
+          "deprecated": false,
+          "v1_translatable": true,
+          "synthesis_nondeterministic": false,
           "slots": [
             {
               "asset_group_id": "image_main",
@@ -3975,10 +3512,17 @@
                 2
               ]
             }
-          ]
+          ],
+          "width": 970,
+          "height": 250,
+          "pixel_ratios": [
+            1.0,
+            2.0
+          ],
+          "asset_source": "buyer_uploaded",
+          "buyer_asset_acceptance": "accepted"
         }
       },
-      "type": "display",
       "is_standard": true
     },
     {
@@ -4039,14 +3583,51 @@
         "experimental": false,
         "format_kind": "image",
         "params": {
+          "experimental": false,
+          "deprecated": false,
+          "v1_translatable": true,
+          "synthesis_nondeterministic": false,
+          "slots": [
+            {
+              "asset_group_id": "image_main",
+              "asset_type": "image",
+              "required": true
+            },
+            {
+              "asset_group_id": "headline",
+              "asset_type": "text",
+              "required": false
+            },
+            {
+              "asset_group_id": "body_text",
+              "asset_type": "text",
+              "required": false
+            },
+            {
+              "asset_group_id": "primary_text",
+              "asset_type": "text",
+              "required": false
+            },
+            {
+              "asset_group_id": "cta",
+              "asset_type": "text",
+              "required": false
+            },
+            {
+              "asset_group_id": "landing_page_url",
+              "asset_type": "url",
+              "required": false
+            }
+          ],
           "width": 970,
           "height": 250,
           "pixel_ratios": [
-            2
-          ]
+            2.0
+          ],
+          "asset_source": "buyer_uploaded",
+          "buyer_asset_acceptance": "accepted"
         }
       },
-      "type": "display",
       "is_standard": true
     },
     {
@@ -4073,34 +3654,19 @@
           "item_type": "individual",
           "asset_id": "impression_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "requirements": {
-            "description": "3rd party impression tracking pixel URL"
-          },
-          "event": "impression",
-          "method": "img"
+          "asset_type": "pixel_tracker"
         },
         {
           "item_type": "individual",
           "asset_id": "viewability_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "event": "viewable_mrc_50",
-          "method": "img",
-          "requirements": {
-            "description": "MRC 50% viewable tracker pixel (1-second viewability for display, 2-seconds with audio for video). Optional \u2014 measurement vendor URLs the seller's renderer fires when the viewable threshold is met."
-          }
+          "asset_type": "pixel_tracker"
         },
         {
           "item_type": "individual",
           "asset_id": "click_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "event": "click",
-          "method": "img",
-          "requirements": {
-            "description": "Click measurement tracker pixel (distinct from landing_page_url, the destination). Optional \u2014 measurement vendor URL fired when the user clicks the creative, in addition to navigating to landing_page_url."
-          }
+          "asset_type": "pixel_tracker"
         }
       ],
       "supported_macros": [
@@ -4126,27 +3692,6 @@
           }
         ]
       },
-      "type": "display",
-      "catalog_requirements": [
-        {
-          "catalog_type": "offering",
-          "required": true,
-          "required_fields": [
-            "name"
-          ]
-        }
-      ],
-      "assets_required": [
-        {
-          "asset_id": "generation_prompt",
-          "item_type": "individual",
-          "required": true,
-          "asset_type": "text",
-          "requirements": {
-            "description": "Text prompt describing the desired creative"
-          }
-        }
-      ],
       "is_standard": true
     },
     {
@@ -4174,34 +3719,19 @@
           "item_type": "individual",
           "asset_id": "impression_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "requirements": {
-            "description": "3rd party impression tracking pixel URL"
-          },
-          "event": "impression",
-          "method": "img"
+          "asset_type": "pixel_tracker"
         },
         {
           "item_type": "individual",
           "asset_id": "viewability_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "event": "viewable_mrc_50",
-          "method": "img",
-          "requirements": {
-            "description": "MRC 50% viewable tracker pixel (1-second viewability for display, 2-seconds with audio for video). Optional \u2014 measurement vendor URLs the seller's renderer fires when the viewable threshold is met."
-          }
+          "asset_type": "pixel_tracker"
         },
         {
           "item_type": "individual",
           "asset_id": "click_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "event": "click",
-          "method": "img",
-          "requirements": {
-            "description": "Click measurement tracker pixel (distinct from landing_page_url, the destination). Optional \u2014 measurement vendor URL fired when the user clicks the creative, in addition to navigating to landing_page_url."
-          }
+          "asset_type": "pixel_tracker"
         }
       ],
       "supported_macros": [
@@ -4218,19 +3748,6 @@
       "canonical": {
         "kind": "html5"
       },
-      "type": "display",
-      "assets_required": [
-        {
-          "asset_id": "html_creative",
-          "item_type": "individual",
-          "required": true,
-          "asset_type": "html",
-          "requirements": {
-            "sandbox": "none",
-            "max_file_size_mb": 0.5
-          }
-        }
-      ],
       "is_standard": true
     },
     {
@@ -4239,9 +3756,16 @@
         "id": "display_image"
       },
       "name": "Display Banner - Image",
-      "description": "Static image banner (supports any dimensions)",
+      "description": "Static image banner with parameterized logical dimensions and pixel density",
       "accepts_parameters": [
-        "dimensions"
+        "dimensions",
+        "pixel_ratio"
+      ],
+      "renders": [
+        {
+          "role": "primary",
+          "parameters_from_format_id": true
+        }
       ],
       "assets": [
         {
@@ -4250,6 +3774,7 @@
           "required": true,
           "asset_type": "image",
           "requirements": {
+            "parameters_from_format_id": true,
             "containers": [
               "jpg",
               "png",
@@ -4272,34 +3797,19 @@
           "item_type": "individual",
           "asset_id": "impression_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "requirements": {
-            "description": "3rd party impression tracking pixel URL"
-          },
-          "event": "impression",
-          "method": "img"
+          "asset_type": "pixel_tracker"
         },
         {
           "item_type": "individual",
           "asset_id": "viewability_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "event": "viewable_mrc_50",
-          "method": "img",
-          "requirements": {
-            "description": "MRC 50% viewable tracker pixel (1-second viewability for display, 2-seconds with audio for video). Optional \u2014 measurement vendor URLs the seller's renderer fires when the viewable threshold is met."
-          }
+          "asset_type": "pixel_tracker"
         },
         {
           "item_type": "individual",
           "asset_id": "click_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "event": "click",
-          "method": "img",
-          "requirements": {
-            "description": "Click measurement tracker pixel (distinct from landing_page_url, the destination). Optional \u2014 measurement vendor URL fired when the user clicks the creative, in addition to navigating to landing_page_url."
-          }
+          "asset_type": "pixel_tracker"
         }
       ],
       "supported_macros": [
@@ -4316,33 +3826,6 @@
       "canonical": {
         "kind": "image"
       },
-      "type": "display",
-      "assets_required": [
-        {
-          "asset_id": "banner_image",
-          "item_type": "individual",
-          "required": true,
-          "asset_type": "image",
-          "requirements": {
-            "containers": [
-              "jpg",
-              "png",
-              "gif",
-              "webp"
-            ]
-          }
-        },
-        {
-          "asset_id": "click_url",
-          "item_type": "individual",
-          "required": true,
-          "asset_type": "url",
-          "requirements": {
-            "url_type": "clickthrough",
-            "description": "Clickthrough destination URL"
-          }
-        }
-      ],
       "is_standard": true
     },
     {
@@ -4366,34 +3849,19 @@
           "item_type": "individual",
           "asset_id": "impression_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "requirements": {
-            "description": "3rd party impression tracking pixel URL"
-          },
-          "event": "impression",
-          "method": "img"
+          "asset_type": "pixel_tracker"
         },
         {
           "item_type": "individual",
           "asset_id": "viewability_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "event": "viewable_mrc_50",
-          "method": "img",
-          "requirements": {
-            "description": "MRC 50% viewable tracker pixel (1-second viewability for display, 2-seconds with audio for video). Optional \u2014 measurement vendor URLs the seller's renderer fires when the viewable threshold is met."
-          }
+          "asset_type": "pixel_tracker"
         },
         {
           "item_type": "individual",
           "asset_id": "click_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "event": "click",
-          "method": "img",
-          "requirements": {
-            "description": "Click measurement tracker pixel (distinct from landing_page_url, the destination). Optional \u2014 measurement vendor URL fired when the user clicks the creative, in addition to navigating to landing_page_url."
-          }
+          "asset_type": "pixel_tracker"
         }
       ],
       "supported_macros": [
@@ -4410,15 +3878,76 @@
       "canonical": {
         "kind": "display_tag"
       },
-      "type": "display",
-      "assets_required": [
+      "is_standard": true
+    },
+    {
+      "format_id": {
+        "agent_url": "https://creative.adcontextprotocol.org",
+        "id": "display_static"
+      },
+      "name": "Static Display",
+      "description": "Legacy static image display format (supports any dimensions)",
+      "accepts_parameters": [
+        "dimensions"
+      ],
+      "assets": [
         {
-          "asset_id": "js_creative",
           "item_type": "individual",
+          "asset_id": "banner_image",
           "required": true,
-          "asset_type": "javascript"
+          "asset_type": "image",
+          "requirements": {
+            "containers": [
+              "jpg",
+              "png",
+              "gif",
+              "webp"
+            ]
+          }
+        },
+        {
+          "item_type": "individual",
+          "asset_id": "click_url",
+          "required": true,
+          "asset_type": "url",
+          "requirements": {
+            "url_type": "clickthrough",
+            "description": "Clickthrough destination URL"
+          }
+        },
+        {
+          "item_type": "individual",
+          "asset_id": "impression_tracker",
+          "required": false,
+          "asset_type": "pixel_tracker"
+        },
+        {
+          "item_type": "individual",
+          "asset_id": "viewability_tracker",
+          "required": false,
+          "asset_type": "pixel_tracker"
+        },
+        {
+          "item_type": "individual",
+          "asset_id": "click_tracker",
+          "required": false,
+          "asset_type": "pixel_tracker"
         }
       ],
+      "supported_macros": [
+        "MEDIA_BUY_ID",
+        "CREATIVE_ID",
+        "CACHEBUSTER",
+        "CLICK_URL",
+        "DEVICE_TYPE",
+        "GDPR",
+        "GDPR_CONSENT",
+        "US_PRIVACY",
+        "GPP_STRING"
+      ],
+      "canonical": {
+        "kind": "image"
+      },
       "is_standard": true
     },
     {
@@ -4460,34 +3989,19 @@
           "item_type": "individual",
           "asset_id": "impression_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "requirements": {
-            "description": "3rd party impression tracking pixel URL"
-          },
-          "event": "impression",
-          "method": "img"
+          "asset_type": "pixel_tracker"
         },
         {
           "item_type": "individual",
           "asset_id": "viewability_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "event": "viewable_mrc_50",
-          "method": "img",
-          "requirements": {
-            "description": "MRC 50% viewable tracker pixel (1-second viewability for display, 2-seconds with audio for video). Optional \u2014 measurement vendor URLs the seller's renderer fires when the viewable threshold is met."
-          }
+          "asset_type": "pixel_tracker"
         },
         {
           "item_type": "individual",
           "asset_id": "click_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "event": "click",
-          "method": "img",
-          "requirements": {
-            "description": "Click measurement tracker pixel (distinct from landing_page_url, the destination). Optional \u2014 measurement vendor URL fired when the user clicks the creative, in addition to navigating to landing_page_url."
-          }
+          "asset_type": "pixel_tracker"
         }
       ],
       "supported_macros": [
@@ -4508,23 +4022,6 @@
       "canonical": {
         "kind": "image"
       },
-      "type": "dooh",
-      "assets_required": [
-        {
-          "asset_id": "billboard_image",
-          "item_type": "individual",
-          "required": true,
-          "asset_type": "image",
-          "requirements": {
-            "width": 1920,
-            "height": 1080,
-            "containers": [
-              "jpg",
-              "png"
-            ]
-          }
-        }
-      ],
       "is_standard": true
     },
     {
@@ -4552,34 +4049,19 @@
           "item_type": "individual",
           "asset_id": "impression_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "requirements": {
-            "description": "3rd party impression tracking pixel URL"
-          },
-          "event": "impression",
-          "method": "img"
+          "asset_type": "pixel_tracker"
         },
         {
           "item_type": "individual",
           "asset_id": "viewability_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "event": "viewable_mrc_50",
-          "method": "img",
-          "requirements": {
-            "description": "MRC 50% viewable tracker pixel (1-second viewability for display, 2-seconds with audio for video). Optional \u2014 measurement vendor URLs the seller's renderer fires when the viewable threshold is met."
-          }
+          "asset_type": "pixel_tracker"
         },
         {
           "item_type": "individual",
           "asset_id": "click_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "event": "click",
-          "method": "img",
-          "requirements": {
-            "description": "Click measurement tracker pixel (distinct from landing_page_url, the destination). Optional \u2014 measurement vendor URL fired when the user clicks the creative, in addition to navigating to landing_page_url."
-          }
+          "asset_type": "pixel_tracker"
         }
       ],
       "supported_macros": [
@@ -4600,22 +4082,6 @@
       "canonical": {
         "kind": "image"
       },
-      "type": "dooh",
-      "assets_required": [
-        {
-          "asset_id": "billboard_image",
-          "item_type": "individual",
-          "required": true,
-          "asset_type": "image",
-          "requirements": {
-            "containers": [
-              "jpg",
-              "png"
-            ],
-            "description": "Landscape image (1920x1080 or larger)"
-          }
-        }
-      ],
       "is_standard": true
     },
     {
@@ -4643,34 +4109,19 @@
           "item_type": "individual",
           "asset_id": "impression_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "requirements": {
-            "description": "3rd party impression tracking pixel URL"
-          },
-          "event": "impression",
-          "method": "img"
+          "asset_type": "pixel_tracker"
         },
         {
           "item_type": "individual",
           "asset_id": "viewability_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "event": "viewable_mrc_50",
-          "method": "img",
-          "requirements": {
-            "description": "MRC 50% viewable tracker pixel (1-second viewability for display, 2-seconds with audio for video). Optional \u2014 measurement vendor URLs the seller's renderer fires when the viewable threshold is met."
-          }
+          "asset_type": "pixel_tracker"
         },
         {
           "item_type": "individual",
           "asset_id": "click_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "event": "click",
-          "method": "img",
-          "requirements": {
-            "description": "Click measurement tracker pixel (distinct from landing_page_url, the destination). Optional \u2014 measurement vendor URL fired when the user clicks the creative, in addition to navigating to landing_page_url."
-          }
+          "asset_type": "pixel_tracker"
         }
       ],
       "supported_macros": [
@@ -4691,22 +4142,6 @@
       "canonical": {
         "kind": "image"
       },
-      "type": "dooh",
-      "assets_required": [
-        {
-          "asset_id": "billboard_image",
-          "item_type": "individual",
-          "required": true,
-          "asset_type": "image",
-          "requirements": {
-            "containers": [
-              "jpg",
-              "png"
-            ],
-            "description": "Portrait image (1080x1920 or similar)"
-          }
-        }
-      ],
       "is_standard": true
     },
     {
@@ -4749,34 +4184,19 @@
           "item_type": "individual",
           "asset_id": "impression_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "requirements": {
-            "description": "3rd party impression tracking pixel URL"
-          },
-          "event": "impression",
-          "method": "img"
+          "asset_type": "pixel_tracker"
         },
         {
           "item_type": "individual",
           "asset_id": "viewability_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "event": "viewable_mrc_50",
-          "method": "img",
-          "requirements": {
-            "description": "MRC 50% viewable tracker pixel (1-second viewability for display, 2-seconds with audio for video). Optional \u2014 measurement vendor URLs the seller's renderer fires when the viewable threshold is met."
-          }
+          "asset_type": "pixel_tracker"
         },
         {
           "item_type": "individual",
           "asset_id": "click_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "event": "click",
-          "method": "img",
-          "requirements": {
-            "description": "Click measurement tracker pixel (distinct from landing_page_url, the destination). Optional \u2014 measurement vendor URL fired when the user clicks the creative, in addition to navigating to landing_page_url."
-          }
+          "asset_type": "pixel_tracker"
         }
       ],
       "supported_macros": [
@@ -4798,24 +4218,6 @@
       "canonical": {
         "kind": "image"
       },
-      "type": "dooh",
-      "assets_required": [
-        {
-          "asset_id": "screen_image",
-          "item_type": "individual",
-          "required": true,
-          "asset_type": "image",
-          "requirements": {
-            "width": 1920,
-            "height": 1080,
-            "containers": [
-              "jpg",
-              "png"
-            ],
-            "description": "Transit screen content"
-          }
-        }
-      ],
       "is_standard": true
     },
     {
@@ -4867,18 +4269,6 @@
         "GDPR_CONSENT",
         "US_PRIVACY",
         "GPP_STRING"
-      ],
-      "type": "display",
-      "assets_required": [
-        {
-          "asset_id": "format",
-          "item_type": "individual",
-          "required": true,
-          "asset_type": "text",
-          "requirements": {
-            "description": "Creative format specification with full details for detailed card"
-          }
-        }
       ],
       "is_standard": true
     },
@@ -4933,18 +4323,6 @@
         "GDPR_CONSENT",
         "US_PRIVACY",
         "GPP_STRING"
-      ],
-      "type": "display",
-      "assets_required": [
-        {
-          "asset_id": "format",
-          "item_type": "individual",
-          "required": true,
-          "asset_type": "text",
-          "requirements": {
-            "description": "Creative format specification to visualize on the card"
-          }
-        }
       ],
       "is_standard": true
     },
@@ -5015,34 +4393,19 @@
           "item_type": "individual",
           "asset_id": "impression_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "requirements": {
-            "description": "3rd party impression tracking pixel URL"
-          },
-          "event": "impression",
-          "method": "img"
+          "asset_type": "pixel_tracker"
         },
         {
           "item_type": "individual",
           "asset_id": "viewability_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "event": "viewable_mrc_50",
-          "method": "img",
-          "requirements": {
-            "description": "MRC 50% viewable tracker pixel (1-second viewability for display, 2-seconds with audio for video). Optional \u2014 measurement vendor URLs the seller's renderer fires when the viewable threshold is met."
-          }
+          "asset_type": "pixel_tracker"
         },
         {
           "item_type": "individual",
           "asset_id": "click_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "event": "click",
-          "method": "img",
-          "requirements": {
-            "description": "Click measurement tracker pixel (distinct from landing_page_url, the destination). Optional \u2014 measurement vendor URL fired when the user clicks the creative, in addition to navigating to landing_page_url."
-          }
+          "asset_type": "pixel_tracker"
         }
       ],
       "supported_macros": [
@@ -5104,55 +4467,6 @@
           }
         ]
       },
-      "type": "native",
-      "assets_required": [
-        {
-          "asset_id": "headline",
-          "item_type": "individual",
-          "required": true,
-          "asset_type": "text",
-          "requirements": {
-            "description": "Editorial-style headline (60 chars recommended)"
-          }
-        },
-        {
-          "asset_id": "body",
-          "item_type": "individual",
-          "required": true,
-          "asset_type": "text",
-          "requirements": {
-            "description": "Article-style body copy (200 chars recommended)"
-          }
-        },
-        {
-          "asset_id": "thumbnail",
-          "item_type": "individual",
-          "required": true,
-          "asset_type": "image",
-          "requirements": {
-            "description": "Thumbnail image (square, 300x300 recommended)"
-          }
-        },
-        {
-          "asset_id": "click_url",
-          "item_type": "individual",
-          "required": true,
-          "asset_type": "url",
-          "requirements": {
-            "url_type": "clickthrough",
-            "description": "Clickthrough destination URL"
-          }
-        },
-        {
-          "asset_id": "disclosure",
-          "item_type": "individual",
-          "required": true,
-          "asset_type": "text",
-          "requirements": {
-            "description": "Sponsored content disclosure text"
-          }
-        }
-      ],
       "is_standard": true
     },
     {
@@ -5195,34 +4509,19 @@
           "item_type": "individual",
           "asset_id": "impression_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "requirements": {
-            "description": "Impression tracking pixel URL"
-          },
-          "event": "impression",
-          "method": "img"
+          "asset_type": "pixel_tracker"
         },
         {
           "item_type": "individual",
           "asset_id": "viewability_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "event": "viewable_mrc_50",
-          "method": "img",
-          "requirements": {
-            "description": "MRC 50% viewable tracker pixel (1-second viewability for display, 2-seconds with audio for video). Optional \u2014 measurement vendor URLs the seller's renderer fires when the viewable threshold is met."
-          }
+          "asset_type": "pixel_tracker"
         },
         {
           "item_type": "individual",
           "asset_id": "click_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "event": "click",
-          "method": "img",
-          "requirements": {
-            "description": "Click measurement tracker pixel (distinct from landing_page_url, the destination). Optional \u2014 measurement vendor URL fired when the user clicks the creative, in addition to navigating to landing_page_url."
-          }
+          "asset_type": "pixel_tracker"
         }
       ],
       "supported_macros": [
@@ -5234,7 +4533,6 @@
       "canonical": {
         "kind": "agent_placement"
       },
-      "type": "native",
       "is_standard": true
     },
     {
@@ -5335,16 +4633,6 @@
         "CACHEBUSTER",
         "CLICK_URL"
       ],
-      "type": "native",
-      "catalog_requirements": [
-        {
-          "catalog_type": "product",
-          "required": false,
-          "required_fields": [
-            "name"
-          ]
-        }
-      ],
       "is_standard": true
     },
     {
@@ -5413,34 +4701,19 @@
           "item_type": "individual",
           "asset_id": "impression_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "requirements": {
-            "description": "3rd party impression tracking pixel URL"
-          },
-          "event": "impression",
-          "method": "img"
+          "asset_type": "pixel_tracker"
         },
         {
           "item_type": "individual",
           "asset_id": "viewability_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "event": "viewable_mrc_50",
-          "method": "img",
-          "requirements": {
-            "description": "MRC 50% viewable tracker pixel (1-second viewability for display, 2-seconds with audio for video). Optional \u2014 measurement vendor URLs the seller's renderer fires when the viewable threshold is met."
-          }
+          "asset_type": "pixel_tracker"
         },
         {
           "item_type": "individual",
           "asset_id": "click_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "event": "click",
-          "method": "img",
-          "requirements": {
-            "description": "Click measurement tracker pixel (distinct from landing_page_url, the destination). Optional \u2014 measurement vendor URL fired when the user clicks the creative, in addition to navigating to landing_page_url."
-          }
+          "asset_type": "pixel_tracker"
         }
       ],
       "supported_macros": [
@@ -5502,54 +4775,6 @@
           }
         ]
       },
-      "type": "native",
-      "assets_required": [
-        {
-          "asset_id": "title",
-          "item_type": "individual",
-          "required": true,
-          "asset_type": "text",
-          "requirements": {
-            "description": "Headline text (25 chars recommended)"
-          }
-        },
-        {
-          "asset_id": "description",
-          "item_type": "individual",
-          "required": true,
-          "asset_type": "text",
-          "requirements": {
-            "description": "Body copy (90 chars recommended)"
-          }
-        },
-        {
-          "asset_id": "main_image",
-          "item_type": "individual",
-          "required": true,
-          "asset_type": "image",
-          "requirements": {
-            "description": "Primary image (1200x627 recommended)"
-          }
-        },
-        {
-          "asset_id": "cta_text",
-          "item_type": "individual",
-          "required": true,
-          "asset_type": "text",
-          "requirements": {
-            "description": "Call-to-action text"
-          }
-        },
-        {
-          "asset_id": "sponsored_by",
-          "item_type": "individual",
-          "required": true,
-          "asset_type": "text",
-          "requirements": {
-            "description": "Advertiser name for disclosure"
-          }
-        }
-      ],
       "is_standard": true
     },
     {
@@ -5700,36 +4925,6 @@
         "GDPR_CONSENT",
         "US_PRIVACY",
         "GPP_STRING"
-      ],
-      "type": "display",
-      "assets_required": [
-        {
-          "asset_id": "product_image",
-          "item_type": "individual",
-          "required": true,
-          "asset_type": "image",
-          "requirements": {
-            "description": "Primary product image or placement preview"
-          }
-        },
-        {
-          "asset_id": "product_name",
-          "item_type": "individual",
-          "required": true,
-          "asset_type": "text",
-          "requirements": {
-            "description": "Display name of the product (e.g., 'Homepage Leaderboard')"
-          }
-        },
-        {
-          "asset_id": "product_description",
-          "item_type": "individual",
-          "required": true,
-          "asset_type": "text",
-          "requirements": {
-            "description": "Detailed description of the product (supports markdown)"
-          }
-        }
       ],
       "is_standard": true
     },
@@ -5884,36 +5079,6 @@
         "US_PRIVACY",
         "GPP_STRING"
       ],
-      "type": "display",
-      "assets_required": [
-        {
-          "asset_id": "product_image",
-          "item_type": "individual",
-          "required": true,
-          "asset_type": "image",
-          "requirements": {
-            "description": "Primary product image or placement preview"
-          }
-        },
-        {
-          "asset_id": "product_name",
-          "item_type": "individual",
-          "required": true,
-          "asset_type": "text",
-          "requirements": {
-            "description": "Display name of the product (e.g., 'Homepage Leaderboard')"
-          }
-        },
-        {
-          "asset_id": "product_description",
-          "item_type": "individual",
-          "required": true,
-          "asset_type": "text",
-          "requirements": {
-            "description": "Short description of the product (supports markdown)"
-          }
-        }
-      ],
       "is_standard": true
     },
     {
@@ -6041,36 +5206,6 @@
           "asset_type": "url",
           "requirements": {
             "description": "Click-through URL for the proposal card (e.g., interactive proposal page)"
-          }
-        }
-      ],
-      "type": "display",
-      "assets_required": [
-        {
-          "asset_id": "proposal_name",
-          "item_type": "individual",
-          "required": true,
-          "asset_type": "text",
-          "requirements": {
-            "description": "Display name of the proposal"
-          }
-        },
-        {
-          "asset_id": "proposal_description",
-          "item_type": "individual",
-          "required": true,
-          "asset_type": "text",
-          "requirements": {
-            "description": "Detailed description of the proposal"
-          }
-        },
-        {
-          "asset_id": "allocation_data",
-          "item_type": "individual",
-          "required": true,
-          "asset_type": "text",
-          "requirements": {
-            "description": "JSON array of allocations: [{product_id, allocation_percentage, rationale}]"
           }
         }
       ],
@@ -6206,36 +5341,6 @@
           }
         }
       ],
-      "type": "display",
-      "assets_required": [
-        {
-          "asset_id": "proposal_name",
-          "item_type": "individual",
-          "required": true,
-          "asset_type": "text",
-          "requirements": {
-            "description": "Display name of the proposal"
-          }
-        },
-        {
-          "asset_id": "proposal_description",
-          "item_type": "individual",
-          "required": true,
-          "asset_type": "text",
-          "requirements": {
-            "description": "Short description of the proposal"
-          }
-        },
-        {
-          "asset_id": "allocation_data",
-          "item_type": "individual",
-          "required": true,
-          "asset_type": "text",
-          "requirements": {
-            "description": "JSON array of allocations: [{product_id, allocation_percentage, rationale}]"
-          }
-        }
-      ],
       "is_standard": true
     },
     {
@@ -6305,34 +5410,19 @@
           "item_type": "individual",
           "asset_id": "impression_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "requirements": {
-            "description": "Impression tracking pixel URL"
-          },
-          "event": "impression",
-          "method": "img"
+          "asset_type": "pixel_tracker"
         },
         {
           "item_type": "individual",
           "asset_id": "viewability_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "event": "viewable_mrc_50",
-          "method": "img",
-          "requirements": {
-            "description": "MRC 50% viewable tracker pixel (1-second viewability for display, 2-seconds with audio for video). Optional \u2014 measurement vendor URLs the seller's renderer fires when the viewable threshold is met."
-          }
+          "asset_type": "pixel_tracker"
         },
         {
           "item_type": "individual",
           "asset_id": "click_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "event": "click",
-          "method": "img",
-          "requirements": {
-            "description": "Click measurement tracker pixel (distinct from landing_page_url, the destination). Optional \u2014 measurement vendor URL fired when the user clicks the creative, in addition to navigating to landing_page_url."
-          }
+          "asset_type": "pixel_tracker"
         }
       ],
       "supported_macros": [
@@ -6344,7 +5434,6 @@
       "canonical": {
         "kind": "sponsored_placement"
       },
-      "type": "native",
       "is_standard": true
     },
     {
@@ -6388,34 +5477,19 @@
           "item_type": "individual",
           "asset_id": "impression_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "requirements": {
-            "description": "3rd party impression tracking pixel URL"
-          },
-          "event": "impression",
-          "method": "img"
+          "asset_type": "pixel_tracker"
         },
         {
           "item_type": "individual",
           "asset_id": "viewability_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "event": "viewable_mrc_50",
-          "method": "img",
-          "requirements": {
-            "description": "MRC 50% viewable tracker pixel (1-second viewability for display, 2-seconds with audio for video). Optional \u2014 measurement vendor URLs the seller's renderer fires when the viewable threshold is met."
-          }
+          "asset_type": "pixel_tracker"
         },
         {
           "item_type": "individual",
           "asset_id": "click_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "event": "click",
-          "method": "img",
-          "requirements": {
-            "description": "Click measurement tracker pixel (distinct from landing_page_url, the destination). Optional \u2014 measurement vendor URL fired when the user clicks the creative, in addition to navigating to landing_page_url."
-          }
+          "asset_type": "pixel_tracker"
         }
       ],
       "supported_macros": [
@@ -6435,25 +5509,6 @@
       "canonical": {
         "kind": "video_hosted"
       },
-      "type": "video",
-      "assets_required": [
-        {
-          "asset_id": "video_file",
-          "item_type": "individual",
-          "required": true,
-          "asset_type": "video",
-          "requirements": {
-            "width": 1080,
-            "height": 1080,
-            "containers": [
-              "mp4",
-              "mov",
-              "webm"
-            ],
-            "description": "1080x1080 square video file"
-          }
-        }
-      ],
       "is_standard": true
     },
     {
@@ -6497,34 +5552,19 @@
           "item_type": "individual",
           "asset_id": "impression_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "requirements": {
-            "description": "3rd party impression tracking pixel URL"
-          },
-          "event": "impression",
-          "method": "img"
+          "asset_type": "pixel_tracker"
         },
         {
           "item_type": "individual",
           "asset_id": "viewability_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "event": "viewable_mrc_50",
-          "method": "img",
-          "requirements": {
-            "description": "MRC 50% viewable tracker pixel (1-second viewability for display, 2-seconds with audio for video). Optional \u2014 measurement vendor URLs the seller's renderer fires when the viewable threshold is met."
-          }
+          "asset_type": "pixel_tracker"
         },
         {
           "item_type": "individual",
           "asset_id": "click_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "event": "click",
-          "method": "img",
-          "requirements": {
-            "description": "Click measurement tracker pixel (distinct from landing_page_url, the destination). Optional \u2014 measurement vendor URL fired when the user clicks the creative, in addition to navigating to landing_page_url."
-          }
+          "asset_type": "pixel_tracker"
         }
       ],
       "supported_macros": [
@@ -6544,25 +5584,6 @@
       "canonical": {
         "kind": "video_hosted"
       },
-      "type": "video",
-      "assets_required": [
-        {
-          "asset_id": "video_file",
-          "item_type": "individual",
-          "required": true,
-          "asset_type": "video",
-          "requirements": {
-            "width": 1080,
-            "height": 1920,
-            "containers": [
-              "mp4",
-              "mov",
-              "webm"
-            ],
-            "description": "1080x1920 vertical video file"
-          }
-        }
-      ],
       "is_standard": true
     },
     {
@@ -6606,34 +5627,19 @@
           "item_type": "individual",
           "asset_id": "impression_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "requirements": {
-            "description": "3rd party impression tracking pixel URL"
-          },
-          "event": "impression",
-          "method": "img"
+          "asset_type": "pixel_tracker"
         },
         {
           "item_type": "individual",
           "asset_id": "viewability_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "event": "viewable_mrc_50",
-          "method": "img",
-          "requirements": {
-            "description": "MRC 50% viewable tracker pixel (1-second viewability for display, 2-seconds with audio for video). Optional \u2014 measurement vendor URLs the seller's renderer fires when the viewable threshold is met."
-          }
+          "asset_type": "pixel_tracker"
         },
         {
           "item_type": "individual",
           "asset_id": "click_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "event": "click",
-          "method": "img",
-          "requirements": {
-            "description": "Click measurement tracker pixel (distinct from landing_page_url, the destination). Optional \u2014 measurement vendor URL fired when the user clicks the creative, in addition to navigating to landing_page_url."
-          }
+          "asset_type": "pixel_tracker"
         }
       ],
       "supported_macros": [
@@ -6653,25 +5659,6 @@
       "canonical": {
         "kind": "video_hosted"
       },
-      "type": "video",
-      "assets_required": [
-        {
-          "asset_id": "video_file",
-          "item_type": "individual",
-          "required": true,
-          "asset_type": "video",
-          "requirements": {
-            "width": 1280,
-            "height": 720,
-            "containers": [
-              "mp4",
-              "mov",
-              "webm"
-            ],
-            "description": "1280x720 video file"
-          }
-        }
-      ],
       "is_standard": true
     },
     {
@@ -6715,34 +5702,19 @@
           "item_type": "individual",
           "asset_id": "impression_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "requirements": {
-            "description": "3rd party impression tracking pixel URL"
-          },
-          "event": "impression",
-          "method": "img"
+          "asset_type": "pixel_tracker"
         },
         {
           "item_type": "individual",
           "asset_id": "viewability_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "event": "viewable_mrc_50",
-          "method": "img",
-          "requirements": {
-            "description": "MRC 50% viewable tracker pixel (1-second viewability for display, 2-seconds with audio for video). Optional \u2014 measurement vendor URLs the seller's renderer fires when the viewable threshold is met."
-          }
+          "asset_type": "pixel_tracker"
         },
         {
           "item_type": "individual",
           "asset_id": "click_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "event": "click",
-          "method": "img",
-          "requirements": {
-            "description": "Click measurement tracker pixel (distinct from landing_page_url, the destination). Optional \u2014 measurement vendor URL fired when the user clicks the creative, in addition to navigating to landing_page_url."
-          }
+          "asset_type": "pixel_tracker"
         }
       ],
       "supported_macros": [
@@ -6762,25 +5734,6 @@
       "canonical": {
         "kind": "video_hosted"
       },
-      "type": "video",
-      "assets_required": [
-        {
-          "asset_id": "video_file",
-          "item_type": "individual",
-          "required": true,
-          "asset_type": "video",
-          "requirements": {
-            "width": 1920,
-            "height": 1080,
-            "containers": [
-              "mp4",
-              "mov",
-              "webm"
-            ],
-            "description": "1920x1080 video file"
-          }
-        }
-      ],
       "is_standard": true
     },
     {
@@ -6810,34 +5763,19 @@
           "item_type": "individual",
           "asset_id": "impression_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "requirements": {
-            "description": "3rd party impression tracking pixel URL"
-          },
-          "event": "impression",
-          "method": "img"
+          "asset_type": "pixel_tracker"
         },
         {
           "item_type": "individual",
           "asset_id": "viewability_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "event": "viewable_mrc_50",
-          "method": "img",
-          "requirements": {
-            "description": "MRC 50% viewable tracker pixel (1-second viewability for display, 2-seconds with audio for video). Optional \u2014 measurement vendor URLs the seller's renderer fires when the viewable threshold is met."
-          }
+          "asset_type": "pixel_tracker"
         },
         {
           "item_type": "individual",
           "asset_id": "click_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "event": "click",
-          "method": "img",
-          "requirements": {
-            "description": "Click measurement tracker pixel (distinct from landing_page_url, the destination). Optional \u2014 measurement vendor URL fired when the user clicks the creative, in addition to navigating to landing_page_url."
-          }
+          "asset_type": "pixel_tracker"
         }
       ],
       "supported_macros": [
@@ -6858,24 +5796,6 @@
       "canonical": {
         "kind": "video_hosted"
       },
-      "type": "video",
-      "assets_required": [
-        {
-          "asset_id": "video_file",
-          "item_type": "individual",
-          "required": true,
-          "asset_type": "video",
-          "requirements": {
-            "min_duration_ms": 30000,
-            "max_duration_ms": 30000,
-            "containers": [
-              "mp4",
-              "mov"
-            ],
-            "description": "30-second CTV-optimized video file (1920x1080 recommended)"
-          }
-        }
-      ],
       "is_standard": true
     },
     {
@@ -6905,34 +5825,19 @@
           "item_type": "individual",
           "asset_id": "impression_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "requirements": {
-            "description": "3rd party impression tracking pixel URL"
-          },
-          "event": "impression",
-          "method": "img"
+          "asset_type": "pixel_tracker"
         },
         {
           "item_type": "individual",
           "asset_id": "viewability_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "event": "viewable_mrc_50",
-          "method": "img",
-          "requirements": {
-            "description": "MRC 50% viewable tracker pixel (1-second viewability for display, 2-seconds with audio for video). Optional \u2014 measurement vendor URLs the seller's renderer fires when the viewable threshold is met."
-          }
+          "asset_type": "pixel_tracker"
         },
         {
           "item_type": "individual",
           "asset_id": "click_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "event": "click",
-          "method": "img",
-          "requirements": {
-            "description": "Click measurement tracker pixel (distinct from landing_page_url, the destination). Optional \u2014 measurement vendor URL fired when the user clicks the creative, in addition to navigating to landing_page_url."
-          }
+          "asset_type": "pixel_tracker"
         }
       ],
       "supported_macros": [
@@ -6953,24 +5858,6 @@
       "canonical": {
         "kind": "video_hosted"
       },
-      "type": "video",
-      "assets_required": [
-        {
-          "asset_id": "video_file",
-          "item_type": "individual",
-          "required": true,
-          "asset_type": "video",
-          "requirements": {
-            "min_duration_ms": 30000,
-            "max_duration_ms": 30000,
-            "containers": [
-              "mp4",
-              "mov"
-            ],
-            "description": "30-second CTV-optimized video file (1920x1080 recommended)"
-          }
-        }
-      ],
       "is_standard": true
     },
     {
@@ -7001,34 +5888,19 @@
           "item_type": "individual",
           "asset_id": "impression_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "requirements": {
-            "description": "3rd party impression tracking pixel URL"
-          },
-          "event": "impression",
-          "method": "img"
+          "asset_type": "pixel_tracker"
         },
         {
           "item_type": "individual",
           "asset_id": "viewability_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "event": "viewable_mrc_50",
-          "method": "img",
-          "requirements": {
-            "description": "MRC 50% viewable tracker pixel (1-second viewability for display, 2-seconds with audio for video). Optional \u2014 measurement vendor URLs the seller's renderer fires when the viewable threshold is met."
-          }
+          "asset_type": "pixel_tracker"
         },
         {
           "item_type": "individual",
           "asset_id": "click_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "event": "click",
-          "method": "img",
-          "requirements": {
-            "description": "Click measurement tracker pixel (distinct from landing_page_url, the destination). Optional \u2014 measurement vendor URL fired when the user clicks the creative, in addition to navigating to landing_page_url."
-          }
+          "asset_type": "pixel_tracker"
         }
       ],
       "supported_macros": [
@@ -7048,11 +5920,22 @@
       "canonical": {
         "kind": "video_hosted"
       },
-      "type": "video",
-      "assets_required": [
+      "is_standard": true
+    },
+    {
+      "format_id": {
+        "agent_url": "https://creative.adcontextprotocol.org",
+        "id": "video_hosted"
+      },
+      "name": "Hosted Video",
+      "description": "Legacy hosted video format (supports any duration)",
+      "accepts_parameters": [
+        "duration"
+      ],
+      "assets": [
         {
-          "asset_id": "video_file",
           "item_type": "individual",
+          "asset_id": "video_file",
           "required": true,
           "asset_type": "video",
           "requirements": {
@@ -7062,8 +5945,43 @@
               "webm"
             ]
           }
+        },
+        {
+          "item_type": "individual",
+          "asset_id": "impression_tracker",
+          "required": false,
+          "asset_type": "pixel_tracker"
+        },
+        {
+          "item_type": "individual",
+          "asset_id": "viewability_tracker",
+          "required": false,
+          "asset_type": "pixel_tracker"
+        },
+        {
+          "item_type": "individual",
+          "asset_id": "click_tracker",
+          "required": false,
+          "asset_type": "pixel_tracker"
         }
       ],
+      "supported_macros": [
+        "MEDIA_BUY_ID",
+        "CREATIVE_ID",
+        "CACHEBUSTER",
+        "CLICK_URL",
+        "DEVICE_TYPE",
+        "GDPR",
+        "GDPR_CONSENT",
+        "US_PRIVACY",
+        "GPP_STRING",
+        "VIDEO_ID",
+        "POD_POSITION",
+        "CONTENT_GENRE"
+      ],
+      "canonical": {
+        "kind": "video_hosted"
+      },
       "is_standard": true
     },
     {
@@ -7094,34 +6012,19 @@
           "item_type": "individual",
           "asset_id": "impression_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "requirements": {
-            "description": "3rd party impression tracking pixel URL"
-          },
-          "event": "impression",
-          "method": "img"
+          "asset_type": "pixel_tracker"
         },
         {
           "item_type": "individual",
           "asset_id": "viewability_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "event": "viewable_mrc_50",
-          "method": "img",
-          "requirements": {
-            "description": "MRC 50% viewable tracker pixel (1-second viewability for display, 2-seconds with audio for video). Optional \u2014 measurement vendor URLs the seller's renderer fires when the viewable threshold is met."
-          }
+          "asset_type": "pixel_tracker"
         },
         {
           "item_type": "individual",
           "asset_id": "click_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "event": "click",
-          "method": "img",
-          "requirements": {
-            "description": "Click measurement tracker pixel (distinct from landing_page_url, the destination). Optional \u2014 measurement vendor URL fired when the user clicks the creative, in addition to navigating to landing_page_url."
-          }
+          "asset_type": "pixel_tracker"
         }
       ],
       "supported_macros": [
@@ -7141,22 +6044,6 @@
       "canonical": {
         "kind": "video_hosted"
       },
-      "type": "video",
-      "assets_required": [
-        {
-          "asset_id": "video_file",
-          "item_type": "individual",
-          "required": true,
-          "asset_type": "video",
-          "requirements": {
-            "containers": [
-              "mp4",
-              "mov",
-              "webm"
-            ]
-          }
-        }
-      ],
       "is_standard": true
     },
     {
@@ -7187,34 +6074,19 @@
           "item_type": "individual",
           "asset_id": "impression_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "requirements": {
-            "description": "3rd party impression tracking pixel URL"
-          },
-          "event": "impression",
-          "method": "img"
+          "asset_type": "pixel_tracker"
         },
         {
           "item_type": "individual",
           "asset_id": "viewability_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "event": "viewable_mrc_50",
-          "method": "img",
-          "requirements": {
-            "description": "MRC 50% viewable tracker pixel (1-second viewability for display, 2-seconds with audio for video). Optional \u2014 measurement vendor URLs the seller's renderer fires when the viewable threshold is met."
-          }
+          "asset_type": "pixel_tracker"
         },
         {
           "item_type": "individual",
           "asset_id": "click_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "event": "click",
-          "method": "img",
-          "requirements": {
-            "description": "Click measurement tracker pixel (distinct from landing_page_url, the destination). Optional \u2014 measurement vendor URL fired when the user clicks the creative, in addition to navigating to landing_page_url."
-          }
+          "asset_type": "pixel_tracker"
         }
       ],
       "supported_macros": [
@@ -7234,25 +6106,6 @@
       "canonical": {
         "kind": "video_hosted"
       },
-      "type": "video",
-      "assets_required": [
-        {
-          "asset_id": "video_file",
-          "item_type": "individual",
-          "required": true,
-          "asset_type": "video",
-          "requirements": {
-            "min_duration_ms": 15000,
-            "max_duration_ms": 15000,
-            "containers": [
-              "mp4",
-              "mov",
-              "webm"
-            ],
-            "description": "15-second video file"
-          }
-        }
-      ],
       "is_standard": true
     },
     {
@@ -7283,34 +6136,19 @@
           "item_type": "individual",
           "asset_id": "impression_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "requirements": {
-            "description": "3rd party impression tracking pixel URL"
-          },
-          "event": "impression",
-          "method": "img"
+          "asset_type": "pixel_tracker"
         },
         {
           "item_type": "individual",
           "asset_id": "viewability_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "event": "viewable_mrc_50",
-          "method": "img",
-          "requirements": {
-            "description": "MRC 50% viewable tracker pixel (1-second viewability for display, 2-seconds with audio for video). Optional \u2014 measurement vendor URLs the seller's renderer fires when the viewable threshold is met."
-          }
+          "asset_type": "pixel_tracker"
         },
         {
           "item_type": "individual",
           "asset_id": "click_tracker",
           "required": false,
-          "asset_type": "pixel_tracker",
-          "event": "click",
-          "method": "img",
-          "requirements": {
-            "description": "Click measurement tracker pixel (distinct from landing_page_url, the destination). Optional \u2014 measurement vendor URL fired when the user clicks the creative, in addition to navigating to landing_page_url."
-          }
+          "asset_type": "pixel_tracker"
         }
       ],
       "supported_macros": [
@@ -7330,25 +6168,6 @@
       "canonical": {
         "kind": "video_hosted"
       },
-      "type": "video",
-      "assets_required": [
-        {
-          "asset_id": "video_file",
-          "item_type": "individual",
-          "required": true,
-          "asset_type": "video",
-          "requirements": {
-            "min_duration_ms": 30000,
-            "max_duration_ms": 30000,
-            "containers": [
-              "mp4",
-              "mov",
-              "webm"
-            ],
-            "description": "30-second video file"
-          }
-        }
-      ],
       "is_standard": true
     },
     {
@@ -7386,15 +6205,6 @@
       "canonical": {
         "kind": "video_vast"
       },
-      "type": "video",
-      "assets_required": [
-        {
-          "asset_id": "vast_tag",
-          "item_type": "individual",
-          "required": true,
-          "asset_type": "vast"
-        }
-      ],
       "is_standard": true
     },
     {
@@ -7432,18 +6242,6 @@
       "canonical": {
         "kind": "video_vast"
       },
-      "type": "video",
-      "assets_required": [
-        {
-          "asset_id": "vast_tag",
-          "item_type": "individual",
-          "required": true,
-          "asset_type": "vast",
-          "requirements": {
-            "description": "VAST 4.x compatible tag"
-          }
-        }
-      ],
       "is_standard": true
     }
   ]

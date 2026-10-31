@@ -26,7 +26,7 @@
 # What DOES fork it is whether the creative already exists — the two branches have
 # separate submit sites and separate wrong answers (missing row vs stale row).
 #
-# @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/creative/sync-creatives-response.json
+# @source repo=adcp ref=v3.2.7 path=static/schemas/source/creative/sync-creatives-response.json
 Feature: UC-006 sync_creatives — an effect that leaves the transaction runs only after that transaction commits (local)
 
   @T-UC-006-local-post-commit-ai-review-ordering @creative-approval @invariant

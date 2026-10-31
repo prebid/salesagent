@@ -5,24 +5,12 @@ These classes handle creative lifecycle management, sync operations, listing,
 assignments, and admin approval workflows.
 """
 
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from enum import Enum
-from typing import Any, ClassVar, Literal
+from typing import Annotated, Any, ClassVar, Literal
 
 from adcp.types import CreativeStatus
-from adcp.types import FormatId as LibraryFormatId
-from adcp.types import (
-    ListCreativeFormatsRequest as LibraryListCreativeFormatsRequest,
-)
-from adcp.types import (
-    ListCreativeFormatsResponse as LibraryListCreativeFormatsResponse,
-)
-from adcp.types import (
-    ListCreativesRequest as LibraryListCreativesRequest,
-)
-from adcp.types import (
-    ListCreativesResponse as LibraryListCreativesResponse,
-)
 from adcp.types import PaginationResponse as LibraryResponsePagination
 from adcp.types import (
     QuerySummary as LibraryQuerySummary,
@@ -30,28 +18,50 @@ from adcp.types import (
 from adcp.types import (
     SyncCreativeResult as LibrarySyncCreativeResult,
 )
-from adcp.types import (
-    SyncCreativesRequest as LibrarySyncCreativesRequest,
-)
 
-# The BRANCH, named at its generated path. ``adcp.types.CreativeAsset`` binds to this same
-# class at RUNTIME, but mypy resolves the public alias to the RootModel UNION, so static and
-# runtime disagreed about what this model extends. Same adcp codegen defect as the pointer
-# problem documented on Creative below; unreported upstream.
-from adcp.types.generated_poc.core.creative_asset import CreativeAsset1 as LibraryCreativeAsset
-from adcp.types.generated_poc.core.provenance import Provenance as LibraryProvenance
-from adcp.types.generated_poc.creative.list_creatives_response import (
+# The BRANCH, named at its generated path. the pinned SDK retired the numeric arm name: the branch
+# IS ``CreativeAsset`` in the generated module now, and neither it nor the public
+# ``adcp.types.CreativeAsset`` is a RootModel, so the static/runtime disagreement this
+# import was written around is gone. The import stays on the GENERATED path for one
+# reason: the public name binds to ``adcp.types.canonical_creative.CreativeAsset``, which
+# STRIPS ``format_id``. Repointing it is part of the creative migration (salesagent-3xcdk),
+# not of the SDK bump.
+from adcp.types.domains.core.creative_asset import CreativeAsset as LibraryCreativeAsset
+from adcp.types.domains.core.creative_filters import CreativeFilters as LibraryCreativeFilters
+from adcp.types.domains.core.creative_revision_id import CreativeRevisionId
+from adcp.types.domains.core.format_id import FormatReferenceStructuredObject as LibraryFormatId
+from adcp.types.domains.core.provenance import Provenance as LibraryProvenance
+from adcp.types.domains.creative.list_creatives_response import (
     Creative as LibraryCreative,
 )
-from adcp.types.generated_poc.creative.sync_creatives_response import (
+from adcp.types.domains.creative.sync_creatives_request import Creative as LibrarySyncCreative
+from adcp.types.domains.creative.sync_creatives_response import (
     SyncCreativesResponse1 as LibrarySyncCreativesSuccess,
 )
-from adcp.types.generated_poc.enums.digital_source_type import DigitalSourceType as LibraryDigitalSourceType
-from adcp.types.generated_poc.media_buy.get_media_buys_response import (
+from adcp.types.domains.enums.digital_source_type import DigitalSourceType as LibraryDigitalSourceType
+from adcp.types.domains.media_buy.get_media_buys_response import (
     CreativeApproval as LibraryGetMediaBuysCreativeApproval,
+)
+
+# The legacy arm from the module that contains only it — see the note in ``_base.py``.
+from adcp.types.legacy import (
+    LegacyListCreativeFormatsRequest as LibraryListCreativeFormatsRequest,
+)
+from adcp.types.legacy import (
+    LegacyListCreativeFormatsResponse as LibraryListCreativeFormatsResponse,
+)
+from adcp.types.legacy import (
+    LegacyListCreativesRequest as LibraryListCreativesRequest,
+)
+from adcp.types.legacy import (
+    LegacyListCreativesResponse as LibraryListCreativesResponse,
+)
+from adcp.types.legacy import (
+    LegacySyncCreativesRequest as LibrarySyncCreativesRequest,
 )
 from pydantic import (
     AwareDatetime,
+    BaseModel,
     ConfigDict,
     Field,
     RootModel,
@@ -62,14 +72,16 @@ from pydantic_core import PydanticCustomError
 
 from src.core.config import get_pydantic_extra_mode
 from src.core.schemas._base import (
-    AdcpResponse,
     BuyerRequest,
-    Format,
     FormatId,
+    FormatIdSlot,
     NestedModelSerializerMixin,
+    PeerFormat,
+    SalesAgentAdcpResponse,
     SalesAgentBaseModel,
     Targeting,
 )
+from src.core.schemas._dependencies import as_local, build_as_local, narrowed_from
 from src.core.schemas.notification import PushNotificationConfig
 
 #: IPTC Digital Source Type, for AI provenance under EU AI Act Article 50.
@@ -88,8 +100,7 @@ from src.core.schemas.notification import PushNotificationConfig
 #: breakage lived only in tests, which is why it survived.
 #:
 #: An alias rather than a subclass because Python forbids extending an enum that has
-#: members — the same constraint ``library_base_violation`` had to be taught in
-#: ``tests/unit/test_architecture_schema_inheritance.py``. CLAUDE.md Pattern #1: use the
+#: members. CLAUDE.md Pattern #1: use the
 #: library type, never duplicate it.
 DigitalSourceType = LibraryDigitalSourceType
 
@@ -129,6 +140,10 @@ class CreativeStatusEnum(Enum):
     approved = "approved"
     rejected = "rejected"
     pending_review = "pending_review"
+
+
+#: The two members core/creative-asset.json's root oneOf discriminates on, one per arm.
+_FORMAT_IDENTIFIERS: tuple[str, str] = ("format_id", "format_kind")
 
 
 class CreativeAssetRequest(LibraryCreativeAsset):
@@ -178,16 +193,18 @@ class CreativeAssetRequest(LibraryCreativeAsset):
     # round-trip through a dict to get past it.
     model_config = ConfigDict(extra=get_pydantic_extra_mode(), from_attributes=True)
 
-    # WEAKENED, deliberately: required -> optional. The parent is one branch of the oneOf,
-    # where format_id is the identifier. The other branch identifies by format_kind and omits
-    # format_id, so requiring it here announces half the schema.
-    # LibraryFormatId, not the local FormatId subclass: the ONLY axis this redeclaration
-    # changes is nullability. Narrowing to the subclass would repeat the defect above one
-    # level down -- the SDK's own FormatId would stop validating into its own field.
-    format_id: LibraryFormatId | None = None  # type: ignore[assignment]
+    # ``format_id`` is BUILT as the local :class:`FormatId`, which carries
+    # core/format-id.json's ``dependencies``, and otherwise is the parent's declaration
+    # (``narrowed_from``). An earlier redeclaration here, written to weaken the field to
+    # optional, dropped the parent's description and its ``deprecated=True`` marker; keeping
+    # the parent's declaration keeps both: ``format_id`` is DEPRECATED in 3.2, the published
+    # schema says so, and reading the attribute emits the SDK's DeprecationWarning, which is
+    # the correct signal while format_kind is the canonical identifier.
+    format_id: FormatIdSlot | None = narrowed_from(LibraryCreativeAsset, "format_id")
 
-    @model_validator(mode="after")
-    def _exactly_one_format_identifier(self) -> "CreativeAssetRequest":
+    @model_validator(mode="before")
+    @classmethod
+    def _exactly_one_format_identifier(cls, data: Any) -> Any:
         """core/creative-asset.json is a oneOf: format_id XOR format_kind.
 
         Raised at the ITEM, which is where a oneOf failure belongs. core/error.json requires
@@ -206,11 +223,44 @@ class CreativeAssetRequest(LibraryCreativeAsset):
         JSON Schema keyword" -- so the issue was dropped from ``issues[]`` and the buyer got
         an envelope with no structured reason. This rejection CAN be substantiated as
         ``oneOf``, so it says so (see ``SELLER_RAISED_KEYWORDS``).
+
+        ``mode="before"``, and that is the whole reason this runs at all. The generated
+        parent carries ``_require_schema_required_group``, the "at least one" half of the
+        same oneOf, as an AFTER validator raising a plain ``ValueError``:
+
+            CreativeAsset requires at least one of these field groups: format_id | format_kind
+
+        Pydantic runs the parent's after-validators before the subclass's, so for the case
+        that matters most -- a creative carrying NEITHER identity -- the parent failed first
+        and the buyer got ``value_error`` with an empty ``issues[]``. Measured: four
+        integration rows asserted ``oneOf`` and read ``value_error`` or nothing. A before
+        validator precedes every after validator in the hierarchy, so the keyword-bearing
+        refusal is the one the buyer sees, and the parent's is unreachable rather than
+        suppressed.
         """
-        supplied = sum(identifier is not None for identifier in (self.format_id, self.format_kind))
-        if supplied != 1:
+        # The raw payload on the wire path, an instance on the model-to-model path
+        # (``from_attributes=True``). Both answer "which identity did the caller supply".
+        #
+        # SUPPLIED MEANS PRESENT, NULL INCLUDED. Each arm of the pinned oneOf is a ``required``
+        # plus a ``not: {required: [...]}``, and JSON Schema's ``required`` is satisfied by the
+        # key being there whatever its value -- so ``{format_kind: "image", format_id: null}``
+        # names the legacy identifier and matches neither arm. Counting ``is not None`` let it
+        # through. A model instance answers the same question with ``model_fields_set``,
+        # which records an explicit null and omits a defaulted field. The one identifier
+        # present must also carry a value: a lone ``format_id: null`` satisfies the v1 arm's
+        # ``required`` and fails its type (core/format-id.json is an object), so it matches
+        # no arm either.
+        if isinstance(data, Mapping):
+            present = [name for name in _FORMAT_IDENTIFIERS if name in data]
+            valued = [name for name in present if data[name] is not None]
+        elif isinstance(data, BaseModel):
+            present = [name for name in _FORMAT_IDENTIFIERS if name in data.model_fields_set]
+            valued = [name for name in present if getattr(data, name) is not None]
+        else:
+            present = valued = [name for name in _FORMAT_IDENTIFIERS if getattr(data, name, None) is not None]
+        if len(present) != 1 or present != valued:
             raise PydanticCustomError("oneOf", "provide exactly one of format_id or format_kind")
-        return self
+        return data
 
     @model_validator(mode="after")
     def _trackers_bind_tracking_events(self) -> "CreativeAssetRequest":
@@ -271,11 +321,34 @@ _NON_TRACKING_EVENTS: frozenset[str] = frozenset(
 )
 
 
+class SyncCreativeAsset(CreativeAssetRequest):
+    """The item ``sync_creatives`` accepts: core/creative-asset.json plus the sync request's ``revision_id``.
+
+    creative/sync-creatives-request.json (v3.2.7) declares ``creatives[]`` as creative-asset.json
+    AND an object adding ``revision_id``, and says of it: "Buyers may send it to any 3.2 peer;
+    creative.supports_revisions gates reliance on immutability, echo, readback, and delivery
+    correlation, not whether the open request shape may carry the field." So the field is
+    accepted here, as the pin declares it (``narrowed_from`` keeps the pin's own declaration),
+    and only on the sync item: a package's inline creative is creative-asset.json alone.
+
+    This seller does not advertise ``creative.supports_revisions``, so the id is neither
+    echoed nor read back. Its one reader is the representation-selection identity check
+    (``check_representation_selection``): "When an item carries ``representation_selection``,
+    its ``creative_id`` and ``revision_id`` must equal the selection lineage"
+    (docs/creative/task-reference/sync_creatives.mdx).
+
+    ``localization``, the item's other member, stays undeclared: this seller does not advertise
+    ``creative.localization``, which the pin makes a precondition of accepting it.
+    """
+
+    revision_id: CreativeRevisionId | None = narrowed_from(LibrarySyncCreative, "revision_id")
+
+
 # --- Creative Lifecycle ---
 class Creative(LibraryCreative):
     """Individual creative asset - extends listing Creative with internal workflow fields.
 
-    adcp 3.6.0 listing Creative fields (public):
+    the pinned SDK listing Creative fields (public):
     - Required: creative_id, format_id, name, status, created_date, updated_date
     - Optional: assets, assignments, catalogs, tags, performance, account, sub_assets
 
@@ -286,7 +359,9 @@ class Creative(LibraryCreative):
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
 
     # === Overrides of listing Creative fields ===
-    name: str = Field(description="Creative name")
+    # ``name`` is INHERITED: the pinned listing Creative declares the same required
+    # ``str``. The redeclaration's only remaining effect was to publish "Creative name"
+    # instead of the pin's "Human-readable creative name".
     status: CreativeStatus = Field(
         default=CreativeStatus.pending_review,
         description="Workflow approval status",
@@ -321,11 +396,23 @@ class Creative(LibraryCreative):
         return v
 
     # === AI Provenance (EU AI Act Article 50) ===
-    # Typed with the PINNED class itself (``Provenance`` is an alias for it, see above), so
-    # the library instance a request carries satisfies this slot as it arrives. The
-    # ``mode="before"`` validator that used to rebuild one local instance from one library
-    # instance is gone with the subclass that made it necessary.
-    provenance: Provenance | None = Field(default=None, description="AI provenance metadata per EU AI Act Article 50")
+    # NOT DECLARED HERE, and the pin is why. ``provenance`` belongs to the REQUEST item:
+    # ``core/creative-asset.json`` declares it, and the listing item this class extends
+    # (``creatives[]`` of list-creatives-response.json, 28 properties, measured on that node)
+    # does not. The field appeared on the pinned bundle's nodes 81 times and on none of them
+    # was it this one -- which is exactly why a substring search over the bundle cannot
+    # settle a question about a model.
+    #
+    # It existed here to carry a value two lines: ``_validate_creative_input`` copied it off
+    # the ``CreativeAssetRequest`` so ``check_provenance_policy`` could read it back. That
+    # check now reads the request item directly, which is both where the pin puts the field
+    # and where the value came from. Persistence never went through here either -- the stored
+    # document is built from the request item in ``_assets.py``.
+    #
+    # The cost of the declaration was not the copy. A field on this class is a field in the
+    # ADVERTISED list_creatives shape (``schema_validation.create_schema_registry`` serves
+    # it), so a buyer was shown a response property the spec does not define and could not
+    # validate against the pin.
 
     # === Internal Fields (excluded from AdCP responses) ===
     principal_id: str | None = Field(
@@ -446,9 +533,10 @@ class SyncCreativesRequest(BuyerRequest, LibrarySyncCreativesRequest):
     inherited from AdCP spec.
 
     Local overrides:
-    - creatives: list[CreativeAssetRequest] -- the SPEC's request item type. This used to be
-      list[Creative], the response model, on the reasoning that it was "richer"; it is richer
-      in response fields while missing seven request ones. See CreativeAssetRequest.
+    - creatives: list[SyncCreativeAsset] -- the SPEC's request item type (creative-asset.json
+      plus the sync item's revision_id). This used to be list[Creative], the response model,
+      on the reasoning that it was "richer"; it is richer in response fields while missing
+      seven request ones. See CreativeAssetRequest.
     """
 
     TAGS: ClassVar[tuple[str, ...]] = (
@@ -464,7 +552,7 @@ class SyncCreativesRequest(BuyerRequest, LibrarySyncCreativesRequest):
     # Narrowed to the local class; see CreateMediaBuyRequest in _base.py.
     push_notification_config: PushNotificationConfig | None = None
 
-    # account and idempotency_key are REQUIRED by AdCP 3.1.1
+    # account and idempotency_key are REQUIRED by AdCP.1
     # (creative/sync-creatives-request.json /required = [idempotency_key, account,
     # creatives]) and are inherited as required. The removed override claimed
     # idempotency_key is "generated at the transport boundary when not supplied" -- which the
@@ -473,15 +561,33 @@ class SyncCreativesRequest(BuyerRequest, LibrarySyncCreativesRequest):
     # A server-generated key differs on every retry, so it provides no at-most-once guarantee
     # at all, and a sync retried after a timeout creates the creatives twice.
 
-    creatives: list[CreativeAssetRequest] = Field(
+    creatives: list[SyncCreativeAsset] = Field(
         ..., min_length=1, max_length=100, description="Array of creative assets to sync (create or update)"
     )  # type: ignore[assignment]
+
+    @field_validator("creatives", mode="before")
+    @classmethod
+    def _creatives_as_sync_items(cls, value: Any) -> Any:
+        """Build an in-process caller's ``CreativeAssetRequest`` as the sync item, by its SUPPLIED fields.
+
+        ``create_media_buy`` and ``update_media_buy`` hand a package's inline creatives over as
+        ``CreativeAssetRequest`` instances. ``from_attributes`` alone would read every attribute,
+        marking each default as sent; ``build_as_local`` reads ``model_fields_set``, so a creative
+        means here what it meant on the instance (``selected_output_digest`` digests exactly what
+        was sent).
+        """
+        if not isinstance(value, list):
+            return value
+        return [
+            build_as_local(SyncCreativeAsset, item) if isinstance(item, CreativeAssetRequest) else item
+            for item in value
+        ]
 
     @model_validator(mode="after")
     def _delete_missing_needs_the_whole_library(self):
         """Refuse delete_missing together with creative_ids, as the pin says to.
 
-        creative/sync-creatives-request.json @ AdCP 3.1.1, ``delete_missing``: "Invalid
+        creative/sync-creatives-request.json @ ``delete_missing``: "Invalid
         when creative_ids is provided -- delete_missing applies to the entire library
         scope, not a filtered subset." A request that says both is malformed as a whole,
         which is INVALID_REQUEST; nothing about it is a per-creative outcome.
@@ -507,22 +613,29 @@ class SyncSummary(SalesAgentBaseModel):
 class SyncCreativeResult(LibrarySyncCreativeResult):
     """Extends library SyncCreativeResult with internal-only fields.
 
-    adcp 6.6 (spec 3.1.1) re-added assigned_to, assignment_errors, platform_id, status,
+    the pinned SDK re-added assigned_to, assignment_errors, platform_id, status,
     changes and warnings to the library parent, so all six are now INHERITED (they were
     locally redeclared under SDK 5.7 which had dropped them). See PR #1567.
 
     Internal-only (not in AdCP spec, excluded from responses):
     - internal_status: review-routing state (renamed off the inherited spec `status`)
-    - review_feedback: platform review feedback
+
+    ``review_feedback`` IS GONE. ``sync-creatives-response.json``'s result item does not
+    declare it -- measured on the node -- and it was write-only: all five construction
+    sites in ``src/core/tools/creatives/`` passed the literal ``None``, and no site in
+    ``src/``, ``scripts/`` or ``tests/`` ever read it. ``Field(exclude=True)`` meant the
+    attribute was its only observable, so a field that was never set and never read looked
+    identical to one doing its job. The pin's channel for per-result feedback is the
+    inherited ``errors``/``warnings`` arrays.
     """
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
 
-    # action is inherited from the adcp 6.6 parent as the StrEnum CreativeAction. Every value
+    # action is inherited from the the pinned SDK parent as the StrEnum CreativeAction. Every value
     # production emits (created/updated/unchanged/failed/deleted — as strings or enum members) is
     # a valid CreativeAction, and StrEnum coerces the strings, so no override or normalizer is needed.
 
-    # adcp 6.6 (spec 3.1.1) re-added assigned_to/assignment_errors/platform_id/status/changes/
+    # the pinned SDK re-added assigned_to/assignment_errors/platform_id/status/changes/
     # warnings to the library parent (PR #1567, shrinking the schema-inheritance
     # allowlist). Our former local `status` held internal review-routing state, not the spec's
     # advisory CreativeStatus, so it is renamed to `internal_status` (excluded from the wire)
@@ -538,11 +651,6 @@ class SyncCreativeResult(LibrarySyncCreativeResult):
     # Writers materialize the list before appending (_append_warning in _sync.py).
     internal_status: str | None = Field(
         None, exclude=True, description="Internal review-routing status (INTERNAL - excluded from AdCP responses)"
-    )
-
-    # Internal-only fields (not in AdCP spec)
-    review_feedback: str | None = Field(
-        None, exclude=True, description="Feedback from platform review process (INTERNAL - excluded from responses)"
     )
 
     @model_validator(mode="after")
@@ -592,10 +700,10 @@ class AssignmentResult(SalesAgentBaseModel):
     )
 
 
-class SyncCreativesResponse(NestedModelSerializerMixin, LibrarySyncCreativesSuccess, AdcpResponse):
+class SyncCreativesResponse(NestedModelSerializerMixin, LibrarySyncCreativesSuccess, SalesAgentAdcpResponse):
     """Extends library SyncCreativesResponse success variant.
 
-    adcp 3.9: SyncCreativesResponse is now a union TypeAlias (not RootModel).
+    the pinned SDK: SyncCreativesResponse is now a union TypeAlias (not RootModel).
     Since the error variant is never constructed (ToolError handles failures),
     we subclass the success variant directly.
 
@@ -603,7 +711,7 @@ class SyncCreativesResponse(NestedModelSerializerMixin, LibrarySyncCreativesSucc
     be. ``creative/sync-creatives-response.json`` composes the envelope into the whole
     response with ``allOf``, so every branch carries its eleven fields -- but the SDK's generated
     ``SyncCreativesResponse1`` (this class's parent) inherits ``AdcpVersionEnvelope`` alone.
-    At adcp 6.6 that is true of 19 of the 24 ``*SuccessResponse`` aliases: the five that DO
+    At the pinned SDK that is true of 19 of the 24 ``*SuccessResponse`` aliases: the five that DO
     inherit are the ones whose response schema has no ``oneOf``, so the alias resolves to the
     root class and picks the base up from the root ``allOf``. Filed upstream as
     adcontextprotocol/adcp-client-python#1136.
@@ -613,7 +721,7 @@ class SyncCreativesResponse(NestedModelSerializerMixin, LibrarySyncCreativesSucc
     go out with no marker at all. Delete this base the day the SDK's success branches compose the
     envelope; ``ProtocolEnvelope`` is exported and correct, only the branches fail to inherit it.
 
-    adcp 6.6 restored the fields SDK 5.7 had collapsed off the success envelope:
+    the pinned SDK restored the fields SDK 5.7 had collapsed off the success envelope:
     dry_run, context (ContextObject|None) and ext (ExtensionObject|None) are all
     INHERITED from the parent again (identical definitions; production may assign
     raw dicts to context/ext, which Pydantic coerces on validation). Only
@@ -656,8 +764,45 @@ class ListCreativeFormatsRequest(BuyerRequest, LibraryListCreativeFormatsRequest
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
 
+    # Narrowed to the local class, which carries core/format-id.json's ``dependencies``.
+    format_ids: list[FormatIdSlot] | None = narrowed_from(LibraryListCreativeFormatsRequest, "format_ids")
+    input_format_ids: list[FormatIdSlot] | None = narrowed_from(LibraryListCreativeFormatsRequest, "input_format_ids")
+    output_format_ids: list[FormatIdSlot] | None = narrowed_from(LibraryListCreativeFormatsRequest, "output_format_ids")
 
-class ListCreativeFormatsResponse(NestedModelSerializerMixin, LibraryListCreativeFormatsResponse, AdcpResponse):
+    @field_validator("disclosure_positions", "disclosure_persistence", mode="before")
+    @classmethod
+    def _refuse_duplicate_disclosure_members(cls, v: Any) -> Any:
+        """Both disclosure filters declare ``uniqueItems: true`` — the generated model dedupes.
+
+        3.2.1 list-creative-formats-request.json puts ``uniqueItems: true`` on
+        ``disclosure_positions`` AND ``disclosure_persistence``, in both role variants
+        (``media-buy/`` and ``creative/``). The generated model does not express it: the pinned SDK's
+        ``types._ergonomic._patch_unique_enum_list`` attaches a ``WrapValidator`` whose
+        ``coerce_to_unique_enum_list`` SILENTLY DEDUPES (``list(dict.fromkeys(...))``), so
+        ``["prominent", "prominent"]`` arrived as ``["prominent"]`` and a buyer's schema
+        violation became a quiet rewrite. A constraint the pin states and the generated model
+        drops is asserted on the DTO — the one shape every transport validates into — the same
+        way :meth:`ListCreativesRequest._account_required_when_pricing_requested` asserts an
+        if/then the generator cannot carry.
+
+        ``mode="before"`` so the raw array is seen ahead of that dedupe. Members are
+        ``StrEnum`` values, so a mixed spelling (``["prominent", DisclosurePosition.prominent]``)
+        hashes equal and is caught too; an unhashable member is left for the enum validator to
+        refuse on type rather than being reported as a duplicate.
+        """
+        if isinstance(v, list):
+            try:
+                distinct = len(dict.fromkeys(v))
+            except TypeError:
+                return v
+            if distinct != len(v):
+                raise PydanticCustomError("unique_list", "members must be unique")
+        return v
+
+
+class ListCreativeFormatsResponse(
+    NestedModelSerializerMixin, LibraryListCreativeFormatsResponse, SalesAgentAdcpResponse
+):
     """Extends library ListCreativeFormatsResponse from AdCP spec.
 
     Inherits all AdCP-compliant fields from adcp library,
@@ -681,10 +826,22 @@ class ListCreativeFormatsResponse(NestedModelSerializerMixin, LibraryListCreativ
         The field is not redeclared as ``list[Format]`` because list is invariant and mypy
         refuses the narrowing; a local Format is a library Format, so the inherited field
         keeps the instance and NestedModelSerializerMixin serializes it by instance.
+
+        A dict is read as :class:`PeerFormat`: this response carries a peer creative agent's
+        formats, and those may hold closed-enum members the pin does not model, which the
+        wire re-emits. Reading that wire back strictly would refuse a document this seller
+        itself produced.
         """
         if isinstance(v, list):
-            return [Format.model_validate(f) if isinstance(f, dict) else f for f in v]
+            return [PeerFormat.model_validate(f) if isinstance(f, dict) else f for f in v]
         return v
+
+
+class CreativeFilters(LibraryCreativeFilters):
+    """``core/creative-filters.json``, with ``format_ids`` narrowed to the local
+    :class:`FormatId`, which carries core/format-id.json's ``dependencies``."""
+
+    format_ids: list[FormatIdSlot] | None = narrowed_from(LibraryCreativeFilters, "format_ids")
 
 
 class ListCreativesRequest(BuyerRequest, LibraryListCreativesRequest):
@@ -694,7 +851,7 @@ class ListCreativesRequest(BuyerRequest, LibraryListCreativesRequest):
     3.1.1's list-creatives-request.json carries filters, sort, pagination, fields,
     account, context, ext and the ``include_*`` projection flags. The list this
     docstring used to enumerate named ``include_performance`` and
-    ``include_sub_assets`` among them, which stopped being true at adcp 3.10 when
+    ``include_sub_assets`` among them, which stopped being true at the pinned SDK when
     both were removed from the spec — a reader checking "is this field spec'd?"
     against the docstring got the wrong answer for two years' worth of SDK bumps.
     Enumerate nothing: the parent is the list.
@@ -713,6 +870,10 @@ class ListCreativesRequest(BuyerRequest, LibraryListCreativesRequest):
     )
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
+
+    filters: Annotated[LibraryCreativeFilters, as_local(CreativeFilters)] | None = narrowed_from(
+        LibraryListCreativesRequest, "filters"
+    )
 
     @model_validator(mode="after")
     def _account_required_when_pricing_requested(self) -> "ListCreativesRequest":
@@ -752,7 +913,7 @@ class Pagination(LibraryResponsePagination):
     pass  # Inherits all fields from library: cursor, has_more, total_count
 
 
-class ListCreativesResponse(NestedModelSerializerMixin, LibraryListCreativesResponse, AdcpResponse):
+class ListCreativesResponse(NestedModelSerializerMixin, LibraryListCreativesResponse, SalesAgentAdcpResponse):
     """Extends library ListCreativesResponse with local subtypes.
 
     Library provides: context, creatives, ext, format_summary, pagination,

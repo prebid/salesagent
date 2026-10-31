@@ -1,0 +1,634 @@
+<title>Creative &amp; Products Xfail Flip Candidates</title>
+<style>
+  :root{
+    --bg:#fbfaf8; --panel:#ffffff; --ink:#1c1b19; --ink-2:#55514c; --ink-3:#86807a;
+    --rule:#e3ded7; --rule-2:#cfc8bf; --accent:#8a3324; --accent-2:#1f5c4d;
+    --warn:#8a6d1f; --code-bg:#f3f0eb; --cat1:#6b7280; --cat2:#1f5c4d;
+    --cat3:#8a6d1f; --cat4:#8a3324; --cat5:#55514c;
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --bg:#17161a; --panel:#1f1e23; --ink:#eceaea; --ink-2:#b4afaa; --ink-3:#8b857f;
+      --rule:#312f36; --rule-2:#433f48; --accent:#e0836f; --accent-2:#6fc3a8;
+      --warn:#d8b65a; --code-bg:#262429; --cat1:#9ca3af; --cat2:#6fc3a8;
+      --cat3:#d8b65a; --cat4:#e0836f; --cat5:#b4afaa;
+    }
+  }
+  :root[data-theme="dark"]{
+    --bg:#17161a; --panel:#1f1e23; --ink:#eceaea; --ink-2:#b4afaa; --ink-3:#8b857f;
+    --rule:#312f36; --rule-2:#433f48; --accent:#e0836f; --accent-2:#6fc3a8;
+    --warn:#d8b65a; --code-bg:#262429; --cat1:#9ca3af; --cat2:#6fc3a8;
+    --cat3:#d8b65a; --cat4:#e0836f; --cat5:#b4afaa;
+  }
+  *{box-sizing:border-box}
+  body{background:var(--bg); color:var(--ink);
+    font:16px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;
+    margin:0; padding:0;}
+  .wrap{max-width:1140px; margin:0 auto; padding:48px 28px 96px;}
+  h1{font-size:30px; line-height:1.2; letter-spacing:-.02em; margin:0 0 6px; font-weight:650;}
+  .sub{color:var(--ink-3); font-size:14px; margin:0 0 36px;}
+  h2{font-size:21px; letter-spacing:-.01em; margin:52px 0 14px; padding-bottom:7px;
+     border-bottom:2px solid var(--rule-2); font-weight:620;}
+  h3{font-size:16.5px; margin:30px 0 9px; font-weight:620;}
+  p{margin:0 0 13px; color:var(--ink-2)}
+  p strong, li strong, td strong{color:var(--ink)}
+  code{background:var(--code-bg); padding:1px 5px; border-radius:3px;
+    font:13.5px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace; color:var(--ink);
+    overflow-wrap:anywhere;}
+  ul,ol{margin:0 0 13px; padding-left:22px; color:var(--ink-2)}
+  li{margin:0 0 7px}
+  .tbl{overflow-x:auto; margin:0 0 20px; border:1px solid var(--rule); border-radius:7px; background:var(--panel)}
+  table{border-collapse:collapse; width:100%; font-size:14px; min-width:860px}
+  th{background:var(--code-bg); text-align:left; padding:10px 12px; font-weight:620;
+     border-bottom:2px solid var(--rule-2); color:var(--ink); vertical-align:bottom;
+     white-space:nowrap; font-size:12.5px; letter-spacing:.03em; text-transform:uppercase}
+  td{padding:10px 12px; border-bottom:1px solid var(--rule); vertical-align:top; color:var(--ink-2)}
+  tr:last-child td{border-bottom:none}
+  .num{text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap}
+  .box{background:var(--panel); border:1px solid var(--rule); border-left:4px solid var(--accent);
+    border-radius:0 7px 7px 0; padding:16px 20px; margin:0 0 22px;}
+  .box.ok{border-left-color:var(--accent-2)}
+  .box.warn{border-left-color:var(--warn)}
+  .box h3{margin-top:0}
+  .box :last-child{margin-bottom:0}
+  .pill{display:inline-block; font-size:11px; font-weight:700; letter-spacing:.06em;
+    padding:2px 7px; border-radius:3px; border:1px solid currentColor; white-space:nowrap}
+  .c1{color:var(--cat1)} .c2{color:var(--cat2)} .c3{color:var(--cat3)}
+  .c4{color:var(--cat4)} .c5{color:var(--cat5)}
+  .ev{font-size:11px; font-weight:700; letter-spacing:.05em; padding:1px 6px;
+    border-radius:3px; white-space:nowrap; border:1px solid currentColor}
+  .exec{color:var(--accent-2)} .read{color:var(--ink-3)}
+  .lede{font-size:17px; color:var(--ink); border-left:3px solid var(--rule-2); padding-left:16px; margin:0 0 26px}
+  dl{margin:0 0 16px} dt{font-weight:620; color:var(--ink); margin-top:12px}
+  dd{margin:4px 0 0 0; color:var(--ink-2)}
+  .foot{margin-top:60px; padding-top:18px; border-top:1px solid var(--rule);
+    font-size:13px; color:var(--ink-3)}
+</style>
+
+<div class="wrap">
+
+<h1>Creative &amp; Products xfail flip candidates</h1>
+<p class="sub">Assessment only — no code changed; the working tree is clean.
+Scope: UC-005, UC-006, UC-018 (creative) and UC-001 / GET-PRODUCTS (products). BDD only.
+Tree <code>assess/xfail-creative</code> @ <code>ccd3fe7ca</code>. Pin: AdCP 3.2.1
+(<code>tests/helpers/adcp_pin.py:20</code>), schemas under the wheel's <code>_schemas/3.2/</code>.
+Baseline run <code>sa-5fd3f010 / innet_091026_2116</code> (both <code>bdd_inprocess.json</code> and
+<code>bdd_e2e.json</code>, exitcode 0).</p>
+
+<p class="lede">The dominant blocker in this scope is not a production gap and not the
+format-identity design. <strong>365 of the 408 xfailed items (89%) route through two
+undeclared mechanisms</strong> — a missing step definition, or an e2e harness declaration —
+and <strong>no routing entry records a decision about any of them</strong>. Of the 43 items
+that do sit under a declared entry, I measured that <strong>5 of the 8 live reasons are
+factually wrong</strong>. Separately, products' main feature and both of creative's
+build/preview features are <strong>unbound</strong>: 276 authored scenarios that never
+collect.</p>
+
+<h2>1. The products question, answered first</h2>
+
+<div class="box warn">
+<h3>Products has no xfails because its main feature is never collected</h3>
+<p><strong>Not "no routed scenarios" — not wired.</strong>
+<code>BR-UC-001-discover-available-inventory.feature</code> carries <strong>121
+scenarios</strong> across 1811 lines and <strong>no BDD test module names it</strong>.
+pytest-bdd collects a feature only through an explicit <code>scenarios(...)</code> call, so
+those 121 scenarios are not run, not xfailed, not skipped, and in no ledger.</p>
+<p>This is a <em>known, allowlisted</em> condition rather than a new discovery: the file is
+entry 1 of the <code>UNBOUND_ALLOWLIST</code> at
+<code>tests/unit/test_architecture_feature_file_bound.py:39</code>, under
+<code>FIXME(#1947)</code> (also <code>salesagent-yz8mo</code>), alongside 17 others. That
+guard's own docstring states the stakes: when it was written, 20 of 38 feature files were
+unbound, "hiding 1604 scenarios and 148 error codes absent from CODE_TABLE". <span class="ev exec">EXECUTION</span>
+— the allowlist is asserted green by the unit suite, and the run artifact shows zero collected
+items for the file.</p>
+</div>
+
+<p>What products <em>does</em> grade is the four <code>BR-UC-GET-PRODUCTS-*</code> features,
+all four bound and all four fully green:</p>
+
+<div class="tbl"><table>
+<thead><tr><th>Products feature</th><th>Bound by</th><th class="num">Scenarios</th><th class="num">Items (in-proc + e2e)</th><th class="num">Xfailed</th></tr></thead>
+<tbody>
+<tr><td><code>BR-UC-001-discover-available-inventory</code></td><td><strong>NOTHING — unbound</strong></td><td class="num">121</td><td class="num">0</td><td class="num">n/a</td></tr>
+<tr><td><code>BR-UC-GET-PRODUCTS-pricing-options</code></td><td><code>test_get_products_pricing_options.py</code></td><td class="num">5</td><td class="num">54 + 18</td><td class="num">0</td></tr>
+<tr><td><code>BR-UC-GET-PRODUCTS-inventory-profile</code></td><td><code>test_get_products_inventory_profile.py</code></td><td class="num">6</td><td class="num">18 + 6</td><td class="num">0</td></tr>
+<tr><td><code>BR-UC-GET-PRODUCTS-format-options</code></td><td><code>test_get_products_format_options.py</code></td><td class="num">3</td><td class="num">12 + 4</td><td class="num">0</td></tr>
+<tr><td><code>BR-UC-GET-PRODUCTS-format-id-filter</code></td><td><code>test_get_products_format_id_filter.py</code></td><td class="num">1</td><td class="num">3 + 1</td><td class="num">0</td></tr>
+</tbody></table></div>
+
+<p>So products grades <strong>15 of 136 authored scenarios</strong>. The 121 unbound ones are
+not idle filler — reading their titles, they cover brief/wholesale/refine discovery modes,
+anonymous pricing suppression, <code>time_budget</code> partial completion via
+<code>incomplete[]</code>, <code>preferred_delivery_types</code>,
+<code>required_policies</code>, <code>filter_diagnostics</code>, and cursor pagination. Some
+of that obligation is graded outside BDD (40 tests across
+<code>tests/integration/test_get_products_behavioral.py</code> and
+<code>test_get_products_auth_obligations.py</code>, the first of which names
+<code>BR-UC-001</code> in its module docstring), which is the wrong layer but not zero.</p>
+
+<div class="box warn">
+<h3>The same is true of two of the three creative features you named</h3>
+<p><code>BR-UC-020-build-creative.feature</code> (84 scenarios, <strong>89</strong>
+format-identity references) and <code>BR-UC-021-preview-creative.feature</code> (71
+scenarios, <strong>38</strong> references) are <strong>both unbound</strong> — entries 9 and
+10 of the same allowlist. Only <code>BR-UC-018-list-creatives.feature</code> is bound
+(<code>tests/bdd/test_uc018_list_creatives.py:120</code>), and it has
+<strong>zero xfailed items</strong>: 492 in-process + 164 e2e, all passing.</p>
+<p>So the creative format-identity surface you care most about is <strong>ungraded, not
+xfailed</strong>. There is no flip candidate in 020/021, because nothing there runs. Across
+products and creative that is <strong>276 authored scenarios</strong> (121 + 84 + 71) in
+three unbound files.</p>
+</div>
+
+<h2>2. Routing entries vs items</h2>
+
+<p>408 xfailed items in scope. They are governed by <strong>14 live declared routing
+entries</strong> and <strong>two undeclared mechanisms</strong>. The mechanisms carry 89% of
+the items and record no per-scenario decision at all.</p>
+
+<div class="tbl"><table>
+<thead><tr><th>Mechanism</th><th>Where</th><th class="num">Entries</th><th class="num">Distinct tags</th><th class="num">Items</th></tr></thead>
+<tbody>
+<tr><td><code>_XFAIL_TAGS</code> (strict marker)</td><td><code>tests/bdd/conftest.py:396</code>, applied at <code>:2399</code></td><td class="num">10 <span class="c4">(2 dead)</span></td><td class="num">8</td><td class="num">26</td></tr>
+<tr><td><code>_SELECTIVE_XFAIL</code> (row-keyed)</td><td><code>tests/bdd/conftest.py:973</code></td><td class="num">4</td><td class="num">4</td><td class="num">12</td></tr>
+<tr><td><code>e2e_rest_known_failures.txt</code></td><td>lines 351, 401</td><td class="num">2</td><td class="num">2</td><td class="num">2</td></tr>
+<tr><td><strong>Auto-dormancy converter</strong> (undeclared)</td><td><code>tests/bdd/conftest.py:311</code></td><td class="num">—</td><td class="num">16</td><td class="num"><strong>188</strong></td></tr>
+<tr><td><strong><code>E2EUnsupportedSetup</code></strong> (undeclared)</td><td>7 raise sites: <code>tests/harness/creative_formats.py:85,94</code>; <code>tests/harness/creative_sync.py:641,682,713,747,818</code></td><td class="num">—</td><td class="num">67</td><td class="num"><strong>177</strong></td></tr>
+</tbody></table></div>
+
+<p>By cause, measured from the two run artifacts (<span class="ev exec">EXECUTION</span>, each
+item classified from its own <code>call.crash.message</code> and
+<code>user_properties.dormant_scenario</code>):</p>
+
+<div class="tbl"><table>
+<thead><tr><th>Cause</th><th class="num">UC-005</th><th class="num">UC-006</th><th class="num">UC-018</th><th class="num">Total</th><th>What it means</th></tr></thead>
+<tbody>
+<tr><td><strong>DORMANT</strong> — <code>StepDefinitionNotFoundError</code></td><td class="num">184</td><td class="num">4</td><td class="num">0</td><td class="num"><strong>188</strong></td><td>The scenario grades nothing. No step definition exists for one of its sentences.</td></tr>
+<tr><td><strong><code>E2EUnsupportedSetup</code></strong> — harness, <code>e2e_rest</code> only</td><td class="num">144</td><td class="num">33</td><td class="num">0</td><td class="num"><strong>177</strong></td><td>The live stack cannot be told to serve the Given's premise. Production never consulted.</td></tr>
+<tr><td><strong>AssertionError</strong> — measured disagreement</td><td class="num">42</td><td class="num">1</td><td class="num">0</td><td class="num"><strong>43</strong></td><td>The scenario ran, reached the wire, and production answered differently. The honest 11%.</td></tr>
+<tr><td colspan="4"><strong>Total in scope</strong></td><td class="num"><strong>408</strong></td><td>370 UC-005 + 38 UC-006 + 0 UC-018.</td></tr>
+</tbody></table></div>
+
+<p>UC-006's 38 split across four modules — 24 in <code>test_uc006_sync_creatives.py</code>
+(the figure you quoted), 10 in <code>test_uc006_dry_run_out_of_transaction_effects.py</code>,
+4 in <code>test_uc006_post_commit_effect_ordering.py</code>. All but 5 are
+<code>E2EUnsupportedSetup</code>.</p>
+
+<h2>3. Category 1 (format-identity design) is empty in this scope</h2>
+
+<p>Your strongest hypothesis does not hold here, and it is worth saying plainly before the
+ranked table. <strong>No xfailed scenario in my scope is blocked because comparisons key on
+the legacy <code>(agent_url, id)</code> pair.</strong> Three independent readings agree:</p>
+
+<ul>
+<li><strong>The pair-keying in this domain is load-free and already correct.</strong>
+<code>src/core/tools/creative_formats.py:271</code> and <code>:421</code> compare through
+<code>format_id_identity</code>, and the e2e harness validator at
+<code>tests/harness/creative_formats.py:70</code> documents the pair as deliberate ("two
+agents may publish the same <code>id</code>"). Nothing xfails for it.</li>
+<li><strong><code>docs/audits/format-kind-canonical-analysis.html</code> §6 says the
+canonical-identity surface has no scenarios, not failing ones.</strong> Its grid marks
+<code>filters.format_kinds</code>, <code>filters.format_option_refs</code>, package
+selectors, <code>CONFLICTING_SELECTORS</code>, canonical satisfaction, vocabulary refusal,
+and <code>formats_to_provide</code> emission all <em>"NO — no feature line names them"</em>.
+The one canonical round-trip that <em>is</em> graded
+(<code>BR-UC-018-list-creatives.feature:1061-1090</code>) <strong>passes</strong>.</li>
+<li><strong>The format-identity work is gated on the unbound files, not on xfails.</strong>
+The 89 format-identity references in <code>BR-UC-020-build-creative.feature</code> are the
+densest such surface in the tree and that file never collects (§1).</li>
+</ul>
+
+<p>Practical consequence: the format-kind lane's next step is <em>binding
+BR-UC-020/021 and writing the missing scenarios</em>, not graduating anything. There is no
+xfail for it to graduate.</p>
+
+<h2>4. Ranked flip candidates</h2>
+
+<p>Ranked by (confidence &times; items) &divide; cost. <span class="pill c2">2</span> blocked on
+a production gap with a known fix · <span class="pill c3">3</span> over-specified ·
+<span class="pill c4">4</span> trap · <span class="pill c5">5</span> genuinely blocked.
+No row is category 1 (see §3).</p>
+
+<div class="tbl"><table>
+<thead><tr>
+<th>#</th><th>Scenario / family</th><th>Routing entry</th><th>Cat</th>
+<th class="num">Items</th><th>Blocker, measured</th><th>Smallest change that flips it</th><th>Confidence</th>
+</tr></thead>
+<tbody>
+
+<tr>
+<td class="num">1</td>
+<td><code>T-UC-005-ext-b-disclosure-dupes</code><br>
+<code>T-UC-005-partition-disclosure</code>/<code>duplicate_positions</code><br>
+<code>T-UC-005-boundary-disclosure</code>/<code>duplicate positions</code></td>
+<td><code>conftest.py:572</code> (<code>_XFAIL_TAGS</code>)<br><code>conftest.py:1133</code>, <code>:1141</code> (<code>_SELECTIVE_XFAIL</code>)</td>
+<td><span class="pill c2">2</span></td>
+<td class="num">9</td>
+<td>The SDK's <code>coerce_to_unique_enum_list</code> <strong>WrapValidator silently
+deduplicates</strong> instead of refusing: <code>['prominent','prominent']</code> →
+<code>['prominent']</code>, no error, request succeeds ("Found 1 creative format").
+<code>MinLen(1)</code> <em>does</em> refuse <code>[]</code>, which is why the
+<code>empty_array</code> row already passes. The pin declares
+<code>uniqueItems: true</code>.</td>
+<td>A <code>@field_validator(..., mode="before")</code> on
+<code>ListCreativeFormatsRequest</code> (<code>src/core/schemas/creative.py:668</code>)
+raising on duplicate members of <code>disclosure_positions</code> /
+<code>disclosure_persistence</code>. ~6 lines. Then delete the three routing entries.</td>
+<td><strong>CERTAIN</strong><br><span class="ev exec">EXECUTION</span></td>
+</tr>
+
+<tr>
+<td class="num">2</td>
+<td><code>T-UC-005-v31-asset-registry-discriminators</code></td>
+<td>none — auto-dormant</td>
+<td><span class="pill c2">2</span></td>
+<td class="num">56</td>
+<td>One missing Given: <em>"the seller catalog has at least one format containing an
+"&lt;asset_type&gt;" asset"</em> (feature line 1180). The outline is 14 Examples rows &times; 4
+transports. Production's <code>asset_types</code> filter exists and
+<code>T-UC-005-partition-asset-types</code> already exercises it.</td>
+<td>One Given seeding a format carrying an asset of the named content type, next to the
+existing registry Givens in
+<code>tests/bdd/steps/generic/given_entities.py</code>. The sibling Given
+<code>given_registry_multi_categories</code> (<code>:91</code>) is the template, including its
+<code>without_asset_type="pixel_tracker"</code> guard.</td>
+<td>MEDIUM-HIGH<br><span class="ev read">READING</span></td>
+</tr>
+
+<tr>
+<td class="num">3</td>
+<td><code>T-UC-005-partition-disclosure-persistence</code> (36)<br>
+<code>T-UC-005-boundary-disclosure-persistence</code> (36)<br>
+<code>T-UC-005-ext-b-persistence-{dupes,empty,invalid}</code> (12)<br>
+<code>T-UC-005-inv-049-11-*</code> (12), <code>-inv-049-8-capabilities</code> (4)</td>
+<td>none — auto-dormant (6 tags + 3)</td>
+<td><span class="pill c2">2</span></td>
+<td class="num">100</td>
+<td><strong>Three pieces, all named.</strong> (a) Missing Given <em>"a seller with formats
+declaring various disclosure persistence capabilities"</em> (feature 809, 995) and the
+<code>disclosure_capabilities</code> Givens at 399/411/422. (b) Missing When <em>"requests
+formats with disclosure_persistence filter [...]"</em> (525, 539, 553). (c)
+<strong><code>req.disclosure_persistence</code> is never read in
+<code>src/core/tools/creative_formats.py</code></strong> — only
+<code>disclosure_positions</code> is filtered (<code>:405-407</code>).</td>
+<td>A filter mirroring <code>:405-407</code> but with the pin's <em>different</em> semantics
+(each requested mode satisfied by <strong>at least one</strong> position, not subset);
+<code>get_format_disclosure_positions</code> (<code>:302</code>) already reads
+<code>disclosure_capabilities</code>, so the data is in hand. Plus the Given and the When.
+The Rank-1 validator already covers the three <code>persistence</code> error rows.</td>
+<td>MEDIUM (12 error-path items HIGH, 88 filter items MEDIUM)<br><span class="ev exec">EXECUTION</span> for (c)'s effect</td>
+</tr>
+
+<tr>
+<td class="num">4</td>
+<td><code>T-UC-005-sandbox-happy</code> (4)<br>
+<code>T-UC-005-boundary-sandbox</code> (12, dormant)</td>
+<td><code>conftest.py</code> <code>_XFAIL_TAGS</code> (<code>sandbox-happy</code>); none for <code>boundary-sandbox</code></td>
+<td><span class="pill c2">2</span></td>
+<td class="num">16</td>
+<td><code>src/core/tools/creative_formats.py:515</code> reads
+<code>sandbox_flag: bool | None = None</code> under the comment "Determine sandbox flag from
+identity (BR-RULE-209 INV-4)" — <strong>it determines nothing</strong>. Measured:
+<em>"Expected sandbox=True, got None"</em>. The real obstacle is one layer up:
+<code>list_creative_formats</code> is a <em>public</em> tool, and
+<code>src/core/resolved_identity.py:541</code> returns a bare
+<code>PublicIdentity(principal=..., tenant=...)</code> for any public row — <strong>the
+account is never resolved for a public tool at all</strong>, so
+<code>identity.account</code> does not exist by type or at runtime.</td>
+<td><em>Not</em> a one-liner, despite appearances. The working expression already lives at
+<code>src/core/tools/creatives/listing.py:751</code>, but that tool is protected
+(<code>identity: ResolvedIdentity</code>). The design call is whether a public row resolves
+the account the request names — i.e. move <code>account</code> up to
+<code>PublicIdentity</code> and fill it in the <code>:541</code> branch. The Given already
+seeds the Account row (<code>given_auth.py:169</code>), and <code>_load_account</code>
+exists. Touches the identity hierarchy, which carries dedicated ast-grep guards.</td>
+<td>MEDIUM<br><span class="ev exec">EXECUTION</span> for the blocker, <span class="ev read">READING</span> for the flip</td>
+</tr>
+
+<tr>
+<td class="num">5</td>
+<td>47 UC-005 tags behind the e2e reference-catalog declaration
+(<code>partition-/boundary-</code> asset-types, dimension, format-ids, input/output-fmtids,
+name-search, responsive, wcag, the <code>inv-049-*</code> family, …)</td>
+<td>none — <code>E2EUnsupportedSetup</code> at <code>tests/harness/creative_formats.py:85,94</code></td>
+<td><span class="pill c2">2</span></td>
+<td class="num">144</td>
+<td>The declaration's own text names both the cause and the fix: the live stack serves only
+the captured reference catalog, so a Given naming a format outside it is unrealizable —
+<em>"Register them in the creative agent registry and refresh the fixture
+(<code>make creative-formats-refresh</code>)"</em>. Production is never reached.</td>
+<td>Extend the reference-catalog fixture to carry the formats the Givens name, or rewrite the
+Givens onto formats already in it. <strong>The historical blocker behind this has
+cleared:</strong> <code>e2e_rest_known_failures.txt:330-340</code> records that at the 3.2 pin
+<code>core/format.json</code> admits <code>pixel_tracker</code> and the asset-union defect
+(adcp#7338) no longer fails this transport — 23 uc005 e2e nodes are XPASS citing it.</td>
+<td>MEDIUM<br><span class="ev read">READING</span></td>
+</tr>
+
+<tr>
+<td class="num">6</td>
+<td><code>T-UC-005-main</code> on <code>e2e_rest</code></td>
+<td><code>e2e_rest_known_failures.txt:351</code></td>
+<td><span class="pill c2">2</span></td>
+<td class="num">1</td>
+<td><em>"E2E catalog needs at least display, video, audio categories, got {'native', 'dooh',
+'video', 'display'}"</em>. Pure catalog content. The ledger block already diagnoses this
+itself at <code>:341-351</code> and says its own recorded reason is stale.</td>
+<td>Seed an <code>audio</code> format into the e2e reference catalog, or reground the
+assertion onto the categories it carries. Note <code>native</code> is not a member of the
+pin's <code>type</code> enum (<code>audio/video/display/dooh</code>), so the fixture carries
+an out-of-vocabulary category either way.</td>
+<td>HIGH<br><span class="ev exec">EXECUTION</span></td>
+</tr>
+
+<tr>
+<td class="num">7</td>
+<td>The <code>type</code>-filter family:
+<code>T-UC-005-main-filtered</code>, <code>-inv-031-1-holds</code>,
+<code>-inv-031-1-violated</code>, <code>-ext-b</code>, plus
+<code>partition-type-filter</code>/<code>invalid_type</code> and
+<code>boundary-type-filter</code>/<code>invalid type (rejected)</code></td>
+<td>4 live <code>_XFAIL_TAGS</code> + 2 <code>_SELECTIVE_XFAIL</code> rows
+(<code>conftest.py:1149</code> and sibling)</td>
+<td><span class="pill c3">3</span></td>
+<td class="num">18</td>
+<td>Measured: a request carrying <code>type</code> <strong>succeeds with the filter
+unapplied</strong> ("Expected 1 display formats, got 2", the extra being
+<code>type='video'</code>; and <code>invalid_type</code> returns 200 with 3 formats). The
+field lands in the SDK parent's <code>model_extra</code> and is stripped before the DTO
+validates, so neither a valid nor an invalid value changes anything.</td>
+<td><strong>Reground the scenarios; do not implement <code>type</code>.</strong> The pin ships
+two request schemas: <code>creative/list-creative-formats-request.json</code> (title
+<em>"List Creative Formats Request (Creative Agent)"</em>) declares <code>type</code>;
+<code>media-buy/list-creative-formats-request.json</code> (title <em>"List Creative Formats
+Request"</em>) does not. The SDK generates only the latter, as
+<code>LegacyListCreativeFormatsRequest</code>, which is what our DTO inherits
+(<code>src/core/schemas/creative.py:15</code>). Every 3.2.1 prose citation names the
+media-buy path, and the spec's own replacement guidance is <code>asset_types</code> /
+<code>format_ids</code>. See also Trap T1 — regrounding must delete the step branch, not just
+the xfails.</td>
+<td>HIGH that it will not flip by implementation<br><span class="ev exec">EXECUTION</span></td>
+</tr>
+
+<tr>
+<td class="num">8</td>
+<td><code>T-UC-005-ext-a</code> ("No tenant context")</td>
+<td><code>_XFAIL_TAGS</code></td>
+<td><span class="pill c3">3</span> + <span class="pill c4">4</span></td>
+<td class="num">4</td>
+<td>Measured: <em>"no wire_error_envelope was captured (is_error=False, error=None)"</em> — the
+request <strong>succeeds</strong>. Two reasons, and the second is the real one.
+(a) <code>list_creative_formats</code> is one of the three public tools, so there is no
+credential refusal to grade. (b) The Given <em>"no hostname-based tenant resolution is
+possible"</em> <strong>did not realize its premise</strong> — a tenant resolved and the call
+went through.</td>
+<td>Decide what a sellerless public read should do, then write a Given that can actually
+produce it. <code>PublicIdentity</code>'s docstring already answers the design half: "a
+request naming no seller this deployment serves is refused CONFIGURATION_ERROR before any
+identity is built". The scenario asks for <code>AUTH_MISSING</code>, which a public row
+cannot emit.</td>
+<td>LOW as written<br><span class="ev exec">EXECUTION</span></td>
+</tr>
+
+<tr>
+<td class="num">9</td>
+<td><code>T-UC-005-sandbox-validation</code></td>
+<td><code>_XFAIL_TAGS</code></td>
+<td><span class="pill c3">3</span></td>
+<td class="num">4</td>
+<td>Measured: no envelope — "invalid dimension filters" produce no error. The pin declares
+<code>min_width</code>/<code>max_width</code>/<code>min_height</code>/<code>max_height</code>
+as bare <code>integer</code> with <strong>no minimum and no cross-field condition</strong>, so
+there is no obligation to reject anything the scenario can send.</td>
+<td>Reground onto a filter the pin <em>does</em> constrain — the Rank-1
+<code>uniqueItems</code> path or an out-of-enum <code>asset_types</code> value — keeping the
+"real, not simulated" assertion, which the spec does support
+(<code>sandbox.mdx</code>: "Sandbox errors are real validation errors").</td>
+<td>MEDIUM after regrounding<br><span class="ev exec">EXECUTION</span></td>
+</tr>
+
+<tr>
+<td class="num">10</td>
+<td>20 UC-006 tags behind the five <code>creative_sync</code> e2e declarations</td>
+<td>none — <code>E2EUnsupportedSetup</code> at <code>tests/harness/creative_sync.py:641,682,713,747,818</code></td>
+<td><span class="pill c5">5</span></td>
+<td class="num">33</td>
+<td>Genuinely blocked, and <strong>these are the best-documented reasons in the whole
+scope</strong> — each names the exact server-side capability it lacks: a notification sink the
+test can poll; a tenant-scoped read-back surface (the snapshot currently reads the <em>wrong
+database</em> over e2e); a request sink plus a review-verdict seam; a live agent that cannot be
+told to answer with no previews; no way to set another process's env-derived config
+mid-scenario.</td>
+<td>Server-side effect capture. Three to five distinct surfaces, each a project. Not a flip
+candidate at reasonable cost — and the reasons are honest, so nothing here needs correcting.</td>
+<td>LOW<br><span class="ev read">READING</span></td>
+</tr>
+
+<tr>
+<td class="num">11</td>
+<td><code>T-UC-006-rule-094-inv5</code> (asset-level provenance)</td>
+<td><code>e2e_rest_known_failures.txt:401</code></td>
+<td><span class="pill c5">5</span></td>
+<td class="num">1</td>
+<td><em>"asset-level provenance.digital_source_type not stored in creative.data.assets"</em>.
+A real production gap: per-asset provenance is not persisted. BR-RULE-094 INV-5.</td>
+<td>Persist provenance per asset rather than per creative. A data-model change in the creative
+repository; sizing needs the creative-migration lane's view
+(<code>salesagent-3xcdk</code> is referenced at <code>creative.py:43</code>).</td>
+<td>LOW<br><span class="ev exec">EXECUTION</span></td>
+</tr>
+
+<tr>
+<td class="num">12</td>
+<td><code>T-UC-005-main-pricing</code>, <code>-main-no-pricing</code></td>
+<td>none — auto-dormant</td>
+<td><span class="pill c3">3</span></td>
+<td class="num">8</td>
+<td>Missing Given seeding "formats with vendor pricing options" (feature 85, 102).</td>
+<td><strong>Delete or reground rather than wire.</strong> <code>include_pricing</code> is
+<code>"deprecated": true</code> in the pin — <em>"DEPRECATED in 3.1. Removed at 4.0. Use
+list_transformers with include_pricing and account"</em>. Writing this Given spends harness
+work to grade a field scheduled for removal. See Trap T2.</td>
+<td>n/a — recommend not flipping<br><span class="ev read">READING</span></td>
+</tr>
+
+</tbody></table></div>
+
+<h2>5. Reasons found factually wrong</h2>
+
+<p>You asked me to check each stated reason against reality. <strong>Of the 8 live
+<code>_XFAIL_TAGS</code>/<code>_SELECTIVE_XFAIL</code> reasons in scope, 5 are wrong and 2 of
+the 10 entries are dead.</strong> Every verification below is against the pinned bundle in a
+tree carrying the identical wheel pin
+(<code>adcp==9.0.0b2+prs1435.1415.1447.1456</code>, confirmed byte-identical
+<code>pyproject.toml</code> line and <code>adcp_pin.py</code> in both trees).</p>
+
+<dl>
+<dt>1. <code>T-UC-005-ext-b-disclosure-dupes</code> — "the pinned schema declares no uniqueItems"</dt>
+<dd><strong>WRONG, and this one is a live flip.</strong> The pin declares
+<code>"uniqueItems": true</code> and <code>"minItems": 1</code> on
+<code>disclosure_positions</code> <em>and</em> <code>disclosure_persistence</code>, on
+<strong>both</strong> role variants. The reason concludes "production is right to accept it…
+reconciling it upstream is the fix, not patching production to match" — the opposite of the
+truth. The real cause is that the SDK implements <code>uniqueItems</code> as a
+<em>coercion</em> (<code>coerce_to_unique_enum_list</code>) rather than a validation.
+<span class="ev exec">EXECUTION</span> — 9 items flipped to PASS under probe.</dd>
+
+<dt>2. <code>T-UC-005-ext-b</code> — "suggestion field not implemented in error responses"</dt>
+<dd><strong>WRONG.</strong> <code>suggestion</code> is written onto the wire at
+<code>src/core/schemas/_base.py:1315</code>, derived from <code>CODE_TABLE</code>, and
+<code>core/error.json</code> declares it as an optional member. Proven by the suite itself:
+roughly ten sibling <code>ext-b-*</code> scenarios in the same feature (lines 490, 530, 544,
+558, 573, 586, 599, 613, 626, 639) assert <em>the identical sentence</em> and all pass. The
+actual blocker is the undeclared <code>type</code> field (Rank 7).
+<span class="ev exec">EXECUTION</span></dd>
+
+<dt>3. <code>T-UC-005-ext-a</code> — "error code AUTH_REQUIRED instead of TENANT_REQUIRED"</dt>
+<dd><strong>WRONG on both sides, and stale.</strong> The scenario no longer mentions
+<code>TENANT_REQUIRED</code> — it was corrected to demand <code>AUTH_MISSING</code>, with the
+feature's own comment at line 464 explaining that <code>TENANT_REQUIRED</code> "was a minted
+code no raise site can emit". <code>TENANT_REQUIRED</code> is absent from the pin's
+120-member <code>enums/error-code.json</code>. And production already raises
+<code>AUTH_MISSING</code> (<code>src/core/exceptions.py:515</code>,
+<code>AdCPAuthRequiredError._code</code>). Neither half of the reason describes anything
+current; the real blocker is Rank 8. <span class="ev exec">EXECUTION</span></dd>
+
+<dt>4. Five reasons citing "adcp 3.12: type filter removed from ListCreativeFormatsRequest"</dt>
+<dd><strong>WRONG as stated, right by accident.</strong> <code>type</code> was not removed at
+the pin: <code>creative/list-creative-formats-request.json</code> declares it with enum
+<code>["audio","video","display","dooh"]</code> and <strong>no</strong>
+<code>"deprecated"</code> marker — unlike its siblings <code>format_ids</code> and
+<code>include_pricing</code>, which do carry one. The true statement is narrower and more
+useful: <code>type</code> exists only on the <em>creative-agent</em> variant, so it is not an
+obligation on a sales agent. The operational conclusion survives; the cited cause does not,
+and the phrasing has propagated into a step assertion (Trap T1).
+<span class="ev read">READING</span> of the pinned schemas + upstream 3.2.1 prose.</dd>
+
+<dt>5. <code>T-UC-005-sandbox-happy</code> — "sandbox mode not implemented in list_creative_formats response"</dt>
+<dd><strong>MISLEADING rather than wrong.</strong> The field is on the response model and on
+the pinned schema, and the code has a <code>sandbox=</code> argument with a comment claiming
+it is "determined from identity". The value is hardcoded <code>None</code>
+(<code>creative_formats.py:515</code>). A reader checking "does this tool support sandbox?"
+against this reason looks in the wrong place — the obstacle is in the resolver, not in the
+response (Rank 4). <span class="ev exec">EXECUTION</span></dd>
+
+<dt>6. Two dead <code>_XFAIL_TAGS</code> entries</dt>
+<dd><code>T-UC-005-inv-049-1-holds</code> and <code>T-UC-005-inv-049-1-violated</code> are
+registered in <code>_XFAIL_TAGS</code> and <strong>appear nowhere in the feature file</strong>
+(0 occurrences; the family runs <code>inv-049-10-*</code> and <code>inv-049-11-*</code>).
+They produced zero items in the run. A free shrink of the routing table with no behavioural
+risk. <span class="ev exec">EXECUTION</span></dd>
+
+<dt>7. <code>e2e_rest_known_failures.txt:351</code> — already self-corrected</dt>
+<dd>Not a finding against the author: the block at <code>:330-351</code> states that its own
+recorded reason (adcp#7338) is stale and that the node now fails on a missing
+<code>audio</code> category. I measured the same failure independently. Noted because it is
+the one reason in the scope that <em>documents</em> its own staleness instead of carrying it
+silently.</dd>
+</dl>
+
+<h2>6. Traps — flag, do not flip</h2>
+
+<div class="box warn">
+<h3>T1. A step assertion pins the <code>type</code> filter's ABSENCE. 10 passing rows would go red if anyone implemented it.</h3>
+<p><code>tests/bdd/steps/generic/then_payload.py:568-576</code>:</p>
+<p><code>if field == "type":</code> → <code># type filter was removed in adcp 3.12 -- all
+partitions dispatch unfiltered requests so the result should equal the full catalog</code> →
+<code>assert not was_narrowed or len(formats) == 0</code></p>
+<p>The five "valid" Examples rows of <code>T-UC-005-partition-type-filter</code> and the five
+of <code>T-UC-005-boundary-type-filter</code> currently <strong>pass</strong>, and this is what
+they assert: that filtering <em>did not happen</em>. They are not merely vacuous — they are
+actively pinned to the unimplemented behaviour, carrying the same false "removed in adcp 3.12"
+citation as the five xfail reasons. The second half of the branch (every format carries a
+<code>type</code>) grades the <em>response</em> field, which does exist, so the rows are not
+wholly empty — but the discriminating half is inverted.</p>
+<p><strong>Consequence for whoever touches Rank 7:</strong> lifting the two
+<code>_SELECTIVE_XFAIL</code> rows is not the change. The branch must be deleted in the same
+commit, or the regrounding will be graded by an assertion that demands the opposite. This was
+not previously reported: <code>docs/audits/bdd-vacuous-passes.html</code> §7 lists UC-026,
+UC-004 and UC-018 as sampled by execution and UC-006/010/011/019 by reading — <strong>UC-005
+was not sampled at all</strong>. <span class="ev exec">EXECUTION</span> (the
+<code>invalid_type</code> row returning 200 with 3 formats is the falsification probe for the
+valid rows: the response is identical whatever <code>type</code> says).</p>
+</div>
+
+<div class="box warn">
+<h3>T2. Wiring <code>main-pricing</code> / <code>main-no-pricing</code> would grade a field the pin deprecates</h3>
+<p>8 dormant items, one missing Given, so they look like a cheap win.
+<code>include_pricing</code> carries <code>"deprecated": true</code> in the pinned request with
+<em>"DEPRECATED in 3.1. Removed at 4.0."</em> Harness work spent here grades a surface
+scheduled for deletion. Recommend deleting the two scenarios or regrounding them onto
+<code>list_transformers</code>, whichever the transformers lane prefers.</p>
+</div>
+
+<div class="box warn">
+<h3>T3. The Rank-2 Examples table is two rows short of the pinned enum</h3>
+<p><code>T-UC-005-v31-asset-registry-discriminators</code> is captioned <em>"14
+asset-content-type filter enum values"</em> and its comment asserts
+<em>"asset-content-type.json (14 values)"</em>. The pinned
+<code>enums/asset-content-type.json</code> has <strong>16</strong>: the 14 listed plus
+<code>zip</code> and <code>published_post</code>. Writing the Given flips 56 items while
+leaving 2 of 16 vocabulary members ungraded, under a comment stating the set is complete. Add
+both rows in the same change. <span class="ev exec">EXECUTION</span> (enum read from the
+pinned bundle).</p>
+</div>
+
+<div class="box">
+<h3>T4. An <code>E2EUnsupportedSetup</code> xfail is not evidence about production</h3>
+<p>177 items — 43% of the scope — never reach production. Treating that bucket's size as a
+measure of spec non-compliance would overstate the gap by roughly fourfold; the only
+production-grounded signal in this scope is the 43 AssertionError items. Conversely, a future
+in-network run that clears the fixture blocker (Rank 5) will convert many of those into
+<em>first measurements</em>, not into regressions. The ledger's own note at
+<code>:315-317</code> makes the same point: <em>"any uc005 scenario that graduates onto a
+success path over e2e_rest lands on this defect immediately. Expect that rather than reading
+it as a regression."</em></p>
+</div>
+
+<h2>7. Method and limits</h2>
+
+<ul>
+<li><strong>Baseline is read, not re-run.</strong> All 408 items were classified by querying
+<code>bdd_inprocess.json</code> and <code>bdd_e2e.json</code> from run
+<code>sa-5fd3f010/innet_091026_2116</code> per-item, using each record's
+<code>call.crash.message</code>, <code>keywords</code> (for the scenario tag) and
+<code>user_properties.dormant_scenario</code>. The exact assertion text quoted for each
+candidate is that record's own crash message. Its UC-005 and UC-006 totals (370 / 24 for
+<code>test_uc006_sync_creatives.py</code>) reproduce the figures in your brief, which is what
+identifies it as the run you measured.</li>
+<li><strong>One execution probe, reverted.</strong> Rank 1 only:
+<code>cassini test bdd tests/bdd/test_uc005_discover_creative_formats.py -k duplicate</code> on
+<code>noetis-b-vm</code> with a 6-line DTO validator and the three routing entries lifted →
+<code>9 passed, 684 deselected, 9 xfailed</code> in 20.2s. The 9 that flipped are exactly the
+<code>disclosure_positions</code> duplicate rows; the 9 that stayed xfailed are the
+<code>disclosure_persistence</code> rows, which are dormant for want of a step — which
+independently corroborates the dormancy classification and Rank 3. Probe reverted;
+<code>git status --porcelain</code> and <code>git diff --stat</code> both empty.</li>
+<li><strong>Predictions were recorded before the probe.</strong> P2 (Rank 1) held, including
+the <code>error.field</code> assertion I had flagged as a risk. <strong>P1 was wrong</strong>
+and is corrected in Rank 4: I predicted a one-line <code>sandbox_flag</code> fix by analogy to
+<code>listing.py:751</code>, then found at <code>resolved_identity.py:541</code> that a public
+row never resolves an account, so the analogy does not transfer.</li>
+<li><strong>Spec grounding.</strong> Obligations are cited against AdCP 3.2.1 — the pinned
+JSON read from the wheel's <code>_schemas/3.2/</code>, and the written spec fetched from
+<code>adcontextprotocol/adcp</code> at <code>dist/docs/3.2.1/</code>. Two path corrections
+worth carrying forward: <code>docs/building/by-layer/L2/creatives.mdx</code>
+<strong>does not exist</strong> at 3.2.1 (creative writing is under <code>creative/*.mdx</code>),
+and the error taxonomy is at <code>building/by-layer/L3/error-handling.mdx</code>, not
+<code>L1/security.mdx</code>. Where that upstream prose and the schema disagree — L3 still
+lists <code>AUTH_REQUIRED</code> as live while the enum marks it a deprecated alias for
+<code>AUTH_MISSING</code> — the schema is treated as authoritative.</li>
+<li><strong>What I did not measure.</strong> No in-network (<code>bdd-in-network</code>) run,
+so every Rank 5 and Rank 6 claim about <code>e2e_rest</code> outcomes is READING over the
+existing artifact plus the ledger's recorded measurements. The flip predictions for Ranks 2,
+3, 4 and 5 are READING: each needs its step or fixture written before an execution probe is
+possible, which is outside an assessment's remit. Storyboard was out of scope and was not
+examined.</li>
+</ul>
+
+<p class="foot">Assessment only — no fixes, no graduations, no routing changes, no assertion
+weakened, no xfail or skip added. Counts are scoped to UC-005, UC-006, UC-018, UC-001 and the
+four GET-PRODUCTS features in run <code>innet_091026_2116</code>; they are not claims about
+the suite as a whole.</p>
+
+</div>

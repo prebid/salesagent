@@ -19,7 +19,7 @@ from src.core.database.models import Account
 from tests.helpers.orm_constraints import check_constraint_values, quoted_values
 
 # The authoritative spec value-set for billing-party, pinned by tag.
-# @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/enums/billing-party.json pointer=/enum
+# @source repo=adcp ref=v3.2.1 path=dist/schemas/3.1.1/enums/billing-party.json pointer=/enum
 _SPEC_BILLING_PARTIES = ("operator", "agent", "advertiser")
 
 

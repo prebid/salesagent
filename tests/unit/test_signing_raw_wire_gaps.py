@@ -59,12 +59,13 @@ ASGI middleware, and these tests address them where they actually are:
     same type and constant the unsigned path already constructs. BOTH forms are
     tested: the vector's comma-joined one and the repeated-tuple one.
 
-Spec grounding: ``adcontextprotocol/adcp@v3.1.1``
-``docs/reference/url-canonicalization.mdx`` (the authoritative algorithm;
-the "receivers do not silently re-normalize" rule grounds the non-ASCII authority
-rejection) and ``.../L1/security.mdx`` §"Verifier checklist (requests)" step 1.
+Spec grounding, at the tag the installed SDK reports: ``docs/reference/url-canonicalization.mdx``
+(the authoritative algorithm; the "receivers do not silently re-normalize" rule grounds the
+non-ASCII authority rejection) and ``docs/building/by-layer/L1/security.mdx`` §"Verifier
+checklist (requests)" steps 1 and 10, plus its error table, which files a raw non-ASCII
+host and a bare IPv6 authority under ``request_target_uri_malformed``.
 **Said out loud rather than implied:** 026 and the malformed-authority family are
-well grounded in that page; 021 (duplicate ``Signature-Input`` dictionary key) and
+well grounded in those pages; 021 (duplicate ``Signature-Input`` dictionary key) and
 022 (multi-valued covered non-list field) are grounded ONLY in the vectors' own
 ``$comment`` plus step 1's bare "Reject if malformed" — no prose enumerates them.
 023 additionally rests on RFC 9530's duplicate-algorithm rule.
@@ -264,8 +265,8 @@ _MALFORMED_HEADER_SHAPES = [
         ],
     ),
     (
-        "non-ascii-authority",  # negative/026's own form
-        [(b"host", "bücher.example.com".encode("latin-1")), (b"signature-input", _SIG_INPUT)],
+        "repeated-host-line",
+        [(b"host", b"seller.example.com"), (b"host", b"other.example.com"), (b"signature-input", _SIG_INPUT)],
     ),
 ]
 
@@ -276,15 +277,10 @@ _MALFORMED_HEADER_SHAPES = [
 def test_strict_precheck_rejects_malformed_wire_headers(shape: str, headers: list[tuple[bytes, bytes]]) -> None:
     """Each malformation is refused at step 1 with the checklist's own code.
 
-    ``request_signature_header_malformed`` — NOT ``request_target_uri_malformed``,
-    which is the canonicalization set's code (``canonicalization.json``'s six
-    ``reject: true`` cases). The two share the authority PREDICATE
-    (``malformed_authority_reason``) and are deliberately kept apart on the CODE.
-
-    Measured against ``adcp==6.6.0``, the SDK returns
-    ``request_signature_components_incomplete`` for the 021 shape and
-    ``request_signature_invalid`` for 022/023/026 — which is why the gate is OURS and
-    runs BEFORE ``verify_request_signature`` rather than being waited on upstream.
+    ``request_signature_header_malformed``. A repeated ``Host`` LINE is one of them: the
+    join turns two lines into an authority no value rule refuses, so the repeat itself is
+    the refusal. A malformed ``Host`` VALUE is not — see
+    :func:`test_malformed_host_authority_is_a_target_uri_refusal_not_a_header_one`.
     """
     from adcp.signing import REQUEST_SIGNATURE_HEADER_MALFORMED
     from adcp.signing.errors import SignatureVerificationError
@@ -294,6 +290,36 @@ def test_strict_precheck_rejects_malformed_wire_headers(shape: str, headers: lis
         _precheck(scope)
     assert excinfo.value.code == REQUEST_SIGNATURE_HEADER_MALFORMED, shape
     assert excinfo.value.step == 1, f"{shape}: the gate must fail at checklist step 1"
+
+
+@pytest.mark.parametrize(
+    "host",
+    ["bücher.example.com", "::1"],
+    ids=["raw-u-label (negative/026)", "unbracketed-ipv6 (negative/031)"],
+)
+def test_malformed_host_authority_is_a_target_uri_refusal_not_a_header_one(host: str) -> None:
+    """A malformed ``Host`` value passes step 1 and is refused as a malformed ``@target-uri``.
+
+    security.mdx's error table files "bare IPv6" and "raw non-ASCII host" under
+    ``request_target_uri_malformed``, and checklist step 10 derives ``@authority`` from the
+    as-received ``Host``. The capture builds the URL from that header, so the target gate
+    judging the URL IS the gate judging the header — one rule, one code.
+    """
+    from src.core.signing.canonical import (
+        REQUEST_TARGET_URI_MALFORMED,
+        TargetUriMalformedError,
+        reject_malformed_target,
+    )
+
+    scope = _scope(
+        raw_path=b"/api/v1/media-buys",
+        path="/api/v1/media-buys",
+        headers=[(b"host", host.encode("latin-1")), (b"signature-input", _SIG_INPUT)],
+    )
+    assert _precheck(scope) is None, f"{host!r}: a malformed authority is not a step-1 header defect"
+    with pytest.raises(TargetUriMalformedError) as excinfo:
+        reject_malformed_target(_target_uri(scope))
+    assert excinfo.value.code == REQUEST_TARGET_URI_MALFORMED
 
 
 def test_strict_precheck_accepts_a_well_formed_request() -> None:

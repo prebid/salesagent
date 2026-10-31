@@ -67,6 +67,37 @@ def create_ranking_agent(model: Any) -> Agent[None, ProductRankingResult]:
     )
 
 
+def _rankable_formats(product: Product) -> list[str]:
+    """How *product*'s formats are described to the ranking model.
+
+    THE CANONICAL ARM FIRST, as the kinds it declares. ``format_kind`` is what a brief can
+    actually be matched against -- "video", "native in feed" -- whereas a deprecated
+    ``format_id`` is an opaque name whose meaning the model has to guess from its spelling.
+    A canonical-only product used to contribute an EMPTY list here, so the model ranked it
+    as a product with no formats at all (salesagent-ol033.8, A7).
+
+    The legacy arm answers for a legacy-only product, spelled through
+    ``format_resolver.format_display`` -- the one renderer of a format identity. The
+    ``str(f)`` this replaced rendered a pydantic model's repr into the prompt
+    ("agent_url=Url('https://...') id='display_300x250_image' width=None ..."), which spends
+    the model's attention on field names.
+
+    Both arms rather than one: ``core/product.json`` lets a product carry either or both
+    during the 3.x window, and a ranking input that drops an arm ranks a legal product on
+    less than it declares.
+    """
+    from src.core.format_resolver import format_display, format_identity_or_none
+    from src.core.format_satisfaction import product_declarations
+
+    kinds = [str(declaration.format_kind) for declaration in product_declarations(product.format_options)]
+    legacy = [
+        format_display(identity)
+        for identity in (format_identity_or_none(entry) for entry in product.format_ids or [])
+        if identity is not None
+    ]
+    return kinds or legacy
+
+
 def build_ranking_prompt(
     custom_prompt: str,
     brief: str,
@@ -88,7 +119,7 @@ def build_ranking_prompt(
             "product_id": p.product_id,
             "name": p.name,
             "description": p.description,
-            "format_ids": [str(f) for f in (p.format_ids or [])],
+            "formats": _rankable_formats(p),
             "channels": [c.value for c in (p.channels or [])],
             "delivery_type": p.delivery_type.value,
         }

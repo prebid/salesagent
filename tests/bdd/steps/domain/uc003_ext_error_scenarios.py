@@ -12,7 +12,11 @@ from typing import Any
 from pytest_bdd import given, parsers, then
 
 from tests.bdd.steps._harness_db import db_session
-from tests.bdd.steps.domain.uc003_update_media_buy import _ensure_update_defaults, _resolve_media_buy_id
+from tests.bdd.steps.domain.uc003_update_media_buy import (
+    _ensure_update_defaults,
+    _resolve_media_buy_id,
+    ensure_product_declares_placements,
+)
 from tests.bdd.steps.generic._auth import authenticate_env_as
 
 
@@ -429,10 +433,23 @@ def given_package_update_inline_creatives_bare(ctx: dict) -> None:
 
 @given("the creative upload/sync process fails")
 def given_creative_sync_fails(ctx: dict) -> None:
-    """Configure the mock adapter to fail on creative sync/upload."""
-    env = ctx["env"]
-    mock_adapter = env.mock["adapter"].return_value
-    mock_adapter.add_creative_assets.side_effect = Exception("Creative sync failed: upload timeout")
+    """The creative agent the inline creatives' format names does not answer.
+
+    update_media_buy syncs inline creatives into the library (``sync_creatives``) and
+    calls no ad-server upload, so the sync is the process that can fail, and the agent
+    the format names is what it dials. The agent being down is a transient failure the
+    seller reports as SERVICE_UNAVAILABLE on every transport.
+
+    This step used to set ``add_creative_assets`` on the CREATE module's adapter mock: a
+    method the update path never calls, on a mock it never reads, and nothing at all on
+    e2e. The scenario passed only while the seller refused the creative's legacy
+    ``display_300x250`` for an unrelated reason, which the canonical mapping registry
+    now resolves.
+    """
+    kwargs = _ensure_update_defaults(ctx)
+    agent_url = ctx["env"].unreachable_creative_agent_url()
+    for creative in kwargs["packages"][0]["creatives"]:
+        creative["format_id"] = {**creative["format_id"], "agent_url": agent_url}
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -521,15 +538,9 @@ def given_placement_invalid_for_product(ctx: dict, placement_id: str) -> None:
     assert product is not None, "No product in ctx or DB"
     # Ensure the product supports placement targeting with a known valid set, so the
     # requested placement_id exercises production's invalid-id branch
-    # (media_buy_update.py:944) rather than the no-placements branch (:958). The model
-    # column is `placements` (list of dicts with placement_id), not `placement_configs`.
-    if not product.placements:
-        product.placements = [
-            {"placement_id": "plc_a", "name": "Placement A"},
-            {"placement_id": "plc_b", "name": "Placement B"},
-        ]
-        ctx["env"]._commit_factory_data()
-        product = _get_product(ctx)
+    # (media_buy_update.py:944) rather than the no-placements branch (:958).
+    ensure_product_declares_placements(ctx, product, ["plc_a", "plc_b"])
+    product = _get_product(ctx)
     # Seed valid creatives so creative validation passes and placement validation is reached.
     _ensure_referenced_creatives_valid(ctx)
     valid_ids = {p.get("placement_id") for p in (product.placements or []) if isinstance(p, dict)}
@@ -614,14 +625,9 @@ def given_update_requires_admin(ctx: dict) -> None:
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# GIVEN steps — mid-flight package addition (ext-u) + cancellation (ext-v)
-#   #1417. Both are production gaps: update_media_buy never reads
-#   new_packages or canceled, and has_updatable_fields() (schemas/_base.py)
-#   omits both — so a request carrying only media_buy_id + one of them trips the
-#   empty-update VALIDATION_ERROR path instead of UNSUPPORTED_FEATURE /
-#   NOT_CANCELLABLE. These steps build the real request and dispatch it on the
-#   wire; the strict xfail markers in conftest flip to passes when production
-#   implements the mid-flight capability gate and state-based cancellation.
+# GIVEN steps — cancellation (ext-v)
+#   #1417. The mid-flight package-addition steps (ext-u) live beside their
+#   BR-RULE-217 siblings in uc003_update_media_buy.py.
 # ═══════════════════════════════════════════════════════════════════════
 
 
@@ -641,38 +647,6 @@ def given_named_media_buy_status(ctx: dict, mb_label: str, status: str) -> None:
     )
     mb.status = status
     ctx["env"]._commit_factory_data()
-
-
-@given("the request includes new_packages with one complete package-request")
-def given_request_new_packages_one(ctx: dict) -> None:
-    """Add one complete package-request to the update's new_packages list.
-
-    new_packages IS a valid UpdateMediaBuyRequest field, but production never
-    reads it and has_updatable_fields() omits it (production gap, ext-u).
-    """
-    kwargs = _ensure_update_defaults(ctx)
-    product = ctx.get("default_product")
-    product_id = product.product_id if product else "guaranteed_display"
-    kwargs["new_packages"] = [
-        {
-            "product_id": product_id,
-            "budget": 5000.0,
-            "pricing_option_id": "cpm_usd_fixed",
-        }
-    ]
-
-
-@given(parsers.parse('the media buy\'s valid_actions does NOT advertise "{action}"'))
-def given_valid_actions_excludes(ctx: dict, action: str) -> None:
-    """Record that the media buy's valid_actions does NOT advertise an action.
-
-    BR-RULE-217 INV-1: new_packages on a seller not advertising add_packages
-    must be rejected with UNSUPPORTED_FEATURE. Production has no such capability
-    gate (it never reads new_packages), so this precondition is recorded for the
-    wire-ready strict xfail. We assert the precondition is meaningful: the action
-    must be a real valid-action name the gate would consult.
-    """
-    assert action, "valid_actions exclusion step requires a non-empty action name"
 
 
 @given("the media buy has committed delivery that the seller cannot cancel mid-flight")

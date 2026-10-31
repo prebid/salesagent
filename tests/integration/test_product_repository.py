@@ -20,7 +20,8 @@ from src.core.database.repositories.product import ProductRepository
 from src.core.database.repositories.uow import ProductUoW
 from src.core.product_conversion import convert_product_model_to_schema
 from src.core.schemas import Product as ProductSchema
-from tests.factories import PricingOptionFactory
+from tests.factories import PricingOptionFactory, ProductFactory, TenantFactory
+from tests.factories.product import FIRST_PUBLISHER_LEADERBOARD, PRODUCT_LOCAL_MREC, TWO_PUBLISHER_PROPERTIES
 
 
 def _create_test_tenant(session, unique_id: str) -> TenantModel:
@@ -491,6 +492,63 @@ class TestProductRepositoryUpdateFields:
             repo = ProductRepository(session, tenant_a_id)
             fetched = repo.get_by_id(f"prod-{uid}")
         assert fetched.name == "Test Product"
+
+
+#: The rule clause of the common-intersection refusal.
+_INTERSECTION_REFUSAL = "every format option must be accepted by all of them"
+
+
+@pytest.mark.requires_db
+class TestProductRepositoryCommonIntersection:
+    """Both write methods refuse a multi-publisher product without placements outside the common intersection.
+
+    core/product.json format_options (v3.2.7): such a product's "format_options MUST therefore
+    be the common intersection accepted across every selected publisher/property scope". An
+    option scoped to the first of two publishers is outside it; the same option on a
+    one-publisher product is inside it, which is the accept control.
+    """
+
+    _CASES = pytest.mark.parametrize(
+        ("publishers", "refused"), [(TWO_PUBLISHER_PROPERTIES, True), (TWO_PUBLISHER_PROPERTIES[:1], False)]
+    )
+
+    @_CASES
+    def test_create(self, factory_session, publishers, refused):
+        tenant = TenantFactory()
+        factory_session.commit()
+        product = ProductModel(
+            tenant_id=tenant.tenant_id,
+            product_id="sliced",
+            name="Sliced",
+            format_options=[PRODUCT_LOCAL_MREC, FIRST_PUBLISHER_LEADERBOARD],
+            properties=publishers,
+            targeting_template={},
+            delivery_type="guaranteed",
+            delivery_measurement={"provider": "publisher"},
+        )
+
+        if refused:
+            with pytest.raises(ValueError, match=_INTERSECTION_REFUSAL), ProductUoW(tenant.tenant_id) as uow:
+                uow.products.create(product)
+        else:
+            with ProductUoW(tenant.tenant_id) as uow:
+                assert uow.products.create(product) is product
+
+    @_CASES
+    def test_update_fields(self, factory_session, publishers, refused):
+        product = ProductFactory(
+            format_ids=None, format_options=[PRODUCT_LOCAL_MREC], properties=publishers, property_tags=None
+        )
+        factory_session.commit()
+        authored = [PRODUCT_LOCAL_MREC, FIRST_PUBLISHER_LEADERBOARD]
+
+        # pytest.raises OUTSIDE the UoW, so the refusal rolls the unit back as in production.
+        if refused:
+            with pytest.raises(ValueError, match=_INTERSECTION_REFUSAL), ProductUoW(product.tenant_id) as uow:
+                uow.products.update_fields(product.product_id, format_options=authored)
+        else:
+            with ProductUoW(product.tenant_id) as uow:
+                assert uow.products.update_fields(product.product_id, format_options=authored) is not None
 
 
 @pytest.mark.requires_db

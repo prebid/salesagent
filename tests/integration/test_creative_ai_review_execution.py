@@ -27,6 +27,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from tests.factories import CreativeAssetFactory, FormatIdFactory
+from tests.factories.webhook import PushNotificationConfigRequestFactory
 from tests.harness import CreativeSyncEnv
 
 TENANT_ID = "test_tenant"
@@ -43,7 +44,12 @@ AI_REASON = "Meets the tenant criteria"
 EXPECTED_DECISION = "approved"
 
 SLACK_WEBHOOK_URL = "https://hooks.slack.com/services/test"
-CREATIVE_FORMAT_ID = "display_300x250"
+#: One of the formats the reference agent serves
+#: (``tests/fixtures/creative_formats/reference_formats.json``). It said
+#: ``display_300x250`` — not in the capture, so ``_validation.py`` refused every creative
+#: here with ``AdCPFormatNotFoundError`` and the sync never reached the ai-powered branch
+#: this file is about.
+CREATIVE_FORMAT_ID = "display_300x250_image"
 FORMAT_ID = FormatIdFactory(id=CREATIVE_FORMAT_ID)
 
 
@@ -153,7 +159,13 @@ class TestAIReviewSurvivesTheWebhookBranch:
             with mocked_ai_backend():
                 response = env.call_impl(
                     creatives=[creative],
-                    push_notification_config={"url": "https://buyer.example/hook"},
+                    # Through the factory, so the registration carries an
+                    # ``operation_id`` and is accepted: this scenario's subject is
+                    # the WEBHOOK BRANCH of the reviewer, which it can only reach
+                    # once the registration gate has passed the config through.
+                    push_notification_config=PushNotificationConfigRequestFactory.payload(
+                        url="https://buyer.example/hook"
+                    ),
                 )
                 assert response.creatives[0].action == "created"
 

@@ -40,11 +40,21 @@ from src.core.config import get_settings
 from src.core.domain_config import _get_protocol_for_domain
 from src.core.signing.canonical import origin_of
 
-# The paths a counterparty actually reaches this agent at, keyed by transport.
-# Values are what the running app resolves to AFTER any redirect it issues —
-# ``/mcp`` 307s to ``/mcp/``, ``/a2a`` does not redirect. This table is what stops
-# the URL we publish drifting from the mount the app actually serves.
-AGENT_ENDPOINT_PATHS: dict[str, str] = {"mcp": "/mcp/", "a2a": "/a2a"}
+# The paths this agent PUBLISHES itself at, keyed by transport. ONE spelling each, and
+# it is the spelling the spec's own worked example publishes: ``seller-setup.mdx`` writes
+# ``https://ads.streamhaus.example/mcp`` in both of the places a publisher copies from —
+# ``brand.json`` ``agents[].url`` and ``adagents.json`` ``authorized_agents[].url``.
+#
+# PUBLISHED, not served-after-redirect. The two differ for MCP: ``/mcp`` is a Starlette
+# ``Mount`` and 307s to ``/mcp/``, while ``/a2a`` answers where it is (``src/app.py``).
+# A redirect is how a counterparty REACHES an endpoint and says nothing about which
+# string IDENTIFIES it: security.mdx's key-discovery step 5 matches a canonicalized
+# ``agents[].url`` against the canonicalized agent URL the counterparty HOLDS, and
+# there "a trailing slash remains significant under the shared algorithm". Publishing
+# the post-redirect ``/mcp/`` therefore meant a buyer holding the spec example's
+# ``/mcp`` matched no entry of ours at all — ``request_signature_agent_not_in_brand_json``
+# for a buyer that had done everything the documentation told it to.
+AGENT_ENDPOINT_PATHS: dict[str, str] = {"mcp": "/mcp", "a2a": "/a2a"}
 
 #: Where the A2A agent card is served. A2A FIXES this path (§8.2, §14.3) and the a2a-sdk
 #: factory mounts it. ONE path: ``src/app.py`` routes it, the tenant landing page links it
@@ -114,9 +124,11 @@ def canonical_agent_url(tenant: DeclaresHost) -> str:
 def agent_endpoint_urls(tenant: DeclaresHost) -> dict[str, str]:
     """The URLs a counterparty invokes this tenant at, keyed by transport.
 
-    One entry per endpoint this agent actually serves. brand.json publishes one
-    ``agents[]`` entry per member of this mapping, so the byte-equal match at
-    ``security.mdx`` step 5 succeeds for a caller of either transport.
+    One entry per endpoint this agent publishes, in the one spelling
+    :data:`AGENT_ENDPOINT_PATHS` gives it. brand.json publishes one ``agents[]`` entry per
+    member of this mapping, so the canonical-equal match at security.mdx's key-discovery
+    step 5 succeeds for a caller of either transport — and succeeds for exactly one entry,
+    which is what that step requires (two matches are ``request_signature_brand_json_ambiguous``).
     """
     return _endpoint_urls_at(canonical_agent_url(tenant))
 
@@ -135,11 +147,21 @@ def identifies_agent(entry_url: object, agent_url: str) -> bool:
     ``url-canonicalization.mdx`` keeps the path, so comparing against the origin alone
     reads a publisher that wrote our MCP or A2A endpoint as authorizing nobody.
 
-    Both slash spellings of each endpoint count because the app answers at both: the
-    ``/mcp`` mount 307s to ``/mcp/`` and ``/a2a/`` 307s to ``/a2a`` (``src/app.py``). That
-    is a fact about where THIS agent is served, which is the only reason a path is
-    accepted. A path the app does not serve, another host, another scheme or another port
-    does not identify it.
+    ONE spelling per endpoint and no tolerance around it. The entry is canonicalized,
+    each URL this agent publishes is canonicalized, and the two are either the same string
+    or they name different agents. ``core/authorized-agent-base.json`` lists the
+    equivalences exhaustively — two urls "that differ only in case, default port, or
+    percent-encoding of unreserved characters are the same agent" — and security.mdx's
+    key-discovery step 5 closes the question this function used to leave open: "A trailing
+    slash remains significant under the shared algorithm." So ``/mcp/`` does not identify
+    the agent published at ``/mcp``, any more than another host, scheme or port does.
+
+    This accepted BOTH slash spellings of each endpoint until the one-spelling change, on
+    the ground that the app answers at both. That was the "additional transformation before
+    comparison" the algorithm forbids, wearing a set rather than an ``rstrip``: it granted
+    the ``/a`` == ``/a/`` equivalence ``canonical_agent_url`` deliberately refuses, and for
+    a bare authority its two entries were byte-identical anyway. What the app answers at is
+    a routing fact; what identifies this agent is :data:`AGENT_ENDPOINT_PATHS`.
 
     Each side goes through ``src.core.schemas.canonical_agent_url``, the one
     implementation of the canonicalization algorithm. An entry it refuses (no host, a
@@ -152,10 +174,7 @@ def identifies_agent(entry_url: object, agent_url: str) -> bool:
     origin = origin_of(agent_url)
     if origin is None:
         raise ValueError(f"agent_url {agent_url!r} has no origin to compare adagents.json entries against")
-    served = {canonical_url(agent_url), canonical_url(origin)}
-    for endpoint in _endpoint_urls_at(origin).values():
-        bare = endpoint.rstrip("/")
-        served |= {canonical_url(bare), canonical_url(bare + "/")}
+    served = {canonical_url(origin)} | {canonical_url(url) for url in _endpoint_urls_at(origin).values()}
     if not isinstance(entry_url, str) or not entry_url:
         return False
     try:

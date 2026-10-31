@@ -52,6 +52,15 @@ _WEBHOOK_CREDENTIAL = "harness-webhook-shared-secret-0123456789"
 #: gets that far in these scenarios, and it must not be able to.
 _WEBHOOK_URL = "https://buyer.example/webhooks/adcp/creative"
 
+#: An ``agent_url`` whose destination the SSRF gate must refuse on every transport.
+#: 169.254.169.254 is the IMDS link-local address; ``adcp.signing`` checks its
+#: metadata blocklist BEFORE the ``allow_private`` gate is read, so unlike an RFC 1918
+#: or loopback address this one is refused even under the e2e stack's open
+#: ``ADCP_OUTBOUND_ALLOW_PRIVATE`` posture. HTTPS, so the refusal is the DESTINATION's
+#: and not step 1's scheme check — an ``http://`` url is rejected at canonicalization
+#: and never reaches the gate this scenario grades.
+_METADATA_AGENT_URL = "https://169.254.169.254/a2a"
+
 
 @given("the Buyer Agent has published a signing key the seller can resolve")
 def given_buyer_publishes_signing_key(ctx: dict) -> None:
@@ -68,6 +77,35 @@ def given_buyer_publishes_signing_key(ctx: dict) -> None:
     variable — the signature. Without it an unsigned dispatch is a different experiment.
     """
     ctx["env"].enable_request_signing()
+
+
+@given("the Buyer Agent's published agent_url points at a cloud-metadata address")
+def given_buyer_agent_url_is_a_banned_destination(ctx: dict) -> None:
+    """Re-point this buyer's trust root at a destination the SSRF gate must refuse.
+
+    ONE variable from the verified scenario: same counterparty, same keypair, same
+    real RFC 9421 signature. Only the ``agent_url`` on its Principal row moves, which
+    is the sole input to the seller's key resolution, so the outcome below is
+    attributable to the destination and to nothing else.
+
+    :data:`_METADATA_AGENT_URL` rather than a loopback or RFC 1918 address, and the
+    reason is transport uniformity rather than taste. ``docker-compose.e2e.yml`` sets
+    ``ADCP_OUTBOUND_ALLOW_PRIVATE=true`` for the server — it has to, because every
+    origin on a compose network resolves to a private bridge address — so a scenario
+    built on a private address would be refused in process and ACCEPTED over e2e,
+    and the one transport closest to production would grade the opposite behavior.
+    The cloud-metadata range is refused UNCONDITIONALLY, ahead of and outside that
+    hatch, so this scenario means the same thing on all four transports. The sibling
+    reasoning, and the same immunity, is recorded in
+    ``local-egress-ssrf-refusal.feature``'s header.
+
+    It is also the address whose mishandling is worth a scenario of its own: before
+    the verifier read the ``signature_code`` the resolver attaches, this exact input
+    was answered ``request_signature_capabilities_unreachable``, which the pinned enum
+    classes ``transient`` with "retry once after a 1-5 s jittered backoff" — telling a
+    caller to retry a probe of the metadata service.
+    """
+    ctx["env"].repoint_signing_agent_url(_METADATA_AGENT_URL)
 
 
 @given(parsers.parse('the seller requires a request signature for "{operation}"'))

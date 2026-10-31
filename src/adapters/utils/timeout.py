@@ -32,7 +32,7 @@ def timeout(seconds: int = 300):
 
     Raises:
         AdCPServiceUnavailableError: If the function doesn't complete in time.
-            AdCP 3.1.1 transport-errors.mdx Rule 1 names this translation: "A
+            transport-errors.mdx Rule 1 names this translation: "A
             database connection timeout becomes SERVICE_UNAVAILABLE." A hung
             ad-server call gets the same code, and both are transient, so the
             buyer's instruction -- retry with backoff -- is correct for either.

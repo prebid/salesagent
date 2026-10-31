@@ -19,6 +19,26 @@ from sqlalchemy import select
 
 from src.core.database.models import PricingOption, Product
 
+#: The canonical creative agent, which the pin names as the namespace for IAB-standard
+#: ``v1_format_ref`` entries (core/product-format-declaration.json, "AAO-hosted convention").
+AAO_CREATIVE_AGENT_URL = "https://creative.adcontextprotocol.org"
+
+
+def canonical_declaration(format_kind: str, v1_format_id: str, **params: Any) -> dict[str, Any]:
+    """One canonical format declaration that asserts its legacy projection.
+
+    Seeders author products canonically (core/product.json: "New products MUST author
+    canonical format_options[] ... Do not author a new product from format_ids alone"). The
+    ``v1_format_ref`` is the seller's assertion of the named format this declaration is, so
+    a legacy buyer is served ``format_ids`` derived from it.
+    """
+    return {
+        "format_kind": format_kind,
+        "params": params,
+        "v1_format_ref": [{"agent_url": AAO_CREATIVE_AGENT_URL, "id": v1_format_id}],
+    }
+
+
 #: A product spec as the seeders write it: the Product's own fields plus a ``pricing``
 #: block. Kept a plain dict because that is what the seeders' literals already are -- and
 #: what ``seed_storyboard_tenant`` derives from the pinned bundle's test kit.
@@ -45,7 +65,7 @@ def seed_product(session, tenant_id: str, spec: ProductSpec) -> bool:
             product_id=spec["product_id"],
             name=spec["name"],
             description=spec["description"],
-            format_ids=spec["formats"],
+            format_options=spec["format_options"],
             targeting_template=spec["targeting_template"],
             delivery_type=spec["delivery_type"],
             property_tags=["all_inventory"],  # Required per AdCP spec

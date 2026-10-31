@@ -1264,16 +1264,47 @@ def get_incomplete_critical_tasks(tenant_id: str) -> list[dict[str, Any]]:
     return [task for task in status["critical"] if not task["is_complete"]]
 
 
-def validate_setup_complete(tenant_id: str) -> None:
+#: The critical tasks that are preconditions for serving REAL inventory, and so do not
+#: gate a SANDBOX request.
+#:
+#: ``ad_server_connected`` is whether the tenant's live ad server is configured, and
+#: ``inventory_synced`` is whether inventory has been pulled from it -- measured, the
+#: latter is incomplete only for a GAM tenant with zero ``GAMInventory`` rows; kevel,
+#: triton and every other adapter report it complete unconditionally. Neither is a fact
+#: about the buyer's request, and neither is reachable by one: AdCP 3.2.3
+#: ``docs/media-buy/advanced-topics/sandbox.mdx`` says a sandbox request "MUST NOT make
+#: real ad platform API calls (no real orders, line items, etc.)" and "MUST return
+#: realistic response shapes with simulated data", so a readiness check about the real
+#: platform's inventory cannot be a precondition for a request that will never touch it.
+#:
+#: EVERY OTHER CRITICAL TASK STILL GATES, and that is the same page's limit on this:
+#: "MUST validate inputs the same way as production (reject invalid budgets, bad dates,
+#: etc.)" and "Apply normal input validation (sandbox does not bypass validation)". So
+#: ``currency_limits`` (budget validation), ``products_created``, ``principals_created``,
+#: ``authorized_properties`` and ``sso_configuration`` are untouched -- a sandbox buyer
+#: cannot buy a product that does not exist or in a currency the seller does not price.
+#:
+#: Keyed on ``key`` rather than ``name`` for the reason the raise site below already
+#: records: ``inventory_synced`` has three display names for the one key.
+_REAL_PLATFORM_TASKS: frozenset[str] = frozenset({"ad_server_connected", "inventory_synced"})
+
+
+def validate_setup_complete(tenant_id: str, *, sandbox: bool = False) -> None:
     """Validate that tenant has completed all critical setup tasks.
 
     Args:
         tenant_id: Tenant ID to validate
+        sandbox: whether the request references a SANDBOX account. When it does, the
+            tenant's real-ad-server readiness does not gate it (see
+            :data:`_REAL_PLATFORM_TASKS`); every input-validation task still does.
+            Defaults to False, so a production request is graded exactly as before.
 
     Raises:
         AdCPConfigurationError: If critical setup tasks are incomplete
     """
     incomplete = get_incomplete_critical_tasks(tenant_id)
+    if sandbox:
+        incomplete = [task for task in incomplete if task["key"] not in _REAL_PLATFORM_TASKS]
     if incomplete:
         # ``key``, not ``name``: ``name`` is admin-UI display text -- two of the critical tasks
         # carry a "⚠️" prefix, and ``inventory_synced`` has three names for the one key.

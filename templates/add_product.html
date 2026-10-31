@@ -37,43 +37,13 @@
 
         <h3 style="margin-top: 2rem;">Creative Formats</h3>
 
-        <div class="form-group">
-            <label>Select format templates and configure sizes:</label>
-            <p style="color: #666; font-size: 0.9rem; margin-bottom: 1rem;">
-                Choose format templates and specify which sizes this product supports. Creative type (image, JS, HTML5)
-                is auto-detected when advertisers upload creatives.
-            </p>
+        {# format_ids is NOT authored here. Deprecated in AdCP 3.2, removed in 4.0, and the
+           pin says "Do not author a new product from format_ids alone" -- so the legacy
+           template picker that used to stand here is gone and a new product declares the
+           canonical arm below. Existing products KEEP the legacy arm they already have; it
+           is simply no longer editable from this surface. #}
 
-            <!-- Format Template Picker Container -->
-            <div id="format-template-picker-container">
-                <div style="text-align: center; padding: 2rem; color: #666;">
-                    Loading format templates...
-                </div>
-            </div>
-        </div>
-
-        <!-- Hidden input to store selected format data -->
-        <input type="hidden" id="formats-data" name="formats" value="[]">
-
-        <!-- Load Format Template Picker JS -->
-        <script src="{{ request.script_root }}/static/js/format-template-picker.js"></script>
-        <script>
-        // Initialize format template picker on page load
-        // Use window.formatPicker for global access (needed for form submission and testing)
-        document.addEventListener('DOMContentLoaded', function() {
-            window.formatPicker = new FormatTemplatePicker({
-                containerId: 'format-template-picker-container',
-                hiddenInputId: 'formats-data',
-                tenantId: '{{ tenant_id }}',
-                adapterType: '{{ adapter_type }}',
-                scriptRoot: '{{ request.script_root }}' || '',
-                initialFormats: [],
-                onSelectionChange: function(formats) {
-                    console.log('Formats updated:', formats.length, 'formats selected');
-                }
-            });
-        });
-        </script>
+        {% include 'components/format_options_editor.html' %}
 
         <h3 style="margin-top: 2rem;">Pricing & Delivery</h3>
 
